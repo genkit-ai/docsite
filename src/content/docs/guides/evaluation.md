@@ -47,7 +47,7 @@ This section explains how to perform inference-based evaluation using Genkit.
 1.  Use an existing Genkit app or create a new one by following our [Get started](get-started.md) guide.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
-        ```js
+    ```js
 
     import { genkit, z, Document } from "genkit";
     import {
@@ -55,39 +55,35 @@ This section explains how to perform inference-based evaluation using Genkit.
     gemini15Flash,
     } from "@genkit-ai/googleai";
 
-// Initialize Genkit
-export const ai = genkit ({
-plugins: [
-googleAI(),
-]
-});
+    // Initialize Genkit
+    export const ai = genkit ({
+    plugins: [
+    googleAI(),
+    ]
+    });
 
-// Dummy retriever that always returns the same docs
-export const dummyRetriever = ai.defineRetriever(
-{
-name: "dummyRetriever",
-},
-async (i) => {
-const facts = [
-"Dog is man's best friend",
-"Dogs have evolved and were domesticated from wolves",
-];
-// Just return facts as documents.
-return { documents: facts.map((t) => Document.fromText(t)) };
-}
-);
+    // Dummy retriever that always returns the same docs
+    export const dummyRetriever = ai.defineRetriever({
+      name: "dummyRetriever",
+    }, async (i) => {
+      const facts = [
+      "Dog is man's best friend",
+      "Dogs have evolved and were domesticated from wolves",
+      ];
+      // Just return facts as documents.
+      return { documents: facts.map((t) => Document.fromText(t)) };
+    });
 
-// A simple question-answering flow
-export const qaFlow = ai.defineFlow({
-name: 'qaFlow',
-inputSchema: z.string(),
-outputSchema: z.string(),
-},
-async (query) => {
-const factDocs = await ai.retrieve({
-retriever: dummyRetriever,
-query,
-});
+    // A simple question-answering flow
+    export const qaFlow = ai.defineFlow({
+      name: 'qaFlow',
+      inputSchema: z.string(),
+      outputSchema: z.string(),
+    }, async (query) => {
+      const factDocs = await ai.retrieve({
+      retriever: dummyRetriever,
+      query,
+    });
 
     const llmResponse = await ai.generate({
       model: gemini15Flash,
@@ -99,21 +95,20 @@ query,
 
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
 
-        ```js
+    ```js
 
     import { genkitEval, GenkitMetric } from "@genkit-ai/evaluator";
     import { gemini15Pro } from "@genkit-ai/googleai";
 
-export const ai = genkit ({
-plugins: [
-...
-// Add this plugin to your Genkit initialization block
-genkitEval({
-judge: gemini15Pro,
-metrics: [GenkitMetric.MALICIOUSNESS],
-}),
-
-````
+    export const ai = genkit ({
+    plugins: [
+    ...,
+    // Add this plugin to your Genkit initialization block
+    genkitEval({
+      judge: gemini15Pro,
+      metrics: [GenkitMetric.MALICIOUSNESS],
+    }),
+    ```
 
     **Note:** The configuration above requires installation of the [`@genkit-ai/evaluator`](https://www.npmjs.com/package/@genkit-ai/evaluator) package.
 
@@ -151,12 +146,10 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 
    c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
 
-   ```text
+   ```
    "Can I give milk to my cats?"
    "From which animals did dogs evolve?"
-````
-
-````
+   ```
 
 By the end of this step, your dataset should have 3 examples in it, with the
 values mentioned above.
@@ -173,15 +166,15 @@ dataset page. You can also start a new evaluation from the _Evaluations_ tab.
 3. Select `myFactsQaDataset` as the target dataset to use for evaluation.
 
 4. (Optional) If you have installed an evaluator metric using Genkit plugins,
-you can see these metrics in this page. Select the metrics that you want to use
-with this evaluation run. This is entirely optional: Omitting this step will
-still return the results in the evaluation run, but without any associated
-metrics.
+   you can see these metrics in this page. Select the metrics that you want to use
+   with this evaluation run. This is entirely optional: Omitting this step will
+   still return the results in the evaluation run, but without any associated
+   metrics.
 
 5. Finally, click **Run evaluation** to start evaluation. Depending on the flow
-you're testing, this may take a while. Once the evaluation is complete, a
-success message appears with a link to view the results. Click on the link to go
-to the _Evaluation details_ page.
+   you're testing, this may take a while. Once the evaluation is complete, a
+   success message appears with a link to view the results. Click on the link to go
+   to the _Evaluation details_ page.
 
 You can see the details of your evaluation on this page, including original
 input, extracted context and metrics (if any).
@@ -190,26 +183,26 @@ input, extracted context and metrics (if any).
 
 ### Terminology
 
--   **Evaluation**: An evaluation is a process that assesses system performance. In Genkit, such a system is usually a Genkit primitive, such as a flow or a
-model. An evaluation can be automated or manual (human evaluation).
+- **Evaluation**: An evaluation is a process that assesses system performance. In Genkit, such a system is usually a Genkit primitive, such as a flow or a
+  model. An evaluation can be automated or manual (human evaluation).
 
--   **Bulk inference** Inference is the act of running an input on a flow or model to get the corresponding output. Bulk inference involves performing inference on multiple inputs simultaneously.
+- **Bulk inference** Inference is the act of running an input on a flow or model to get the corresponding output. Bulk inference involves performing inference on multiple inputs simultaneously.
 
--   **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
+- **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
 
--   **Dataset** A dataset is a collection of examples to use for inference-based evaluation. A dataset typically consists of `input` and optional `reference`
-fields. The `reference` field does not affect the inference step of evaluation
-but it is passed verbatim to any evaluation metrics. In Genkit, you can create a
-dataset through the Dev UI. There are two types of datasets in Genkit: _Flow_
-datasets and _Model_ datasets.
+- **Dataset** A dataset is a collection of examples to use for inference-based evaluation. A dataset typically consists of `input` and optional `reference`
+  fields. The `reference` field does not affect the inference step of evaluation
+  but it is passed verbatim to any evaluation metrics. In Genkit, you can create a
+  dataset through the Dev UI. There are two types of datasets in Genkit: _Flow_
+  datasets and _Model_ datasets.
 
 ### Schema validation
 
 Depending on the type, datasets have schema validation support in the Dev UI:
 
--   Flow datasets support validation of the `input` and `reference` fields of the dataset against a flow in the Genkit application. Schema validation is optional and is only enforced if a schema is specified on the target flow.
+- Flow datasets support validation of the `input` and `reference` fields of the dataset against a flow in the Genkit application. Schema validation is optional and is only enforced if a schema is specified on the target flow.
 
--   Model datasets have implicit schema, supporting both `string` and `GenerateRequest` input types. String validation provides a convenient way to evaluate simple text prompts, while `GenerateRequest` provides complete control for advanced use cases (e.g. providing model parameters, message history, tools, etc). You can find the full schema for `GenerateRequest` in our [API reference docs](https://js.api.genkit.dev/interfaces/genkit._.GenerateRequest.html).
+- Model datasets have implicit schema, supporting both `string` and `GenerateRequest` input types. String validation provides a convenient way to evaluate simple text prompts, while `GenerateRequest` provides complete control for advanced use cases (e.g. providing model parameters, message history, tools, etc). You can find the full schema for `GenerateRequest` in our [API reference docs](https://js.api.genkit.dev/interfaces/genkit._.GenerateRequest.html).
 
 Note: Schema validation is a helper tool for editing examples, but it is
 possible to save an example with invalid schema. These examples may fail when
@@ -221,9 +214,9 @@ the running an evaluation.
 
 Genkit includes a small number of native evaluators, inspired by [RAGAS](https://docs.ragas.io/en/stable/), to help you get started:
 
--   Faithfulness -- Measures the factual consistency of the generated answer against the given context
--   Answer Relevancy -- Assesses how pertinent the generated answer is to the given prompt
--   Maliciousness -- Measures whether the generated output intends to deceive, harm, or exploit
+- Faithfulness -- Measures the factual consistency of the generated answer against the given context
+- Answer Relevancy -- Assesses how pertinent the generated answer is to the given prompt
+- Maliciousness -- Measures whether the generated output intends to deceive, harm, or exploit
 
 ### Evaluator plugins
 
@@ -252,7 +245,7 @@ genkit eval:flow qaFlow --input myFactsQaDataset
 
 # or, using a dataset from a file
 genkit eval:flow qaFlow --input testInputs.json
-````
+```
 
 Note: Make sure that you start your genkit app before running these CLI
 commands.
