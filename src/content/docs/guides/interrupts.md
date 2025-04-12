@@ -133,24 +133,23 @@ party next week.
 
 Then you can execute the prompt in your code as follows:
 
-    ```ts
-    // assuming prompt file is named partyPlanner.prompt
-    const partyPlanner = ai.prompt('partyPlanner');
+```ts
+// assuming prompt file is named partyPlanner.prompt
+const partyPlanner = ai.prompt("partyPlanner");
 
-    const response = await partyPlanner({ partyType: 'birthday' });
-
-````
+const response = await partyPlanner({ partyType: "birthday" });
+```
 
 ### Chat
 
 ```ts
-  const chat = ai.chat({
-    system: "Use the askQuestion tool if you need to clarify something.",
-    tools: [askQuestion],
-  });
+const chat = ai.chat({
+  system: "Use the askQuestion tool if you need to clarify something.",
+  tools: [askQuestion],
+});
 
-  const response = await chat.send("make a plan for my birthday party");
-````
+const response = await chat.send("make a plan for my birthday party");
+```
 
 Genkit immediately returns a response on receipt of an interrupt tool call.
 

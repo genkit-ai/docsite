@@ -18,6 +18,11 @@ export default defineConfig({
 					label: "GitHub",
 					href: "https://github.com/firebase/genkit",
 				},
+				{
+					icon: "discord",
+					label: "Discord",
+					href: "https://discord.gg/qXt5zzQKpc",
+				},
 			],
 			sidebar: [
 				{
@@ -25,10 +30,6 @@ export default defineConfig({
 					items: [
 						{ label: "Introduction", slug: "index" }, // Assuming index.mdx is the intro
 						{ label: "Get started", slug: "guides/get-started" },
-						{
-							label: "Migrate from Genkit 0.9 to 1.0",
-							slug: "guides/migrating-from-0.9",
-						},
 						{ label: "API Stability Channels", slug: "guides/api-stability" },
 						{ label: "Developer tools", slug: "guides/devtools" },
 					],
@@ -82,7 +83,7 @@ export default defineConfig({
 							label: "Observe local metrics",
 							slug: "guides/local-observability",
 						},
-						// { label: "Error Types", link: "#TODO" }, // Error types content not migrated
+						{ label: "Error Types", slug: "guides/errors/types" },
 					],
 				},
 				{
@@ -97,41 +98,35 @@ export default defineConfig({
 						{ label: "Authorization and integrity", slug: "guides/auth" },
 					],
 				},
-				/* {
+				{
 					label: "Observing AI workflows",
 					items: [
-						// { label: "Getting Started", link: "#TODO" }, // Observability content not migrated
-						// { label: "Authentication", link: "#TODO" },
-						// { label: "Advanced Configuration", link: "#TODO" },
-						// { label: "Telemetry Collection", link: "#TODO" },
-						// { label: "Troubleshooting", link: "#TODO" },
-					],
-				}, */
-				{
-					label: "Writing plugins",
-					items: [
-						{ label: "Deploy with Firebase", slug: "guides/firebase" },
-						{ label: "Deploy with Cloud Run", slug: "guides/cloud-run" },
 						{
-							label: "Deploy to any Node.js platform",
-							slug: "guides/deploy-node",
+							label: "Getting Started",
+							slug: "guides/observability/getting-started",
 						},
-						{ label: "Authorization and integrity", slug: "guides/auth" },
-					],
-				},
-				{
-					label: "Observing AI workflows",
-					items: [
-						// { label: "Getting Started", link: "#TODO" }, // Observability content not migrated
-						// { label: "Authentication", link: "#TODO" },
-						// { label: "Advanced Configuration", link: "#TODO" },
-						// { label: "Telemetry Collection", link: "#TODO" },
-						// { label: "Troubleshooting", link: "#TODO" },
+						{
+							label: "Authentication",
+							slug: "guides/observability/authentication",
+						},
+						{
+							label: "Advanced Configuration",
+							slug: "guides/observability/advanced-configuration",
+						},
+						{
+							label: "Telemetry Collection",
+							slug: "guides/observability/telemetry-collection",
+						},
+						{
+							label: "Troubleshooting",
+							slug: "guides/observability/troubleshooting",
+						},
 					],
 				},
 				{
 					label: "Writing plugins",
 					items: [
+						// NOTE: Deployment links were incorrectly placed here before, removed them.
 						{ label: "Overview", slug: "guides/plugin-authoring" },
 						{
 							label: "Writing an Evaluator Plugin",
@@ -142,10 +137,19 @@ export default defineConfig({
 				{
 					label: "Plugins",
 					items: [
-						// { label: "Google AI for Developers", link: "#TODO" }, // Specific plugin pages not migrated
-						// { label: "Google Cloud Vertex AI", link: "#TODO" },
-						{ label: "Firebase", slug: "guides/firebase" }, // Re-link to firebase deploy page
+						{ label: "Google AI", slug: "guides/plugins/google-genai" },
+						{ label: "Vertex AI", slug: "guides/plugins/vertex-ai" },
+						{ label: "Firebase", slug: "guides/plugins/firebase" },
+						{ label: "Ollama", slug: "guides/plugins/ollama" },
+						{ label: "Chroma", slug: "guides/plugins/chroma" },
+						{ label: "Pinecone", slug: "guides/plugins/pinecone" },
 						// { label: "Partner & 3P Plugins", link: "#TODO" },
+					],
+				},
+				{
+					label: "Templates",
+					items: [
+						{ label: "pgvector Retriever", slug: "guides/templates/pgvector" },
 					],
 				},
 				{
@@ -157,11 +161,11 @@ export default defineConfig({
 				{
 					label: "Migration Guides",
 					items: [
+						// Added 0.9->1.0 link to main Genkit section previously
 						{
-							label: "Migrate from Genkit 0.5 to 0.9",
+							label: "Migrate from 0.5 to 0.9",
 							slug: "guides/migrating-from-0.5",
 						},
-						// Note: 0.9 to 1.0 migration is under 'Genkit' section
 					],
 				},
 				{
