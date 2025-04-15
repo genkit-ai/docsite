@@ -8,7 +8,7 @@ This feature of Genkit is in **Beta,** which means it is not yet part of Genkit'
 
 A powerful application of large language models are LLM-powered agents. An agent
 is a system that can carry out complex tasks by planning how to break tasks into
-smaller ones, and (with the help of [tool calling](tool-calling)) execute tasks
+smaller ones, and (with the help of [tool calling](/guides/tool-calling)) execute tasks
 that interact with external resources such as databases or even physical
 devices.
 

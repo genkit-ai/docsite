@@ -105,9 +105,9 @@ Configuration for Genkit is now done per instance. Telemetry and logging is conf
   logger.setLogLevel("debug");
   ```
 
-See the [Monitoring and Logging](./monitoring.md) documentation for more details on how to configure telemetry and logging.
+See the [Monitoring and Logging](/guides/observability/getting-started) documentation for more details on how to configure telemetry and logging.
 
-See the [Get Started](./get-started.md) documentation for more details on how to configure a Genkit instance.
+See the [Get Started](/guides/get-started) documentation for more details on how to configure a Genkit instance.
 
 #### Migrate Genkit actions to be called from the `genkit` instance
 

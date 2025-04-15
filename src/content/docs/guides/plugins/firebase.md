@@ -90,16 +90,16 @@ Application Default Credentials. To specify your credentials:
 The Firebase plugin provides a telemetry implementation for sending metrics,
 traces, and logs to Genkit Monitoring.
 
-To get started, visit the [Getting started guide](../observability/getting-started.md)
+To get started, visit the [Getting started guide](/guides/observability/getting-started)
 for installation and configuration instructions.
 
-See the [Authentication and authorization guide](../observability/authentication.md)
+See the [Authentication and authorization guide](/guides/observability/authentication)
 to authenticate with Google Cloud.
 
-See the [Advanced configuration guide](../observability/advanced-configuration.md)
+See the [Advanced configuration guide](/guides/observability/advanced-configuration)
 for configuration options.
 
-See the [Telemetry collection](../observability/telemetry-collection.md) for
+See the [Telemetry collection](/guides/observability/telemetry-collection) for
 details on which Genkit metrics, traces, and logs collected.
 
 ### Cloud Firestore vector search
@@ -108,7 +108,7 @@ You can use Cloud Firestore as a vector store for RAG indexing and retrieval.
 
 This section contains information specific to the `firebase` plugin and Cloud
 Firestore's vector search feature. See the
-[Retrieval-augmented generation](/../rag.md) page for a more detailed
+[Retrieval-augmented generation](/guides/rag) page for a more detailed
 discussion on implementing RAG using Genkit.
 
 #### Using `GCLOUD_SERVICE_ACCOUNT_CREDS` and Firestore
@@ -203,7 +203,7 @@ The following options can be passed to the `options` field in `ai.retrieve`:
 
 To populate your Firestore collection, use an embedding generator along with
 the Admin SDK. For example, the menu ingestion script from the
-[Retrieval-augmented generation](http://../rag.md) page could be adapted for
+[Retrieval-augmented generation](/guides/rag) page could be adapted for
 Firestore in the following way:
 
 <!--See note above on prettier-ignore -->
@@ -297,7 +297,7 @@ To create the index:
 
 #### Learn more
 
-- See the [Retrieval-augmented generation](http://../rag.md) page for a general discussion
+- See the [Retrieval-augmented generation](/guides/rag) page for a general discussion
   on indexers and retrievers in Genkit.
 - See [Search with vector embeddings](https://firebase.google.com/docs/firestore/vector-search)
   in the Cloud Firestore docs for more on the vector search feature.

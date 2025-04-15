@@ -106,15 +106,15 @@ your own.
 Genkit provides indexer and retriever support through its plugin system. The
 following plugins are officially supported:
 
-- [Cloud Firestore vector store](plugins/firebase.md)
-- [Vertex AI Vector Search](plugins/vertex-ai.md)
-- [Chroma DB](plugins/chroma.md) vector database
-- [Pinecone](plugins/pinecone.md) cloud vector database
+- [Cloud Firestore vector store](/guides/plugins/firebase)
+- [Vertex AI Vector Search](/guides/plugins/vertex-ai)
+- [Chroma DB](/guides/plugins/chroma) vector database
+- [Pinecone](/guides/plugins/pinecone) cloud vector database
 
 In addition, Genkit supports the following vector stores through predefined code
 templates, which you can customize for your database configuration and schema:
 
-- PostgreSQL with [`pgvector`](templates/pgvector.md)
+- PostgreSQL with [`pgvector`](/guides/templates/pgvector)
 
 Embedding model support is provided through the following plugins:
 
@@ -123,8 +123,8 @@ Embedding model support is provided through the following plugins:
 | [Google Generative AI][1] | Gecko text embedding |
 | [Google Vertex AI][2]     | Gecko text embedding |
 
-[1]: plugins/google-genai.md
-[2]: plugins/vertex-ai.md
+[1]: /guides/plugins/google-genai
+[2]: /guides/plugins/vertex-ai
 
 ## Defining a RAG Flow
 

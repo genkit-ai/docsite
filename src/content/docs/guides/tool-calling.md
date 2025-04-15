@@ -16,7 +16,7 @@ The use cases of tool calling generally fall into a few themes:
 - Information specific to your app domain, such as product information or user
   profiles.
 
-Note the overlap with [retrieval augmented generation](rag) (RAG), which is also
+Note the overlap with [retrieval augmented generation](/guides/rag) (RAG), which is also
 a way to let an LLM integrate factual information into its generations. RAG is a
 heavier solution that is most suited when you have a large amount of information
 or the information that's most relevant to a prompt is ambiguous. On the other
@@ -37,14 +37,14 @@ database lookup, tool calling is more appropriate.
 ## Before you begin
 
 If you want to run the code examples on this page, first complete the steps in
-the [Getting started](get-started) guide. All of the examples assume that you
+the [Getting started](/guides/get-started) guide. All of the examples assume that you
 have already set up a project with Genkit dependencies installed.
 
 This page discusses one of the advanced features of Genkit model abstraction, so
 before you dive too deeply, you should be familiar with the content on the
-[Generating content with AI models](models) page. You should also be familiar
+[Generating content with AI models](/guides/models) page. You should also be familiar
 with Genkit's system for defining input and output schemas, which is discussed
-on the [Flows](flows) page.
+on the [Flows](/guides/flows) page.
 
 ## Overview of tool calling
 
@@ -211,7 +211,7 @@ to, for example:
 
 **Interrupts** are special tools that can halt the loop and return control
 to your code so that you can handle more advanced scenarios. Visit the
-[interrupts guide](interrupts) to learn how to use them.
+[interrupts guide](/guides/interrupts) to learn how to use them.
 
 ### Explicitly handling tool calls
 

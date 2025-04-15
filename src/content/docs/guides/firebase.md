@@ -10,7 +10,7 @@ which automatically adds auth info.
 
 ## Before you begin
 
-- You should be familiar with Genkit's concept of [flows](flows), and how to
+- You should be familiar with Genkit's concept of [flows](/guides/flows), and how to
   write them. The instructions on this page assume that you already have some
   flows defined, which you want to deploy.
 - It would be helpful, but not required, if you've already used Cloud
@@ -27,7 +27,7 @@ up, follow these steps:
 1.  Upgrade the project to the Blaze plan, which is required to deploy Cloud
     Functions.
 
-1.  Install the [Firebase CLI](/docs/cli).
+1.  Install the [Firebase CLI](https://firebase.google.com/docs/cli).
 
 1.  Log in with the Firebase CLI:
 
@@ -148,7 +148,7 @@ For this example, do one of the following, depending on the model provider you c
     This step is important to prevent accidentally leaking your API key,
     which grants access to a potentially metered service.
 
-    See [Store and access sensitive configuration information](/docs/functions/config-env?gen=2nd#secret-manager)
+    See [Store and access sensitive configuration information](https://firebase.google.com/docs/functions/config-env?gen=2nd#secret-manager)
     for more information on managing secrets.
 
 1.  Edit `src/index.ts` and add the following after the existing imports:
@@ -404,7 +404,7 @@ You can now navigate to the URL printed by the `genkit start` command to access.
 ## Optional: Developing using Firebase Local Emulator Suite
 
 Firebase offers a
-[suite of emulators for local development](/docs/emulator-suite), which you can
+[suite of emulators for local development](https://firebase.google.com/docs/emulator-suite), which you can
 use with Genkit.
 
 To use the Genkit Dev UI with the Firebase Emulator Suite, start the Firebase

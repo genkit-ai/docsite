@@ -46,7 +46,7 @@ another as new models emerge.
 ### Before you begin
 
 If you want to run the code examples on this page, first complete the steps in
-the [Getting started](get-started) guide. All of the examples assume that you
+the [Getting started](/guides/get-started) guide. All of the examples assume that you
 have already installed Genkit as a dependency in your project.
 
 ### Models supported by Genkit
@@ -60,13 +60,13 @@ The Genkit team maintains plugins for working with models provided by Vertex AI,
 Google Generative AI, and Ollama:
 
 - Gemini family of LLMs, through the
-  [Google Cloud Vertex AI plugin](plugins/vertex-ai.md)
-- Gemini family of LLMs, through the [Google AI plugin](plugins/google-genai.md)
+  [Google Cloud Vertex AI plugin](/guides/plugins/vertex-ai)
+- Gemini family of LLMs, through the [Google AI plugin](/guides/plugins/google-genai)
 - Imagen2 and Imagen3 image generation models, through Google Cloud Vertex AI
 - Anthropic's Claude 3 family of LLMs, through Google Cloud Vertex AI's model
   garden
 - Gemma 2, Llama 3, and many more open models, through the [Ollama
-  plugin](plugins/ollama.md) (you must host the Ollama server yourself)
+  plugin](/guides/plugins/ollama) (you must host the Ollama server yourself)
 
 In addition, there are also several community-supported plugins that provide
 interfaces to these models:
@@ -86,7 +86,7 @@ npmjs.org](https://www.npmjs.com/search?q=keywords%3Agenkit-model){:.external}.
 
 Before you can use Genkit to start generating content, you need to load and
 configure a model plugin. If you're coming from the Getting Started guide,
-you've already done this. Otherwise, see the [Getting Started](get-started)
+you've already done this. Otherwise, see the [Getting Started](/guides/get-started)
 guide or the individual plugin's documentation and follow the steps there before
 continuing.
 
@@ -628,14 +628,14 @@ example, to generate an image using the Imagen2 model through Vertex AI:
 #### Learn more about Genkit
 
 - As an app developer, the primary way you influence the output of generative AI
-  models is through prompting. Read [Prompt management](dotpronpt) to learn how
+  models is through prompting. Read [Prompt management](/guides/dotprompt) to learn how
   Genkit helps you develop effective prompts and manage them in your codebase.
 - Although `generate()` is the nucleus of every generative AI powered
   application, real-world applications usually require additional work before
   and after invoking a generative AI model. To reflect this, Genkit introduces
   the concept of _flows_, which are defined like functions but add additional
   features such as observability and simplified deployment. To learn more, see
-  [Defining workflows](flows).
+  [Defining workflows](/guides/flows).
 
 #### Advanced LLM use
 
@@ -655,13 +655,13 @@ TODO: Add these when new pages are written.
   it should perform some action and send the result back to the LLM along with
   the original prompt. Genkit has library functions that automate both the
   prompt generation and the call-response loop elements of a tool calling
-  implementation. See [Tool calling](tool-calling) to learn more.
+  implementation. See [Tool calling](/guides/tool-calling) to learn more.
 - Retrieval-augmented generation (RAG) is a technique used to introduce
   domain-specific information into a model's output. This is accomplished by
   inserting relevant information into a prompt before passing it on to the
   language model. A complete RAG implementation requires you to bring several
   technologies together: text embedding generation models, vector databases, and
-  large language models. See [Retrieval-augmented generation (RAG)](rag) to
+  large language models. See [Retrieval-augmented generation (RAG)](/guides/rag) to
   learn how Genkit simplifies the process of coordinating these various
   elements.
 
@@ -675,4 +675,4 @@ like temperature.
 
 Genkit's evaluators are structured ways to assess the quality of your LLM's
 responses, using a variety of strategies. Read more on the
-[Evaluation](evaluation) page.
+[Evaluation](/guides/evaluation) page.

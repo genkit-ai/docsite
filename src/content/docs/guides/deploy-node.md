@@ -19,7 +19,7 @@ sample flow.
 
 - Node.js 20+: Confirm that your environment is using Node.js version 20 or
   higher (`node --version`).
-- You should be familiar with Genkit's concept of [flows](flows).
+- You should be familiar with Genkit's concept of [flows](/guides/flows).
 
 ## 1. Set up your project
 
@@ -152,7 +152,7 @@ You can use the Developer UI to test flows interactively during development:
 npx genkit start -- npm run start
 ```
 
-Navigate to [http://localhost:4000/flows](http://localhost:4000/flows) to
+Navigate to `http://localhost:4000/flows` to
 test your flows in the UI.
 
 ## 4. Deploy the project

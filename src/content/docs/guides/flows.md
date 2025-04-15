@@ -406,9 +406,9 @@ export const menuSuggestion = onCallGenkit(
 
 For more information, see the following pages:
 
-- [Deploy with Firebase](/docs/genkit/firebase)
-- [Authorization and integrity](/docs/genkit/auth#cloud_functions_for_firebase_integration)
-- [Firebase plugin](/docs/genkit/plugins/firebase)
+- [Deploy with Firebase](/guides/firebase)
+- [Authorization and integrity](/guides/auth#authorize-using-cloud-functions-for-firebase)
+- [Firebase plugin](/guides/plugins/firebase)
 
 ### Express.js
 
@@ -448,5 +448,5 @@ startFlowServer({
 ```
 
 For information on deploying to specific platforms, see
-[Deploy with Cloud Run](/docs/genkit/cloud-run) and
-[Deploy flows to any Node.js platform](/docs/genkit/deploy-node).
+[Deploy with Cloud Run](/guides/cloud-run) and
+[Deploy flows to any Node.js platform](/guides/deploy-node).

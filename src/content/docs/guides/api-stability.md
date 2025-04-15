@@ -49,8 +49,8 @@ for beta features. You can modify your existing dependency string by changing
 
 ### Current Features in Beta
 
-- **[Chat/Sessions](chat):** a first-class conversational `ai.chat()` feature
+- **[Chat/Sessions](/guides/chat):** a first-class conversational `ai.chat()` feature
   along with persistent sessions that store both conversation history and an
   arbitrary state object.
-- **[Interrupts](interrupts):** special tools that can pause generation for
+- **[Interrupts](/guides/interrupts):** special tools that can pause generation for
   human-in-the-loop feedback, out-of-band processing, and more.

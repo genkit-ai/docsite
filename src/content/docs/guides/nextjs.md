@@ -7,7 +7,7 @@ apps.
 
 ## Before you begin
 
-You should be familiar with Genkit's concept of [flows](flows), and how to write
+You should be familiar with Genkit's concept of [flows](/guides/flows), and how to write
 them.
 
 ## Create a Next.js project
@@ -184,6 +184,6 @@ external services you use (such as your chosen model API service) are available
 to the deployed app. See the following pages for information specific to your
 chosen deployment platform:
 
-- [Cloud Functions for Firebase](firebase)
-- [Cloud Run](cloud-run)
-- [Other Node.js platforms](deploy-node)
+- [Cloud Functions for Firebase](/guides/firebase)
+- [Cloud Run](/guides/cloud-run)
+- [Other Node.js platforms](/guides/deploy-node)

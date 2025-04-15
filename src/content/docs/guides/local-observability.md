@@ -40,5 +40,5 @@ The
 dashboard helps you understand the overall health of your Genkit features. It
 is also useful for debugging stability and content issues that may
 indicate problems with your LLM prompts and/or Genkit Flows. See the
-[Getting Started](/docs/genkit/observability/getting-started) guide for
+[Getting Started](/guides/observability/getting-started) guide for
 more details.

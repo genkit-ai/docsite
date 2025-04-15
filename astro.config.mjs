@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import tailwind from "@astrojs/tailwind";
+import starlightLinksValidatorPlugin from "starlight-links-validator";
 
 // https://astro.build/config
 export default defineConfig({
@@ -13,6 +14,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Genkit",
+			plugins: [starlightLinksValidatorPlugin()],
 			logo: {
 				src: "./src/assets/lockup_white_tight.png",
 				replacesTitle: true,
