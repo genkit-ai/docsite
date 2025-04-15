@@ -159,11 +159,15 @@ const response = await weatherPrompt({ location: "Baltimore" });
 
 ### Prompt file
 
-```handlebars
+```dotprompt
+---
+tools: [getWeather]
+input:
+  schema:
+    location: string
+---
 
---- system: "Answer questions using the tools you have." tools: [getWeather]
-input: schema: location: string --- What is the weather in
-{{location}}?
+What is the weather in {{location}}?
 ```
 
 Then you can execute the prompt in your code as follows:

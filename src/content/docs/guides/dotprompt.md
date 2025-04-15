@@ -281,16 +281,23 @@ front matter section:
 
 <!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/dotprompt/prompts/ex04.prompt -->
 
-```handlebars
---- model: googleai/gemini-1.5-flash-latest input: schema: theme?:
-string(description="the theme of the menu item", default="pirate") output:
-schema: name: string(description="The name of the menu item.") description:
-string(description="A description of the menu item.") calories:
-number(description="The estimated number of calories.") allergens(array,
-description="Any known allergens in the menu item."): string --- Invent a menu
-item for a restaurant with a
-{{theme}}
-theme.
+```dotprompt
+---
+model: googleai/gemini-1.5-flash
+config:
+  temperature: 0.9
+input:
+  schema:
+    location: string
+    style?: string
+    name?: string
+  default:
+    location: a restaurant
+---
+
+You are the world's most welcoming AI assistant and are currently working at {{location}}.
+
+Greet a guest{{#if name}} named {{name}}{{/if}}{{#if style}} in the style of {{style}}{{/if}}.
 ```
 
 These schemas are used in much the same way as those passed to a `generate()`
@@ -422,8 +429,12 @@ export const MenuItemSchema = defineSchema(
 
 Within your prompt, provide the name of the registered schema:
 
-```handlebars
---- model: googleai/gemini-1.5-flash-latest output: schema: MenuItemSchema ---
+```dotprompt
+---
+model: googleai/gemini-1.5-flash-latest
+output:
+  schema: MenuItemSchema
+---
 ```
 
 The Dotprompt library will automatically resolve the name to the underlying
@@ -452,16 +463,20 @@ You already saw this in action in the section on input and output schemas:
 
 <!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/dotprompt/prompts/ex04.prompt -->
 
-```handlebars
---- model: googleai/gemini-1.5-flash-latest input: schema: theme?:
-string(description="the theme of the menu item", default="pirate") output:
-schema: name: string(description="The name of the menu item.") description:
-string(description="A description of the menu item.") calories:
-number(description="The estimated number of calories.") allergens(array,
-description="Any known allergens in the menu item."): string --- Invent a menu
-item for a restaurant with a
-{{theme}}
-theme.
+```dotprompt
+---
+model: googleai/gemini-1.5-flash-latest
+input:
+  schema:
+    theme: string, the theme of the menu item
+output:
+  schema:
+    name: string, the name of the menu item
+    description: string, a description of the menu item
+    calories: number, the estimated number of calories
+    allergens(array, any known allergens in the menu item): string
+---
+Invent a menu item for a restaurant with a {{theme}} theme.
 ```
 
 In this example, the Handlebars expression, `{{theme}}`,
@@ -487,8 +502,14 @@ Handlebars's `#if` helper:
 
 <!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/dotprompt/prompts/ex05.prompt -->
 
-```handlebars
---- model: googleai/gemini-1.5-flash-latest input: schema: theme?: string ---
+```dotprompt
+---
+model: googleai/gemini-1.5-flash-latest
+input:
+  schema:
+    theme?: string
+---
+
 Invent a menu item for a restaurant{{#if theme}} with a {{theme}} theme{{/if}}.
 ```
 
@@ -514,18 +535,20 @@ construct multi-message prompts:
 
 <!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/dotprompt/prompts/ex06.prompt -->
 
-```handlebars
---- model: googleai/gemini-1.5-flash-latest input: schema: item_type: string
-theme: string ---
+```dotprompt
+---
+model: googleai/gemini-1.5-flash-latest
+input:
+  schema:
+    item_type: string
+  theme: string
+---
+
 {{role "system"}}
 You are an expert copywriter. Always write in a helpful and engaging tone.
 
 {{role "user"}}
-Suggest a name and description for a
-{{item_type}}
-with a
-{{theme}}
-theme.
+Suggest a name and description for a {{item_type}} with a {{theme}} theme.
 ```
 
 ### Multi-modal prompts
@@ -535,9 +558,15 @@ use the `{{media}}` helper:
 
 <!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/dotprompt/prompts/ex08.prompt -->
 
-```handlebars
---- model: googleai/gemini-1.5-pro-latest input: schema: image_url: string
-question: string ---
+```dotprompt
+---
+model: googleai/gemini-1.5-pro-latest
+input:
+  schema:
+    image_url: string
+    question: string
+---
+
 {{media url=image_url}}
 
 {{question}}
@@ -567,13 +596,13 @@ can be especially helpful for related prompts that share common behavior.
 When loading a prompt directory, any file prefixed with an underscore (`_`) is
 considered a partial. So a file `_personality.prompt` might contain:
 
-```handlebars
+```dotprompt
 You should speak like a {{#if style}}{{style}}{{else}}helpful assistant.{{/if}}.
 ```
 
 This can then be included in other prompts:
 
-```handlebars
+```dotprompt
 ---
 model: googleai/gemini-1.5-flash
 input:
@@ -581,6 +610,7 @@ input:
     name: string
     style?: string
 ---
+
 {{role "system"}}
 {{>personality style=style}}
 
@@ -601,13 +631,13 @@ members of a list.
 
 **\_destination.prompt**
 
-```handlebars
+```dotprompt
 - {{name}} ({{country}})
 ```
 
 **chooseDestination.prompt**
 
-```handlebars
+```dotprompt
 ---
 model: googleai/gemini-1.5-flash-latest
 input:
@@ -658,9 +688,15 @@ defineHelper("shout", (input: string) => {
 
 Once a helper is defined you can use it in any prompt:
 
-```handlebars
---- model: googleai/gemini-1.5-flash input: schema: name: string --- HELLO,
-{{shout name}}!!!
+```dotprompt
+---
+model: googleai/gemini-1.5-flash
+input:
+  schema:
+  name: string
+---
+
+HELLO, {{shout name}}!!!
 ```
 
 ## Prompt variants

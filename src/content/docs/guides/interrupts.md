@@ -119,9 +119,14 @@ const response = await triviaPrompt({ subject: "computer history" });
 
 ### Prompt file
 
-```handlebars
+```dotprompt
+---
+tools: [askQuestion]
+input:
+  schema:
+    partyType: string
+---
 
---- tools: [askQuestion] input: schema: partyType: string ---
 {{role "system"}}
 Use the askQuestion tool if you need to clarify something.
 

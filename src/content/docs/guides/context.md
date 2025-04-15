@@ -105,12 +105,15 @@ When using [Dotprompt templates](dotprompt), context is made available with the
 `@` variable prefix. For example, a context object of
 `{auth: {name: 'Michael'}}` could be accessed in the prompt template like so:
 
-```handlebars
+```dotprompt
 
---- input: schema: pirateStyle?: boolean --- {% verbatim %}{{#if pirateStyle}}{%
-  endverbatim %} Avast, {% verbatim %}{{@auth.name}}{% endverbatim %}, how be ye
-  today? {% verbatim %}{{else}}{% endverbatim %} Hello, {% verbatim %}{{@auth.name}}{%
-  endverbatim %}, how are you today? {% verbatim %}{{/if}}{% endverbatim %}
+---
+input:
+  schema:
+    pirateStyle?: boolean
+---
+
+{{#if pirateStyle}}Avast, {{@auth.name}}, how be ye today?{{else}}Hello, {{@auth.name}}, how are you today?{{/if}}
 ```
 
 ## Provide context at runtime

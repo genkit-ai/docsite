@@ -5,6 +5,11 @@ import tailwind from "@astrojs/tailwind";
 
 // https://astro.build/config
 export default defineConfig({
+	markdown: {
+		shikiConfig: {
+			langAlias: { dotprompt: "handlebars" },
+		},
+	},
 	integrations: [
 		starlight({
 			title: "Genkit",
