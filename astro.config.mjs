@@ -3,9 +3,12 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import tailwind from "@astrojs/tailwind";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
+import starlightLlmsTxt from "starlight-llms-txt";
 
 // https://astro.build/config
 export default defineConfig({
+	// TODO: Update to genkit.dev before launch
+	site: 'https://genkit-dev-astro.web.app/',
 	markdown: {
 		shikiConfig: {
 			langAlias: { dotprompt: "handlebars" },
@@ -14,7 +17,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Genkit",
-			plugins: [starlightLinksValidatorPlugin()],
+			plugins: [starlightLinksValidatorPlugin(), starlightLlmsTxt({
+				projectName: 'Genkit',
+				description: 'Open-source GenAI toolkit for JS, Go, and Python.',
+				minify: {whitespace: false}
+			})],
 			logo: {
 				src: "./src/assets/lockup_white_tight.png",
 				replacesTitle: true,
