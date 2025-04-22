@@ -31,7 +31,9 @@ export async function getStaticPaths() {
           const rawContent = await fs.readFile(filePath, "utf-8");
 
           // --- Check for <LLMs> tag ---
-          const llmMatch = rawContent.match(/<LLMs>([\s\S]*?)<\/LLMs>/);
+          const llmMatch = rawContent.match(
+            /<LLMSummary>([\s\S]*?)<\/LLMSummary>/
+          );
 
           if (llmMatch && llmMatch[1]) {
             // --- Case 1: <LLMs> tag found ---
