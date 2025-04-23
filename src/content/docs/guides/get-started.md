@@ -1,5 +1,5 @@
 ---
-title: Get started
+title: Get started with Genkit JS
 ---
 
 This guide shows you how to get started with Genkit in a Node.js app.
