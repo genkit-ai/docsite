@@ -17,6 +17,10 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Genkit",
+			components: {
+				Header: './src/content/custom/header.astro',
+				Hero: './src/content/custom/hero.astro',
+			},
 			plugins: [starlightLinksValidatorPlugin(), starlightLlmsTxt({
 				projectName: 'Genkit',
 				description: 'Open-source GenAI toolkit for JS, Go, and Python.',
@@ -30,7 +34,8 @@ export default defineConfig({
 				]
 			})],
 			logo: {
-				src: "./src/assets/lockup_white_tight.png",
+				dark: "./src/assets/lockup_white_tight2.png",
+				light: "./src/assets/lockup_dark_tight.png",
 				replacesTitle: true,
 			},
 			social: [
@@ -44,12 +49,17 @@ export default defineConfig({
 					label: "Discord",
 					href: "https://discord.gg/qXt5zzQKpc",
 				},
+				{
+					icon: "youtube",
+					label: "Youtube",
+					href: "https://www.youtube.com/playlist?list=PLl-K7zZEsYLn_AieFQOD5iIrbvQj6X1ah",
+				},
 			],
 			sidebar: [
 				{
 					label: "Genkit",
 					items: [
-						{ label: "Introduction", slug: "index" }, // Assuming index.mdx is the intro
+						{ label: "Introduction", slug: "guides/intro" }, // Assuming index.mdx is the intro
 						{ label: "Get started", slug: "guides/get-started" },
 						{ label: "API Stability Channels", slug: "guides/api-stability" },
 						{ label: "Developer tools", slug: "guides/devtools" },
