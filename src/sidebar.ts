@@ -4,7 +4,7 @@ const JS_SIDEBAR = [
   {
     label: "API reference",
     link: "https://js.api.genkit.dev/",
-    icon: "external",
+    attrs: { "data-external": true },
   },
   {
     label: "Building AI workflows",
