@@ -21,7 +21,33 @@ export default defineConfig({
       title: "Genkit",
       components: {
         Sidebar: "./src/components/sidebar.astro",
+		Header: './src/content/custom/header.astro',
+		Hero: './src/content/custom/hero.astro',
       },
+	  head: [
+        {
+          tag: 'link',
+          attrs: {
+            href: 'https://fonts.gstatic.com',
+            rel: 'preconnect',
+            crossorigin: true,
+          },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            href: "https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap",
+            rel: 'stylesheet',
+          },
+        },
+		{
+			tag: 'link',
+			attrs: {
+			  href: "https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap",
+			  rel: 'stylesheet',
+			},
+		  },
+      ],
       plugins: [
         starlightLinksValidatorPlugin(),
         starlightLlmsTxt({
@@ -96,10 +122,11 @@ export default defineConfig({
           ],
         }),
       ],
-      logo: {
-        src: "./src/assets/lockup_white_tight.png",
-        replacesTitle: true,
-      },
+	  logo: {
+		dark: "./src/assets/lockup_white_tight2.png",
+		light: "./src/assets/lockup_dark_tight.png",
+		replacesTitle: true,
+	  },
       social: [
         {
           icon: "github",
