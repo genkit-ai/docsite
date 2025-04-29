@@ -51,10 +51,10 @@ following sections will go into more detail about each of the parts that make a
 ## Before you begin
 
 Before reading this page, you should be familiar with the content covered on the
-[Generating content with AI models](/guides/models) page.
+[Generating content with AI models](/docs/models) page.
 
 If you want to run the code examples on this page, first complete the steps in
-the [Get started](/guides/get-started) guide. All of the examples assume that you
+the [Get started](/docs/get-started) guide. All of the examples assume that you
 have already installed Genkit as a dependency in your project.
 
 ## Creating prompt files
@@ -223,7 +223,7 @@ const response = await hello(
 Any parameters you pass to the prompt call will override the same parameters
 specified in the prompt file.
 
-See [Generate content with AI models](/guides/models) for descriptions of the available
+See [Generate content with AI models](/docs/models) for descriptions of the available
 options.
 
 ### Using the developer UI
@@ -271,7 +271,7 @@ prompt:
 const response = await hello(undefined, { config: { temperature: 0.9 } });
 ```
 
-See [Generate content with AI models](/guides/models) for descriptions of the available
+See [Generate content with AI models](/docs/models) for descriptions of the available
 options.
 
 ## Input and output schemas
@@ -585,7 +585,7 @@ const response = await imgQuestion({
 });
 ```
 
-See also [Multimodal input](/guides/models#multimodal-input), on the Models
+See also [Multimodal input](/docs/models#multimodal-input), on the Models
 page, for an example of constructing a `data:` URL.
 
 ### Partials

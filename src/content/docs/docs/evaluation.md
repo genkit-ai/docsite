@@ -44,7 +44,7 @@ This section explains how to perform inference-based evaluation using Genkit.
 
 ### Setup
 
-1.  Use an existing Genkit app or create a new one by following our [Get started](/guides/get-started) guide.
+1.  Use an existing Genkit app or create a new one by following our [Get started](/docs/get-started) guide.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
     ```js
@@ -220,7 +220,7 @@ Genkit includes a small number of native evaluators, inspired by [RAGAS](https:/
 
 ### Evaluator plugins
 
-Genkit supports additional evaluators through plugins, like the Vertex Rapid Evaluators, which you can access via the [VertexAI Plugin](/guides/plugins/vertex-ai#evaluators).
+Genkit supports additional evaluators through plugins, like the Vertex Rapid Evaluators, which you can access via the [VertexAI Plugin](/docs/plugins/vertex-ai#evaluators).
 
 ## Advanced use
 

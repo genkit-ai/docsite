@@ -4,7 +4,7 @@ title: Error Types
 
 Genkit knows about two specialized types: `GenkitError` and `UserFacingError`.
 `GenkitError` is intended for use by Genkit itself or Genkit plugins.
-`UserFacingError` is intended for [`ContextProviders`](/guides/deploy-node) and
+`UserFacingError` is intended for [`ContextProviders`](/docs/deploy-node) and
 your code. The separation between these two error types helps you better understand
 where your error is coming from.
 

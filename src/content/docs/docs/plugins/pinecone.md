@@ -80,5 +80,5 @@ export const bobFactsIndexer = pineconeIndexerRef({
 await ai.index({ indexer: bobFactsIndexer, documents });
 ```
 
-See the [Retrieval-augmented generation](/guides/rag) page for a general
+See the [Retrieval-augmented generation](/docs/rag) page for a general
 discussion on indexers and retrievers.

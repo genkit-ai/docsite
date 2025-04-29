@@ -1,6 +1,6 @@
 ---
 title: Migrate from 0.9 to 1.0
-slug: guides/migrating-from-0.9
+slug: docs/migrating-from-0.9
 ---
 
 Genkit 1.0 introduces many feature enhancements that improve overall
@@ -293,7 +293,7 @@ startFlowServer(
 );
 ```
 
-For more details, refer to the [auth documentation](/guides/auth).
+For more details, refer to the [auth documentation](/docs/auth).
 
 The following snippet shows an example of handling auth in Cloud Functions
 for Firebase:

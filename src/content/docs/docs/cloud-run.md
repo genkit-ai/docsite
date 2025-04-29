@@ -9,7 +9,7 @@ explains how to deploy your flows directly from code.
 ## Before you begin
 
 - Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
-- You should be familiar with Genkit's concept of [flows](/guides/flows), and how to
+- You should be familiar with Genkit's concept of [flows](/docs/flows), and how to
   write them. This page assumes that you already have flows that you want to
   deploy.
 - It would be helpful, but not required, if you've already used Google Cloud
@@ -125,7 +125,7 @@ app.post(
 The `auth` parameter of the authorization policy comes from the `auth` property
 of the request object. You typically set this property using Express middleware.
 See
-[Authorization and integrity](/guides/auth#non-firebase-http-authorization).
+[Authorization and integrity](/docs/auth#non-firebase-http-authorization).
 
 Refer to [express plugin documentation](https://js.api.genkit.dev/modules/_genkit-ai_express.html)
 for more details.

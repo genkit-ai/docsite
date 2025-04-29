@@ -306,4 +306,4 @@ export const POST = appRoute(selfSummaryFlow, {
 <!-- NOTE: Should we provide more docs? E.g. docs into various web frameworks and hosting services? -->
 
 For more information about using Express, see the
-[Cloud Run](/guides/cloud-run) instructions.
+[Cloud Run](/docs/cloud-run) instructions.

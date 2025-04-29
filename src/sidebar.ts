@@ -1,6 +1,6 @@
 const JS_SIDEBAR = [
-  { label: "Get started", slug: "guides/get-started" },
-  { label: "API Stability Channels", slug: "guides/api-stability" },
+  { label: "Get started", slug: "docs/get-started" },
+  { label: "API Stability Channels", slug: "docs/api-stability" },
   {
     label: "API reference",
     link: "https://js.api.genkit.dev/",
@@ -9,50 +9,50 @@ const JS_SIDEBAR = [
   {
     label: "Building AI workflows",
     items: [
-      { label: "Generating content", slug: "guides/models" },
+      { label: "Generating content", slug: "docs/models" },
       {
         label: "Passing information through context",
-        slug: "guides/context",
+        slug: "docs/context",
       },
-      { label: "Creating flows", slug: "guides/flows" },
+      { label: "Creating flows", slug: "docs/flows" },
       {
         label: "Managing prompts with Dotprompt",
-        slug: "guides/dotprompt",
+        slug: "docs/dotprompt",
       },
-      { label: "Persistent chat sessions", slug: "guides/chat" },
+      { label: "Persistent chat sessions", slug: "docs/chat" },
       {
         label: "Tools",
         items: [
-          { label: "Tool calling", slug: "guides/tool-calling" },
+          { label: "Tool calling", slug: "docs/tool-calling" },
           {
             label: "Pause generation using interrupts",
-            slug: "guides/interrupts",
+            slug: "docs/interrupts",
           },
         ],
       },
       {
         label: "Retrieval-augmented generation (RAG)",
-        slug: "guides/rag",
+        slug: "docs/rag",
       },
-      { label: "Multi-agent systems", slug: "guides/multi-agent" },
-      { label: "Evaluation", slug: "guides/evaluation" },
+      { label: "Multi-agent systems", slug: "docs/multi-agent" },
+      { label: "Evaluation", slug: "docs/evaluation" },
       {
         label: "Observe local metrics",
-        slug: "guides/local-observability",
+        slug: "docs/local-observability",
       },
-      { label: "Error Types", slug: "guides/errors/types" },
+      { label: "Error Types", slug: "docs/errors/types" },
     ],
   },
   {
     label: "Deploying AI workflows",
     items: [
-      { label: "Deploy with Firebase", slug: "guides/firebase" },
-      { label: "Deploy with Cloud Run", slug: "guides/cloud-run" },
+      { label: "Deploy with Firebase", slug: "docs/firebase" },
+      { label: "Deploy with Cloud Run", slug: "docs/cloud-run" },
       {
         label: "Deploy to any Node.js platform",
-        slug: "guides/deploy-node",
+        slug: "docs/deploy-node",
       },
-      { label: "Authorization and integrity", slug: "guides/auth" },
+      { label: "Authorization and integrity", slug: "docs/auth" },
     ],
   },
   {
@@ -60,23 +60,23 @@ const JS_SIDEBAR = [
     items: [
       {
         label: "Getting Started",
-        slug: "guides/observability/getting-started",
+        slug: "docs/observability/getting-started",
       },
       {
         label: "Authentication",
-        slug: "guides/observability/authentication",
+        slug: "docs/observability/authentication",
       },
       {
         label: "Advanced Configuration",
-        slug: "guides/observability/advanced-configuration",
+        slug: "docs/observability/advanced-configuration",
       },
       {
         label: "Telemetry Collection",
-        slug: "guides/observability/telemetry-collection",
+        slug: "docs/observability/telemetry-collection",
       },
       {
         label: "Troubleshooting",
-        slug: "guides/observability/troubleshooting",
+        slug: "docs/observability/troubleshooting",
       },
     ],
   },
@@ -84,22 +84,22 @@ const JS_SIDEBAR = [
     label: "Writing plugins",
     items: [
       // NOTE: Deployment links were incorrectly placed here before, removed them.
-      { label: "Overview", slug: "guides/plugin-authoring" },
+      { label: "Overview", slug: "docs/plugin-authoring" },
       {
         label: "Writing an Evaluator Plugin",
-        slug: "guides/plugin-authoring-evaluator",
+        slug: "docs/plugin-authoring-evaluator",
       },
     ],
   },
   {
     label: "Plugins",
     items: [
-      { label: "Google AI", slug: "guides/plugins/google-genai" },
-      { label: "Vertex AI", slug: "guides/plugins/vertex-ai" },
-      { label: "Firebase", slug: "guides/plugins/firebase" },
-      { label: "Ollama", slug: "guides/plugins/ollama" },
-      { label: "Chroma", slug: "guides/plugins/chroma" },
-      { label: "Pinecone", slug: "guides/plugins/pinecone" },
+      { label: "Google AI", slug: "docs/plugins/google-genai" },
+      { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
+      { label: "Firebase", slug: "docs/plugins/firebase" },
+      { label: "Ollama", slug: "docs/plugins/ollama" },
+      { label: "Chroma", slug: "docs/plugins/chroma" },
+      { label: "Pinecone", slug: "docs/plugins/pinecone" },
       // { label: "Partner & 3P Plugins", link: "#TODO" },
     ],
   },
@@ -108,13 +108,13 @@ const JS_SIDEBAR = [
     items: [
       {
         label: "pgvector Retriever",
-        slug: "guides/templates/pgvector",
+        slug: "docs/templates/pgvector",
       },
     ],
   },
   {
     label: "Framework Integrations",
-    items: [{ label: "Using Genkit with Next.js", slug: "guides/nextjs" }],
+    items: [{ label: "Using Genkit with Next.js", slug: "docs/nextjs" }],
   },
   {
     label: "Migration Guides",
@@ -122,13 +122,13 @@ const JS_SIDEBAR = [
       // Added 0.9->1.0 link to main Genkit section previously
       {
         label: "Migrate from 0.5 to 0.9",
-        slug: "guides/migrating-from-0.5",
+        slug: "docs/migrating-from-0.5",
       },
     ],
   },
   {
     label: "Community",
-    items: [{ label: "Connect with us", slug: "guides/feedback" }],
+    items: [{ label: "Connect with us", slug: "docs/feedback" }],
   },
   // Keeping Reference section if it's still needed, otherwise remove
   // {
@@ -137,13 +137,13 @@ const JS_SIDEBAR = [
   // }
 ];
 
-const GO_SIDEBAR = [{ label: "Get Started", slug: "go/guides/get-started" }];
+const GO_SIDEBAR = [{ label: "Get Started", slug: "go/docs/get-started" }];
 const PYTHON_SIDEBAR = [
-  { label: "Get Started", slug: "python/guides/get-started" },
+  { label: "Get Started", slug: "python/docs/get-started" },
 ];
 
 export const sidebar = [
-  { label: "Developer tools", slug: "guides/devtools" },
+  { label: "Developer tools", slug: "docs/devtools" },
   {
     label: "Genkit JS",
     items: JS_SIDEBAR,

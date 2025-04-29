@@ -106,7 +106,7 @@ dashboard.
    delay by setting `metricExportIntervalMillis` in the telemetry configuration.
 
 4. If metrics are not appearing in the Genkit Monitoring dashboard, view the
-   [Troubleshooting](/guides/observability/troubleshooting) guide for steps
+   [Troubleshooting](/docs/observability/troubleshooting) guide for steps
    to debug.
 
 ## Step 5. Re-build and deploy code

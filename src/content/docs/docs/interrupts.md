@@ -6,7 +6,7 @@ title: Pause generation using interrupts
 This feature of Genkit is in **Beta,** which means it is not yet part of Genkit's stable API. APIs of beta features may change in minor version releases.
 :::
 
-_Interrupts_ are a special kind of [tool](/guides/tool-calling) that can pause the
+_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
 LLM generation-and-tool-calling loop to return control back to you. When
 you're ready, you can then _resume_ generation by sending _replies_ that the LLM
 processes for further generation.
@@ -28,14 +28,14 @@ The most common uses for interrupts fall into a few categories:
 All of the examples documented here assume that you have already set up a
 project with Genkit dependencies installed. If you want to run the code
 examples on this page, first complete the steps in the
-[Get started](/guides/get-started) guide.
+[Get started](/docs/get-started) guide.
 
 Before diving too deeply, you should also be familiar with the following
 concepts:
 
-- [Generating content](/guides/models) with AI models.
-- Genkit's system for [defining input and output schemas](/guides/flows).
-- General methods of [tool-calling](/guides/tool-calling).
+- [Generating content](/docs/models) with AI models.
+- Genkit's system for [defining input and output schemas](/docs/flows).
+- General methods of [tool-calling](/docs/tool-calling).
 
 ## Overview of interrupts
 

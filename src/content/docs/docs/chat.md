@@ -19,10 +19,10 @@ abstractions that make it easier for you to build chat-based LLM applications.
 ## Before you begin
 
 Before reading this page, you should be familiar with the content covered on the
-[Generating content with AI models](/guides/models) page.
+[Generating content with AI models](/docs/models) page.
 
 If you want to run the code examples on this page, first complete the steps in
-the [Getting started](/guides/get-started) guide. All of the examples assume that you
+the [Getting started](/docs/get-started) guide. All of the examples assume that you
 have already installed Genkit as a dependency in your project.
 
 Note that the chat API is currently in beta and must be used from the
@@ -128,7 +128,7 @@ const chat = session.chat();
 ```
 
 To modify the session state based on how the chat unfolds, define
-[tools](/guides/tool-calling) and include them with your requests:
+[tools](/docs/tool-calling) and include them with your requests:
 
 ```ts
 const changeUserName = ai.defineTool(

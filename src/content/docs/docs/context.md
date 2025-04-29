@@ -16,8 +16,8 @@ with an LLM may be handling simultaneously:
 
 Genkit provides a consistent `context` object that can propagate generation and
 execution context throughout the process. This context is made available to all
-actions including [flows](/guides/flows), [tools](/guides/tool-calling), and
-[prompts](/guides/dotprompt).
+actions including [flows](/docs/flows), [tools](/docs/tool-calling), and
+[prompts](/docs/dotprompt).
 
 Context is automatically propagated to all actions called within the scope of
 execution: Context passed to a flow is made available to prompts executed
@@ -42,7 +42,7 @@ allow you to restrict tool queries to the current user's available scope.
 
 Context must be an object, but its properties are yours to decide. In some
 situations Genkit automatically populates context. For example, when using
-[persistent sessions](/guides/chat) the `state` property is automatically added to
+[persistent sessions](/docs/chat) the `state` property is automatically added to
 context.
 
 One of the most common uses of context is to store information about the current
@@ -101,7 +101,7 @@ that is automatically supplied to your function definition:
 
 ### Prompt file
 
-When using [Dotprompt templates](/guides/dotprompt), context is made available with the
+When using [Dotprompt templates](/docs/dotprompt), context is made available with the
 `@` variable prefix. For example, a context object of
 `{auth: {name: 'Michael'}}` could be accessed in the prompt template like so:
 

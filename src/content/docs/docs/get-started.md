@@ -41,7 +41,7 @@ export GEMINI_API_KEY=<your API key>
 ```
 
 :::note
-While this tutorial uses the Gemini API from AI Studio, Genkit supports a wide variety of model providers including Gemini from Vertex AI, Anthropic’s Claude 3 models and Llama 3.1 through the Vertex AI Model Garden, open source models through Ollama, and several other community-supported providers like OpenAI and Cohere. See [Models supported by Genkit](/guides/models#models-supported-by-genkit) for details.
+While this tutorial uses the Gemini API from AI Studio, Genkit supports a wide variety of model providers including Gemini from Vertex AI, Anthropic’s Claude 3 models and Llama 3.1 through the Vertex AI Model Garden, open source models through Ollama, and several other community-supported providers like OpenAI and Cohere. See [Models supported by Genkit](/docs/models#models-supported-by-genkit) for details.
 :::
 
 ## Make your first request
@@ -74,13 +74,13 @@ Now that you’re set up to make model requests with Genkit, learn how to use mo
 Genkit capabilities to build your AI-powered apps and workflows. To get started
 with additional Genkit capabilities, see the following guides:
 
-- [Developer tools](/guides/devtools): Learn how to set up and use
+- [Developer tools](/docs/devtools): Learn how to set up and use
   Genkit’s CLI and developer UI to help you locally test and debug your app.
-- [Generating content](/guides/models): Learn how to use Genkit’s unified
+- [Generating content](/docs/models): Learn how to use Genkit’s unified
   generation API to generate text and structured data from any supported
   model.
-- [Creating flows](/guides/flows): Learn how to use special Genkit
+- [Creating flows](/docs/flows): Learn how to use special Genkit
   functions, called flows, that provide end-to-end observability for workflows
   and rich debugging from Genkit tooling.
-- [Managing prompts](/guides/dotprompt): Learn how Genkit helps you manage
+- [Managing prompts](/docs/dotprompt): Learn how Genkit helps you manage
   your prompts and configuration together as code.

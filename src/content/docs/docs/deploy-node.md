@@ -19,7 +19,7 @@ sample flow.
 
 - Node.js 20+: Confirm that your environment is using Node.js version 20 or
   higher (`node --version`).
-- You should be familiar with Genkit's concept of [flows](/guides/flows).
+- You should be familiar with Genkit's concept of [flows](/docs/flows).
 
 ## 1. Set up your project
 

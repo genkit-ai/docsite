@@ -21,32 +21,32 @@ export default defineConfig({
       title: "Genkit",
       components: {
         Sidebar: "./src/components/sidebar.astro",
-		Header: './src/content/custom/header.astro',
-		Hero: './src/content/custom/hero.astro',
+        Header: "./src/content/custom/header.astro",
+        Hero: "./src/content/custom/hero.astro",
       },
-	  head: [
+      head: [
         {
-          tag: 'link',
+          tag: "link",
           attrs: {
-            href: 'https://fonts.gstatic.com',
-            rel: 'preconnect',
+            href: "https://fonts.gstatic.com",
+            rel: "preconnect",
             crossorigin: true,
           },
         },
         {
-          tag: 'link',
+          tag: "link",
           attrs: {
             href: "https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap",
-            rel: 'stylesheet',
+            rel: "stylesheet",
           },
         },
-		{
-			tag: 'link',
-			attrs: {
-			  href: "https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap",
-			  rel: 'stylesheet',
-			},
-		  },
+        {
+          tag: "link",
+          attrs: {
+            href: "https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap",
+            rel: "stylesheet",
+          },
+        },
       ],
       plugins: [
         starlightLinksValidatorPlugin(),
@@ -60,18 +60,18 @@ export default defineConfig({
               description:
                 "Guidance on how to generate content and interact with LLM and image models using Genkit.",
               paths: [
-                "guides/models",
-                "guides/context",
-                "guides/flows",
-                "guides/dotprompt",
-                "guides/chat",
-                "guides/tool-calling",
-                "guides/interrupts",
-                "guides/rag",
-                "guides/multi-agent",
-                "guides/evaluation",
-                "guides/local-observability",
-                "guides/errors/types",
+                "docs/models",
+                "docs/context",
+                "docs/flows",
+                "docs/dotprompt",
+                "docs/chat",
+                "docs/tool-calling",
+                "docs/interrupts",
+                "docs/rag",
+                "docs/multi-agent",
+                "docs/evaluation",
+                "docs/local-observability",
+                "docs/errors/types",
               ],
             },
             {
@@ -79,11 +79,11 @@ export default defineConfig({
               description:
                 "Guidance on how to deploy Genkit code to various environments including Firebase and Cloud Run or use within a Next.js app.",
               paths: [
-                "guides/firebase",
-                "guides/cloud-run",
-                "guides/deploy-node",
-                "guides/auth",
-                "guides/nextjs",
+                "docs/firebase",
+                "docs/cloud-run",
+                "docs/deploy-node",
+                "docs/auth",
+                "docs/nextjs",
               ],
             },
             {
@@ -91,19 +91,19 @@ export default defineConfig({
               description:
                 "Guidance about Genkit's various observability features and how to use them.",
               paths: [
-                "guides/observability/getting-started",
-                "guides/observability/authentication",
-                "guides/observability/advanced-configuration",
-                "guides/observability/telemetry-collection",
-                "guides/observability/troubleshooting",
+                "docs/observability/getting-started",
+                "docs/observability/authentication",
+                "docs/observability/advanced-configuration",
+                "docs/observability/telemetry-collection",
+                "docs/observability/troubleshooting",
               ],
             },
             {
               label: "Writing Plugins",
               description: "Guidance about how to author plugins for Genkit.",
               paths: [
-                "guides/plugin-authoring",
-                "guides/plugin-authoring-evaluator",
+                "docs/plugin-authoring",
+                "docs/plugin-authoring-evaluator",
               ],
             },
             {
@@ -111,22 +111,22 @@ export default defineConfig({
               description:
                 "Provider-specific documentation for the Google AI, Vertex AI, Firebase, Ollama, Chroma, and Pinecone plugins.",
               paths: [
-                "guides/plugins/google-genai",
-                "guides/plugins/vertex-ai",
-                "guides/plugins/firebase",
-                "guides/plugins/ollama",
-                "guides/plugins/chroma",
-                "guides/plugins/pinecone",
+                "docs/plugins/google-genai",
+                "docs/plugins/vertex-ai",
+                "docs/plugins/firebase",
+                "docs/plugins/ollama",
+                "docs/plugins/chroma",
+                "docs/plugins/pinecone",
               ],
             },
           ],
         }),
       ],
-	  logo: {
-		dark: "./src/assets/lockup_white_tight2.png",
-		light: "./src/assets/lockup_dark_tight.png",
-		replacesTitle: true,
-	  },
+      logo: {
+        dark: "./src/assets/lockup_white_tight2.png",
+        light: "./src/assets/lockup_dark_tight.png",
+        replacesTitle: true,
+      },
       social: [
         {
           icon: "github",

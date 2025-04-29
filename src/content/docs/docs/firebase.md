@@ -10,7 +10,7 @@ which automatically adds auth info.
 
 ## Before you begin
 
-- You should be familiar with Genkit's concept of [flows](/guides/flows), and how to
+- You should be familiar with Genkit's concept of [flows](/docs/flows), and how to
   write them. The instructions on this page assume that you already have some
   flows defined, which you want to deploy.
 - It would be helpful, but not required, if you've already used Cloud

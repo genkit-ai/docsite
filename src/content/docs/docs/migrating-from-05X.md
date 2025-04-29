@@ -1,6 +1,6 @@
 ---
 title: Migrate from 0.5 to 0.9
-slug: guides/migrating-from-0.5
+slug: docs/migrating-from-0.5
 ---
 
 Genkit 0.9 introduces a number of breaking changes alongside feature enhancements that improve overall functionality. If you have been developing applications with Genkit 0.5, you will need to update your application code when you upgrade to the latest version. This guide outlines the most significant changes and offers steps to migrate your existing applications smoothly.
@@ -105,9 +105,9 @@ Configuration for Genkit is now done per instance. Telemetry and logging is conf
   logger.setLogLevel("debug");
   ```
 
-See the [Monitoring and Logging](/guides/observability/getting-started) documentation for more details on how to configure telemetry and logging.
+See the [Monitoring and Logging](/docs/observability/getting-started) documentation for more details on how to configure telemetry and logging.
 
-See the [Get Started](/guides/get-started) documentation for more details on how to configure a Genkit instance.
+See the [Get Started](/docs/get-started) documentation for more details on how to configure a Genkit instance.
 
 #### Migrate Genkit actions to be called from the `genkit` instance
 
