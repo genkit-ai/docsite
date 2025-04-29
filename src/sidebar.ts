@@ -137,7 +137,59 @@ const JS_SIDEBAR = [
   // }
 ];
 
-const GO_SIDEBAR = [{ label: "Get Started", slug: "go/docs/get-started" }];
+const GO_SIDEBAR = [
+  { label: "Get started", slug: "go/docs/get-started-go" },
+  {
+    label: "API Reference",
+    items: [
+      {
+        label: "Genkit Go packages",
+        link: "https://pkg.go.dev/github.com/firebase/genkit/go",
+        attrs: { "data-external": true }
+      }
+    ]
+  },
+  {
+    label: "Building AI workflows",
+    items: [
+      { label: "Generating content", slug: "go/docs/models" },
+      { label: "Creating flows", slug: "go/docs/flows" },
+      { label: "Managing prompts with Dotprompt", slug: "go/docs/dotprompt" },
+      { label: "Tool calling", slug: "go/docs/tool-calling" },
+      { label: "Retrieval-augmented generation (RAG)", slug: "go/docs/rag" },
+      { label: "Evaluation", slug: "go/docs/evaluation" },
+      { label: "Observability & monitoring", slug: "go/docs/monitoring" },
+    ]
+  },
+  {
+    label: "Deploying AI workflows",
+    items: [
+      { label: "Deploy with Cloud Run", slug: "go/docs/cloud-run" },
+      { label: "Deploy with any hosting service", slug: "go/docs/deploy" },
+    ]
+  },
+  {
+    label: "Writing plugins",
+    items: [
+      { label: "Overview", slug: "go/docs/plugin-authoring" },
+      { label: "Writing a model plugin", slug: "go/docs/plugin-authoring-models" },
+      { label: "Writing a telemetry plugin", slug: "go/docs/plugin-authoring-telemetry" },
+    ]
+  },
+  {
+    label: "Plugins",
+    items: [
+      { label: "Google Generative AI", slug: "go/docs/plugins/google-genai" },
+      { label: "Google Cloud", slug: "go/docs/plugins/google-cloud" },
+      {
+        label: "Partner & 3P Plugins",
+        // Map the directory path; Starlight should handle linking to the index page.
+        // Alternate paths from YAML are typically handled via redirects/aliases, not direct sidebar links.
+        slug: "go/docs/plugins/third-party-plugins"
+      },
+    ]
+  }
+];
 const PYTHON_SIDEBAR = [
   { label: "Get Started", slug: "python/docs/get-started" },
 ];
