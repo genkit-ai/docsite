@@ -4,7 +4,13 @@ const JS_SIDEBAR = [
   {
     label: "API reference",
     link: "https://js.api.genkit.dev/",
-    attrs: { "data-external": true },
+    attrs: {
+      "data-external": true,
+      target: "_blank",
+      class: "external-icon",
+      style:
+        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+    },
   },
   {
     label: "Building AI workflows",
@@ -141,13 +147,13 @@ const GO_SIDEBAR = [
   { label: "Get started", slug: "go/docs/get-started-go" },
   {
     label: "API Reference",
-    items: [
-      {
-        label: "Genkit Go packages",
-        link: "https://pkg.go.dev/github.com/firebase/genkit/go",
-        attrs: { "data-external": true }
-      }
-    ]
+    link: "https://pkg.go.dev/github.com/firebase/genkit/go",
+    attrs: {
+      "data-external": true,
+      target: "_blank",
+      style:
+        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+    },
   },
   {
     label: "Building AI workflows",
@@ -159,22 +165,28 @@ const GO_SIDEBAR = [
       { label: "Retrieval-augmented generation (RAG)", slug: "go/docs/rag" },
       { label: "Evaluation", slug: "go/docs/evaluation" },
       { label: "Observability & monitoring", slug: "go/docs/monitoring" },
-    ]
+    ],
   },
   {
     label: "Deploying AI workflows",
     items: [
       { label: "Deploy with Cloud Run", slug: "go/docs/cloud-run" },
       { label: "Deploy with any hosting service", slug: "go/docs/deploy" },
-    ]
+    ],
   },
   {
     label: "Writing plugins",
     items: [
       { label: "Overview", slug: "go/docs/plugin-authoring" },
-      { label: "Writing a model plugin", slug: "go/docs/plugin-authoring-models" },
-      { label: "Writing a telemetry plugin", slug: "go/docs/plugin-authoring-telemetry" },
-    ]
+      {
+        label: "Writing a model plugin",
+        slug: "go/docs/plugin-authoring-models",
+      },
+      {
+        label: "Writing a telemetry plugin",
+        slug: "go/docs/plugin-authoring-telemetry",
+      },
+    ],
   },
   {
     label: "Plugins",
@@ -183,12 +195,15 @@ const GO_SIDEBAR = [
       { label: "Google Cloud", slug: "go/docs/plugins/google-cloud" },
       {
         label: "Partner & 3P Plugins",
-        // Map the directory path; Starlight should handle linking to the index page.
-        // Alternate paths from YAML are typically handled via redirects/aliases, not direct sidebar links.
-        slug: "go/docs/plugins/third-party-plugins"
+        items: [
+          { label: "Overview", slug: "go/docs/plugins/third-party-plugins" },
+          { label: "Ollama", slug: "go/docs/plugins/ollama" },
+          { label: "pgvector", slug: "go/docs/plugins/pgvector" },
+          { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
+        ],
       },
-    ]
-  }
+    ],
+  },
 ];
 const PYTHON_SIDEBAR = [
   { label: "Get Started", slug: "python/docs/get-started" },
