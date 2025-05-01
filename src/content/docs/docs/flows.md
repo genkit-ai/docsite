@@ -41,17 +41,16 @@ flow doesn't need to be flow-aware.
 In its simplest form, a flow just wraps a function. The following example wraps
 a function that calls `generate()`:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex01) -->
-
-```ts
+```typescript
 export const menuSuggestionFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
   },
   async (restaurantTheme) => {
-    const { text } = await ai.generate(
-      `Invent a menu item for a ${restaurantTheme} themed restaurant.`
-    );
+    const { text } = await ai.generate({
+      model: gemini15Flash,
+      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
+    });
     return text;
   }
 );
@@ -73,32 +72,30 @@ also specify an input schema.
 Here's a refinement of the last example, which defines a flow that takes a
 string as input and outputs an object:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex02) -->
-
-```ts
-import { z } from "genkit/schema";
+```typescript
+import { z } from 'genkit';
 
 const MenuItemSchema = z.object({
-  name: z.string().describe("The name of the menu item."),
-  description: z.string().describe("A description of the menu item."),
-  calories: z.number().describe("The estimated number of calories."),
-  allergens: z
-    .array(z.string())
-    .describe("Any known allergens in the menu item."),
+  dishname: z.string(),
+  description: z.string(),
 });
 
-export const menuSuggestionFlow = ai.defineFlow(
+export const menuSuggestionFlowWithSchema = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
     outputSchema: MenuItemSchema,
   },
   async (restaurantTheme) => {
-    const response = await ai.generate({
+    const { output } = await ai.generate({
+      model: gemini15Flash,
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
-    return response.output!;
+    if (output == null) {
+      throw new Error("Response doesn't satisfy schema.");
+    }
+    return output;
   }
 );
 ```
@@ -109,22 +106,23 @@ contain `generate()` calls). Here's a variation of the example that passes a
 schema to `generate()`, but uses the structured output to format a simple
 string, which the flow returns.
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex03) -->
-
-```ts
-export const menuSuggestionFlow = ai.defineFlow(
+```typescript
+export const menuSuggestionFlowMarkdown = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
   async (restaurantTheme) => {
-    const response = await ai.generate({
+    const { output } = await ai.generate({
+      model: gemini15Flash,
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
-    const menuItem = response.output!;
-    return `${menuItem.name}: ${menuItem.description}`;
+    if (output == null) {
+      throw new Error("Response doesn't satisfy schema.");
+    }
+    return `**${output.dishname}**: ${output.description}`;
   }
 );
 ```
@@ -133,11 +131,8 @@ export const menuSuggestionFlow = ai.defineFlow(
 
 Once you've defined a flow, you can call it from your Node.js code:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex04) -->
-
-```ts
-const response = await menuSuggestionFlow("space");
-console.log(response);
+```typescript
+const { text } = await menuSuggestionFlow('bistro');
 ```
 
 The argument to the flow must conform to the input schema, if you defined one.
@@ -146,11 +141,9 @@ If you defined an output schema, the flow response will conform to it. For
 example, if you set the output schema to `MenuItemSchema`, the flow output will
 contain its properties:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex05) -->
-
-```ts
-const menuItem = await menuSuggestionFlow("space");
-console.log(menuItem.name);
+```typescript
+const { dishname, description } =
+  await menuSuggestionFlowWithSchema('bistro');
 ```
 
 ## Streaming flows
@@ -164,27 +157,31 @@ generated.
 
 Here's an example of a flow that supports streaming:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex06) -->
-
-```ts
-export const menuSuggestionFlow = ai.defineFlow(
+```typescript
+export const menuSuggestionStreamingFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
-    outputSchema: z.string(),
     streamSchema: z.string(),
+    outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
   },
-  async (restaurantTheme, { context, sendChunk }) => {
-    const { stream, response } = ai.generateStream({
-      prompt: `Tell me a story about a ${restaurantTheme} themed restaurant.`,
+  async (restaurantTheme, { sendChunk }) => {
+    const response = await ai.generateStream({
+      model: gemini15Flash,
+      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
 
-    for await (const chunk of stream) {
+    for await (const chunk of response.stream) {
+      // Here, you could process the chunk in some way before sending it to
+      // the output stream via streamingCallback(). In this example, we output
+      // the text of the chunk, unmodified.
       sendChunk(chunk.text);
     }
 
-    const finalResponse = await response;
-    return finalResponse.text;
+    return {
+      theme: restaurantTheme,
+      menuItem: (await response.response).text,
+    };
   }
 );
 ```
@@ -208,31 +205,24 @@ the callback as often as is useful for your flow.
 Streaming flows are also callable, but they immediately return a response object
 rather than a promise:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex07) -->
-
-```ts
-const { stream, output } = menuSuggestionFlow.stream("space");
+```typescript
+const response = menuSuggestionStreamingFlow.stream('Danube');
 ```
 
 The response object has a stream property, which you can use to iterate over the
 streaming output of the flow as it's generated:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex08) -->
-
-```ts
-for await (const chunk of stream) {
-  console.log(chunk);
+```typescript
+for await (const chunk of response.stream) {
+  console.log('chunk', chunk);
 }
 ```
 
 You can also get the complete output of the flow, as you can with a
 non-streaming flow:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex09) -->
-
-```ts
-const finalOutput = await output;
-console.log(finalOutput);
+```typescript
+const output = await response.output;
 ```
 
 Note that the streaming output of a flow might not be the same type as the
@@ -274,7 +264,7 @@ genkit start -- tsx --watch src/your-code.ts
 From the **Run** tab of developer UI, you can run any of the flows defined in
 your project:
 
-<!-- TODO: devui-flows.png -->
+![Genkit DevUI flows](../../../assets/devui-flows.png)
 
 After you've run a flow, you can inspect a trace of the flow invocation by
 either clicking **View trace** or looking on the **Inspect** tab.
@@ -284,33 +274,39 @@ as well as details for each of the individual steps within the flow. For
 example, consider the following flow, which contains several generation
 requests:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex10) -->
+```typescript
+const PrixFixeMenuSchema = z.object({
+  starter: z.string(),
+  soup: z.string(),
+  main: z.string(),
+  dessert: z.string(),
+});
 
-```ts
-export const brainstormingFlow = ai.defineFlow(
+export const complexMenuSuggestionFlow = ai.defineFlow(
   {
-    name: "brainstormingFlow",
-    inputSchema: z.object({ subject: z.string() }),
-    outputSchema: z.array(z.string()),
+    name: 'complexMenuSuggestionFlow',
+    inputSchema: z.string(),
+    outputSchema: PrixFixeMenuSchema,
   },
-  async (input) => {
-    // Generate a list of ideas.
-    const ideaResponse = await ai.generate({
-      prompt: `Brainstorm a list of 3 ideas about ${input.subject}.`,
-      output: { schema: z.array(z.string()) },
+  async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
+    const chat = ai.chat({ model: gemini15Flash });
+    await chat.send('What makes a good prix fixe menu?');
+    await chat.send(
+      'What are some ingredients, seasonings, and cooking techniques that ' +
+        `would work for a ${theme} themed menu?`
+    );
+    const { output } = await chat.send({
+      prompt:
+        `Based on our discussion, invent a prix fixe menu for a ${theme} ` +
+        'themed restaurant.',
+      output: {
+        schema: PrixFixeMenuSchema,
+      },
     });
-    const ideas = ideaResponse.output!;
-
-    // Elaborate on each idea.
-    const elaboratedIdeas: string[] = [];
-    for (const idea of ideas) {
-      const elaboratedResponse = await ai.generate({
-        prompt: `Elaborate on the following idea: ${idea}`,
-      });
-      elaboratedIdeas.push(elaboratedResponse.text);
+    if (!output) {
+      throw new Error('No data generated.');
     }
-
-    return elaboratedIdeas;
+    return output;
   }
 );
 ```
@@ -318,7 +314,7 @@ export const brainstormingFlow = ai.defineFlow(
 When you run this flow, the trace viewer shows you details about each generation
 request including its output:
 
-<!-- TODO: resources/devui-inspect.png -->
+![Genkit DevUI flows](../../../assets/devui-inspect.png)
 
 ### Flow steps
 
@@ -343,25 +339,30 @@ some unspecified method, and the second step includes the menu as context for a
 
 ```ts
 import { run } from "genkit";
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/index.ts (region_tag: ex11) -->
-import { retrieveMenu } from './menu-db.js';
 
-export const menuSuggestionFlow = ai.defineFlow(
+export const menuQuestionFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionFlow',
-    inputSchema: z.object({ restaurantTheme: z.string() }),
+    name: 'menuQuestionFlow',
+    inputSchema: z.string(),
     outputSchema: z.string(),
   },
-  async (input) => {
-    // Retrieve the menu.
-    const menu = await ai.run('retrieve-menu', () =>
-      retrieveMenu(input.restaurantTheme)
-    );
+  async (input: string): Promise<string> => {
+    const menu = await ai.run(
+      'retrieve-daily-menu',
+      async (): Promise<string> => {
+        // Retrieve today's menu. (This could be a database access or simply
+        // fetching the menu from your website.)
 
-    // Generate a menu item suggestion.
+        // ...
+
+        return menu;
+      }
+    );
     const { text } = await ai.generate({
-      prompt: `Suggest an item for the menu of a ${input.restaurantTheme} themed restaurant.`,
-      context: [menu],
+      model: gemini15Flash,
+      system: "Help the user answer questions about today's menu.",
+      prompt: input,
+      docs: [{ content: [{ text: menu }] }],
     });
     return text;
   }
@@ -371,7 +372,7 @@ export const menuSuggestionFlow = ai.defineFlow(
 Because the retrieval step is wrapped in a `run()` call, it's included as a step
 in the trace viewer:
 
-<!-- TODO: devui-runstep.png -->
+![Genkit DevUI flows](../../../assets/devui-runstep.png)
 
 ## Deploying flows
 
@@ -385,20 +386,25 @@ To deploy flows with Cloud Functions for Firebase, use the `onCallGenkit`
 feature of `firebase-functions/https`. `onCallGenkit` wraps your flow in a
 callable function. You may set an auth policy and configure App Check.
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/firebase.ts (region_tag: ex) -->
+```typescript
+import { hasClaim, onCallGenkit } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
 
-```ts
-import { onCallGenkit, hasClaim } from "firebase-functions/v2/https";
+const apiKey = defineSecret('GOOGLE_AI_API_KEY');
 
-// Assume menuSuggestionFlow is defined as above.
+const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+  },
+  async (restaurantTheme) => {
+    // ...
+  }
+);
 
 export const menuSuggestion = onCallGenkit(
   {
-    // Configure required options for your function.
-    secrets: [googleAIapiKey],
-    enforceAppCheck: true,
-    // Use an authPolicy to ensure the user is signed in.
-    authPolicy: hasClaim("email_verified"),
+    secrets: [apiKey],
+    authPolicy: hasClaim('email_verified'),
   },
   menuSuggestionFlow
 );
@@ -415,14 +421,21 @@ For more information, see the following pages:
 To deploy flows using any Node.js hosting platform, such as Cloud Run, define
 your flows using `defineFlow()` and then call `startFlowServer()`:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/express.ts (region_tag: ex01) -->
+```typescript
+import { startFlowServer } from '@genkit-ai/express';
 
-```ts
-import { startFlowServer } from "@genkit-ai/express";
+export const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+  },
+  async (restaurantTheme) => {
+    // ...
+  }
+);
 
-// Assume menuSuggestionFlow is defined as above.
-
-startFlowServer();
+startFlowServer({
+  flows: [menuSuggestionFlow],
+});
 ```
 
 By default, `startFlowServer` will serve all the flows defined in your codebase
@@ -438,12 +451,21 @@ If needed, you can customize the flows server to serve a specific list of flows,
 as shown below. You can also specify a custom port (it will use the PORT
 environment variable if set) or specify CORS settings.
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/flows/express.ts (region_tag: ex02) -->
+```typescript
+export const flowA = ai.defineFlow({ name: 'flowA' }, async (subject) => {
+  // ...
+});
 
-```ts
+export const flowB = ai.defineFlow({ name: 'flowB' }, async (subject) => {
+  // ...
+});
+
 startFlowServer({
-  flows: [menuSuggestionFlow], // Serve only menuSuggestionFlow
-  port: 3000,
+  flows: [flowB],
+  port: 4567,
+  cors: {
+    origin: '*',
+  },
 });
 ```
 

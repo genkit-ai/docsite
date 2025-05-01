@@ -2,17 +2,6 @@ const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
   { label: "API Stability Channels", slug: "docs/api-stability" },
   {
-    label: "API reference",
-    link: "https://js.api.genkit.dev/",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-    },
-  },
-  {
     label: "Building AI workflows",
     items: [
       { label: "Generating content", slug: "docs/models" },
@@ -142,18 +131,9 @@ const JS_SIDEBAR = [
     label: "Community",
     items: [{ label: "Connect with us", slug: "docs/feedback" }],
   },
-  // Keeping Reference section if it's still needed, otherwise remove
-  // {
-  // 	label: "Reference",
-  // 	autogenerate: { directory: "reference" },
-  // }
-];
-
-const GO_SIDEBAR = [
-  { label: "Get started", slug: "go/docs/get-started-go" },
   {
-    label: "API Reference",
-    link: "https://pkg.go.dev/github.com/firebase/genkit/go",
+    label: "API reference",
+    link: "https://js.api.genkit.dev/",
     attrs: {
       "data-external": true,
       target: "_blank",
@@ -162,6 +142,10 @@ const GO_SIDEBAR = [
         "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
     },
   },
+];
+
+const GO_SIDEBAR = [
+  { label: "Get started", slug: "go/docs/get-started-go" },
   {
     label: "Building AI workflows",
     items: [
@@ -211,12 +195,9 @@ const GO_SIDEBAR = [
       },
     ],
   },
-];
-const PYTHON_SIDEBAR = [
-  { label: "Get started", slug: "python/docs/get-started" },
   {
     label: "API Reference",
-    link: "https://python.api.genkit.dev/reference/api/",
+    link: "https://pkg.go.dev/github.com/firebase/genkit/go",
     attrs: {
       "data-external": true,
       target: "_blank",
@@ -225,6 +206,9 @@ const PYTHON_SIDEBAR = [
         "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
     },
   },
+];
+const PYTHON_SIDEBAR = [
+  { label: "Get started", slug: "python/docs/get-started" },
   { label: "Deploy with Cloud Run", slug: "python/docs/cloud-run" },
   { label: "Deploy with Flask", slug: "python/docs/flask" },
   { label: "Generating content with AI models", slug: "python/docs/reference/models" },
@@ -240,6 +224,17 @@ const PYTHON_SIDEBAR = [
       { label: "Ollama", slug: "python/docs/reference/plugins/ollama" },
       { label: "Dev Local Vector Store", slug: "python/docs/reference/plugins/dev-local-vectorstore" },
     ],
+  },
+  {
+    label: "API Reference",
+    link: "https://python.api.genkit.dev/reference/api/",
+    attrs: {
+      "data-external": true,
+      target: "_blank",
+      class: "external-icon",
+      style:
+        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+    },
   },
 ];
 
