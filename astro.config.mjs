@@ -47,6 +47,13 @@ export default defineConfig({
             rel: "stylesheet",
           },
         },
+        {
+          tag: "link",
+          attrs: {
+            href: "https://fonts.googleapis.com/css2?family=Google+Symbols&display=block",
+            rel: "stylesheet",
+          },
+        },
       ],
       plugins: [
         starlightLinksValidatorPlugin(),

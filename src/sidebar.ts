@@ -103,10 +103,16 @@ const JS_SIDEBAR = [
       { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
       { label: "Firebase", slug: "docs/plugins/firebase" },
-      { label: "Ollama", slug: "docs/plugins/ollama" },
-      { label: "Chroma", slug: "docs/plugins/chroma" },
-      { label: "Pinecone", slug: "docs/plugins/pinecone" },
-      // { label: "Partner & 3P Plugins", link: "#TODO" },
+      {
+        label: "Partner & 3P Plugins",
+        items: [
+          { label: "Overview", slug: "docs/plugins/third-party-plugins" },
+          { label: "Pinecone", slug: "docs/plugins/pinecone" },
+          { label: "ChromaDB", slug: "docs/plugins/chroma" },
+          { label: "Ollama", slug: "docs/plugins/ollama" },
+          { label: "pgvector", slug: "docs/plugins/pgvector" },
+        ],
+      },
     ],
   },
   {
@@ -151,6 +157,7 @@ const GO_SIDEBAR = [
     attrs: {
       "data-external": true,
       target: "_blank",
+      class: "external-icon",
       style:
         "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
     },
@@ -213,6 +220,7 @@ const PYTHON_SIDEBAR = [
     attrs: {
       "data-external": true,
       target: "_blank",
+      class: "external-icon",
       style:
         "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
     },
