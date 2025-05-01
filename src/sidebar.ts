@@ -206,7 +206,33 @@ const GO_SIDEBAR = [
   },
 ];
 const PYTHON_SIDEBAR = [
-  { label: "Get Started", slug: "python/docs/get-started" },
+  { label: "Get started", slug: "python/docs/get-started" },
+  {
+    label: "API Reference",
+    link: "https://python.api.genkit.dev/reference/api/",
+    attrs: {
+      "data-external": true,
+      target: "_blank",
+      style:
+        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+    },
+  },
+  { label: "Deploy with Cloud Run", slug: "python/docs/cloud-run" },
+  { label: "Deploy with Flask", slug: "python/docs/flask" },
+  { label: "Generating content with AI models", slug: "python/docs/reference/models" },
+  { label: "Defining AI workflows", slug: "python/docs/reference/flows" },
+  { label: "Tool (function) calling", slug: "python/docs/reference/tools" },
+  { label: "Tool interrupts", slug: "python/docs/reference/interrupts" },
+  { label: "Retrieval-augmented generation (RAG)", slug: "python/docs/reference/rag" },
+  {
+    label: "Plugins",
+    items: [
+      { label: "Google GenAI", slug: "python/docs/reference/plugins/google-genai" },
+      { label: "Firestore Vector Store", slug: "python/docs/reference/plugins/firestore" },
+      { label: "Ollama", slug: "python/docs/reference/plugins/ollama" },
+      { label: "Dev Local Vector Store", slug: "python/docs/reference/plugins/dev-local-vectorstore" },
+    ],
+  },
 ];
 
 export const sidebar = [
