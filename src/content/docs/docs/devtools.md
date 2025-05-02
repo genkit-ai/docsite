@@ -82,7 +82,7 @@ automatically open the Developer UI in your default browser tab.
 npx genkit start -o -- <command to run your code>
 ```
 
-<!-- TODO: welcome_to_genkit_developer_ui.png -->
+![Genkit Developer UI](../../../assets/welcome_to_genkit_developer_ui.png)
 
 The Developer UI has action runners for `flow`, `prompt`, `model`, `tool`,
 `retriever`, `indexer`, `embedder` and `evaluator` based on the components
@@ -90,7 +90,7 @@ you have defined in your code.
 
 Here's a quick gif tour with cats.
 
-<!-- TODO: genkit_developer_ui_overview.gif -->
+![Genkit Developer UI Overview](/genkit_developer_ui_overview.gif)
 
 ### Analytics
 

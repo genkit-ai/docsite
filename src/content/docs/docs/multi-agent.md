@@ -15,43 +15,52 @@ devices.
 Here are some excerpts from a very simple customer service agent built using a
 single prompt and several tools:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/multi-agent/simple.ts (region_tag: tools) -->
-
-```ts
-const listHotels = ai.defineTool(
+```typescript
+const menuLookupTool = ai.defineTool(
   {
-    name: "listHotels",
-    description: "List hotels in a given location. Returns the list of hotels.",
-    inputSchema: z.object({ location: z.string() }),
-    outputSchema: z.array(z.string()),
+    name: 'menuLookupTool',
+    description: 'use this tool to look up the menu for a given date',
+    inputSchema: z.object({
+      date: z.string().describe('the date to look up the menu for'),
+    }),
+    outputSchema: z.string().describe('the menu for a given date'),
   },
-  async ({ location }) => {
-    // ... call a hotel booking API
-    return ["hotel 1", "hotel 2"];
+  async (input) => {
+    // Retrieve the menu from a database, website, etc.
+    // ...
   }
 );
 
-const reserveHotel = ai.defineTool(
+const reservationTool = ai.defineTool(
   {
-    name: "reserveHotel",
-    description:
-      "Reserve a hotel for the given dates. Returns the reservation ID.",
-    inputSchema: z.object({ hotelId: z.string(), dates: z.string() }),
-    outputSchema: z.string(),
+    name: 'reservationTool',
+    description: 'use this tool to try to book a reservation',
+    inputSchema: z.object({
+      partySize: z.coerce.number().describe('the number of guests'),
+      date: z.string().describe('the date to book for'),
+    }),
+    outputSchema: z
+      .string()
+      .describe(
+        "true if the reservation was successfully booked and false if there's" +
+          ' no table available for the requested time'
+      ),
   },
-  async ({ hotelId, dates }) => {
-    // ... call a hotel booking API
-    return "reservation-123";
+  async (input) => {
+    // Access your database to try to make the reservation.
+    // ...
   }
 );
 ```
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/multi-agent/simple.ts (region_tag: chat) -->
-
-```ts
-const chat = await ai.chat({
-  system: "You are a customer service agent for a hotel chain.",
-  tools: [listHotels, reserveHotel],
+```typescript
+const chat = ai.chat({
+  model: gemini15Pro,
+  system:
+    "You are an AI customer service agent for Pavel's Cafe. Use the tools " +
+    'available to you to help the customer. If you cannot help the ' +
+    'customer with the available tools, politely explain so.',
+  tools: [menuLookupTool, reservationTool],
 });
 ```
 
@@ -82,37 +91,32 @@ interface with the user.
 Here's what an expanded version of the previous example might look like as a
 multi-agent system:
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/multi-agent/multi.ts (region_tag: agents) -->
+```typescript
+// Define a prompt that represents a specialist agent
+const reservationAgent = ai.definePrompt({
+  name: 'reservationAgent',
+  description: 'Reservation Agent can help manage guest reservations',
+  tools: [reservationTool, reservationCancelationTool, reservationListTool],
+  system: 'Help guests make and manage reservations',
+});
 
-```ts
-const listReservations = ai.defineTool(/* ... */);
-const cancelReservation = ai.defineTool(/* ... */);
+// Or load agents from .prompt files
+const menuInfoAgent = ai.prompt('menuInfoAgent');
+const complaintAgent = ai.prompt('complaintAgent');
 
-const reservationAgent = ai.definePrompt(
-  {
-    name: "reservationAgent",
-    description: "Use this agent to list or cancel reservations.",
-    tools: [listReservations, cancelReservation],
-  },
-  '{{role "system"}} You are an agent that helps users manage their reservations. {{role "user"}} {{prompt}}'
-);
-
-const bookingAgent = ai.definePrompt(
-  {
-    name: "bookingAgent",
-    description: "Use this agent to book hotels.",
-    tools: [listHotels, reserveHotel],
-  },
-  '{{role "system"}} You are an agent that helps users book hotels. {{role "user"}} {{prompt}}'
-);
+// The triage agent is the agent that users interact with initially
+const triageAgent = ai.definePrompt({
+  name: 'triageAgent',
+  description: 'Triage Agent',
+  tools: [reservationAgent, menuInfoAgent, complaintAgent],
+  system: `You are an AI customer service agent for Pavel's Cafe.
+  Greet the user and ask them how you can help. If appropriate, transfer to an
+  agent that can better handle the request. If you cannot help the customer with
+  the available tools, politely explain so.`,
+});
 ```
 
-<!-- TODO: Investigate code inclusion from firebase/genkit/js/doc-snippets/src/multi-agent/multi.ts (region_tag: chat) -->
-
-```ts
-const chat = await ai.chat({
-  system:
-    "You are a customer service agent for a hotel chain. You can delegate tasks to other agents.",
-  tools: [reservationAgent, bookingAgent],
-});
+```typescript
+// Start a chat session, initially with the triage agent
+const chat = ai.chat(triageAgent);
 ```

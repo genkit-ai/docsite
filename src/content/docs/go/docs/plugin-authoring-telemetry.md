@@ -64,7 +64,14 @@ Every telemetry plugin needs to import the Genkit core library and several
 OpenTelemetry libraries:
 
 ```go
-// TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="import"
+	// Import the Genkit core library.
+
+	"github.com/firebase/genkit/go/genkit"
+
+	// Import the OpenTelemetry libraries.
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/trace"
 ```
 
 If you are building a plugin around an existing OpenTelemetry or `slog`
@@ -76,7 +83,18 @@ A telemetry plugin should, at a minimum, support the following configuration
 options:
 
 ```go
-// TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="config"
+type Config struct {
+	// Export even in the dev environment.
+	ForceExport bool
+
+	// The interval for exporting metric data.
+	// The default is 60 seconds.
+	MetricInterval time.Duration
+
+	// The minimum level at which logs will be written.
+	// Defaults to [slog.LevelInfo].
+	LogLevel slog.Leveler
+}
 ```
 
 The examples that follow assume you are making these options available and will
@@ -94,20 +112,29 @@ The `Init()` function of a telemetry plugin should do all of the following:
   set:
 
   ```go
-  // TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="shouldexport"
+	shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
+	if !shouldExport {
+		return nil
+	}
   ```
 
 - Initialize your trace span exporter and register it with Genkit:
 
   ```go
-  // TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="registerspanexporter"
+	spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
+	genkit.RegisterSpanProcessor(g, spanProcessor)
   ```
 
 - Initialize your metric exporter and register it with the OpenTelemetry
   library:
 
   ```go
-  // TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="registermetricexporter"
+	r := metric.NewPeriodicReader(
+		YourCustomMetricExporter{},
+		metric.WithInterval(cfg.MetricInterval),
+	)
+	mp := metric.NewMeterProvider(metric.WithReader(r))
+	otel.SetMeterProvider(mp)
   ```
 
   Use the user-configured collection interval (`Config.MetricInterval`) when
@@ -116,7 +143,10 @@ The `Init()` function of a telemetry plugin should do all of the following:
 - Register your `slog` handler as the default logger:
 
   ```go
-  // TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/telemetryplugin.go region_tag="registerlogexporter"
+	logger := slog.New(YourCustomHandler{
+		Options: &slog.HandlerOptions{Level: cfg.LogLevel},
+	})
+	slog.SetDefault(logger)
   ```
 
   You should configure your handler to honor the user-specified minimum log
@@ -139,7 +169,37 @@ task. For example, the `googlecloud` plugin removes the `genkit:input` and
 similar to the following:
 
 ```go
-// TODO: Include code from github.com/firebase/genkit/go/internal/doc-snippets/telemetryplugin/exporters.go region_tag="redactpii"
+type redactingSpanExporter struct {
+	trace.SpanExporter
+}
+
+func (e *redactingSpanExporter) ExportSpans(ctx context.Context, spanData []trace.ReadOnlySpan) error {
+	var redacted []trace.ReadOnlySpan
+	for _, s := range spanData {
+		redacted = append(redacted, redactedSpan{s})
+	}
+	return e.SpanExporter.ExportSpans(ctx, redacted)
+}
+
+func (e *redactingSpanExporter) Shutdown(ctx context.Context) error {
+	return e.SpanExporter.Shutdown(ctx)
+}
+
+type redactedSpan struct {
+	trace.ReadOnlySpan
+}
+
+func (s redactedSpan) Attributes() []attribute.KeyValue {
+	// Omit input and output, which may contain PII.
+	var ts []attribute.KeyValue
+	for _, a := range s.ReadOnlySpan.Attributes() {
+		if a.Key == "genkit:input" || a.Key == "genkit:output" {
+			continue
+		}
+		ts = append(ts, a)
+	}
+	return ts
+}
 ```
 
 ## Troubleshooting
