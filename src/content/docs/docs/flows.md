@@ -48,7 +48,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { text } = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
     return text;
@@ -88,7 +88,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -115,7 +115,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -167,7 +167,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   },
   async (restaurantTheme, { sendChunk }) => {
     const response = await ai.generateStream({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
 
@@ -289,7 +289,7 @@ export const complexMenuSuggestionFlow = ai.defineFlow(
     outputSchema: PrixFixeMenuSchema,
   },
   async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: gemini15Flash });
+    const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
     await chat.send('What makes a good prix fixe menu?');
     await chat.send(
       'What are some ingredients, seasonings, and cooking techniques that ' +
@@ -359,7 +359,7 @@ export const menuQuestionFlow = ai.defineFlow(
       }
     );
     const { text } = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       system: "Help the user answer questions about today's menu.",
       prompt: input,
       docs: [{ content: [{ text: menu }] }],
