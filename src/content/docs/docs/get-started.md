@@ -50,13 +50,13 @@ Get started with Genkit in just a few lines of simple code.
 
 ```ts
 // import the Genkit and Google AI plugin libraries
-import { gemini20Flash, googleAI } from "@genkit-ai/googleai";
-import { genkit } from "genkit";
+import { googleAI } from '@genkit-ai/googleai';
+import { genkit } from 'genkit';
 
 // configure a Genkit instance
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini20Flash, // set default model
+  model: googleAI.model('gemini-2.0-flash'), // set default model
 });
 
 async function main() {

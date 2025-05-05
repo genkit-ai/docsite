@@ -268,7 +268,7 @@ which you should not use in production.
 
 ```ts
 import { devLocalRetrieverRef } from "@genkit-ai/dev-local-vectorstore";
-import { gemini } from "@genkit-ai/vertexai";
+import { vertexAI } from "@genkit-ai/vertexai";
 
 // Define the retriever reference
 export const menuRetriever = devLocalRetrieverRef("menuQA");
@@ -285,7 +285,7 @@ export const menuQAFlow = ai.defineFlow(
 
     // generate a response
     const { text } = await ai.generate({
-      model: gemini("gemini-1.5-flash"),
+      model: vertexAI.model('gemini-2.0-flash'),
       prompt: `
 You are acting as a helpful AI assistant that can answer 
 questions about the food available on the menu at Genkit Grub Pub.

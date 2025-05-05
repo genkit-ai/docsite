@@ -64,12 +64,12 @@ the user, for example by asking a multiple-choice question.
 For this use case, use the Genkit instance's `defineInterrupt()` method:
 
 ```ts
-import { genkit, z } from "genkit";
-import { googleAI, gemini15Flash } from "@genkitai/google-ai";
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkitai/google-ai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
 });
 
 const askQuestion = ai.defineInterrupt({

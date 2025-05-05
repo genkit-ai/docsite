@@ -34,13 +34,13 @@ Here is a minimal, console-based, chatbot application:
 
 ```ts
 import { genkit } from "genkit/beta";
-import { googleAI, gemini20Flash } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 
 import { createInterface } from "node:readline/promises";
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini20Flash,
+  model: googleAI.model('gemini-2.0-flash'),
 });
 
 async function main() {
@@ -91,7 +91,7 @@ The `chat()` method accepts most of the same configuration options as
 
 ```ts
 const chat = ai.chat({
-  model: gemini15Pro,
+  model: googleAI.model('gemini-2.0-flash'),
   system:
     "You're a pirate first mate. Address the user as Captain and assist " +
     "them however you can.",
@@ -150,7 +150,7 @@ const changeUserName = ai.defineTool(
 
 ```ts
 const chat = session.chat({
-  model: gemini15Pro,
+  model: googleAI.model('gemini-2.0-flash'),
   tools: [changeUserName],
 });
 await chat.send("change user name to Kevin");

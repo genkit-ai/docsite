@@ -97,12 +97,12 @@ supported. In addition:
 Use the Genkit instance's `defineTool()` function to write tool definitions:
 
 ```ts
-import { genkit, z } from "genkit";
-import { googleAI, gemini15Flash } from "@genkitai/google-ai";
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkitai/google-ai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
 });
 
 const getWeather = ai.defineTool(
@@ -119,7 +119,7 @@ const getWeather = ai.defineTool(
   async (input) => {
     // Here, we would typically make an API call or database query. For this
     // example, we just return a fixed value.
-    return "The current weather in ${input.location} is 63°F and sunny.";
+    return `The current weather in ${input.location} is 63°F and sunny.`;
   }
 );
 ```
@@ -198,6 +198,85 @@ const response = await chat.send({
 
 Genkit will automatically handle the tool call if the LLM needs to use the
 `getWeather` tool to answer the prompt.
+
+### Dynamically defining tools at runtime {: #dynamic-tools }
+
+As most things in Genkit tools need to be predefined during your app's
+initialization. This is necessary so that you would be able interact with your
+tools from the Genkit Dev UI. This is typically the recommended way. However
+there are scenarios when the tool must be defined dynamically per user request.
+
+You can dynamically define tools using `ai.dynamicTool` function. It is very
+similar to `ai.defineTool` method, however dynamic tools are not tracked by
+Genkit runtime, so cannot be interacted with from Genkit Dev UI and must be
+passed to the `ai.generate` call by reference (for regular tools you can also
+use a string tool name).
+
+```ts
+import { genkit, z } from "genkit";
+import { googleAI } from "@genkit-ai/googleai";
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model("gemini-2.0-flash"),
+});
+
+ai.defineFlow("weatherFlow", async () => {
+  const getWeather = ai.dynamicTool(
+    {
+      name: "getWeather",
+      description: "Gets the current weather in a given location",
+      inputSchema: z.object({
+        location: z
+          .string()
+          .describe("The location to get the current weather for"),
+      }),
+      outputSchema: z.string(),
+    },
+    async (input) => {
+      return `The current weather in ${input.location} is 63°F and sunny.`;
+    }
+  );
+
+  const { text } = await ai.generate({
+    prompt: "What is the weather in Baltimore?",
+    tools: [getWeather],
+  });
+
+  return text;
+});
+```
+
+When defining dynamic tools, to specify input and output schemas you can either
+use Zod as shown in the previous example, or you can pass in manually
+constructed JSON Schema.
+
+```ts
+const getWeather = ai.dynamicTool(
+  {
+    name: "getWeather",
+    description: "Gets the current weather in a given location",
+    inputJsonSchema: myInputJsonSchema,
+    outputJsonSchema: myOutputJsonSchema,
+  },
+  async (input) => { /* ... */ }
+);
+```
+
+Dynamic tools don't require the implementation function. If you don't pass in
+the function the tool will behave like an [interrupt](interrupts) and you can
+do manual tool call handling:
+
+```ts
+const getWeather = ai.dynamicTool(
+  {
+    name: "getWeather",
+    description: "Gets the current weather in a given location",
+    inputJsonSchema: myInputJsonSchema,
+    outputJsonSchema: myOutputJsonSchema,
+  }
+);
+```
 
 ### Pause the tool loop by using interrupts
 
