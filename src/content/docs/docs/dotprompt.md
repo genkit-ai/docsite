@@ -474,8 +474,8 @@ const description = output?.description;
 The portion of a `.prompt` file that follows the front matter (if present) is
 the prompt itself, which will be passed to the model. While this prompt could be
 a simple text string, very often you will want to incorporate user input into
-the prompt. To do so, you can specify your prompt using the
-[Handlebars](https://handlebarsjs.com/guide/){:.external} templating language.
+the prompt. To do so, you can specify your prompt using the 
+<a href="https://handlebarsjs.com/guide/" target="_blank">Handlebars</a> templating language.
 Prompt templates can include placeholders that refer to the values defined by
 your prompt's input schema.
 
@@ -530,9 +530,8 @@ Invent a menu item for a {{#if theme}}{{theme}} themed{{/if}} restaurant.
 In this example, the prompt renders as "Invent a menu item for a restaurant"
 when the `theme` property is unspecified.
 
-See the [Handlebars
-documentation](https://handlebarsjs.com/guide/builtin-helpers.html){:.external}
-for information on all of the built-in logical helpers.
+See the <a href="https://handlebarsjs.com/guide/builtin-helpers.html" target="_blank">Handlebars
+documentation</a> for information on all of the built-in logical helpers.
 
 In addition to properties defined by your input schema, your templates can also
 refer to values automatically defined by Genkit. The next few sections describe

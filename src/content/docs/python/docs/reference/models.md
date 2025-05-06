@@ -372,7 +372,7 @@ model plugins add support for other media sources. For example, the Vertex AI
 plugin also lets you use Cloud Storage (`gs://`) URLs.
 
 <!-- TODO: The 'Generating media' section is incomplete. -->
-### Generating media {:#generating-media}
+### Generating media
 
 So far, most of the examples on this page have dealt with generating text using
 LLMs. However, Genkit can also be used with image generation models. Using
