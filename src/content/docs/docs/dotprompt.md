@@ -50,10 +50,9 @@ Greet a guest{{#if name}} named {{name}}{{/if}}{{#if style}} in the style of {{s
 
 The portion in the triple-dashes is YAML front matter, similar to the front
 matter format used by GitHub Markdown and Jekyll; the rest of the file is the
-prompt, which can optionally use
-[Handlebars](https://handlebarsjs.com/guide/) templates. The
-following sections will go into more detail about each of the parts that make a
-`.prompt` file and how to use them.
+prompt, which can optionally use <a href="https://handlebarsjs.com/guide/" target="_blank">Handlebars
+</a> templates. The following sections will go into more detail about each of 
+the parts that make a `.prompt` file and how to use them.
 
 ## Before you begin
 
