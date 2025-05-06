@@ -102,7 +102,7 @@ This section explains how to perform inference-based evaluation using Genkit.
     ...,
     // Add this plugin to your Genkit initialization block
     genkitEval({
-      judge: googleAI.model('gemini-1.5-pro'),
+      judge: googleAI.model('gemini-2.0-pro'),
       metrics: [GenkitMetric.MALICIOUSNESS],
     }),
     ```

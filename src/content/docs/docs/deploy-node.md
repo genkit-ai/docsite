@@ -53,7 +53,7 @@ npm install -D genkit-cli typescript tsx
 
 In `src/index.ts`, define a sample flow and configure the flow server:
 
-  ```typescript
+```typescript
   import { genkit } from 'genkit';
   import { googleAI } from '@genkit-ai/googleai';
   import { startFlowServer } from '@genkit-ai/express';
