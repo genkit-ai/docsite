@@ -199,7 +199,7 @@ const response = await chat.send({
 Genkit will automatically handle the tool call if the LLM needs to use the
 `getWeather` tool to answer the prompt.
 
-### Dynamically defining tools at runtime {: #dynamic-tools }
+### Dynamically defining tools at runtime
 
 As most things in Genkit tools need to be predefined during your app's
 initialization. This is necessary so that you would be able interact with your
