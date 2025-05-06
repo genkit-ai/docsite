@@ -50,10 +50,7 @@ This section explains how to perform inference-based evaluation using Genkit.
     ```js
 
     import { genkit, z, Document } from "genkit";
-    import {
-    googleAI,
-    gemini15Flash,
-    } from "@genkit-ai/googleai";
+    import { googleAI } from "@genkit-ai/googleai";
 
     // Initialize Genkit
     export const ai = genkit ({
@@ -86,7 +83,7 @@ This section explains how to perform inference-based evaluation using Genkit.
     });
 
     const llmResponse = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocs,
     });
@@ -105,7 +102,7 @@ This section explains how to perform inference-based evaluation using Genkit.
     ...,
     // Add this plugin to your Genkit initialization block
     genkitEval({
-      judge: gemini15Pro,
+      judge: googleAI.model('gemini-2.0-pro'),
       metrics: [GenkitMetric.MALICIOUSNESS],
     }),
     ```
@@ -371,7 +368,7 @@ export const qaFlow = ai.defineFlow(
     });
 
     const llmResponse = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocsModified,
     });
@@ -448,7 +445,7 @@ questions.
 
 ```ts
 import { genkit, z } from "genkit";
-import { googleAI, gemini15Flash } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 import { chunk } from "llm-chunk"; // npm i llm-chunk
 import path from "path";
 import { readFile } from "fs/promises";
@@ -489,7 +486,7 @@ export const synthesizeQuestions = ai.defineFlow(
     const questions: string[] = [];
     for (var i = 0; i < chunks.length; i++) {
       const qResponse = await ai.generate({
-        model: gemini15Flash,
+        model: googleAI.model('gemini-2.0-flash'),
         prompt: {
           text: `Generate one question about the text below: ${chunks[i]}`,
         },

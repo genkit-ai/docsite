@@ -64,14 +64,14 @@ must add the `'use server'` directive to the top of the file.
 For example:
 
 ```ts
-"use server";
+'use server';
 
-import { gemini20Flash, googleAI } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 import { genkit, z } from "genkit";
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini20Flash,
+  model: googleAI.model('gemini-2.0-flash'),
 });
 
 export const menuSuggestionFlow = ai.defineFlow(

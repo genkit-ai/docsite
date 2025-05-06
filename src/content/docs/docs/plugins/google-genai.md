@@ -95,7 +95,7 @@ const uploadResult = await fileManager.uploadFile("path/to/file.jpg", {
 });
 
 const response = await ai.generate({
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
   prompt: [
     { text: "Describe this image:" },
     {
@@ -116,13 +116,13 @@ instructions from the
 or fine-tune a model using
 [AI Studio](https://aistudio.corp.google.com/app/tune).
 
-The tuning process uses a base model—for example, Gemini 1.5 Flash—and your
+The tuning process uses a base model—for example, Gemini 2.0 Flash—and your
 provided examples to create a new tuned model. Remember the base model you
 used, and copy the new model's ID.
 
 When calling the tuned model in Genkit, use the base model as the `model`
 parameter, and pass the tuned model's ID as part of the `config` block. For
-example, if you used Gemini 1.5 Flash as the base model, and got the model ID
+example, if you used Gemini 2.0 Flash as the base model, and got the model ID
 `tunedModels/my-example-model-apbm8oqbvuv2` you can call it with:
 
 ```ts
@@ -132,7 +132,7 @@ const ai = genkit({
 
 const llmResponse = await ai.generate({
   prompt: `Suggest an item for the menu of fish themed restruant`,
-  model: gemini15Flash.withConfig({
+  model: googleAI.model('gemini-2.0-flash').withConfig({
     version: "tunedModels/my-example-model-apbm8oqbvuv2",
   }),
 });
@@ -144,7 +144,7 @@ The Google Generative AI plugin supports **context caching**, which allows model
 
 ### How to Use Context Caching
 
-To enable context caching, ensure your model supports it. For example, `gemini15Flash` and `gemini15Pro` are models that support context caching.
+To enable context caching, ensure your model supports it. For example, `gemini-2.0-flash` and `gemini-2.0-pro` are models that support context caching.
 
 You can define a caching mechanism in your application like this:
 
@@ -173,9 +173,9 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
   config: {
-    version: "gemini-1.5-flash-001", // Only 001 currently supports context caching
+    version: "gemini-2.0-flash-001", // Only 001 currently supports context caching
   },
   prompt: "Describe Pierre’s transformation throughout the novel.",
 });
@@ -215,9 +215,9 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
   config: {
-    version: "gemini-1.5-flash-001", // Only 001 currently supports context caching
+    version: "gemini-2.0-flash-001", // Only 001 currently supports context caching
   },
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
@@ -275,16 +275,16 @@ const analyzeVideoResponse = await ai.generate({
     },
   ],
   config: {
-    version: "gemini-1.5-flash-001", // Only 001 versions support context caches
+    version: "gemini-2.0-flash-001", // Only 001 versions support context caches
   },
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'),
   prompt: query,
 });
 ```
 
 ### Supported Models for Context Caching
 
-Only specific models, such as `gemini15Flash` and `gemini15Pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
+Only specific models, such as `gemini-2.0-flash` and `gemini-2.0-pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
 
 ### Further Reading
 

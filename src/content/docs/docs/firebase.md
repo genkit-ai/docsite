@@ -225,7 +225,7 @@ looks something like the following example:
 
 ```ts
 import { genkit } from "genkit";
-import { googleAI, gemini20Flash } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 import { onCallGenkit, hasClaim } from "firebase-functions/https";
 import { defineSecret } from "firebase-functions/params";
 
@@ -233,7 +233,7 @@ const apiKey = defineSecret("GEMINI_API_KEY");
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini20Flash,
+  model: googleAI.model('gemini-2.0-flash'),
 });
 
 const generatePoemFlow = ai.defineFlow(
