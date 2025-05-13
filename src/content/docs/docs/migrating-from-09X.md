@@ -43,13 +43,13 @@ const session = ai.createSession({ ... })
 **Old:**
 
 ```ts
-import { runFlow, streamFlow } from "genkit/client";
+import { runFlow, streamFlow } from 'genkit/client';
 ```
 
 **New:**
 
 ```ts
-import { runFlow, streamFlow } from "genkit/beta/client";
+import { runFlow, streamFlow } from 'genkit/beta/client';
 ```
 
 ## Introducing new `@genkit-ai/express` package
@@ -254,7 +254,7 @@ The following snippet shows an example of handling auth in Express.
 ```ts
 import { UserFacingError } from 'genkit';
 import { ContextProvider, RequestData } from 'genkit/context';
-import { expressHandler, startFlowServer } from '@genkit-ai/express';
+import { expressHandler, startFlowServer, withContextProvider } from '@genkit-ai/express';
 
 const context: ContextProvider<Context> = (req: RequestData) => {
   return {
