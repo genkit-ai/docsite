@@ -84,3 +84,5 @@ with additional Genkit capabilities, see the following guides:
   and rich debugging from Genkit tooling.
 - [Managing prompts](/docs/dotprompt): Learn how Genkit helps you manage
   your prompts and configuration together as code.
+- [Integrating in an app](https://developers.google.com/solutions/learn/agentic-barista):
+Walk through a deployed example of multiple Genkit flows powering a web app.
