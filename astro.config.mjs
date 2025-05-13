@@ -6,6 +6,11 @@ import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import { sidebar } from "./src/sidebar";
 
+console.log(process.env)
+
+const site = 'https://starlight.astro.build/';
+const ogUrl = new URL('lockup_white_tight.png?v=1', site).href;
+
 // https://astro.build/config
 export default defineConfig({
   // TODO: Update to genkit.dev before launch
@@ -25,13 +30,10 @@ export default defineConfig({
         Hero: "./src/content/custom/hero.astro",
       },
       head: [
-        // {
-        //   tag: "meta",
-        //   attrs: {
-        //     property: "og:image",
-        //     content: "./src/assets/lockup_dark_tight.png",
-        //   },
-        // },
+        {
+					tag: 'meta',
+					attrs: { property: 'og:image', content: ogUrl },
+				},
         {
           tag: "link",
           attrs: {
