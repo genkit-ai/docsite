@@ -8,7 +8,7 @@ import { sidebar } from "./src/sidebar";
 
 console.log(process.env)
 
-const site = 'https://starlight.astro.build/';
+const site = 'https://genkit-dev-astro--pr-11-zldt97gu.web.app';
 const ogUrl = new URL('lockup_white_tight.png?v=1', site).href;
 
 // https://astro.build/config
