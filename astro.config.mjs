@@ -25,13 +25,13 @@ export default defineConfig({
         Hero: "./src/content/custom/hero.astro",
       },
       head: [
-        {
-          tag: "meta",
-          attrs: {
-            property: "og:image",
-            content: "./src/assets/lockup_dark_tight.png",
-          },
-        },
+        // {
+        //   tag: "meta",
+        //   attrs: {
+        //     property: "og:image",
+        //     content: "./src/assets/lockup_dark_tight.png",
+        //   },
+        // },
         {
           tag: "link",
           attrs: {
@@ -137,8 +137,9 @@ export default defineConfig({
         }),
       ],
       logo: {
-        dark: "./src/assets/lockup_white_tight2.png",
+        // dark: "./src/assets/lockup_white_tight2.png",
         light: "./src/assets/lockup_dark_tight.png",
+        dark: "./src/assets/lockup_dark_tight.png",
         replacesTitle: true,
       },
       social: [
