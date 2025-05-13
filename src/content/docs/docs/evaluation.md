@@ -20,12 +20,9 @@ Genkit supports two types of evaluation:
   collection of pre-determined inputs, assessing the corresponding outputs for
   quality.
 
-      This is the most common evaluation type, suitable for most use cases. This
-      approach tests a system's actual output for each evaluation run.
+  This is the most common evaluation type, suitable for most use cases. This approach tests a system's actual output for each evaluation run.
 
-      You can perform the quality assessment manually, by visually inspecting the
-      results. Alternatively, you can automate the assessment by using an
-      evaluation metric.
+  You can perform the quality assessment manually, by visually inspecting the results. Alternatively, you can automate the assessment by using an evaluation metric.
 
 - **Raw evaluation**: This type of evaluation directly assesses the quality of
   inputs without any inference. This approach typically is used with automated
@@ -35,8 +32,7 @@ Genkit supports two types of evaluation:
   from your production traces) and you want to have an objective measurement of
   the quality of the collected data.
 
-      For more information, see the [Advanced use](#advanced_use) section of this
-      page.
+  For more information, see the [Advanced use](#advanced_use) section of this page.
 
 This section explains how to perform inference-based evaluation using Genkit.
 
@@ -48,16 +44,11 @@ This section explains how to perform inference-based evaluation using Genkit.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
     ```js
-
     import { genkit, z, Document } from "genkit";
     import { googleAI } from "@genkit-ai/googleai";
 
     // Initialize Genkit
-    export const ai = genkit ({
-    plugins: [
-    googleAI(),
-    ]
-    });
+    export const ai = genkit({ plugins: [googleAI()] });
 
     // Dummy retriever that always returns the same docs
     export const dummyRetriever = ai.defineRetriever({
@@ -73,21 +64,23 @@ This section explains how to perform inference-based evaluation using Genkit.
 
     // A simple question-answering flow
     export const qaFlow = ai.defineFlow({
-      name: 'qaFlow',
-      inputSchema: z.string(),
-      outputSchema: z.string(),
-    }, async (query) => {
-      const factDocs = await ai.retrieve({
-      retriever: dummyRetriever,
-      query,
-    });
+        name: 'qaFlow',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+      },
+      async (query) => {
+        const factDocs = await ai.retrieve({
+          retriever: dummyRetriever,
+          query,
+        });
 
-    const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
-      prompt: `Answer this question with the given context ${query}`,
-      docs: factDocs,
-    });
-    return llmResponse.text;
+        const llmResponse = await ai.generate({
+          model: googleAI.model('gemini-2.0-flash'),
+          prompt: `Answer this question with the given context ${query}`,
+          docs: factDocs,
+        });
+        return llmResponse.text;
+      });
     ```
 
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
@@ -95,16 +88,18 @@ This section explains how to perform inference-based evaluation using Genkit.
     ```js
 
     import { genkitEval, GenkitMetric } from "@genkit-ai/evaluator";
-    import { gemini15Pro } from "@genkit-ai/googleai";
+    import { googleAI } from "@genkit-ai/googleai";
 
     export const ai = genkit ({
-    plugins: [
-    ...,
-    // Add this plugin to your Genkit initialization block
-    genkitEval({
-      judge: googleAI.model('gemini-2.0-pro'),
-      metrics: [GenkitMetric.MALICIOUSNESS],
-    }),
+      plugins: [
+        ...
+        // Add this plugin to your Genkit initialization block
+        genkitEval({
+          judge: googleAI.model('gemini-2.0-flash'),
+          metrics: [GenkitMetric.MALICIOUSNESS],
+        }),
+      ]
+    });
     ```
 
     **Note:** The configuration above requires installation of the [`@genkit-ai/evaluator`](https://www.npmjs.com/package/@genkit-ai/evaluator) package.
@@ -187,7 +182,8 @@ input, extracted context and metrics (if any).
 
 - **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
 
-- **Dataset** A dataset is a collection of examples to use for inference-based evaluation. A dataset typically consists of `input` and optional `reference`
+- **Dataset** A dataset is a collection of examples to use for inference-based      
+  evaluation. A dataset typically consists of `input` and optional `reference`
   fields. The `reference` field does not affect the inference step of evaluation
   but it is passed verbatim to any evaluation metrics. In Genkit, you can create a
   dataset through the Dev UI. There are two types of datasets in Genkit: _Flow_
