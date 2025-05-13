@@ -80,7 +80,7 @@ This section explains how to perform inference-based evaluation using Genkit.
           docs: factDocs,
         });
         return llmResponse.text;
-      }
+      });
     ```
 
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
