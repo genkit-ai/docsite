@@ -1,6 +1,7 @@
 const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
-  { label: "API Stability Channels", slug: "docs/api-stability" },
+  { label: "Developer tools", slug: "docs/devtools" },
+  { label: "API stability channels", slug: "docs/api-stability" },
   {
     label: "Building AI workflows",
     items: [
@@ -233,14 +234,13 @@ const PYTHON_SIDEBAR = [
       target: "_blank",
       class: "external-icon",
       style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+        "font-weight: 500; font-size: var(--sl-text-sm); color: var(--sl-color-white);",
     },
   },
 ];
 
 export const sidebar = [
   { label: "Introduction", slug: "" },
-  { label: "Developer tools", slug: "docs/devtools" },
   {
     label: "Genkit JS",
     items: JS_SIDEBAR,
