@@ -26,6 +26,13 @@ export default defineConfig({
       },
       head: [
         {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "./src/assets/lockup_dark_tight.png",
+          },
+        },
+        {
           tag: "link",
           attrs: {
             href: "https://fonts.gstatic.com",
