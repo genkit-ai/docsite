@@ -30,7 +30,7 @@ export default defineConfig({
       head: [
         {
 					tag: 'meta',
-					attrs: { property: 'og:image', content: ogUrl },
+					attrs: { property: 'og:image', content: ogUrl, width: "1085", height: "377" },
 				},
         {
           tag: "link",
