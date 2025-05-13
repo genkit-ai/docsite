@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import tailwind from "@astrojs/tailwind";
+import tailwindcss from '@tailwindcss/vite';
 import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import { sidebar } from "./src/sidebar";
@@ -148,11 +149,6 @@ export default defineConfig({
       ],
       sidebar,
       customCss: [
-        "@fontsource/ibm-plex-sans/400.css",
-        "@fontsource/ibm-plex-sans/400-italic.css",
-        "@fontsource/ibm-plex-sans/600.css",
-        "@fontsource/ibm-plex-sans/600-italic.css",
-        "./src/fonts/font-face.css",
         "./src/tailwind.css",
       ],
     }),

@@ -239,6 +239,7 @@ const PYTHON_SIDEBAR = [
 ];
 
 export const sidebar = [
+  { label: "Introduction", slug: "" },
   { label: "Developer tools", slug: "docs/devtools" },
   {
     label: "Genkit JS",
