@@ -5,6 +5,7 @@ import tailwind from "@astrojs/tailwind";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import { sidebar } from "./src/sidebar";
+import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
 
 // https://astro.build/config
 export default defineConfig({
@@ -17,6 +18,9 @@ export default defineConfig({
   },
   integrations: [
     starlight({
+      expressiveCode: {
+        themes: [GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME],
+      },
       pagination: false,
       title: "Genkit",
       components: {
@@ -154,9 +158,7 @@ export default defineConfig({
         },
       ],
       sidebar,
-      customCss: [
-        "./src/tailwind.css",
-      ],
+      customCss: ["./src/tailwind.css"],
     }),
     tailwind({ applyBaseStyles: false }),
   ],
