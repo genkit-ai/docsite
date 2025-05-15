@@ -7,7 +7,7 @@ through the [Gemini API](https://ai.google.dev/docs/gemini_api_overview).
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save @genkit-ai/googleai
 ```
 
@@ -91,7 +91,7 @@ const uploadResult = await fileManager.uploadFile("path/to/file.jpg", {
 });
 
 const response = await ai.generate({
-  model: googleAI.model('gemini-2.0-flash'),
+  model: googleAI.model("gemini-2.0-flash"),
   prompt: [
     { text: "Describe this image:" },
     {
@@ -128,7 +128,7 @@ const ai = genkit({
 
 const llmResponse = await ai.generate({
   prompt: `Suggest an item for the menu of fish themed restruant`,
-  model: googleAI.model('tunedModels/my-example-model-apbm8oqbvuv2'),
+  model: googleAI.model("tunedModels/my-example-model-apbm8oqbvuv2"),
 });
 ```
 
@@ -167,7 +167,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: "Describe Pierre’s transformation throughout the novel.",
 });
 ```
@@ -206,7 +206,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
 ```
@@ -262,7 +262,7 @@ const analyzeVideoResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: query,
 });
 ```

@@ -18,7 +18,7 @@ build intelligent and scalable AI applications. Key features include:
 
 Install the Firebase plugin with npm:
 
-```posix-terminal
+```bash
 npm install @genkit-ai/firebase
 ```
 
@@ -283,7 +283,7 @@ To create the index:
 
   The command looks like the following:
 
-  ```posix-terminal
+  ```bash
   gcloud alpha firestore indexes composite create --project=your-project-id \
     --collection-group=yourCollectionName --query-scope=COLLECTION \
     --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=yourEmbeddingField
@@ -334,6 +334,6 @@ export const example = onCallGenkit({ secrets: [apiKey] }, exampleFlow);
 
 Deploy your flow using the Firebase CLI:
 
-```posix-terminal
+```bash
 firebase deploy --only functions
 ```

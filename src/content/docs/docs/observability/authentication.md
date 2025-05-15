@@ -37,13 +37,13 @@ If you don't have the gcloud CLI installed, first follow the [installation instr
 
 1. Authenticate using the `gcloud` CLI:
 
-   ```posix-terminal
+   ```bash
    gcloud auth application-default login
    ```
 
 2. Set your project ID
 
-   ```posix-terminal
+   ```bash
    gcloud config set project PROJECT_ID
    ```
 
@@ -89,7 +89,7 @@ those credentials to your production environment.
 4. Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable as the path to
    the credential file.
 
-   ```posix-terminal
+   ```bash
    GOOGLE_APPLICATION_CREDENTIALS = "path/to/your/key/file"
    ```
 
@@ -116,7 +116,7 @@ file.
 4. Assign the contents of the credential file to the
    `GCLOUD_SERVICE_ACCOUNT_CREDS` environment variable as follows:
 
-```posix-terminal
+```bash
 GCLOUD_SERVICE_ACCOUNT_CREDS='{
   "type": "service_account",
   "project_id": "your-project-id",

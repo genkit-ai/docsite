@@ -3,7 +3,7 @@ title: Deploy with Flask
 description: Learn how to build a Flask application using Genkit for Python.
 ---
 
-Prerequisites: make sure you have everything installed from the [Get Started](/python/get-started/) guide.
+Prerequisites: make sure you have everything installed from the [Get Started](/python/docs/get-started/) guide.
 
 1.  Install Genkit Flask plugin
 
