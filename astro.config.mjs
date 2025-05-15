@@ -37,7 +37,7 @@ export default defineConfig({
             width: "1085",
             height: "377",
           },
-				},
+	},
         {
           tag: "link",
           attrs: {
