@@ -8,7 +8,7 @@ import { sidebar } from "./src/sidebar";
 
 // TODO -- This has to be updated to the final URL for docsite
 const site = 'https://genkit-dev-astro.web.app/';
-const ogUrl = new URL('ogi.png?v=1', site).href;
+const ogUrl = new URL('ogimage.png?v=1', site).href;
 
 // https://astro.build/config
 export default defineConfig({
@@ -31,7 +31,12 @@ export default defineConfig({
       head: [
         {
 					tag: 'meta',
-					attrs: { property: 'og:image', content: ogUrl, width: "1085", height: "377" },
+					attrs: { 
+            property: 'og:image',
+            content: ogUrl,
+            width: "1085",
+            height: "377",
+          },
 				},
         {
           tag: "link",
@@ -138,9 +143,8 @@ export default defineConfig({
         }),
       ],
       logo: {
-        // dark: "./src/assets/lockup_white_tight2.png",
+        dark: "./src/assets/lockup_white_tight2.png",
         light: "./src/assets/lockup_dark_tight.png",
-        dark: "./src/assets/lockup_dark_tight.png",
         replacesTitle: true,
       },
       social: [
