@@ -345,14 +345,14 @@ For evaluation with Gemini, disable safety settings so that the evaluator can
 accept, detect, and score potentially harmful content.
 
 ```ts
-import { gemini15Pro } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [
     vertexAI(),
     ...
     myCustomEvals({
-      judge: gemini15Pro,
+      judge: googleAI.model("gemini-2.0-flash"),
     }),
   ],
   ...

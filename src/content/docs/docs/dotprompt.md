@@ -31,7 +31,7 @@ example of what these files look like:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 config:
   temperature: 0.9
 input:
@@ -114,7 +114,7 @@ Here is a minimal example of a prompt file:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 ---
 You are the world's most welcoming AI assistant. Greet the user and offer your assistance.
 ```
@@ -261,7 +261,7 @@ configuration values for your prompt:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 config:
   temperature: 1.4
   topK: 50
@@ -301,7 +301,7 @@ front matter section:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -445,7 +445,7 @@ Within your prompt, provide the name of the registered schema:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash-latest
+model: googleai/gemini-2.0-flash-latest
 output:
   schema: MenuItemSchema
 ---
@@ -482,7 +482,7 @@ You already saw this in action in the section on input and output schemas:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -518,7 +518,7 @@ Handlebars's `#if` helper:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -547,7 +547,7 @@ construct multi-message prompts:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 input:
   schema:
     userQuestion: string
@@ -566,7 +566,7 @@ use the `{{media}}` helper:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 input:
   schema:
     photoUrl: string
@@ -605,7 +605,7 @@ This can then be included in other prompts:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     name: string
@@ -640,7 +640,7 @@ members of a list.
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash-latest
+model: googleai/gemini-2.0-flash-latest
 input:
   schema:
     destinations(array):
@@ -680,10 +680,10 @@ Once a helper is defined you can use it in any prompt:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
-  name: string
+    name: string
 ---
 
 HELLO, {{shout name}}!!!
@@ -731,7 +731,7 @@ as in a prompt file, or a function that returns a `GenerateRequest`:
 ```ts
 const myPrompt = ai.definePrompt({
   name: 'myPrompt',
-  model: 'googleai/gemini-1.5-flash',
+  model: 'googleai/gemini-2.0-flash',
   input: {
     schema: z.object({
       name: z.string(),
@@ -744,7 +744,7 @@ const myPrompt = ai.definePrompt({
 ```ts
 const myPrompt = ai.definePrompt({
   name: 'myPrompt',
-  model: 'googleai/gemini-1.5-flash',
+  model: 'googleai/gemini-2.0-flash',
   input: {
     schema: z.object({
       name: z.string(),
