@@ -19,31 +19,31 @@ into when using Genkit Monitoring.
 
 4.  Debug locally:
 
-Enable dev export:
+    Enable dev export:
 
-```typescript
-enableFirebaseTelemetry({
-  forceDevExport: true,
-});
-```
+    ```typescript
+    enableFirebaseTelemetry({
+      forceDevExport: true,
+    });
+    ```
 
-To test with your personal user credentials, use the
-[gcloud CLI](https://cloud.google.com/sdk/docs/install) to authenticate with
-Google Cloud. Doing so can help diagnose enabled or disabled APIs, but does
-not test the gcloud auth application-default login.
+    To test with your personal user credentials, use the
+    [gcloud CLI](https://cloud.google.com/sdk/docs/install) to authenticate with
+    Google Cloud. Doing so can help diagnose enabled or disabled APIs, but does
+    not test the gcloud auth application-default login.
 
-Alternatively, impersonating the service account lets you test
-production-like access. You must have the
-`roles/iam. serviceAccountTokenCreator` IAM role applied to your user account
-in order to impersonate service accounts:
+    Alternatively, impersonating the service account lets you test
+    production-like access. You must have the
+    `roles/iam. serviceAccountTokenCreator` IAM role applied to your user account
+    in order to impersonate service accounts:
 
-```posix-terminal
-gcloud auth application-default login --impersonate-service-account <SERVICE_ACCT_EMAIL>
-```
+    ```posix-terminal
+    gcloud auth application-default login --impersonate-service-account <SERVICE_ACCT_EMAIL>
+    ```
 
-See the
-[ADC](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment)
-documentation for more information.
+    See the
+    [ADC](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment)
+    documentation for more information.
 
 ### Telemetry upload reliability in Firebase Functions / Cloud Run
 
@@ -55,4 +55,6 @@ If higher reliability is important to you, consider changing
 [CPU allocation](https://cloud.google.com/run/docs/configuring/cpu-allocation)
 to **always allocated** in the Google Cloud Console.
 
-Note: The **always allocated** setting impacts pricing.
+:::note
+The **always allocated** setting impacts pricing.
+:::
