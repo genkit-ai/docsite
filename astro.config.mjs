@@ -43,6 +43,13 @@ export default defineConfig({
         {
           tag: "link",
           attrs: {
+            href: "https://fonts.googleapis.com/css2?family=Google+Sans+Text:wght@400;500&display=swap",
+            rel: "stylesheet",
+          },
+        },
+        {
+          tag: "link",
+          attrs: {
             href: "https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap",
             rel: "stylesheet",
           },
