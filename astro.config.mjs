@@ -7,7 +7,7 @@ import starlightLlmsTxt from "starlight-llms-txt";
 import { sidebar } from "./src/sidebar";
 
 const site = 'https://genkit-dev-astro--pr-11-zldt97gu.web.app';
-const ogUrl = new URL('ogimage.png?v=1', site).href;
+const ogUrl = new URL('ogi.png?v=1', site).href;
 
 // https://astro.build/config
 export default defineConfig({
