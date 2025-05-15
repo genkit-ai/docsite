@@ -43,6 +43,13 @@ export default defineConfig({
         {
           tag: "link",
           attrs: {
+            href: "https://fonts.googleapis.com/css2?family=Google+Sans+Text:wght@400;500&display=swap",
+            rel: "stylesheet",
+          },
+        },
+        {
+          tag: "link",
+          attrs: {
             href: "https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap",
             rel: "stylesheet",
           },
@@ -148,11 +155,6 @@ export default defineConfig({
       ],
       sidebar,
       customCss: [
-        "@fontsource/ibm-plex-sans/400.css",
-        "@fontsource/ibm-plex-sans/400-italic.css",
-        "@fontsource/ibm-plex-sans/600.css",
-        "@fontsource/ibm-plex-sans/600-italic.css",
-        "./src/fonts/font-face.css",
         "./src/tailwind.css",
       ],
     }),
