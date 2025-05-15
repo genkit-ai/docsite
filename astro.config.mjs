@@ -6,7 +6,8 @@ import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import { sidebar } from "./src/sidebar";
 
-const site = 'https://genkit-dev-astro--pr-11-zldt97gu.web.app';
+// TODO -- This has to be updated to the final URL for docsite
+const site = 'https://genkit-dev-astro.web.app/';
 const ogUrl = new URL('ogi.png?v=1', site).href;
 
 // https://astro.build/config
