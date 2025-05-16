@@ -69,110 +69,110 @@ const providerID = "yourplugin"
 Every plugin should define and export the following symbols to conform to the
 `genkit.Plugin` interface:
 
--   A struct type that encapsulates all of the configuration options accepted by
-    the plugin.
+- A struct type that encapsulates all of the configuration options accepted by
+  the plugin.
 
-    For any plugin options that are secret values, such as API keys, you should
-    offer both a config option and a default environment variable to configure
-    it. This lets your plugin take advantage of the secret-management features
-    offered by many hosting providers (such as Cloud Secret Manager, which you
-    can use with Cloud Run). For example:
+  For any plugin options that are secret values, such as API keys, you should
+  offer both a config option and a default environment variable to configure
+  it. This lets your plugin take advantage of the secret-management features
+  offered by many hosting providers (such as Cloud Secret Manager, which you
+  can use with Cloud Run). For example:
 
-    ```go
-    package yourplugin
+  ```go
+  package yourplugin
 
-    import "os"
+  import "os"
 
-    // MyPlugin holds the configuration for your plugin.
-    type MyPlugin struct {
-    	APIKey string // Can be set directly or via YOURPLUGIN_API_KEY env var
-    	// Other options you may allow to configure...
-    	SomeOption string `json:"someOption"`
-    }
+  // MyPlugin holds the configuration for your plugin.
+  type MyPlugin struct {
+  	APIKey string // Can be set directly or via YOURPLUGIN_API_KEY env var
+  	// Other options you may allow to configure...
+  	SomeOption string `json:"someOption"`
+  }
 
-    func (p *MyPlugin) resolveAPIKey() string {
-    	if p.APIKey != "" {
-    		return p.APIKey
-    	}
-    	// Default to environment variable if APIKey field is not set
-    	return os.Getenv("YOURPLUGIN_API_KEY")
-    }
-    ```
+  func (p *MyPlugin) resolveAPIKey() string {
+  	if p.APIKey != "" {
+  		return p.APIKey
+  	}
+  	// Default to environment variable if APIKey field is not set
+  	return os.Getenv("YOURPLUGIN_API_KEY")
+  }
+  ```
 
--   A `Name()` method on the struct that returns the provider ID.
+- A `Name()` method on the struct that returns the provider ID.
 
-    ```go
-    package yourplugin
+  ```go
+  package yourplugin
 
-    func (p *MyPlugin) Name() string {
-    	return providerID
-    }
-    ```
+  func (p *MyPlugin) Name() string {
+  	return providerID
+  }
+  ```
 
--   An `Init()` method on the struct with a declaration like the following:
+- An `Init()` method on the struct with a declaration like the following:
 
-    ```go
-    package yourplugin
+  ```go
+  package yourplugin
 
-    import (
-    	"context"
-    	"errors"
-    	"fmt" // Import fmt for error formatting
+  import (
+  	"context"
+  	"errors"
+  	"fmt" // Import fmt for error formatting
 
-    	"github.com/firebase/genkit/go/genkit"
-    )
+  	"github.com/firebase/genkit/go/genkit"
+  )
 
-    func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
-    	apiKey := p.resolveAPIKey() // Use the helper method
-    	if apiKey == "" {
-    		return errors.New("API key is required for yourplugin")
-    	}
+  func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
+  	apiKey := p.resolveAPIKey() // Use the helper method
+  	if apiKey == "" {
+  		return errors.New("API key is required for yourplugin")
+  	}
 
-    	// Perform any setup steps required by your plugin.
-    	// For example:
-    	// - Confirm that any required configuration values are specified.
-    	// - Assign default values to any unspecified optional settings.
-    	if p.SomeOption == "" {
-    		p.SomeOption = "defaultValue"
-    	}
+  	// Perform any setup steps required by your plugin.
+  	// For example:
+  	// - Confirm that any required configuration values are specified.
+  	// - Assign default values to any unspecified optional settings.
+  	if p.SomeOption == "" {
+  		p.SomeOption = "defaultValue"
+  	}
 
-    	// - Verify that the given configuration options are valid together.
-    	//   (Example: if option A is set, option B must also be set)
+  	// - Verify that the given configuration options are valid together.
+  	//   (Example: if option A is set, option B must also be set)
 
-    	// - Create any shared resources required by the rest of your plugin.
-    	//   For example, create clients for any services your plugin accesses.
-    	//   myServiceClient, err := NewServiceClient(apiKey)
-    	//   if err != nil {
-    	//       return fmt.Errorf("failed to create service client: %w", err)
-    	//   }
-    	//   Store the client or other resources in the plugin struct or globally accessible way.
+  	// - Create any shared resources required by the rest of your plugin.
+  	//   For example, create clients for any services your plugin accesses.
+  	//   myServiceClient, err := NewServiceClient(apiKey)
+  	//   if err != nil {
+  	//       return fmt.Errorf("failed to create service client: %w", err)
+  	//   }
+  	//   Store the client or other resources in the plugin struct or globally accessible way.
 
-    	fmt.Printf("Initializing %s plugin with option: %s\n", p.Name(), p.SomeOption)
+  	fmt.Printf("Initializing %s plugin with option: %s\n", p.Name(), p.SomeOption)
 
-    	// Register models, retrievers, etc. using genkit.Define... functions
-    	// Example: DefineMyModel(g, myServiceClient)
+  	// Register models, retrievers, etc. using genkit.Define... functions
+  	// Example: DefineMyModel(g, myServiceClient)
 
-    	return nil // Return nil on successful initialization
-    }
+  	return nil // Return nil on successful initialization
+  }
 
-    // Ensure MyPlugin implements genkit.Plugin
-    var _ genkit.Plugin = &MyPlugin{}
-    ```
+  // Ensure MyPlugin implements genkit.Plugin
+  var _ genkit.Plugin = &MyPlugin{}
+  ```
 
-    In this function, perform any setup steps required by your plugin. For
-    example:
+  In this function, perform any setup steps required by your plugin. For
+  example:
 
-    -   Confirm that any required configuration values are specified and assign
-        default values to any unspecified optional settings.
-    -   Verify that the given configuration options are valid together.
-    -   Create any shared resources required by the rest of your plugin. For
-        example, create clients for any services your plugin accesses.
+  - Confirm that any required configuration values are specified and assign
+    default values to any unspecified optional settings.
+  - Verify that the given configuration options are valid together.
+  - Create any shared resources required by the rest of your plugin. For
+    example, create clients for any services your plugin accesses.
 
-    To the extent possible, the resources provided by your plugin shouldn't
-    assume that any other plugins have been installed before this one.
+  To the extent possible, the resources provided by your plugin shouldn't
+  assume that any other plugins have been installed before this one.
 
-    This method will be called automatically during `genkit.Init()` when the
-    user passes the plugin into the `WithPlugins()` option.
+  This method will be called automatically during `genkit.Init()` when the
+  user passes the plugin into the `WithPlugins()` option.
 
 ## Building plugin features
 
@@ -185,7 +185,7 @@ Genkit model plugins add one or more generative AI models to the Genkit
 registry. A model represents any generative model that is capable of receiving a
 prompt as input and generating text, media, or data as output.
 
-See [Writing a Genkit model plugin](./plugin-authoring-models.md).
+See [Writing a Genkit model plugin](/go/docs/plugin-authoring-models).
 
 ### Telemetry plugins
 
@@ -193,7 +193,7 @@ Genkit telemetry plugins configure Genkit's OpenTelemetry instrumentation to
 export traces, metrics, and logs to a particular monitoring or visualization
 tool.
 
-See [Writing a Genkit telemetry plugin](./plugin-authoring-telemetry.md).
+See [Writing a Genkit telemetry plugin](/go/docs/plugin-authoring-telemetry).
 
 ## Publishing a plugin
 
@@ -203,5 +203,5 @@ can be found with a simple search on
 [`pkg.go.dev`](https://pkg.go.dev/search?q=genkit). Any of the following are
 good choices:
 
--   `github.com/yourorg/genkit-plugins/servicename`
--   `github.com/yourorg/your-repo/genkit/servicename`
+- `github.com/yourorg/genkit-plugins/servicename`
+- `github.com/yourorg/your-repo/genkit/servicename`

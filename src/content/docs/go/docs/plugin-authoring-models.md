@@ -9,7 +9,7 @@ prompt as input and generating text, media, or data as output.
 
 ## Before you begin
 
-Read [Writing Genkit plugins](./plugin-authoring.md) for information about writing
+Read [Writing Genkit plugins](/go/docs/plugin-authoring) for information about writing
 any kind of Genkit plug-in, including model plugins. In particular, note that
 every plugin must export a type that conforms to the `genkit.Plugin` interface,
 which includes a `Name()` and a `Init()` function.
@@ -194,57 +194,57 @@ message pair.
 In addition to the resources that all plugins must export, a model plugin should
 also export the following:
 
--   A generation config type, as discussed [earlier](#defining-your-models-config-schema).
+- A generation config type, as discussed [earlier](#defining-your-models-config-schema).
 
--   A `Model()` function, which returns references to your plugin's defined
-    models. Often, this can be:
+- A `Model()` function, which returns references to your plugin's defined
+  models. Often, this can be:
 
-    ```go
-    package myplugin
+  ```go
+  package myplugin
 
-    import (
-    	"github.com/firebase/genkit/go/ai"
-    	"github.com/firebase/genkit/go/genkit"
-    )
+  import (
+  	"github.com/firebase/genkit/go/ai"
+  	"github.com/firebase/genkit/go/genkit"
+  )
 
-    // Model returns a specific model registered by this plugin.
-    func Model(g *genkit.Genkit, name string) *ai.Model {
-    	// providerID should be defined as a constant in your package
-    	return genkit.LookupModel(g, providerID, name)
-    }
-    ```
+  // Model returns a specific model registered by this plugin.
+  func Model(g *genkit.Genkit, name string) *ai.Model {
+  	// providerID should be defined as a constant in your package
+  	return genkit.LookupModel(g, providerID, name)
+  }
+  ```
 
--   A `ModelRef` function, which creates a model reference paired with its
-    config that can validate the type and be passed around together:
+- A `ModelRef` function, which creates a model reference paired with its
+  config that can validate the type and be passed around together:
 
-    ```go
-    package myplugin
+  ```go
+  package myplugin
 
-    import (
-    	"github.com/firebase/genkit/go/ai"
-    )
+  import (
+  	"github.com/firebase/genkit/go/ai"
+  )
 
-    // ModelRef creates a typed reference to a model provided by this plugin,
-    // associating it with its specific configuration type.
-    func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
-    	// providerID should be defined as a constant in your package
-    	return ai.NewModelRef(providerID+"/"+name, config)
-    }
-    ```
+  // ModelRef creates a typed reference to a model provided by this plugin,
+  // associating it with its specific configuration type.
+  func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
+  	// providerID should be defined as a constant in your package
+  	return ai.NewModelRef(providerID+"/"+name, config)
+  }
+  ```
 
--   **Optional**: A `DefineModel()` function, which lets users define models
-    that your plugin can provide, but that you do not automatically define.
-    There are two main reasons why you might want to provide such a function:
+- **Optional**: A `DefineModel()` function, which lets users define models
+  that your plugin can provide, but that you do not automatically define.
+  There are two main reasons why you might want to provide such a function:
 
-    -   Your plugin provides access to too many models to practically register
-        each one. For example, the Ollama plugin can provide access to dozens of
-        different models, with more added frequently. For this reason, it
-        doesn't automatically define any models, and instead requires the user
-        to call `DefineModel()` for each model they want to use.
+  - Your plugin provides access to too many models to practically register
+    each one. For example, the Ollama plugin can provide access to dozens of
+    different models, with more added frequently. For this reason, it
+    doesn't automatically define any models, and instead requires the user
+    to call `DefineModel()` for each model they want to use.
 
-    -   To give your users the ability to use newly-released models that you
-        have not yet added to your plugin.
+  - To give your users the ability to use newly-released models that you
+    have not yet added to your plugin.
 
-    A plugin's `DefineModel()` function is typically a frontend to
-    `genkit.DefineModel()` that defines a generation function, but lets the user
-    specify the model name and model capabilities.
+  A plugin's `DefineModel()` function is typically a frontend to
+  `genkit.DefineModel()` that defines a generation function, but lets the user
+  specify the model name and model capabilities.

@@ -16,12 +16,12 @@ artwork created by humans.
 
 In addition, LLMs have proven capable of tasks beyond simple text generation:
 
--   Writing computer programs.
--   Planning subtasks that are required to complete a larger task.
--   Organizing unorganized data.
--   Understanding and extracting information data from a corpus of text.
--   Following and performing automated activities based on a text description of
-    the activity.
+- Writing computer programs.
+- Planning subtasks that are required to complete a larger task.
+- Organizing unorganized data.
+- Understanding and extracting information data from a corpus of text.
+- Following and performing automated activities based on a text description of
+  the activity.
 
 There are many models available to you, from several different providers. Each
 model has its own strengths and weaknesses and one model might excel at one task
@@ -47,7 +47,7 @@ model for another as new models emerge.
 ### Before you begin
 
 If you want to run the code examples on this page, first complete the steps in
-the [Get started](./get-started-go.md) guide. All of the examples assume that you
+the [Get started](/go/docs/get-started-go) guide. All of the examples assume that you
 have already installed Genkit as a dependency in your project.
 
 ### Models supported by Genkit
@@ -60,19 +60,17 @@ specific model and its API.
 The Genkit team maintains plugins for working with models provided by Vertex AI,
 Google Generative AI, and Ollama:
 
--   Gemini family of LLMs, through the
-    [Google Cloud Vertex AI plugin](./plugins/vertex-ai.md).
--   Gemini family of LLMs, through the
-    [Google AI plugin](./plugins/google-genai.md).
--   Gemma 3, Llama 4, and many more open models, through the
-    [Ollama plugin](./plugins/ollama.md)
-    (you must host the Ollama server yourself).
+- Gemini family of LLMs, through the
+  [Google GenAI plugin](/go/docs/plugins/google-genai).
+- Gemma 3, Llama 4, and many more open models, through the
+  [Ollama plugin](/go/docs/plugins/ollama)
+  (you must host the Ollama server yourself).
 
 ### Loading and configuring model plugins
 
 Before you can use Genkit to start generating content, you need to load and
 configure a model plugin. If you're coming from the Get Started guide,
-you've already done this. Otherwise, see the [Get Started](./get-started-go.md)
+you've already done this. Otherwise, see the [Get Started](/go/docs/get-started-go)
 guide or the individual plugin's documentation and follow the steps there before
 continuing.
 
@@ -439,12 +437,12 @@ return output that conforms to your Go types.
 When you specify an output type in `genkit.Generate()`, Genkit does several
 things behind the scenes:
 
--   Augments the prompt with additional guidance about the selected output
-    format. This also has the side effect of specifying to the model what
-    content exactly you want to generate (for example, not only suggest a menu
-    item but also generate a description, a list of allergens, and so on).
--   Verifies that the output conforms to the schema.
--   Marshals the model output into a Go type.
+- Augments the prompt with additional guidance about the selected output
+  format. This also has the side effect of specifying to the model what
+  content exactly you want to generate (for example, not only suggest a menu
+  item but also generate a description, a list of allergens, and so on).
+- Verifies that the output conforms to the schema.
+- Marshals the model output into a Go type.
 
 To get structured output from a successful generate call, call `Output()` on the
 model response with an empty value of the type:
@@ -509,21 +507,21 @@ error. One possible error can happen when the model fails to generate output
 that conforms to the schema. The best strategy for dealing with such errors will
 depend on your exact use case, but here are some general hints:
 
--   **Try a different model**. For structured output to succeed, the model must
-    be capable of generating output in JSON. The most powerful LLMs like Gemini
-    are versatile enough to do this; however, smaller models, such as some of
-    the local models you would use with Ollama, might not be able to generate
-    structured output reliably unless they have been specifically trained to do
-    so.
+- **Try a different model**. For structured output to succeed, the model must
+  be capable of generating output in JSON. The most powerful LLMs like Gemini
+  are versatile enough to do this; however, smaller models, such as some of
+  the local models you would use with Ollama, might not be able to generate
+  structured output reliably unless they have been specifically trained to do
+  so.
 
--   **Simplify the schema**. LLMs may have trouble generating complex or deeply
-    nested types. Try using clear names, fewer fields, or a flattened structure
-    if you are not able to reliably generate structured data.
+- **Simplify the schema**. LLMs may have trouble generating complex or deeply
+  nested types. Try using clear names, fewer fields, or a flattened structure
+  if you are not able to reliably generate structured data.
 
--   **Retry the `genkit.Generate()` call**. If the model you've chosen only
-    rarely fails to generate conformant output, you can treat the error as you
-    would treat a network error, and retry the request using some kind of
-    incremental back-off strategy.
+- **Retry the `genkit.Generate()` call**. If the model you've chosen only
+  rarely fails to generate conformant output, you can treat the error as you
+  would treat a network error, and retry the request using some kind of
+  incremental back-off strategy.
 
 ### Streaming
 
@@ -680,36 +678,36 @@ plugin also lets you use Cloud Storage (`gs://`) URLs.
 
 #### Learn more about Genkit
 
--   As an app developer, the primary way you influence the output of generative
-    AI models is through prompting. Read
-    [Managing prompts with Dotprompt](./dotprompt.md) to learn
-    how Genkit helps you develop effective prompts and manage them in your
-    codebase.
--   Although `genkit.Generate()` is the nucleus of every generative AI powered
-    application, real-world applications usually require additional work before
-    and after invoking a generative AI model. To reflect this, Genkit introduces
-    the concept of _flows_, which are defined like functions but add additional
-    features such as observability and simplified deployment. To learn more, see
-    [Defining AI workflows](./flows.md).
+- As an app developer, the primary way you influence the output of generative
+  AI models is through prompting. Read
+  [Managing prompts with Dotprompt](/go/docs/dotprompt) to learn
+  how Genkit helps you develop effective prompts and manage them in your
+  codebase.
+- Although `genkit.Generate()` is the nucleus of every generative AI powered
+  application, real-world applications usually require additional work before
+  and after invoking a generative AI model. To reflect this, Genkit introduces
+  the concept of _flows_, which are defined like functions but add additional
+  features such as observability and simplified deployment. To learn more, see
+  [Defining AI workflows](/go/docs/flows).
 
 #### Advanced LLM use
 
 There are techniques your app can use to reap even more benefit from LLMs.
 
--   One way to enhance the capabilities of LLMs is to prompt them with a list of
-    ways they can request more information from you, or request you to perform
-    some action. This is known as _tool calling_ or _function calling_. Models
-    that are trained to support this capability can respond to a prompt with a
-    specially-formatted response, which indicates to the calling application
-    that it should perform some action and send the result back to the LLM along
-    with the original prompt. Genkit has library functions that automate both
-    the prompt generation and the call-response loop elements of a tool calling
-    implementation. See [Tool calling](./tool-calling.md) to learn more.
--   Retrieval-augmented generation (RAG) is a technique used to introduce
-    domain-specific information into a model's output. This is accomplished by
-    inserting relevant information into a prompt before passing it on to the
-    language model. A complete RAG implementation requires you to bring several
-    technologies together: text embedding generation models, vector databases, and
-    large language models. See [Retrieval-augmented generation (RAG)](./rag.md) to
-    learn how Genkit simplifies the process of coordinating these various
-    elements.
+- One way to enhance the capabilities of LLMs is to prompt them with a list of
+  ways they can request more information from you, or request you to perform
+  some action. This is known as _tool calling_ or _function calling_. Models
+  that are trained to support this capability can respond to a prompt with a
+  specially-formatted response, which indicates to the calling application
+  that it should perform some action and send the result back to the LLM along
+  with the original prompt. Genkit has library functions that automate both
+  the prompt generation and the call-response loop elements of a tool calling
+  implementation. See [Tool calling](/go/docs/tool-calling) to learn more.
+- Retrieval-augmented generation (RAG) is a technique used to introduce
+  domain-specific information into a model's output. This is accomplished by
+  inserting relevant information into a prompt before passing it on to the
+  language model. A complete RAG implementation requires you to bring several
+  technologies together: text embedding generation models, vector databases, and
+  large language models. See [Retrieval-augmented generation (RAG)](/go/docs/rag) to
+  learn how Genkit simplifies the process of coordinating these various
+  elements.

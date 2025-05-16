@@ -74,7 +74,7 @@ const ai = genkit({
 });
 
 const llmResponse = await ai.generate({
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model("gemini-2.0-flash"),
   prompt: "What should I do when I visit Melbourne?",
 });
 ```
@@ -589,7 +589,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model("gemini-2.0-flash"),
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
 ```

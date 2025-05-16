@@ -90,5 +90,5 @@ if err != nil {
 menuInfo := resp.Documents
 ```
 
-See the [Retrieval-augmented generation](../rag.md) page for a general
+See the [Retrieval-augmented generation](/go/docs/rag) page for a general
 discussion on using indexers and retrievers for RAG.

@@ -35,11 +35,9 @@ and on the Google Cloud Console.
 
 3. Write a Genkit feature by following the [Get Started Guide](https://firebase.google.com/docs/genkit/get-started), and prepare your code for deployment by using one of the following guides:
 
-   a.  [Deploy flows using Cloud Functions for Firebase](../firebase)
-
-   b.  [Deploy flows using Cloud Run](../cloud-run)
-
-   c.  [Deploy flows to any Node.js platform](../deploy-node)
+   a. [Deploy flows using Cloud Functions for Firebase](/docs/firebase)
+   b. [Deploy flows using Cloud Run](/docs/cloud-run)
+   c. [Deploy flows to any Node.js platform](/docs/deploy-node)
 
 ## Step 1. Add the Firebase plugin
 

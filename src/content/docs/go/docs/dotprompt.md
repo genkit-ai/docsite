@@ -59,10 +59,10 @@ following sections will go into more detail about each of the parts that make a
 ## Before you begin
 
 Before reading this page, you should be familiar with the content covered on the
-[Generating content with AI models](./models.md) page.
+[Generating content with AI models](/go/docs/models) page.
 
 If you want to run the code examples on this page, first complete the steps in
-the [Get started](./get-started-go.md) guide. All of the examples assume that you
+the [Get started](/go/docs/get-started-go) guide. All of the examples assume that you
 have already installed Genkit as a dependency in your project.
 
 ## Creating prompt files
@@ -225,7 +225,7 @@ resp, err := helloPrompt.Execute(context.Background(),
 Any parameters you pass to the prompt call will override the same parameters
 specified in the prompt file.
 
-See [Generate content with AI models](./models.md) for descriptions of the available
+See [Generate content with AI models](/go/docs/models) for descriptions of the available
 options.
 
 ### Using the developer UI
@@ -262,8 +262,8 @@ config:
   topP: 0.4
   maxOutputTokens: 400
   stopSequences:
-    -   "<end>"
-    -   "<fin>"
+    - "<end>"
+    - "<fin>"
 ---
 ```
 
@@ -281,7 +281,7 @@ resp, err := helloPrompt.Execute(context.Background(),
     }))
 ```
 
-See [Generate content with AI models](./models.md) for descriptions of the available
+See [Generate content with AI models](/go/docs/models) for descriptions of the available
 options.
 
 ## Input and output schemas
@@ -309,7 +309,7 @@ Invent a menu item for a {{theme}} themed
 restaurant.
 ```
 
- This code produces the following structured output:
+This code produces the following structured output:
 
 ```go
 package main
@@ -612,8 +612,8 @@ func main() {
 }
 ```
 
-See also [Multimodal input](./models.md#multimodal-input), on the
-[Generating content with AI models](./models.md) page, for an
+See also [Multimodal input](/go/docs/models#multimodal-input), on the
+[Generating content with AI models](/go/docs/models) page, for an
 example of constructing a `data:` URL.
 
 ### Partials
@@ -654,7 +654,7 @@ Partials accept named arguments or a single positional argument
 representing the context. This can be helpful for tasks such as rendering
 members of a list.
 
-**_destination.prompt**
+**\_destination.prompt**
 
 ```dotprompt
 -   {{name}} ({{country}})
@@ -771,8 +771,8 @@ To create a variant, create a `[name].[variant].prompt` file. For example, if
 you were using Gemini 2.0 Flash in your prompt but wanted to see if Gemini 2.5
 Pro would perform better, you might create two files:
 
-*   `myPrompt.prompt`: the "baseline" prompt
-*   `myPrompt.gemini25pro.prompt`: a variant named `gemini25pro`
+- `myPrompt.prompt`: the "baseline" prompt
+- `myPrompt.gemini25pro.prompt`: a variant named `gemini25pro`
 
 To use a prompt variant, specify the variant option when loading:
 
