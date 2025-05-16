@@ -66,21 +66,3 @@ ai = Genkit(
 ```
 
 You can specify the `location` and `project` ID, among other configuration options available in the `VertexAI` constructor.
-
-## API Reference
-
-Detailed API documentation for the Google GenAI plugin components is generated separately.
-
-*(Note: The original MkDocs configuration used `mkdocstrings` to auto-generate content here. A different approach is needed for Starlight.)*
-
-### GeminiConfigSchema
-
-*(Refer to generated API documentation for details)*
-
-### GoogleAI
-
-*(Refer to generated API documentation for details)*
-
-### VertexAI
-
-*(Refer to generated API documentation for details)*
