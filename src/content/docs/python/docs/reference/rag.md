@@ -85,7 +85,7 @@ from genkit.plugins.google_genai import (
     VertexAI,
     vertexai_name,
 )
-from genkit.plugins.firebase.firestore import FirestoreVectorStore
+from genkit.plugins.firebase.firestore import FirestoreVectorStore, DistanceMeasure
 
 ai = Genkit(
     plugins=[
