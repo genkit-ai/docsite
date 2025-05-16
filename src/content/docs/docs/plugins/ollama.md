@@ -7,7 +7,7 @@ The Ollama plugin provides interfaces to any of the local LLMs supported by
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save genkitx-ollama
 ```
 
@@ -19,7 +19,7 @@ follow the instructions on: [Download Ollama](https://ollama.com/download).
 You can use the Ollama CLI to download the model you are interested in. For
 example:
 
-```posix-terminal
+```bash
 ollama pull gemma
 ```
 

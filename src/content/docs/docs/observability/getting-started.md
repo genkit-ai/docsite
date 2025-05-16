@@ -45,7 +45,7 @@ and on the Google Cloud Console.
 
 Install the `@genkit-ai/firebase` plugin in your project:
 
-```posix-terminal
+```bash
 npm i @genkit-ai/firebase
 ```
 
@@ -103,7 +103,7 @@ dashboard.
    [Google Cloud CLI tool](https://cloud.google.com/sdk/docs/install?authuser=0),
    authenticate using the service account:
 
-   ```posix-terminal
+   ```bash
    gcloud auth application-default login --impersonate-service-account SERVICE_ACCT_EMAIL
    ```
 
