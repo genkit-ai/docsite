@@ -76,8 +76,3 @@ async def run_ollama():
 # asyncio.run(run_ollama())
 ```
 
-## API Reference
-
-Detailed API documentation for the Ollama plugin components is generated separately.
-
-*(Note: The original MkDocs configuration used `mkdocstrings` to auto-generate content here. A different approach is needed for Starlight.)*

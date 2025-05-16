@@ -183,9 +183,3 @@ gcloud firestore indexes composite create \
 *   Replace `<YOUR_DIMENSION_COUNT>` with the correct dimension for your embedding model. Common values are:
     *   `768` for `text-embedding-004` (Vertex AI)
 *   Replace `<YOUR_VECTOR_FIELD>` with the name of the field containing vector embeddings (e.g., `embedding`).
-
-## API Reference
-
-Detailed API documentation for the FirestoreVectorStore is generated separately.
-
-*(Note: The original MkDocs configuration used `mkdocstrings` to auto-generate content here. A different approach is needed for Starlight.)*
