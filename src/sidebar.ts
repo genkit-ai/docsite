@@ -1,12 +1,21 @@
 const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
   { label: "Developer tools", slug: "docs/devtools" },
-  { label: "API stability channels", slug: "docs/api-stability" },
   { 
     label: "Tutorials",
     items: [
       { label: "Chat with a PDF", slug: "docs/tutorials/tutorial-chat-with-a-pdf" },
-      { label: "Summarize YouTube videos", slug: "docs/tutorials/tutorial-summarize-youtube-videos" }
+      { label: "Summarize YouTube videos", slug: "docs/tutorials/tutorial-summarize-youtube-videos" },
+      { 
+        label: "Agentic barista Angular app", 
+        link: "https://developers.google.com/solutions/learn/agentic-barista",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        }, 
+      }
     ],
   },
   {
@@ -138,15 +147,21 @@ const JS_SIDEBAR = [
     items: [{ label: "Connect with us", slug: "docs/feedback" }],
   },
   {
-    label: "API reference",
-    link: "https://js.api.genkit.dev/",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-    },
+    label: "Reference",
+    items: [
+      {
+        label: "API reference",
+        link: "https://js.api.genkit.dev/",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+          // style: "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+        },
+      },
+      { label: "API stability channels", slug: "docs/api-stability" },
+    ],
   },
 ];
 
@@ -201,16 +216,20 @@ const GO_SIDEBAR = [
       },
     ],
   },
-  {
-    label: "API Reference",
-    link: "https://pkg.go.dev/github.com/firebase/genkit/go",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-    },
+  { 
+    label: "Reference",
+    items: [
+      {
+        label: "API Reference",
+        link: "https://pkg.go.dev/github.com/firebase/genkit/go",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        },
+      },
+    ]
   },
 ];
 const PYTHON_SIDEBAR = [
@@ -231,16 +250,20 @@ const PYTHON_SIDEBAR = [
       { label: "Dev Local Vector Store", slug: "python/docs/reference/plugins/dev-local-vectorstore" },
     ],
   },
-  {
-    label: "API Reference",
-    link: "https://python.api.genkit.dev/reference/api/",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 500; font-size: var(--sl-text-sm); color: var(--sl-color-white);",
-    },
+  { 
+    label: "Reference",
+    items: [
+      {
+        label: "API Reference",
+        link: "https://python.api.genkit.dev/reference/api/",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        },
+      },
+    ]
   },
 ];
 
