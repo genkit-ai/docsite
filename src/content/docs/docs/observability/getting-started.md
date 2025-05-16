@@ -26,15 +26,20 @@ and on the Google Cloud Console.
    **Add a project**, then follow the on-screen instructions. You can
    create a new project or add Firebase services to an already-existing Google Cloud project.
 
-2. Ensure your project is on the [Blaze pricing plan](https://firebase.google.com/pricing).
+2. Ensure your project is on the
+   [Blaze pricing plan](https://firebase.google.com/pricing).
 
-Genkit Monitoring relies on telemetry data written to Google Cloud
-Logging, Metrics, and Trace, which are paid services. View the
-[Google Cloud Observability pricing](https://cloud.google.com/stackdriver/pricing) page for pricing details and to learn about free-of-charge tier limits. 3. Write a Genkit feature by following the [Get Started Guide](https://firebase.google.com/docs/genkit/get-started), and prepare your code for deployment by using one of the following guides:
+   Genkit Monitoring relies on telemetry data written to Google Cloud
+   Logging, Metrics, and Trace, which are paid services. View the
+   [Google Cloud Observability pricing](https://cloud.google.com/stackdriver/pricing) page for pricing details and to learn about free-of-charge tier limits.
 
-    1.  [Deploy flows using Cloud Functions for Firebase](../firebase)
-    2.  [Deploy flows using Cloud Run](../cloud-run)
-    3.  [Deploy flows to any Node.js platform](../deploy-node)
+3. Write a Genkit feature by following the [Get Started Guide](https://firebase.google.com/docs/genkit/get-started), and prepare your code for deployment by using one of the following guides:
+
+   a.  [Deploy flows using Cloud Functions for Firebase](../firebase)
+
+   b.  [Deploy flows using Cloud Run](../cloud-run)
+
+   c.  [Deploy flows to any Node.js platform](../deploy-node)
 
 ## Step 1. Add the Firebase plugin
 
@@ -87,10 +92,12 @@ dashboard.
 
 2. Use your service account to authenticate and test your configuration.
 
-   Tip: In order to impersonate the service account, you will need to have
+   :::tip
+   In order to impersonate the service account, you will need to have
    the `roles/iam.serviceAccountTokenCreator`
    [IAM role](https://console.cloud.google.com/iam-admin/iam) applied to your
    user account.
+   :::
 
    With the
    [Google Cloud CLI tool](https://cloud.google.com/sdk/docs/install?authuser=0),
@@ -116,4 +123,6 @@ After Genkit Monitoring receives your metrics, you can view them by
 visiting the
 [Genkit Monitoring dashboard](https://console.firebase.google.com/project/_/genai_monitoring)
 
-Note: It may take up to 5 minutes to collect the first metric (based on the default `metricExportIntervalMillis` setting in the telemetry configuration).
+:::note
+It may take up to 5 minutes to collect the first metric (based on the default `metricExportIntervalMillis` setting in the telemetry configuration).
+:::

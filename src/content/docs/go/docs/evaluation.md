@@ -48,7 +48,7 @@ Perform these steps to get started quickly with Genkit.
 ### Setup
 
 1.  Use an existing Genkit app or create a new one by following our
-    [Get started](./get-started-go.md) guide.
+    [Get started](../get-started-go) guide.
 
 2.  Add the following code to define a simple RAG application to evaluate. For
     this guide, we use a dummy retriever that always returns the same documents.
@@ -114,9 +114,6 @@ Perform these steps to get started quickly with Genkit.
             }
             return llmResponse.Text(), nil
         })
-
-        // Blocks end of program execution to use the developer UI.
-        select {}
     }
     ```
 
@@ -125,21 +122,12 @@ Perform these steps to get started quickly with Genkit.
     `evaluators` package.
 
     ```go
-    package main
-
     import (
-        "context"
-        "fmt"
-        "log"
-
-        "github.com/firebase/genkit/go/ai"
-        "github.com/firebase/genkit/go/genkit"
-        "github.com/firebase/genkit/go/plugins/evaluators" // Import evaluators
-        "github.com/firebase/genkit/go/plugins/googlegenai"
+        "github.com/firebase/genkit/go/plugins/evaluators"
     )
 
     func main() {
-        ctx := context.Background()
+        // ...
 
         metrics := []evaluators.MetricConfig{
             {
@@ -155,14 +143,6 @@ Perform these steps to get started quickly with Genkit.
             ),
             genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
         )
-        if err != nil {
-            log.Fatalf("Genkit initialization error: %v", err)
-        }
-
-        // ... (rest of the code from previous step) ...
-
-        // Blocks end of program execution to use the developer UI.
-        select {}
     }
     ```
 

@@ -147,7 +147,7 @@ import {
   devLocalIndexerRef,
   devLocalVectorstore,
 } from "@genkit-ai/dev-local-vectorstore";
-import { textEmbedding004, vertexAI } from "@genkit-ai/vertexai";
+import { vertexAI } from "@genkit-ai/vertexai";
 import { z, genkit } from "genkit";
 
 const ai = genkit({
@@ -159,7 +159,7 @@ const ai = genkit({
     devLocalVectorstore([
       {
         indexName: "menuQA",
-        embedder: textEmbedding004,
+        embedder: vertexAI.embedder("text-embedding-005"),
       },
     ]),
   ],

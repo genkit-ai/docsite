@@ -146,15 +146,15 @@ To find the appropriate service account:
 
 - Firebase functions & Cloud Run
 
-  <code><var>PROJECT ID</var>-compute@developer.gserviceaccount.com</code>
+  `PROJECT ID-compute@developer.gserviceaccount.com`
 
 - App Engine
 
-  <code><var>PROJECT ID</var>@appspot.gserviceaccount.com</code>
+  `PROJECT ID@appspot.gserviceaccount.com`
 
 - App Hosting
 
-  <code>firebase-app-hosting-compute@<var>PROJECT ID</var>.iam.gserviceaccount.com</code>
+  `firebase-app-hosting-compute@PROJECT ID.iam.gserviceaccount.com`
 
 If you are deploying outside of the Google ecosystem or don't want to use a
 default service account, you can

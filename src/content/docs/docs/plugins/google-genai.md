@@ -65,7 +65,7 @@ const ai = genkit({
 const llmResponse = await ai.generate("Tell me a joke.");
 ```
 
-or use embedders with `embed` or retrievers:
+or use embedders (ex. `text-embedding-004`) with `embed` or retrievers:
 
 ```ts
 const ai = genkit({

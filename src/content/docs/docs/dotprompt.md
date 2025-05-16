@@ -445,7 +445,7 @@ Within your prompt, provide the name of the registered schema:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash-latest
+model: googleai/gemini-2.0-flash-latest
 output:
   schema: MenuItemSchema
 ---
@@ -683,7 +683,7 @@ Once a helper is defined you can use it in any prompt:
 model: googleai/gemini-2.0-flash
 input:
   schema:
-  name: string
+    name: string
 ---
 
 HELLO, {{shout name}}!!!
