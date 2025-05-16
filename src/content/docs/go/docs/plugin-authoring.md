@@ -8,31 +8,21 @@ configurable modules that can provide models, retrievers, indexers, trace
 stores, and more. You've already seen plugins in action just by using Genkit:
 
 ```go
-package main
-
 import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-	// Assuming server plugin is needed for a complete example
-	// "github.com/firebase/genkit/go/plugins/server"
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+    "github.com/firebase/genkit/go/plugins/server"
 )
+```
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(
-			&googlegenai.GoogleAI{APIKey: "YOUR_API_KEY"}, // Replace with your key or env var logic
-			&googlegenai.VertexAI{ProjectID: "my-project", Location: "us-central1"},
-		),
-	)
-	if err != nil {
-		log.Fatalf("Genkit initialization failed: %v", err)
-	}
-	// ... rest of your Genkit application logic ...
-}
+```go
+g, err := genkit.Init(ctx,
+    ai.WithPlugins(
+        &googlegenai.GoogleAI{APIKey: ...},
+        &googlegenai.VertexAI{ProjectID: "my-project", Location: "us-central1"},
+    ),
+)
 ```
 
 The Vertex AI plugin takes configuration (such as the user's Google Cloud
@@ -69,110 +59,44 @@ const providerID = "yourplugin"
 Every plugin should define and export the following symbols to conform to the
 `genkit.Plugin` interface:
 
-- A struct type that encapsulates all of the configuration options accepted by
-  the plugin.
+-   A struct type that encapsulates all of the configuration options accepted by
+    the plugin.
 
-  For any plugin options that are secret values, such as API keys, you should
-  offer both a config option and a default environment variable to configure
-  it. This lets your plugin take advantage of the secret-management features
-  offered by many hosting providers (such as Cloud Secret Manager, which you
-  can use with Cloud Run). For example:
+    For any plugin options that are secret values, such as API keys, you should
+    offer both a config option and a default environment variable to configure
+    it. This lets your plugin take advantage of the secret-management features
+    offered by many hosting providers (such as Cloud Secret Manager, which you
+    can use with Cloud Run). For example:
 
-  ```go
-  package yourplugin
+    ```go
+    type MyPlugin struct {
+        APIKey string
+        // Other options you may allow to configure...
+    }
+    ```
 
-  import "os"
+-   A `Name()` method on the struct that returns the provider ID.
 
-  // MyPlugin holds the configuration for your plugin.
-  type MyPlugin struct {
-  	APIKey string // Can be set directly or via YOURPLUGIN_API_KEY env var
-  	// Other options you may allow to configure...
-  	SomeOption string `json:"someOption"`
-  }
+-   An `Init()` method on the struct with a declaration like the following:
 
-  func (p *MyPlugin) resolveAPIKey() string {
-  	if p.APIKey != "" {
-  		return p.APIKey
-  	}
-  	// Default to environment variable if APIKey field is not set
-  	return os.Getenv("YOURPLUGIN_API_KEY")
-  }
-  ```
+    ```go
+    func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
+    ```
 
-- A `Name()` method on the struct that returns the provider ID.
+    In this function, perform any setup steps required by your plugin. For
+    example:
 
-  ```go
-  package yourplugin
+    -   Confirm that any required configuration values are specified and assign
+        default values to any unspecified optional settings.
+    -   Verify that the given configuration options are valid together.
+    -   Create any shared resources required by the rest of your plugin. For
+        example, create clients for any services your plugin accesses.
 
-  func (p *MyPlugin) Name() string {
-  	return providerID
-  }
-  ```
+    To the extent possible, the resources provided by your plugin shouldn't
+    assume that any other plugins have been installed before this one.
 
-- An `Init()` method on the struct with a declaration like the following:
-
-  ```go
-  package yourplugin
-
-  import (
-  	"context"
-  	"errors"
-  	"fmt" // Import fmt for error formatting
-
-  	"github.com/firebase/genkit/go/genkit"
-  )
-
-  func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
-  	apiKey := p.resolveAPIKey() // Use the helper method
-  	if apiKey == "" {
-  		return errors.New("API key is required for yourplugin")
-  	}
-
-  	// Perform any setup steps required by your plugin.
-  	// For example:
-  	// - Confirm that any required configuration values are specified.
-  	// - Assign default values to any unspecified optional settings.
-  	if p.SomeOption == "" {
-  		p.SomeOption = "defaultValue"
-  	}
-
-  	// - Verify that the given configuration options are valid together.
-  	//   (Example: if option A is set, option B must also be set)
-
-  	// - Create any shared resources required by the rest of your plugin.
-  	//   For example, create clients for any services your plugin accesses.
-  	//   myServiceClient, err := NewServiceClient(apiKey)
-  	//   if err != nil {
-  	//       return fmt.Errorf("failed to create service client: %w", err)
-  	//   }
-  	//   Store the client or other resources in the plugin struct or globally accessible way.
-
-  	fmt.Printf("Initializing %s plugin with option: %s\n", p.Name(), p.SomeOption)
-
-  	// Register models, retrievers, etc. using genkit.Define... functions
-  	// Example: DefineMyModel(g, myServiceClient)
-
-  	return nil // Return nil on successful initialization
-  }
-
-  // Ensure MyPlugin implements genkit.Plugin
-  var _ genkit.Plugin = &MyPlugin{}
-  ```
-
-  In this function, perform any setup steps required by your plugin. For
-  example:
-
-  - Confirm that any required configuration values are specified and assign
-    default values to any unspecified optional settings.
-  - Verify that the given configuration options are valid together.
-  - Create any shared resources required by the rest of your plugin. For
-    example, create clients for any services your plugin accesses.
-
-  To the extent possible, the resources provided by your plugin shouldn't
-  assume that any other plugins have been installed before this one.
-
-  This method will be called automatically during `genkit.Init()` when the
-  user passes the plugin into the `WithPlugins()` option.
+    This method will be called automatically during `genkit.Init()` when the
+    user passes the plugin into the `WithPlugins()` option.
 
 ## Building plugin features
 

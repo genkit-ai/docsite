@@ -40,45 +40,20 @@ standard Go, and code inside a flow doesn't need to be flow-aware.
 ## Defining and calling flows
 
 In its simplest form, a flow just wraps a function. The following example wraps
-a function that calls `Generate()`:
+a function that calls `genkit.Generate()`:
 
 ```go
-package main
+menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string) (string, error) {
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+        if err != nil {
+            return "", err
+        }
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
-		func(ctx context.Context, theme string) (string, error) {
-			resp, err := genkit.Generate(ctx, g,
-				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-			)
-			if err != nil {
-				return "", err
-			}
-
-			return resp.Text(), nil
-		})
-
-	// Use the flow (example)
-	_, _ = menuSuggestionFlow.Run(ctx, "pirate")
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+        return resp.Text(), nil
+    })
 ```
 
 Just by wrapping your `genkit.Generate()` calls like this, you add some
@@ -98,43 +73,17 @@ Here's a refinement of the last example, which defines a flow that takes a
 string as input and outputs an object:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
 type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+    Name        string `json:"name"`
+    Description string `json:"description"`
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
-		func(ctx context.Context, theme string) (MenuItem, error) {
-			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-			)
-			return item, err
-		})
-
-	// Use the flow (example)
-	_, _ = menuSuggestionFlow.Run(ctx, "bistro")
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string) (MenuItem, error) {
+        return genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+    })
 ```
 
 Note that the schema of a flow does not necessarily have to line up with the
@@ -146,48 +95,22 @@ output to format a simple string, which the flow returns. Note how we pass
 `WithOutputType()` option and getting a value of that type in response.
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
 type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+    Name        string `json:"name"`
+    Description string `json:"description"`
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
+menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
+    func(ctx context.Context, theme string) (string, error) {
+        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+        if err != nil {
+            return "", err
+        }
 
-	menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
-		func(ctx context.Context, theme string) (string, error) {
-			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-			)
-			if err != nil {
-				return "", err
-			}
-
-			return fmt.Sprintf("**%s**: %s", item.Name, item.Description), nil
-		})
-
-	// Use the flow (example)
-	_, _ = menuSuggestionMarkdownFlow.Run(ctx, "sci-fi")
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+        return fmt.Sprintf("**%s**: %s", item.Name, item.Description), nil
+    })
 ```
 
 ### Calling flows
@@ -195,7 +118,7 @@ func main() {
 Once you've defined a flow, you can call it from your Go code:
 
 ```go
-item, err := menuSuggestionFlow.Run(ctx, "bistro")
+item, err := menuSuggestionFlow.Run(context.Background(), "bistro")
 ```
 
 The argument to the flow must conform to the input schema.
@@ -205,13 +128,13 @@ example, if you set the output schema to `MenuItem`, the flow output will
 contain its properties:
 
 ```go
-item, err := menuSuggestionFlow.Run(ctx, "bistro")
+item, err := menuSuggestionFlow.Run(context.Background(), "bistro")
 if err != nil {
     log.Fatal(err)
 }
 
-log.Println(item.Name) // Assuming MenuItem has Name field
-log.Println(item.Description) // Assuming MenuItem has Description field
+log.Println(item.Name)
+log.Println(item.Description)
 ```
 
 ## Streaming flows
@@ -226,64 +149,38 @@ user as they are generated.
 Here's an example of a flow that supports streaming:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
 type Menu struct {
-	Theme string     `json:"theme"`
-	Items []MenuItem `json:"items"`
+    Theme  string     `json:"theme"`
+    Items  []MenuItem `json:"items"`
 }
 
 type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+    Name        string `json:"name"`
+    Description string `json:"description"`
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string, callback core.StreamCallback[string]) (Menu, error) {
+        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+            ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+                // Here, you could process the chunk in some way before sending it to
+                // the output stream using StreamCallback. In this example, we output
+                // the text of the chunk, unmodified.
+                return callback(ctx, chunk.Text())
+            }),
+        )
+        if err != nil {
+            return nil, err
+        }
 
-	menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-		func(ctx context.Context, theme string, callback core.StreamCallback[string]) (Menu, error) {
-			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-					// Here, you could process the chunk in some way before sending it to
-					// the output stream using StreamCallback. In this example, we output
-					// the text of the chunk, unmodified.
-					return callback(ctx, chunk.Text())
-				}),
-			)
-			if err != nil {
-				// Return zero value for Menu along with the error
-				return Menu{}, err
-			}
-
-			return Menu{
-				Theme: theme,
-				Items: []MenuItem{item},
-			}, nil
-		})
-
-	// Use the flow (example)
-	_, _ = menuSuggestionFlow.Run(ctx, "fantasy") // Non-streaming call still works
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+        return Menu{
+            Theme: theme,
+            Items: []MenuItem{item},
+        }, nil
+    })
 ```
+
 
 The `string` type in `StreamCallback[string]` specifies the type of
 values your flow streams. This does not necessarily need to be the same
@@ -301,75 +198,23 @@ Streaming flows can be run like non-streaming flows with
 `menuSuggestionFlow.Run(ctx, "bistro")` or they can be streamed:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-type Menu struct {
-	Theme string     `json:"theme"`
-	Items []MenuItem `json:"items"`
+streamCh, err := menuSuggestionFlow.Stream(context.Background(), "bistro")
+if err != nil {
+    log.Fatal(err)
 }
 
-type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Assume menuSuggestionFlow is defined as in the previous example
-	menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-		func(ctx context.Context, theme string, callback core.StreamCallback[string]) (Menu, error) {
-			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-					return callback(ctx, chunk.Text())
-				}),
-			)
-			if err != nil {
-				return Menu{}, err
-			}
-			return Menu{Theme: theme, Items: []MenuItem{item}}, nil
-		})
-
-	streamCh, err := menuSuggestionFlow.Stream(ctx, "bistro")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for result := range streamCh {
-		if result.Err != nil {
-			log.Fatalf("Stream error: %v", result.Err)
-		}
-		if result.Done {
-			// Access the final output (Menu)
-			finalOutput := result.Output
-			log.Printf("Menu with %s theme:\n", finalOutput.Theme)
-			for _, item := range finalOutput.Items {
-				log.Printf(" - %s: %s", item.Name, item.Description)
-			}
-		} else {
-			// Access the streamed chunk (string)
-			chunk := result.Stream
-			log.Println("Stream chunk:", chunk)
-		}
-	}
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
+for result := range streamCh {
+    if result.Err != nil {
+        log.Fatal("Stream error: %v", result.Err)
+    }
+    if result.Done {
+        log.Printf("Menu with %s theme:\n", result.Output.Theme)
+        for item := range result.Output.Items {
+            log.Println(" - %s: %s", item.Name, item.Description)
+        }
+    } else {
+        log.Println("Stream chunk:", result.Stream)
+    }
 }
 ```
 
@@ -427,8 +272,8 @@ but this section gives brief overviews of your deployment options.
 ### `net/http` Server
 
 To deploy a flow using any Go hosting platform, such as Cloud Run, define
-your flow using `DefineFlow()` and start a `net/http` server with the provided
-flow handler:
+your flow using `genkit.DefineFlow()` and start a `net/http` server with the 
+provided flow handler using `genkit.Handler()`:
 
 ```go
 package main
@@ -438,13 +283,13 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/firebase/genkit/go/ai" // Assuming MenuItem is defined elsewhere or here
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
-type MenuItem struct { // Define MenuItem if not already defined
+type MenuItem struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
@@ -459,7 +304,6 @@ func main() {
 
 	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
 		func(ctx context.Context, theme string) (MenuItem, error) {
-			// Flow implementation...
 			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
 				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
 			)
@@ -476,38 +320,15 @@ func main() {
 manages its lifecycle, including capturing interrupt signals to ease local
 development, but you may use your own method.
 
-To serve all the flows defined in your codebase, you can use `ListFlows()`:
+To serve all the flows defined in your codebase, you can use 
+`genkit.ListFlows()`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-	"net/http"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/server"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Assume flows are defined elsewhere and registered with 'g'
-
-	mux := http.NewServeMux()
-	for _, flow := range genkit.ListFlows(g) {
-		// Capture the flow variable for the closure
-		currentFlow := flow
-		mux.HandleFunc("POST /"+currentFlow.Name(), genkit.Handler(currentFlow))
-	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+mux := http.NewServeMux()
+for _, flow := range genkit.ListFlows(g) {
+    mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 }
+log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
 ```
 
 You can call a flow endpoint with a POST request as follows:
@@ -523,36 +344,13 @@ You can also use other server frameworks to deploy your flows. For
 example, you can use [Gin](https://gin-gonic.com/) with just a few lines:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/gin-gonic/gin"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Assume flows are defined elsewhere and registered with 'g'
-
-	router := gin.Default()
-	for _, flow := range genkit.ListFlows(g) {
-		// Capture the flow variable for the closure
-		currentFlow := flow
-		router.POST("/"+currentFlow.Name(), func(c *gin.Context) {
-			genkit.Handler(currentFlow)(c.Writer, c.Request)
-		})
-	}
-	log.Fatal(router.Run(":3400"))
+router := gin.Default()
+for _, flow := range genkit.ListFlows(g) {
+    router.POST("/"+flow.Name(), func(c *gin.Context) {
+        genkit.Handler(flow)(c.Writer, c.Request)
+    })
 }
+log.Fatal(router.Run(":3400"))
 ```
 
 For information on deploying to specific platforms, see
