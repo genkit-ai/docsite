@@ -7,7 +7,7 @@ The Pinecone plugin provides indexer and retriever implementations that use the
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save genkitx-pinecone
 ```
 

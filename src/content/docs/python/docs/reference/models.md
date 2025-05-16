@@ -16,12 +16,12 @@ artwork created by humans.
 
 In addition, LLMs have proven capable of tasks beyond simple text generation:
 
--   Writing computer programs
--   Planning subtasks that are required to complete a larger task
--   Organizing unorganized data
--   Understanding and extracting information data from a corpus of text
--   Following and performing automated activities based on a text description of
-    the activity
+- Writing computer programs
+- Planning subtasks that are required to complete a larger task
+- Organizing unorganized data
+- Understanding and extracting information data from a corpus of text
+- Following and performing automated activities based on a text description of
+  the activity
 
 There are many models available to you, from several different providers. Each
 model has its own strengths and weaknesses and one model might excel at one task
@@ -48,7 +48,7 @@ another as new models emerge.
 
 Before you can use Genkit to start generating content, you need to load and
 configure a model plugin. If you're coming from the Getting Started guide,
-you've already done this. Otherwise, see the [Get started](/python/get-started/)
+you've already done this. Otherwise, see the [Get started](/python/docs/get-started/)
 guide or the individual plugin's documentation and follow the steps there before
 continuing.
 
@@ -201,12 +201,12 @@ conforms to your Python types.
 When you specify a schema in `generate()`, Genkit does several things behind the
 scenes:
 
--   Augments the prompt with additional guidance about the desired output format.
-    This also has the side effect of specifying to the model what content exactly
-    you want to generate (for example, not only suggest a menu item but also
-    generate a description, a list of allergens, and so on).
--   Parses the model output into a Pydantic object.
--   Verifies that the output conforms with the schema.
+- Augments the prompt with additional guidance about the desired output format.
+  This also has the side effect of specifying to the model what content exactly
+  you want to generate (for example, not only suggest a menu item but also
+  generate a description, a list of allergens, and so on).
+- Parses the model output into a Pydantic object.
+- Verifies that the output conforms with the schema.
 
 To get structured output from a successful generate call, use the response
 object's `output` property:
@@ -372,6 +372,7 @@ model plugins add support for other media sources. For example, the Vertex AI
 plugin also lets you use Cloud Storage (`gs://`) URLs.
 
 <!-- TODO: The 'Generating media' section is incomplete. -->
+
 ### Generating media
 
 So far, most of the examples on this page have dealt with generating text using
@@ -382,4 +383,5 @@ example, to generate an image using the Imagen model:
 ```python
 # TODO: Add example for image generation
 ```
+
 <!-- End TODO -->

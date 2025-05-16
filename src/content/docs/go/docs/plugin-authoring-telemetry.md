@@ -10,13 +10,13 @@ configures the [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go
 to export to a particular OpenTelemetry-capable system.
 
 Genkit includes a plugin that configures OpenTelemetry to export data to
-[Google Cloud Monitoring and Cloud Logging](./plugins/google-cloud.md). To support
+[Google Cloud Monitoring and Cloud Logging](/go/docs/plugins/google-cloud). To support
 other monitoring systems, you can extend Genkit by writing a telemetry plugin,
 as described on this page.
 
 ## Before you begin
 
-Read [Writing Genkit plugins](./plugin-authoring.md) for information about writing
+Read [Writing Genkit plugins](/go/docs/plugin-authoring) for information about writing
 any kind of Genkit plugin, including telemetry plugins. In particular, note that
 every plugin must export an `Init` function, which users are expected to call
 before using the plugin.
@@ -54,7 +54,7 @@ or the monitoring service's docs to see if integrations are already available.
 
 If you need to build these integrations yourself, take a look at the source of
 the [official OpenTelemetry exporters](https://github.com/open-telemetry/opentelemetry-go/tree/main/exporters)
-and the page [A Guide to Writing `slog` Handlers](https://github.com/golang/example/blob/master/slog-handler-guide/README.md).
+and the page [A Guide to Writing `slog` Handlers](https://github.com/golang/example/blob/master/slog-handler-guide/README).
 
 ## Building the plugin
 
@@ -112,29 +112,29 @@ The `Init()` function of a telemetry plugin should do all of the following:
   set:
 
   ```go
-	shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
-	if !shouldExport {
-		return nil
-	}
+  shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
+  if !shouldExport {
+  	return nil
+  }
   ```
 
 - Initialize your trace span exporter and register it with Genkit:
 
   ```go
-	spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
-	genkit.RegisterSpanProcessor(g, spanProcessor)
+  spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
+  genkit.RegisterSpanProcessor(g, spanProcessor)
   ```
 
 - Initialize your metric exporter and register it with the OpenTelemetry
   library:
 
   ```go
-	r := metric.NewPeriodicReader(
-		YourCustomMetricExporter{},
-		metric.WithInterval(cfg.MetricInterval),
-	)
-	mp := metric.NewMeterProvider(metric.WithReader(r))
-	otel.SetMeterProvider(mp)
+  r := metric.NewPeriodicReader(
+  	YourCustomMetricExporter{},
+  	metric.WithInterval(cfg.MetricInterval),
+  )
+  mp := metric.NewMeterProvider(metric.WithReader(r))
+  otel.SetMeterProvider(mp)
   ```
 
   Use the user-configured collection interval (`Config.MetricInterval`) when
@@ -143,10 +143,10 @@ The `Init()` function of a telemetry plugin should do all of the following:
 - Register your `slog` handler as the default logger:
 
   ```go
-	logger := slog.New(YourCustomHandler{
-		Options: &slog.HandlerOptions{Level: cfg.LogLevel},
-	})
-	slog.SetDefault(logger)
+  logger := slog.New(YourCustomHandler{
+  	Options: &slog.HandlerOptions{Level: cfg.LogLevel},
+  })
+  slog.SetDefault(logger)
   ```
 
   You should configure your handler to honor the user-specified minimum log

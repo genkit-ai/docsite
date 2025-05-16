@@ -166,7 +166,7 @@ provider-specific actions.
         genkit start -- go run .
         ```
 
-    3.  In the developer UI (http://localhost:4000/), run the flow:
+    3.  In the developer UI (`http://localhost:4000/`), run the flow:
 
     4.  Click **jokesFlow**.
 

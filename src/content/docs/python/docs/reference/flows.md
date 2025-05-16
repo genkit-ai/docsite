@@ -8,13 +8,13 @@ that you can simply take user input, pass it to the model, and display the model
 output back to the user. Usually, there are pre- and post-processing steps that
 must accompany the model call. For example:
 
-*   Retrieving contextual information to send with the model call
-*   Retrieving the history of the user's current session, for example in a chat
-    app
-*   Using one model to reformat the user input in a way that's suitable to pass
-    to another model
-*   Evaluating the "safety" of a model's output before presenting it to the user
-*   Combining the output of several models
+- Retrieving contextual information to send with the model call
+- Retrieving the history of the user's current session, for example in a chat
+  app
+- Using one model to reformat the user input in a way that's suitable to pass
+  to another model
+- Evaluating the "safety" of a model's output before presenting it to the user
+- Combining the output of several models
 
 Every step of this workflow must work together for any AI-related task to
 succeed.
@@ -24,16 +24,16 @@ flow. Flows are written just like functions, using ordinary Python code, but
 they add additional capabilities intended to ease the development of AI
 features:
 
-*   **Type safety**: Input and output schemas defined using
-    [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/), which
-    provides both static and runtime type checking
-*   **Streaming**: Flows support streaming of data, such as parital LLM responses,
-    or any custom serializable objects.
-*   **Integration with developer UI**: Debug flows independently of your
-    application code using the developer UI. In the developer UI, you can run
-    flows and view traces for each step of the flow.
-*   **Simplified deployment**: Deploy flows directly as web API endpoints, using
-    Cloud Run or any platform that can host a web app.
+- **Type safety**: Input and output schemas defined using
+  [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/), which
+  provides both static and runtime type checking
+- **Streaming**: Flows support streaming of data, such as parital LLM responses,
+  or any custom serializable objects.
+- **Integration with developer UI**: Debug flows independently of your
+  application code using the developer UI. In the developer UI, you can run
+  flows and view traces for each step of the flow.
+- **Simplified deployment**: Deploy flows directly as web API endpoints, using
+  Cloud Run or any platform that can host a web app.
 
 Unlike similar features in other frameworks, Genkit's flows are lightweight and
 unobtrusive, and don't force your app to conform to any specific abstraction.
@@ -205,5 +205,5 @@ from your app clients. Deployment is discussed in detail on several other pages,
 but this section gives brief overviews of your deployment options.
 
 For information on deploying to specific platforms, see
-[Deploy with Cloud Run](/python/cloud-run/) and
-[Deploy with Flask](/python/flask/).
+[Deploy with Cloud Run](/python/docs/cloud-run/) and
+[Deploy with Flask](/python/docs/flask/).

@@ -32,7 +32,7 @@ Genkit supports two types of evaluation:
   from your production traces) and you want to have an objective measurement of
   the quality of the collected data.
 
-  For more information, see the [Advanced use](#advanced_use) section of this page.
+  For more information, see the [Advanced use](#advanced-use) section of this page.
 
 This section explains how to perform inference-based evaluation using Genkit.
 
@@ -51,20 +51,24 @@ This section explains how to perform inference-based evaluation using Genkit.
     export const ai = genkit({ plugins: [googleAI()] });
 
     // Dummy retriever that always returns the same docs
-    export const dummyRetriever = ai.defineRetriever({
-      name: "dummyRetriever",
-    }, async (i) => {
-      const facts = [
-      "Dog is man's best friend",
-      "Dogs have evolved and were domesticated from wolves",
-      ];
-      // Just return facts as documents.
-      return { documents: facts.map((t) => Document.fromText(t)) };
-    });
+    export const dummyRetriever = ai.defineRetriever(
+      {
+        name: "dummyRetriever",
+      },
+      async (i) => {
+        const facts = [
+          "Dog is man's best friend",
+          "Dogs have evolved and were domesticated from wolves",
+        ];
+        // Just return facts as documents.
+        return { documents: facts.map((t) => Document.fromText(t)) };
+      }
+    );
 
     // A simple question-answering flow
-    export const qaFlow = ai.defineFlow({
-        name: 'qaFlow',
+    export const qaFlow = ai.defineFlow(
+      {
+        name: "qaFlow",
         inputSchema: z.string(),
         outputSchema: z.string(),
       },
@@ -75,30 +79,29 @@ This section explains how to perform inference-based evaluation using Genkit.
         });
 
         const llmResponse = await ai.generate({
-          model: googleAI.model('gemini-2.0-flash'),
+          model: googleAI.model("gemini-2.0-flash"),
           prompt: `Answer this question with the given context ${query}`,
           docs: factDocs,
         });
         return llmResponse.text;
-      });
+      }
+    );
     ```
 
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
 
     ```js
-
     import { genkitEval, GenkitMetric } from "@genkit-ai/evaluator";
     import { googleAI } from "@genkit-ai/googleai";
 
-    export const ai = genkit ({
+    export const ai = genkit({
       plugins: [
-        ...
-        // Add this plugin to your Genkit initialization block
+        ...// Add this plugin to your Genkit initialization block
         genkitEval({
-          judge: googleAI.model('gemini-2.0-flash'),
+          judge: googleAI.model("gemini-2.0-flash"),
           metrics: [GenkitMetric.MALICIOUSNESS],
         }),
-      ]
+      ],
     });
     ```
 
@@ -182,7 +185,7 @@ input, extracted context and metrics (if any).
 
 - **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
 
-- **Dataset** A dataset is a collection of examples to use for inference-based      
+- **Dataset** A dataset is a collection of examples to use for inference-based  
   evaluation. A dataset typically consists of `input` and optional `reference`
   fields. The `reference` field does not affect the inference step of evaluation
   but it is passed verbatim to any evaluation metrics. In Genkit, you can create a
@@ -364,7 +367,7 @@ export const qaFlow = ai.defineFlow(
     });
 
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model("gemini-2.0-flash"),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocsModified,
     });
@@ -482,7 +485,7 @@ export const synthesizeQuestions = ai.defineFlow(
     const questions: string[] = [];
     for (var i = 0; i < chunks.length; i++) {
       const qResponse = await ai.generate({
-        model: googleAI.model('gemini-2.0-flash'),
+        model: googleAI.model("gemini-2.0-flash"),
         prompt: {
           text: `Generate one question about the text below: ${chunks[i]}`,
         },

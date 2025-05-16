@@ -107,20 +107,19 @@ create your own.
 Genkit provides indexer and retriever support through its plugin system. The
 following plugins are officially supported:
 
-- [Pinecone](./plugins/pinecone.md) cloud vector database
+- [Pinecone](/go/docs/plugins/pinecone) cloud vector database
 
 In addition, Genkit supports the following vector stores through predefined
 code templates, which you can customize for your database configuration and
 schema:
 
-- PostgreSQL with [`pgvector`](./pgvector.md) <!-- Adjusted link from templates/pgvector.md -->
+- PostgreSQL with [`pgvector`](/go/docs/plugins/pgvector)
 
 Embedding model support is provided through the following plugins:
 
-| Plugin                    | Models               |
-| ------------------------- | -------------------- |
-| [Google Generative AI](./plugins/google-genai.md) | Text embedding       |
-| [Vertex AI](./plugins/vertex-ai.md) | Text embedding | <!-- Added Vertex AI based on later code examples -->
+| Plugin                                                | Models         |
+| ----------------------------------------------------- | -------------- |
+| [Google Generative AI](/go/docs/plugins/google-genai) | Text embedding |
 
 ## Defining a RAG Flow
 
@@ -144,8 +143,8 @@ The following example shows how to create an indexer to ingest a collection of
 PDF documents and store them in a local vector database.
 
 It uses the local file-based vector similarity retriever that Genkit provides
-out-of-the box for simple testing and prototyping. *Do not use this
-in production.*
+out-of-the box for simple testing and prototyping. _Do not use this
+in production._
 
 #### Create the indexer
 

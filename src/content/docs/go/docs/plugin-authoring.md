@@ -109,7 +109,7 @@ Genkit model plugins add one or more generative AI models to the Genkit
 registry. A model represents any generative model that is capable of receiving a
 prompt as input and generating text, media, or data as output.
 
-See [Writing a Genkit model plugin](./plugin-authoring-models.md).
+See [Writing a Genkit model plugin](/go/docs/plugin-authoring-models).
 
 ### Telemetry plugins
 
@@ -117,7 +117,7 @@ Genkit telemetry plugins configure Genkit's OpenTelemetry instrumentation to
 export traces, metrics, and logs to a particular monitoring or visualization
 tool.
 
-See [Writing a Genkit telemetry plugin](./plugin-authoring-telemetry.md).
+See [Writing a Genkit telemetry plugin](/go/docs/plugin-authoring-telemetry).
 
 ## Publishing a plugin
 
@@ -127,5 +127,5 @@ can be found with a simple search on
 [`pkg.go.dev`](https://pkg.go.dev/search?q=genkit). Any of the following are
 good choices:
 
--   `github.com/yourorg/genkit-plugins/servicename`
--   `github.com/yourorg/your-repo/genkit/servicename`
+- `github.com/yourorg/genkit-plugins/servicename`
+- `github.com/yourorg/your-repo/genkit/servicename`

@@ -85,13 +85,13 @@ Now that you're set up to make model requests with Genkit, learn how to use more
 Genkit capabilities to build your AI-powered apps and workflows. To get started
 with additional Genkit capabilities, see the following guides:
 
-*   [Developer tools](./devtools.md): Learn how to set up and use
-    Genkit's CLI and developer UI to help you locally test and debug your app.
-*   [Generating content](./models.md): Learn how to use Genkit's
-    unified generation API to generate text and structured data from any
-    supported model.
-*   [Creating flows](./flows.md): Learn how to use special Genkit
-    functions, called flows, that provide end-to-end observability for workflows
-    and rich debugging from Genkit tooling.
-*   [Managing prompts](./dotprompt.md): Learn how Genkit helps you
-    manage your prompts and configuration together as code.
+- [Developer tools](/docs/devtools): Learn how to set up and use
+  Genkit's CLI and developer UI to help you locally test and debug your app.
+- [Generating content](/go/docs/models): Learn how to use Genkit's
+  unified generation API to generate text and structured data from any
+  supported model.
+- [Creating flows](/go/docs/flows): Learn how to use special Genkit
+  functions, called flows, that provide end-to-end observability for workflows
+  and rich debugging from Genkit tooling.
+- [Managing prompts](/go/docs/dotprompt): Learn how Genkit helps you
+  manage your prompts and configuration together as code.

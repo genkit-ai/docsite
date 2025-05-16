@@ -2,9 +2,6 @@
 title: Firebase plugin
 ---
 
-<!-- NOTE: prettier-ignore used in some snippets to allow copy/paste into Firebase Functions which
-use https://github.com/firebase/firebase-tools/blob/master/templates/init/functions/javascript/_eslintrc -->
-
 The Firebase plugin provides integrations with Firebase services, so you can
 build intelligent and scalable AI applications. Key features include:
 
@@ -18,7 +15,7 @@ build intelligent and scalable AI applications. Key features include:
 
 Install the Firebase plugin with npm:
 
-```posix-terminal
+```bash
 npm install @genkit-ai/firebase
 ```
 
@@ -40,8 +37,6 @@ npm install @genkit-ai/firebase
 You must initialize the Firebase Admin SDK in your application.
 This is not handled automatically by the plugin.
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 import { initializeApp } from 'firebase-admin/app';
 
@@ -119,8 +114,6 @@ store, you need to pass credentials directly to the Firestore instance
 during initialization or the singleton may be initialized with application
 default credentials depending on plugin initialization order.
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 import {initializeApp} from "firebase-admin/app";
 import {getFirestore} from "firebase-admin/firestore";
@@ -140,8 +133,6 @@ if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
 Use `defineFirestoreRetriever()` to create a retriever for Firestore
 vector-based queries.
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { initializeApp } from 'firebase-admin/app';
@@ -166,8 +157,6 @@ const retriever = defineFirestoreRetriever(ai, {
 To retrieve documents using the defined retriever, pass the retriever instance
 and query options to `ai.retrieve`.
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 const docs = await ai.retrieve({
   retriever,
@@ -195,9 +184,7 @@ The following options can be passed to the `options` field in `ai.retrieve`:
   ```
 
 - **`collection`**: _(string)_
-  Override the default collection specified in the retriever configuration.
-- This is useful for querying subcollections or dynamically switching between
-- collections.
+  Override the default collection specified in the retriever configuration. This is useful for querying subcollections or dynamically switching between collections.
 
 #### Populate Firestore with Embeddings
 
@@ -206,8 +193,6 @@ the Admin SDK. For example, the menu ingestion script from the
 [Retrieval-augmented generation](/docs/rag) page could be adapted for
 Firestore in the following way:
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 import { genkit } from 'genkit';
 import { vertexAI, textEmbedding004 } from "@genkit-ai/vertexai";
@@ -283,7 +268,7 @@ To create the index:
 
   The command looks like the following:
 
-  ```posix-terminal
+  ```bash
   gcloud alpha firestore indexes composite create --project=your-project-id \
     --collection-group=yourCollectionName --query-scope=COLLECTION \
     --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=yourEmbeddingField
@@ -312,8 +297,6 @@ streaming and JSON requests. You can use the
 [Cloud Functions client SDKs](https://firebase.google.com/docs/functions/callable?gen=2nd#call_the_function)
 to call them.
 
-<!--See note above on prettier-ignore -->
-<!-- prettier-ignore -->
 ```js
 import { onCallGenkit } from 'firebase-functions/https';
 import { defineSecret } from 'firebase-functions/params';
@@ -328,12 +311,12 @@ export const exampleFlow = ai.defineFlow({
 );
 
 // WARNING: This has no authentication or app check protections.
-// See github.com/firebase/genkit/blob/main/docs/auth.md for more information.
+// See genkit.dev/docs/auth for more information.
 export const example = onCallGenkit({ secrets: [apiKey] }, exampleFlow);
 ```
 
 Deploy your flow using the Firebase CLI:
 
-```posix-terminal
+```bash
 firebase deploy --only functions
 ```

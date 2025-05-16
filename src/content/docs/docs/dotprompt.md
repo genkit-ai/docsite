@@ -640,7 +640,7 @@ members of a list.
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash-latest
+model: googleai/gemini-2.0-flash
 input:
   schema:
     destinations(array):
@@ -698,16 +698,16 @@ side-by-side with existing versions. Dotprompt supports this through its
 variants feature.
 
 To create a variant, create a `[name].[variant].prompt` file. For instance, if
-you were using Gemini 1.5 Flash in your prompt but wanted to see if Gemini 1.5
+you were using Gemini 2.0 Flash in your prompt but wanted to see if Gemini 2.5
 Pro would perform better, you might create two files:
 
 - `my_prompt.prompt`: the "baseline" prompt
-- `my_prompt.gemini15pro.prompt`: a variant named `gemini15pro`
+- `my_prompt.gemini25pro.prompt`: a variant named `gemini25pro`
 
 To use a prompt variant, specify the variant option when loading:
 
 ```ts
-const myPrompt = ai.prompt('my_prompt', { variant: 'gemini15pro' });
+const myPrompt = ai.prompt('my_prompt', { variant: 'gemini25pro' });
 ```
 
 The name of the variant is included in the metadata of generation traces, so you

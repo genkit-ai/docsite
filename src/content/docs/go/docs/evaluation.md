@@ -17,27 +17,27 @@ performance of your system's building blocks.
 
 Genkit supports two types of evaluation:
 
-*   **Inference-based evaluation**: This type of evaluation runs against a
-    collection of pre-determined inputs, assessing the corresponding outputs for
-    quality.
+- **Inference-based evaluation**: This type of evaluation runs against a
+  collection of pre-determined inputs, assessing the corresponding outputs for
+  quality.
 
-    This is the most common evaluation type, suitable for most use cases. This
-    approach tests a system's actual output for each evaluation run.
+  This is the most common evaluation type, suitable for most use cases. This
+  approach tests a system's actual output for each evaluation run.
 
-    You can perform the quality assessment manually, by visually inspecting the
-    results. Alternatively, you can automate the assessment by using an
-    evaluation metric.
+  You can perform the quality assessment manually, by visually inspecting the
+  results. Alternatively, you can automate the assessment by using an
+  evaluation metric.
 
-*   **Raw evaluation**: This type of evaluation directly assesses the quality of
-    inputs without any inference. This approach typically is used with automated
-    evaluation using metrics. All required fields for evaluation (e.g., `input`,
-    `context`, `output` and `reference`) must be present in the input dataset. This
-    is useful when you have data coming from an external source (e.g., collected
-    from your production traces) and you want to have an objective measurement of
-    the quality of the collected data.
+- **Raw evaluation**: This type of evaluation directly assesses the quality of
+  inputs without any inference. This approach typically is used with automated
+  evaluation using metrics. All required fields for evaluation (e.g., `input`,
+  `context`, `output` and `reference`) must be present in the input dataset. This
+  is useful when you have data coming from an external source (e.g., collected
+  from your production traces) and you want to have an objective measurement of
+  the quality of the collected data.
 
-    For more information, see the [Advanced use](#advanced-use) section of this
-    page.
+  For more information, see the [Advanced use](#advanced-use) section of this
+  page.
 
 This section explains how to perform inference-based evaluation using Genkit.
 
@@ -48,7 +48,7 @@ Perform these steps to get started quickly with Genkit.
 ### Setup
 
 1.  Use an existing Genkit app or create a new one by following our
-    [Get started](../get-started-go) guide.
+    [Get started](/go/docs/get-started-go) guide.
 
 2.  Add the following code to define a simple RAG application to evaluate. For
     this guide, we use a dummy retriever that always returns the same documents.
@@ -217,7 +217,7 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 ### Run evaluation and view results
 
 To start evaluating the flow, click the **Run new evaluation** button on your
-dataset page. You can also start a new evaluation from the *Evaluations* tab.
+dataset page. You can also start a new evaluation from the _Evaluations_ tab.
 
 1.  Select the `Flow` radio button to evaluate a flow.
 
@@ -238,7 +238,7 @@ dataset page. You can also start a new evaluation from the *Evaluations* tab.
 5.  Click **Run evaluation** to start evaluation. Depending on the flow
     you're testing, this may take a while. Once the evaluation is complete, a
     success message appears with a link to view the results. Click the link
-    to go to the *Evaluation details* page.
+    to go to the _Evaluation details_ page.
 
 You can see the details of your evaluation on this page, including original
 input, extracted context and metrics (if any).
@@ -250,24 +250,24 @@ input, extracted context and metrics (if any).
 Knowing the following terms can help ensure that you correctly understand
 the information provided on this page:
 
--   **Evaluation**: An evaluation is a process that assesses system performance.
-    In Genkit, such a system is usually a Genkit primitive, such as a flow or a
-    model. An evaluation can be automated or manual (human evaluation).
+- **Evaluation**: An evaluation is a process that assesses system performance.
+  In Genkit, such a system is usually a Genkit primitive, such as a flow or a
+  model. An evaluation can be automated or manual (human evaluation).
 
--   **Bulk inference** Inference is the act of running an input on a flow or
-    model to get the corresponding output. Bulk inference involves performing
-    inference on multiple inputs simultaneously.
+- **Bulk inference** Inference is the act of running an input on a flow or
+  model to get the corresponding output. Bulk inference involves performing
+  inference on multiple inputs simultaneously.
 
--   **Metric** An evaluation metric is a criterion on which an inference is
-    scored. Examples include accuracy, faithfulness, maliciousness, whether the
-    output is in English, etc.
+- **Metric** An evaluation metric is a criterion on which an inference is
+  scored. Examples include accuracy, faithfulness, maliciousness, whether the
+  output is in English, etc.
 
--   **Dataset** A dataset is a collection of examples to use for inference-based
-    evaluation. A dataset typically consists of `Input` and optional `Reference`
-    fields. The `Reference` field does not affect the inference step of evaluation
-    but it is passed verbatim to any evaluation metrics. In Genkit, you can create
-    a dataset through the Dev UI. There are two types of datasets in Genkit:
-    *Flow* datasets and *Model* datasets.
+- **Dataset** A dataset is a collection of examples to use for inference-based
+  evaluation. A dataset typically consists of `Input` and optional `Reference`
+  fields. The `Reference` field does not affect the inference step of evaluation
+  but it is passed verbatim to any evaluation metrics. In Genkit, you can create
+  a dataset through the Dev UI. There are two types of datasets in Genkit:
+  _Flow_ datasets and _Model_ datasets.
 
 ## Supported evaluators
 
@@ -280,13 +280,13 @@ Genkit includes a small number of built-in evaluators, ported from
 the [JS evaluators plugin](https://js.api.genkit.dev/enums/_genkit-ai_evaluator.GenkitMetric.html),
 to help you get started:
 
--   EvaluatorDeepEqual -- Checks if the generated output is deep-equal to the
-    reference output provided.
--   EvaluatorRegex -- Checks if the generated output matches the regular
-    expression provided in the reference field.
--   EvaluatorJsonata -- Checks if the generated output matches the
-    [JSONATA](https://jsonata.org/) expression provided in the
-    reference field.
+- EvaluatorDeepEqual -- Checks if the generated output is deep-equal to the
+  reference output provided.
+- EvaluatorRegex -- Checks if the generated output matches the regular
+  expression provided in the reference field.
+- EvaluatorJsonata -- Checks if the generated output matches the
+  [JSONATA](https://jsonata.org/) expression provided in the
+  reference field.
 
 ## Advanced use
 
@@ -357,14 +357,14 @@ You can view the results of your evaluation run in the Dev UI at
 
 #### `eval:extractData` and `eval:run` commands
 
-To support *raw evaluation*, Genkit provides tools to extract data from traces
+To support _raw evaluation_, Genkit provides tools to extract data from traces
 and run evaluation metrics on extracted data. This is useful, for example, if
 you are using a different framework for evaluation or if you are collecting
 inferences from a different environment to test locally for output quality.
 
-You can batch run your Genkit flow and extract an *evaluation dataset* from the
+You can batch run your Genkit flow and extract an _evaluation dataset_ from the
 resultant traces. A raw evaluation dataset is a collection of inputs for
-evaluation metrics, *without* running any prior inference.
+evaluation metrics, _without_ running any prior inference.
 
 Run your flow over your test inputs:
 

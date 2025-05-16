@@ -7,7 +7,7 @@ through the [Gemini API](https://ai.google.dev/docs/gemini_api_overview).
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save @genkit-ai/googleai
 ```
 
@@ -41,10 +41,17 @@ Configure the plugin to use your API key by doing one of the following:
 
 ## Usage
 
-This plugin statically exports references to its supported models:
+The recommended way to reference models is through the helper function provided by the plugin:
 
 ```ts
 import { googleAI } from "@genkit-ai/googleai";
+
+// Referencing models
+const model = googleAI.model('gemini-2.0-flash');
+const modelPro = googleAI.model('gemini-2.0-flash-lite');
+
+// Referencing embedders
+const embedder = googleAI.embedder('text-embedding-004');
 ```
 
 You can use these references to specify which model `generate()` uses:
@@ -52,7 +59,7 @@ You can use these references to specify which model `generate()` uses:
 ```ts
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model("gemini-2.0-flash"),
+  model: googleAI.model('gemini-2.0-flash'), // Set default model
 });
 
 const llmResponse = await ai.generate("Tell me a joke.");
@@ -66,7 +73,7 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: googleAI.emebedder("text-embedding-004"),
+  embedder: googleAI.embedder('text-embedding-004'),
   content: input,
 });
 ```
@@ -91,7 +98,7 @@ const uploadResult = await fileManager.uploadFile("path/to/file.jpg", {
 });
 
 const response = await ai.generate({
-  model: googleAI.model('gemini-2.0-flash'),
+  model: googleAI.model("gemini-2.0-flash"),
   prompt: [
     { text: "Describe this image:" },
     {
@@ -128,7 +135,7 @@ const ai = genkit({
 
 const llmResponse = await ai.generate({
   prompt: `Suggest an item for the menu of fish themed restruant`,
-  model: googleAI.model('tunedModels/my-example-model-apbm8oqbvuv2'),
+  model: googleAI.model("tunedModels/my-example-model-apbm8oqbvuv2"),
 });
 ```
 
@@ -167,7 +174,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: "Describe Pierre’s transformation throughout the novel.",
 });
 ```
@@ -206,7 +213,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
 ```
@@ -262,7 +269,7 @@ const analyzeVideoResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model("gemini-2.0-flash-001"),
   prompt: query,
 });
 ```

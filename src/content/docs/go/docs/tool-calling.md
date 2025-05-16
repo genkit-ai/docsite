@@ -12,12 +12,12 @@ The use cases of tool calling generally fall into a few themes:
 
 **Giving an LLM access to information it wasn't trained with**
 
-*   Frequently changing information, such as a stock price or the current
-    weather.
-*   Information specific to your app domain, such as product information or user
-    profiles.
+- Frequently changing information, such as a stock price or the current
+  weather.
+- Information specific to your app domain, such as product information or user
+  profiles.
 
-Note the overlap with [retrieval augmented generation](./rag.md) (RAG), which is also
+Note the overlap with [retrieval augmented generation](/go/docs/rag) (RAG), which is also
 a way to let an LLM integrate factual information into its generations. RAG is a
 heavier solution that is most suited when you have a large amount of information
 or the information that's most relevant to a prompt is ambiguous. On the other
@@ -26,26 +26,26 @@ retrieving the information the LLM needs, tool calling is more appropriate.
 
 **Introducing a degree of determinism into an LLM workflow**
 
-*   Performing calculations that the LLM cannot reliably complete itself.
-*   Forcing an LLM to generate verbatim text under certain circumstances, such
-    as when responding to a question about an app's terms of service.
+- Performing calculations that the LLM cannot reliably complete itself.
+- Forcing an LLM to generate verbatim text under certain circumstances, such
+  as when responding to a question about an app's terms of service.
 
 **Performing an action when initiated by an LLM**
 
-*   Turning on and off lights in an LLM-powered home assistant
-*   Reserving table reservations in an LLM-powered restaurant agent
+- Turning on and off lights in an LLM-powered home assistant
+- Reserving table reservations in an LLM-powered restaurant agent
 
 ## Before you begin
 
 If you want to run the code examples on this page, first complete the steps in
-the [Get started](./get-started-go.md) guide. All of the examples assume that you
+the [Get started](/go/docs/get-started-go) guide. All of the examples assume that you
 have already set up a project with Genkit dependencies installed.
 
 This page discusses one of the advanced features of Genkit model abstraction, so
 before you dive too deeply, you should be familiar with the content on the
-[Generating content with AI models](./models.md) page. You should also be familiar
+[Generating content with AI models](/go/docs/models) page. You should also be familiar
 with Genkit's system for defining input and output schemas, which is discussed
-on the [Flows](./flows.md) page.
+on the [Flows](/go/docs/flows) page.
 
 ## Overview of tool calling
 
@@ -65,15 +65,15 @@ looks like:
 
 For this to work, several requirements must be met:
 
-*   The model must be trained to make tool requests when it's needed to complete
-    a prompt. Most of the larger models provided through web APIs such as Gemini
-    can do this, but smaller and more specialized models often cannot. Genkit
-    will throw an error if you try to provide tools to a model that doesn't
-    support it.
-*   The calling application must provide tool definitions to the model in the
-    format it expects.
-*   The calling application must prompt the model to generate tool calling
-    requests in the format the application expects.
+- The model must be trained to make tool requests when it's needed to complete
+  a prompt. Most of the larger models provided through web APIs such as Gemini
+  can do this, but smaller and more specialized models often cannot. Genkit
+  will throw an error if you try to provide tools to a model that doesn't
+  support it.
+- The calling application must provide tool definitions to the model in the
+  format it expects.
+- The calling application must prompt the model to generate tool calling
+  requests in the format the application expects.
 
 ## Tool calling with Genkit
 
@@ -88,10 +88,10 @@ Tool calling support depends on the model, the model API, and the Genkit plugin.
 Consult the relevant documentation to determine if tool calling is likely to be
 supported. In addition:
 
-*   Genkit will throw an error if you try to provide tools to a model that
-    doesn't support it.
-*   If the plugin exports model references, the `ModelInfo.Supports.Tools`
-    property will indicate if it supports tool calling.
+- Genkit will throw an error if you try to provide tools to a model that
+  doesn't support it.
+- If the plugin exports model references, the `ModelInfo.Supports.Tools`
+  property will indicate if it supports tool calling.
 
 ### Defining tools
 
