@@ -233,14 +233,14 @@ complete output conforms to `outputSchema`.
 
 You can run flows from the command line using the Genkit CLI tool:
 
-```posix-terminal
+```bash
 genkit flow:run menuSuggestionFlow '"French"'
 ```
 
 For streaming flows, you can print the streaming output to the console by adding
 the `-s` flag:
 
-```posix-terminal
+```bash
 genkit flow:run menuSuggestionFlow '"French"' -s
 ```
 
@@ -257,7 +257,7 @@ UI.
 To start the developer UI, run the following commands from your project
 directory:
 
-```posix-terminal
+```bash
 genkit start -- tsx --watch src/your-code.ts
 ```
 
@@ -442,7 +442,7 @@ By default, `startFlowServer` will serve all the flows defined in your codebase
 as HTTP endpoints (for example, `http://localhost:3400/menuSuggestionFlow`). You
 can call a flow with a POST request as follows:
 
-```posix-terminal
+```bash
 curl -X POST "http://localhost:3400/menuSuggestionFlow" \
   -H "Content-Type: application/json"  -d '{"data": "banana"}'
 ```

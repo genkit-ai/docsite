@@ -37,7 +37,7 @@ production-like access. You must have the
 `roles/iam. serviceAccountTokenCreator` IAM role applied to your user account
 in order to impersonate service accounts:
 
-```posix-terminal
+```bash
 gcloud auth application-default login --impersonate-service-account <SERVICE_ACCT_EMAIL>
 ```
 

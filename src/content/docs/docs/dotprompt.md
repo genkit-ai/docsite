@@ -31,7 +31,7 @@ example of what these files look like:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 config:
   temperature: 0.9
 input:
@@ -114,7 +114,7 @@ Here is a minimal example of a prompt file:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 ---
 You are the world's most welcoming AI assistant. Greet the user and offer your assistance.
 ```
@@ -261,7 +261,7 @@ configuration values for your prompt:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 config:
   temperature: 1.4
   topK: 50
@@ -301,7 +301,7 @@ front matter section:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -482,7 +482,7 @@ You already saw this in action in the section on input and output schemas:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -518,7 +518,7 @@ Handlebars's `#if` helper:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     theme?: string
@@ -547,7 +547,7 @@ construct multi-message prompts:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 input:
   schema:
     userQuestion: string
@@ -566,7 +566,7 @@ use the `{{media}}` helper:
 
 ```dotprompt
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.0-flash
 input:
   schema:
     photoUrl: string
@@ -605,7 +605,7 @@ This can then be included in other prompts:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
     name: string
@@ -640,7 +640,7 @@ members of a list.
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash-latest
+model: googleai/gemini-2.0-flash
 input:
   schema:
     destinations(array):
@@ -680,7 +680,7 @@ Once a helper is defined you can use it in any prompt:
 
 ```dotprompt
 ---
-model: googleai/gemini-1.5-flash
+model: googleai/gemini-2.0-flash
 input:
   schema:
   name: string
@@ -698,16 +698,16 @@ side-by-side with existing versions. Dotprompt supports this through its
 variants feature.
 
 To create a variant, create a `[name].[variant].prompt` file. For instance, if
-you were using Gemini 1.5 Flash in your prompt but wanted to see if Gemini 1.5
+you were using Gemini 2.0 Flash in your prompt but wanted to see if Gemini 2.5
 Pro would perform better, you might create two files:
 
 - `my_prompt.prompt`: the "baseline" prompt
-- `my_prompt.gemini15pro.prompt`: a variant named `gemini15pro`
+- `my_prompt.gemini25pro.prompt`: a variant named `gemini25pro`
 
 To use a prompt variant, specify the variant option when loading:
 
 ```ts
-const myPrompt = ai.prompt('my_prompt', { variant: 'gemini15pro' });
+const myPrompt = ai.prompt('my_prompt', { variant: 'gemini25pro' });
 ```
 
 The name of the variant is included in the metadata of generation traces, so you
@@ -731,7 +731,7 @@ as in a prompt file, or a function that returns a `GenerateRequest`:
 ```ts
 const myPrompt = ai.definePrompt({
   name: 'myPrompt',
-  model: 'googleai/gemini-1.5-flash',
+  model: 'googleai/gemini-2.0-flash',
   input: {
     schema: z.object({
       name: z.string(),
@@ -744,7 +744,7 @@ const myPrompt = ai.definePrompt({
 ```ts
 const myPrompt = ai.definePrompt({
   name: 'myPrompt',
-  model: 'googleai/gemini-1.5-flash',
+  model: 'googleai/gemini-2.0-flash',
   input: {
     schema: z.object({
       name: z.string(),

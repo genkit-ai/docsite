@@ -7,7 +7,7 @@ through the [Gemini API](https://ai.google.dev/docs/gemini_api_overview).
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save @genkit-ai/googleai
 ```
 
