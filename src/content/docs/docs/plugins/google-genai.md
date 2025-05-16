@@ -7,7 +7,7 @@ through the [Gemini API](https://ai.google.dev/docs/gemini_api_overview).
 
 ## Installation
 
-```bash
+```posix-terminal
 npm i --save @genkit-ai/googleai
 ```
 
@@ -41,14 +41,17 @@ Configure the plugin to use your API key by doing one of the following:
 
 ## Usage
 
-This plugin statically exports references to its supported models:
+The recommended way to reference models is through the helper function provided by the plugin:
 
 ```ts
-import {
-  gemini15Flash,
-  gemini15Pro,
-  textEmbedding004,
-} from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
+
+// Referencing models
+const model = googleAI.model('gemini-2.0-flash');
+const modelPro = googleAI.model('gemini-2.0-flash-lite');
+
+// Referencing embedders
+const embedder = googleAI.embedder('text-embedding-004');
 ```
 
 You can use these references to specify which model `generate()` uses:
@@ -56,13 +59,13 @@ You can use these references to specify which model `generate()` uses:
 ```ts
 const ai = genkit({
   plugins: [googleAI()],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-2.0-flash'), // Set default model
 });
 
 const llmResponse = await ai.generate("Tell me a joke.");
 ```
 
-or use embedders (ex. `textEmbedding004`) with `embed` or retrievers:
+or use embedders with `embed` or retrievers:
 
 ```ts
 const ai = genkit({
@@ -70,7 +73,7 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: textEmbedding004,
+  embedder: googleAI.embedder('text-embedding-004'),
   content: input,
 });
 ```
@@ -132,8 +135,8 @@ const ai = genkit({
 
 const llmResponse = await ai.generate({
   prompt: `Suggest an item for the menu of fish themed restruant`,
-  model: googleAI.model('gemini-2.0-flash').withConfig({
-    version: "tunedModels/my-example-model-apbm8oqbvuv2",
+  model: googleAI.model('gemini-2.0-flash', {
+    version: 'tunedModels/my-example-model-apbm8oqbvuv2'
   }),
 });
 ```
@@ -144,7 +147,7 @@ The Google Generative AI plugin supports **context caching**, which allows model
 
 ### How to Use Context Caching
 
-To enable context caching, ensure your model supports it. For example, `gemini-2.0-flash` and `gemini-2.0-pro` are models that support context caching.
+To enable context caching, ensure your model supports it. For example, `gemini-2.0-flash` and `gemini-1.5-pro` are models that support context caching.
 
 You can define a caching mechanism in your application like this:
 
@@ -173,10 +176,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash'),
-  config: {
-    version: "gemini-2.0-flash-001", // Only 001 currently supports context caching
-  },
+  model: googleAI.model('gemini-2.0-flash-001'),
   prompt: "Describe Pierre’s transformation throughout the novel.",
 });
 ```
@@ -215,10 +215,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash'),
-  config: {
-    version: "gemini-2.0-flash-001", // Only 001 currently supports context caching
-  },
+  model: googleAI.model('gemini-2.0-flash-001'),
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
 ```
@@ -274,17 +271,14 @@ const analyzeVideoResponse = await ai.generate({
       },
     },
   ],
-  config: {
-    version: "gemini-2.0-flash-001", // Only 001 versions support context caches
-  },
-  model: googleAI.model('gemini-2.0-flash'),
+  model: googleAI.model('gemini-2.0-flash-001'),
   prompt: query,
 });
 ```
 
 ### Supported Models for Context Caching
 
-Only specific models, such as `gemini-2.0-flash` and `gemini-2.0-pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
+Only specific models, such as `gemini-2.0-flash` and `gemini-1.5-pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
 
 ### Further Reading
 
