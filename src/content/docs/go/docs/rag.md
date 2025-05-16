@@ -150,45 +150,29 @@ in production.*
 #### Create the indexer
 
 ```go
-package main
+// Import Genkit's file-based vector retriever, (Don't use in production.)
+import "github.com/firebase/genkit/go/plugins/localvec"
 
-import (
-	"context"
-	"log"
+// Vertex AI provides the text-embedding-004 embedder model.
+import "github.com/firebase/genkit/go/plugins/vertexai"
+```
 
-	"github.com/firebase/genkit/go/genkit"
-	// Import Genkit's file-based vector retriever, (Don't use in production.)
-	"github.com/firebase/genkit/go/plugins/localvec"
-	// Vertex AI provides the text-embedding-004 embedder model.
-	"github.com/firebase/genkit/go/plugins/vertexai" // Corrected import path
-)
+```go
+ctx := context.Background()
 
-func main() {
-	ctx := context.Background()
+g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+if err != nil {
+	log.Fatal(err)
+}
 
-	// Initialize Genkit with the Vertex AI plugin for the embedder
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&vertexai.VertexAI{})) // Assuming VertexAI plugin is used
-	if err != nil {
-		log.Fatalf("Genkit initialization error: %v", err)
-	}
+if err = localvec.Init(); err != nil {
+	log.Fatal(err)
+}
 
-	// Initialize the local vector store
-	if err = localvec.Init(); err != nil {
-		log.Fatalf("Local vector store initialization error: %v", err)
-	}
-
-	// Define the indexer and retriever using the local vector store and Vertex AI embedder
-	menuPDFIndexer, _, err := localvec.DefineIndexerAndRetriever(g, "menuQA",
-		localvec.Config{Embedder: vertexai.VertexAIEmbedder(g, "text-embedding-004")}) // Corrected embedder function call
-	if err != nil {
-		log.Fatalf("Failed to define indexer/retriever: %v", err)
-	}
-
-	log.Println("Indexer defined:", menuPDFIndexer.Name())
-	// ... rest of the application logic, potentially defining flows ...
-
-	// Keep the application running for potential UI interaction or further processing
-	// select {} // Uncomment if needed
+menuPDFIndexer, _, err := localvec.DefineIndexerAndRetriever(g, "menuQA",
+	  localvec.Config{Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004")})
+if err != nil {
+	log.Fatal(err)
 }
 ```
 
@@ -201,20 +185,10 @@ The following definition configures the chunking function to return document
 segments of 200 characters, with an overlap between chunks of 20 characters.
 
 ```go
-package main
-
-import (
-	"github.com/tmc/langchaingo/textsplitter"
+splitter := textsplitter.NewRecursiveCharacter(
+    textsplitter.WithChunkSize(200),
+    textsplitter.WithChunkOverlap(20),
 )
-
-func main() {
-	splitter := textsplitter.NewRecursiveCharacter(
-		textsplitter.WithChunkSize(200),
-		textsplitter.WithChunkOverlap(20),
-	)
-	// Use the splitter...
-	_ = splitter // Avoid unused variable error
-}
 ```
 
 More chunking options for this library can be found in the
@@ -223,109 +197,66 @@ More chunking options for this library can be found in the
 #### Define your indexer flow
 
 ```go
-package main
+genkit.DefineFlow(
+    g, "indexMenu",
+    func(ctx context.Context, path string) (any, error) {
+        // Extract plain text from the PDF. Wrap the logic in Run so it
+        // appears as a step in your traces.
+        pdfText, err := genkit.Run(ctx, "extract", func() (string, error) {
+            return readPDF(path)
+        })
+        if err != nil {
+            return nil, err
+        }
 
-import (
-	"context"
-	"fmt"
-	"io"
-	"log"
+        // Split the text into chunks. Wrap the logic in Run so it appears as a
+        // step in your traces.
+        docs, err := genkit.Run(ctx, "chunk", func() ([]*ai.Document, error) {
+            chunks, err := splitter.SplitText(pdfText)
+            if err != nil {
+                return nil, err
+            }
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/localvec"
-	"github.com/firebase/genkit/go/plugins/vertexai"
-	"github.com/ledongthuc/pdf" // PDF parsing library
-	"github.com/tmc/langchaingo/textsplitter"
+            var docs []*ai.Document
+            for _, chunk := range chunks {
+                docs = append(docs, ai.DocumentFromText(chunk, nil))
+            }
+            return docs, nil
+        })
+        if err != nil {
+            return nil, err
+        }
+
+        // Add chunks to the index.
+        err = ai.Index(ctx, menuPDFIndexer, ai.WithDocs(docs...))
+        return nil, err
+    },
 )
+```
 
-// Helper function to extract plain text from a PDF.
+```go
+// Helper function to extract plain text from a PDF. Excerpted from
+// https://github.com/ledongthuc/pdf
 func readPDF(path string) (string, error) {
-	f, r, err := pdf.Open(path)
-	// Should add defer f.Close() here
-	if err != nil {
-		return "", err
-	}
-	defer f.Close() // Ensure file is closed
+    f, r, err := pdf.Open(path)
+    if f != nil {
+        defer f.Close()
+    }
+    if err != nil {
+        return "", err
+    }
 
-	reader, err := r.GetPlainText()
-	if err != nil {
-		return "", err
-	}
+    reader, err := r.GetPlainText()
+    if err != nil {
+        return "", err
+    }
 
-	bytes, err := io.ReadAll(reader)
-	if err != nil {
-		return "", err
-	}
+    bytes, err := io.ReadAll(reader)
+    if err != nil {
+        return "", err
+    }
 
-	return string(bytes), nil
-}
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&vertexai.VertexAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init error: %v", err)
-	}
-	if err = localvec.Init(); err != nil {
-		log.Fatalf("Local vector store init error: %v", err)
-	}
-
-	menuPDFIndexer, _, err := localvec.DefineIndexerAndRetriever(g, "menuQA",
-		localvec.Config{Embedder: vertexai.VertexAIEmbedder(g, "text-embedding-004")})
-	if err != nil {
-		log.Fatalf("Define indexer error: %v", err)
-	}
-
-	splitter := textsplitter.NewRecursiveCharacter(
-		textsplitter.WithChunkSize(200),
-		textsplitter.WithChunkOverlap(20),
-	)
-
-	genkit.DefineFlow(
-		g, "indexMenu",
-		func(ctx context.Context, path string) (any, error) {
-			// Extract plain text from the PDF. Wrap the logic in Run so it
-			// appears as a step in your traces.
-			pdfText, err := genkit.Run(ctx, "extract", func() (string, error) {
-				return readPDF(path)
-			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract PDF text: %w", err)
-			}
-
-			// Split the text into chunks. Wrap the logic in Run so it appears as a
-			// step in your traces.
-			docs, err := genkit.Run(ctx, "chunk", func() ([]*ai.Document, error) {
-				chunks, err := splitter.SplitText(pdfText)
-				if err != nil {
-					return nil, fmt.Errorf("failed to split text: %w", err)
-				}
-
-				var docs []*ai.Document
-				for _, chunk := range chunks {
-					docs = append(docs, ai.DocumentFromText(chunk, nil))
-				}
-				return docs, nil
-			})
-			if err != nil {
-				return nil, err // Error already wrapped in Run
-			}
-
-			// Add chunks to the index.
-			err = ai.Index(ctx, menuPDFIndexer, ai.WithDocs(docs...))
-			if err != nil {
-				return nil, fmt.Errorf("failed to index documents: %w", err)
-			}
-			return nil, nil // Return nil result and nil error on success
-		},
-	)
-
-	log.Println("indexMenu flow defined.")
-	// To run this flow, you'd typically call it from another part of your app
-	// or use the Genkit CLI after starting the app.
-	// Example: _, err = indexMenuFlow.Run(ctx, "path/to/your/menu.pdf")
-	// select {} // Keep running if needed
+    return string(bytes), nil
 }
 ```
 
@@ -345,78 +276,48 @@ the indexer example, this example uses Genkit's file-based vector retriever,
 which you should not use in production.
 
 ```go
-package main
+ctx := context.Background()
 
-import (
-	"context"
-	"fmt"
-	"log"
+g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+if err != nil {
+    log.Fatal(err)
+}
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googleai" // Using Google AI for generation
-	"github.com/firebase/genkit/go/plugins/localvec"
-	"github.com/firebase/genkit/go/plugins/vertexai" // Using Vertex AI for embedding
+if err = localvec.Init(); err != nil {
+    log.Fatal(err)
+}
+
+model := googlegenai.VertexAIModel(g, "gemini-1.5-flash")
+
+_, menuPdfRetriever, err := localvec.DefineIndexerAndRetriever(
+    g, "menuQA", localvec.Config{Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004")},
 )
+if err != nil {
+    log.Fatal(err)
+}
 
-func main() {
-	ctx := context.Background()
+genkit.DefineFlow(
+  g, "menuQA",
+  func(ctx context.Context, question string) (string, error) {
+    // Retrieve text relevant to the user's question.
+    resp, err := ai.Retrieve(ctx, menuPdfRetriever, ai.WithTextDocs(question))
 
-	// Initialize Genkit with necessary plugins
-	g, err := genkit.Init(ctx, genkit.WithPlugins(
-		&vertexai.VertexAI{},   // For the embedder
-		&googleai.GoogleAI{}, // For the generator model
-	))
-	if err != nil {
-		log.Fatalf("Genkit init error: %v", err)
-	}
-	if err = localvec.Init(); err != nil {
-		log.Fatalf("Local vector store init error: %v", err)
-	}
 
-	// Define the retriever (assuming indexer was defined previously or separately)
-	_, menuPdfRetriever, err := localvec.DefineIndexerAndRetriever(
-		g, "menuQA", localvec.Config{Embedder: vertexai.VertexAIEmbedder(g, "text-embedding-004")},
-	)
-	if err != nil {
-		log.Fatalf("Define retriever error: %v", err)
-	}
+    if err != nil {
+        return "", err
+    }
 
-	// Define the RAG flow
-	menuQAFlow := genkit.DefineFlow(
-		g, "menuQA",
-		func(ctx context.Context, question string) (string, error) {
-			// Retrieve text relevant to the user's question.
-			resp, err := ai.Retrieve(ctx, menuPdfRetriever, ai.WithTextDocs(question))
-			if err != nil {
-				return "", fmt.Errorf("retrieval failed: %w", err)
-			}
-
-			// Call Generate, including the menu information in your prompt.
-			genResp, err := genkit.Generate(ctx, g,
-				ai.WithModelName("googleai/gemini-1.5-flash"), // Specify generator model
-				ai.WithDocs(resp.Documents...),
-				ai.WithSystem(`
+    // Call Generate, including the menu information in your prompt.
+    return genkit.GenerateText(ctx, g,
+        ai.WithModelName("googleai/gemini-2.0-flash"),
+        ai.WithDocs(resp.Documents),
+        ai.WithSystem(`
 You are acting as a helpful AI assistant that can answer questions about the
 food available on the menu at Genkit Grub Pub.
 Use only the context provided to answer the question. If you don't know, do not
-make up an answer. Do not add or change items on the menu.`),
-				ai.WithPrompt(question),
-			)
-			if err != nil {
-				return "", fmt.Errorf("generation failed: %w", err)
-			}
-			return genResp.Text(), nil
-		})
-
-	log.Println("menuQA flow defined.")
-	// Example of running the flow
-	// answer, err := menuQAFlow.Run(ctx, "Do you have vegetarian options?")
-	// if err != nil { log.Fatal(err) }
-	// log.Println("Answer:", answer)
-
-	// select {} // Keep running if needed
-}
+make up an answer. Do not add or change items on the menu.`)
+        ai.WithPrompt(question),
+  })
 ```
 
 ## Write your own indexers and retrievers
@@ -435,117 +336,39 @@ following example defines a custom retriever that applies your function to the
 menu retriever defined earlier:
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"sort" // Needed for reranking example
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/localvec"
-	"github.com/firebase/genkit/go/plugins/vertexai"
-)
-
-// Assume menuPDFRetriever is defined and initialized as in previous examples
-var menuPDFRetriever *ai.Retriever
-
-// Placeholder for your custom reranking logic
-func rerank(docs []*ai.Document) []*ai.Document {
-	// Example reranking: sort by length (shortest first)
-	sort.Slice(docs, func(i, j int) bool {
-		return len(docs[i].Text()) < len(docs[j].Text())
-	})
-	log.Printf("Reranked %d documents", len(docs))
-	return docs
-}
-
-// CustomMenuRetrieverOptions defines options for the custom retriever.
 type CustomMenuRetrieverOptions struct {
-	K          int `json:"k,omitempty"`
-	PreRerankK int `json:"preRerankK,omitempty"`
+    K          int
+    PreRerankK int
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&vertexai.VertexAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init error: %v", err)
-	}
-	if err = localvec.Init(); err != nil {
-		log.Fatalf("Local vector store init error: %v", err)
-	}
+advancedMenuRetriever := genkit.DefineRetriever(
+    g, "custom", "advancedMenuRetriever",
+    func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
+        // Handle options passed using our custom type.
+        opts, _ := req.Options.(CustomMenuRetrieverOptions)
+        // Set fields to default values when either the field was undefined
+        // or when req.Options is not a CustomMenuRetrieverOptions.
+        if opts.K == 0 {
+            opts.K = 3
+        }
+        if opts.PreRerankK == 0 {
+            opts.PreRerankK = 10
+        }
 
-	// Define the base retriever first
-	_, retriever, err := localvec.DefineIndexerAndRetriever(
-		g, "menuQA", localvec.Config{Embedder: vertexai.VertexAIEmbedder(g, "text-embedding-004")},
-	)
-	if err != nil {
-		log.Fatalf("Define base retriever error: %v", err)
-	}
-	menuPDFRetriever = retriever // Assign to global var for use in custom retriever
+        // Call the retriever as in the simple case.
+        resp, err := ai.Retrieve(ctx, menuPDFRetriever,
+            ai.WithDocs(req.Query),
+            ai.WithConfig(ocalvec.RetrieverOptions{K: opts.PreRerankK}),
+        )
+        if err != nil {
+            return nil, err
+        }
 
-	// Define the custom retriever
-	advancedMenuRetriever := genkit.DefineRetriever(
-		g, "custom", "advancedMenuRetriever",
-		func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
-			// Handle options passed using our custom type.
-			opts := CustomMenuRetrieverOptions{K: 3, PreRerankK: 10} // Defaults
-			if req.Options != nil {
-				if customOpts, ok := req.Options.(CustomMenuRetrieverOptions); ok {
-					if customOpts.K > 0 {
-						opts.K = customOpts.K
-					}
-					if customOpts.PreRerankK > 0 {
-						opts.PreRerankK = customOpts.PreRerankK
-					}
-				} else if mapOpts, ok := req.Options.(map[string]any); ok {
-					// Handle options passed as map (e.g., from CLI or UI)
-					if kVal, ok := mapOpts["k"].(float64); ok && kVal > 0 { // JSON numbers are float64
-						opts.K = int(kVal)
-					}
-					if preKVal, ok := mapOpts["preRerankK"].(float64); ok && preKVal > 0 {
-						opts.PreRerankK = int(preKVal)
-					}
-				}
-			}
+        // Re-rank the returned documents using your custom function.
+        rerankedDocs := rerank(response.Documents)
+        response.Documents = rerankedDocs[:opts.K]
 
-			// Call the base retriever as in the simple case.
-			resp, err := ai.Retrieve(ctx, menuPDFRetriever,
-				ai.WithTextDocs(req.Query),
-				// Pass options specific to the underlying retriever if needed
-				// Example for localvec: ai.WithRetrieverConfig(&localvec.RetrieverOptions{K: opts.PreRerankK}),
-			)
-			if err != nil {
-				return nil, fmt.Errorf("base retrieval failed: %w", err)
-			}
-
-			// Re-rank the returned documents using your custom function.
-			rerankedDocs := rerank(resp.Documents)
-
-			// Trim to the final K
-			finalK := opts.K
-			if finalK > len(rerankedDocs) {
-				finalK = len(rerankedDocs)
-			}
-			resp.Documents = rerankedDocs[:finalK]
-
-			return resp, nil
-		},
-	)
-
-	log.Println("Advanced retriever defined:", advancedMenuRetriever.Name())
-
-	// Example usage:
-	// query := "What are the vegan options?"
-	// customResp, err := ai.Retrieve(ctx, advancedMenuRetriever,
-	// 	ai.WithTextDocs(query),
-	// 	ai.WithRetrieverOptions(CustomMenuRetrieverOptions{K: 5, PreRerankK: 20}),
-	// )
-	// if err != nil { log.Fatal(err) }
-	// log.Printf("Advanced retrieval found %d documents for '%s'", len(customResp.Documents), query)
-
-	// select {} // Keep running if needed
-}
+        return response, nil
+    },
+)
+```

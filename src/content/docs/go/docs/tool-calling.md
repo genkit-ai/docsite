@@ -126,7 +126,7 @@ func main() {
 		log.Fatalf("Genkit initialization failed: %v", err)
 	}
 
-	getWeatherTool := genkit.DefineTool(
+	genkit.DefineTool(
 		g, "getWeather", "Gets the current weather in a given location",
 		func(ctx context.Context, input WeatherInput) (string, error) {
 			// Here, we would typically make an API call or database query. For this
@@ -134,9 +134,6 @@ func main() {
 			log.Printf("Tool 'getWeather' called for location: %s", input.Location)
 			return fmt.Sprintf("The current weather in %s is 63°F and sunny.", input.Location), nil
 		})
-
-	log.Println("Tool defined:", getWeatherTool.Name())
-	// ... rest of application logic, potentially using the tool ...
 }
 ```
 
@@ -151,102 +148,26 @@ Include defined tools in your prompts to generate content.
 **Using `genkit.Generate()`:**
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("What is the weather in San Francisco?"),
+	ai.WithTools(getWeatherTool),
 )
-
-type WeatherInput struct {
-	Location string `json:"location" jsonschema_description:"Location to get weather for"`
-}
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-1.5-flash"),
-	)
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	getWeatherTool := genkit.DefineTool(
-		g, "getWeather", "Gets the current weather in a given location",
-		func(ctx context.Context, input WeatherInput) (string, error) {
-			return fmt.Sprintf("The current weather in %s is 63°F and sunny.", input.Location), nil
-		})
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithPrompt("What is the weather in San Francisco?"),
-		ai.WithTools(getWeatherTool),
-	)
-	if err != nil {
-		log.Fatalf("Generate failed: %v", err)
-	}
-	log.Println("Response:", resp.Text())
-}
 ```
 
 **Using `genkit.DefinePrompt()`:**
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+weatherPrompt, err := genkit.DefinePrompt(g, "weatherPrompt",
+	ai.WithPrompt("What is the weather in {% verbatim %}{{location}}{% endverbatim %}?"),
+	ai.WithTools(getWeatherTool),
 )
-
-type WeatherInput struct {
-	Location string `json:"location" jsonschema_description:"Location to get weather for"`
+if err != nil {
+	log.Fatal(err)
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-1.5-flash"),
-	)
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	getWeatherTool := genkit.DefineTool(
-		g, "getWeather", "Gets the current weather in a given location",
-		func(ctx context.Context, input WeatherInput) (string, error) {
-			return fmt.Sprintf("The current weather in %s is 63°F and sunny.", input.Location), nil
-		})
-
-	weatherPrompt, err := genkit.DefinePrompt(g, "weatherPrompt",
-		ai.WithPrompt("What is the weather in {{location}}?"),
-		ai.WithTools(getWeatherTool),
-		// Define input schema for the prompt itself
-		ai.WithInputSchema(struct{ Location string }{})),
-	)
-	if err != nil {
-		log.Fatalf("DefinePrompt failed: %v", err)
-	}
-
-	resp, err := weatherPrompt.Execute(ctx,
-		ai.WithInput(map[string]any{"location": "San Francisco"}),
-	)
-	if err != nil {
-		log.Fatalf("Prompt Execute failed: %v", err)
-	}
-	log.Println("Response:", resp.Text())
-}
+resp, err := weatherPrompt.Execute(ctx,
+	with.Input(map[string]any{"location": "San Francisco"}),
+)
 ```
 
 **Using a `.prompt` file:**
@@ -268,55 +189,15 @@ What is the weather in {{location}}?
 Then execute it in your Go code:
 
 ```go
-package main
+// Assuming prompt file named weatherPrompt.prompt exists in ./prompts dir.
+weatherPrompt := genkit.LookupPrompt("weatherPrompt")
+if weatherPrompt == nil {
+	log.Fatal("no prompt named 'weatherPrompt' found")
+}
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := weatherPrompt.Execute(ctx,
+	ai.WithInput(map[string]any{"location": "San Francisco"}),
 )
-
-type WeatherInput struct { // Tool input schema
-	Location string `json:"location" jsonschema_description:"Location to get weather for"`
-}
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-1.5-flash"),
-		// Ensure prompts directory is configured if not default
-		// genkit.WithPromptDir("./prompts"),
-	)
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	// Define the tool so it can be referenced in the prompt file
-	_ = genkit.DefineTool(
-		g, "getWeather", "Gets the current weather in a given location",
-		func(ctx context.Context, input WeatherInput) (string, error) {
-			return fmt.Sprintf("The current weather in %s is 63°F and sunny.", input.Location), nil
-		})
-
-
-	// Assuming prompt file named weatherPrompt.prompt exists in ./prompts dir.
-	weatherPrompt := genkit.LookupPrompt(g, "weatherPrompt")
-	if weatherPrompt == nil {
-		log.Fatal("no prompt named 'weatherPrompt' found")
-	}
-
-	resp, err := weatherPrompt.Execute(ctx,
-		ai.WithInput(map[string]any{"location": "San Francisco"}),
-	)
-	if err != nil {
-		log.Fatalf("Prompt Execute failed: %v", err)
-	}
-	log.Println("Response:", resp.Text())
-}
 ```
 
 Genkit will automatically handle the tool call if the LLM needs to use the
@@ -329,104 +210,49 @@ complicated logic, set the `WithReturnToolRequests()` option to `true`. Now it's
 your responsibility to ensure all of the tool requests are fulfilled:
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+getWeatherTool := genkit.DefineTool(
+    g, "getWeather", "Gets the current weather in a given location",
+    func(ctx *ai.ToolContext, location struct {
+        Location string `jsonschema_description:"Location to get weather for"`
+    }) (string, error) {
+        // Tool implementation...
+        return "sunny", nil
+    },
 )
 
-type WeatherInput struct {
-	Location string `json:"location" jsonschema_description:"Location to get weather for"`
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("What is the weather in San Francisco?"),
+    ai.WithTools(getWeatherTool),
+    ai.WithReturnToolRequests(true),
+)
+if err != nil {
+    log.Fatal(err)
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-1.5-flash"),
-	)
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
+parts := []*ai.Part{}
+for _, req := range resp.ToolRequests() {
+    tool := genkit.LookupTool(g, req.Name)
+    if tool == nil {
+        log.Fatalf("tool %q not found", req.Name)
+    }
 
-	getWeatherTool := genkit.DefineTool(
-		g, "getWeather", "Gets the current weather in a given location",
-		func(ctx context.Context, input WeatherInput) (string, error) {
-			// Tool implementation...
-			log.Printf("Explicit tool call for: %s", input.Location)
-			return "sunny", nil
-		},
-	)
+    output, err := tool.RunRaw(ctx, req.Input)
+    if err != nil {
+        log.Fatalf("tool %q execution failed: %v", tool.Name(), err)
+    }
 
-	// Initial generate call, asking for tool requests to be returned
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithPrompt("What is the weather in San Francisco?"),
-		ai.WithTools(getWeatherTool),
-		ai.WithReturnToolRequests(true), // Explicitly handle tool requests
-	)
-	if err != nil {
-		log.Fatalf("Initial Generate failed: %v", err)
-	}
-
-	// Check if the model requested a tool call
-	toolRequests := resp.ToolRequests()
-	if len(toolRequests) == 0 {
-		log.Println("Model responded directly:", resp.Text())
-		return // No tool call needed
-	}
-
-	// Process tool requests
-	toolResponseParts := []*ai.Part{}
-	for _, req := range toolRequests {
-		tool := genkit.LookupTool(g, req.Name)
-		if tool == nil {
-			log.Printf("tool %q not found, skipping", req.Name)
-			// Optionally return an error or a default response part
-			toolResponseParts = append(toolResponseParts,
-				ai.NewToolResponsePart(&ai.ToolResponse{
-					Name:   req.Name,
-					// Ref:    req.Ref, // Ref might not be available/needed depending on model
-					Error: fmt.Sprintf("Tool %s not found", req.Name),
-				}))
-			continue
-		}
-
-		// Execute the tool. RunRaw takes the raw input from the model.
-		output, err := tool.RunRaw(ctx, req.Input)
-		if err != nil {
-			log.Printf("tool %q execution failed: %v", tool.Name(), err)
-			// Optionally return an error part
-			toolResponseParts = append(toolResponseParts,
-				ai.NewToolResponsePart(&ai.ToolResponse{
-					Name:  req.Name,
-					Error: err.Error(),
-				}))
-			continue
-		}
-
-		// Add the successful tool response part
-		toolResponseParts = append(toolResponseParts,
-			ai.NewToolResponsePart(&ai.ToolResponse{
-				Name:   req.Name,
-				Output: output,
-			}))
-	}
-
-	// Send the tool responses back to the model
-	finalResp, err := genkit.Generate(ctx, g,
-		// Include original history and the new tool response message
-		ai.WithMessages(append(resp.History(), ai.NewToolResponseMessage(toolResponseParts...))...),
-		ai.WithTools(getWeatherTool), // Provide tools again if needed for multi-turn
-	)
-	if err != nil {
-		log.Fatalf("Final Generate failed: %v", err)
-	}
-
-	log.Println("Final Response:", finalResp.Text())
+    parts = append(parts,
+        ai.NewToolResponsePart(&ai.ToolResponse{
+            Name:   req.Name,
+            Ref:    req.Ref,
+            Output: output,
+        }))
 }
+
+resp, err = genkit.Generate(ctx, g,
+    ai.WithMessages(append(resp.History(), ai.NewMessage(ai.RoleTool, nil, parts...))...),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```

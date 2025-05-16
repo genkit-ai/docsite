@@ -97,24 +97,24 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
+	ctx := context.Background()
 
-    g, err := genkit.Init(ctx,
-        genkit.WithPlugins(&googlegenai.GoogleAI{}),
-        genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
-    )
-    if err != nil {
-        log.Fatalf("could not initialize Genkit: %v", err)
-    }
+	g, err := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+	)
+	if err != nil {
+		log.Fatalf("could not initialize Genkit: %v", err)
+	}
 
-    resp, err := genkit.Generate(ctx, g,
-        ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
-    )
-    if err != nil {
-        log.Fatalf("could not generate model response: %v", err)
-    }
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	)
+	if err != nil {
+		log.Fatalf("could not generate model response: %v", err)
+	}
 
-    log.Println(resp.Text())
+	log.Println(resp.Text())
 }
 ```
 
@@ -146,8 +146,8 @@ You can also specify a model for a single `genkit.Generate()` call:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-pro"),
-    ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithModelName("googleai/gemini-2.5-pro"),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 )
 ```
 
@@ -175,58 +175,35 @@ use the system prompt to specify characteristics such as a persona you want the
 model to adopt, the tone of its responses, and the format of its responses.
 
 If the model you're using supports system prompts, you can provide one with the
-`WithSystem()` option:
+`ai.WithSystem()` option:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithSystem("You are a food industry marketing consultant."),
-    ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithSystem("You are a food industry marketing consultant."),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 )
 ```
 
-For models that don't support system prompts, `WithSystem()` simulates it by
+For models that don't support system prompts, `ai.WithSystem()` simulates it by
 modifying the request to appear _like_ a system prompt.
 
 ### Model parameters
 
-The `genkit.Generate()` function takes a `WithConfig()` option, through which
+The `genkit.Generate()` function takes a `ai.WithConfig()` option, through which
 you can specify optional settings that control how the model generates content:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithConfig(&googlegenai.GeminiConfig{
+		MaxOutputTokens: 500,
+		StopSequences:   ["<end>", "<fin>"],
+		Temperature:     0.5,
+		TopP:            0.4,
+		TopK:            50,
+	}),
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.0-flash"),
-		ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
-		ai.WithConfig(&googlegenai.GeminiConfig{
-			MaxOutputTokens: 500,
-			StopSequences:   []string{"<end>", "<fin>"},
-			Temperature:     0.5,
-			TopP:            0.4,
-			TopK:            50,
-		}),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-	log.Println(resp.Text())
-}
 ```
 
 The exact parameters that are supported depend on the individual model and model
@@ -326,47 +303,27 @@ these changes in code.
 
 Given that each provider or even a specific model may have its own configuration
 schema or warrant certain settings, it may be error prone to set separate
-options using `WithModelName()` and `WithConfig()` since the latter is not
+options using `ai.WithModelName()` and `ai.WithConfig()` since the latter is not
 strongly typed to the former.
 
 To pair a model with its config, you can create a model reference that you can
 pass into the generate call instead:
 
 ```go
-package main
+model := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.GeminiConfig{
+	MaxOutputTokens: 500,
+	StopSequences:   ["<end>", "<fin>"],
+	Temperature:     0.5,
+	TopP:            0.4,
+	TopK:            50,
+})
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(model),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	model := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.GeminiConfig{
-		MaxOutputTokens: 500,
-		StopSequences:   []string{"<end>", "<fin>"},
-		Temperature:     0.5,
-		TopP:            0.4,
-		TopK:            50,
-	})
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(model),
-		ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-	log.Println(resp.Text())
+if err != nil {
+	log.Fatal(err)
 }
 ```
 
@@ -386,17 +343,6 @@ In Genkit, you can request structured output from a model by specifying an
 output type when you call `genkit.Generate()`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
 type MenuItem struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -404,28 +350,12 @@ type MenuItem struct {
 	Allergens   []string `json:"allergens"`
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
-		ai.WithOutputType(MenuItem{}),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err) // One possible error is that the response does not conform to the type.
-	}
-
-	var item MenuItem
-	if err := resp.Output(&item); err != nil {
-		log.Fatalf("failed to extract output: %v", err)
-	}
-
-	log.Printf("%s (%d calories, %d allergens): %s\n",
-		item.Name, item.Calories, len(item.Allergens), item.Description)
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithOutputType(MenuItem{}),
+)
+if err != nil {
+	log.Fatal(err) // One possible error is that the response does not conform to the type.
 }
 ```
 
@@ -452,55 +382,30 @@ model response with an empty value of the type:
 ```go
 var item MenuItem
 if err := resp.Output(&item); err != nil {
-    log.Fatalf(err)
+	log.Fatalf(err)
 }
 
 log.Printf("%s (%d calories, %d allergens): %s\n",
-    item.Name, item.Calories, len(item.Allergens), item.Description)
+	item.Name, item.Calories, len(item.Allergens), item.Description)
 ```
 
 Alternatively, you can use `genkit.GenerateData()` for a more succinct call:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 )
-
-type MenuItem struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Calories    int      `json:"calories"`
-	Allergens   []string `json:"allergens"`
+if err != nil {
+	log.Fatal(err)
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
-		ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-
-	log.Printf("%s (%d calories, %d allergens): %s\n",
-		item.Name, item.Calories, len(item.Allergens), item.Description)
-}
+log.Printf("%s (%d calories, %d allergens): %s\n",
+	item.Name, item.Calories, len(item.Allergens), item.Description)
 ```
 
 This function requires the output type parameter but automatically sets the
-`WithOutputType()` option and calls `resp.Output()` before returning the value.
+`ai.WithOutputType()` option and calls `ModelResponse.Output()` before returning
+the value.
 
 #### Handling errors
 
@@ -534,41 +439,22 @@ can read the model's response to their message as it's being generated, which
 improves the perceived responsiveness of the application and enhances the
 illusion of chatting with an intelligent counterpart.
 
-In Genkit, you can stream output using the `WithStreaming()` option:
+In Genkit, you can stream output using the `ai.WithStreaming()` option:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Suggest a complete menu for a pirate themed restaurant."),
+	ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+		// Do something with the chunk...
+		log.Println(chunk.Text())
+		return nil
+	}),
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithPrompt("Suggest a complete menu for a pirate themed restaurant."),
-		ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-			// Do something with the chunk...
-			log.Println(chunk.Text())
-			return nil
-		}),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-
-	log.Println("Final response text:", resp.Text())
+if err != nil {
+	log.Fatal(err)
 }
+
+log.Println(resp.Text())
 ```
 
 <!-- TODO: Talk about streaming structured data once it's supported. -->
@@ -591,83 +477,35 @@ part and a text part. This example specifies an image using a
 publicly-accessible HTTPS URL.
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.0-flash"),
-		ai.WithMessages(
-			ai.NewUserMessage(
-				ai.NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
-				ai.NewTextPart("Compose a poem about this image."),
-			),
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithMessages(
+		NewUserMessage(
+			NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
+			NewTextPart("Compose a poem about this image."),
 		),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-	log.Println(resp.Text())
-}
+	),
+)
 ```
 
 You can also pass media data directly by encoding it as a data URL. For
 example:
 
 ```go
-package main
-
-import (
-	"context"
-	"encoding/base64"
-	"io/ioutil"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("could not initialize Genkit: %v", err)
-	}
-
-	image, err := ioutil.ReadFile("photo.jpg")
-	if err != nil {
-		log.Fatalf("could not read image file: %v", err)
-	}
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.0-flash"),
-		ai.WithMessages(
-			ai.NewUserMessage(
-				ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(image)),
-				ai.NewTextPart("Compose a poem about this image."),
-			),
-		),
-	)
-	if err != nil {
-		log.Fatalf("could not generate model response: %v", err)
-	}
-	log.Println(resp.Text())
+image, err := ioutil.ReadFile("photo.jpg")
+if err != nil {
+	log.Fatal(err)
 }
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithMessages(
+		NewUserMessage(
+			NewMediaPart("image/jpeg", "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(image)),
+			NewTextPart("Compose a poem about this image."),
+		),
+	),
+)
 ```
 
 All models that support media input support both data URLs and HTTPS URLs. Some

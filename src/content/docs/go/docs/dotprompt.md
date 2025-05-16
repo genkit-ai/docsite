@@ -216,9 +216,9 @@ section about [specifying input schemas](#input-and-output-schemas)), configurat
 
 ```go
 resp, err := helloPrompt.Execute(context.Background(),
-    ai.WithModelName("googleai/gemini-2.0-flash"),
-    ai.WithInput(map[string]any{"name": "John"}),
-    ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5})
+	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithInput(map[string]any{"name": "John"}),
+	ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5})
 )
 ```
 
@@ -390,21 +390,21 @@ The above schema is equivalent to the following Go type:
 
 ```go
 type Article struct {
-    Title    string   `json:"title"`
-    Subtitle string   `json:"subtitle,omitempty" jsonschema:"required=false"`
-    Draft    bool     `json:"draft,omitempty"`  // True when in draft state
-    Status   string   `json:"status,omitempty" jsonschema:"enum=PENDING,enum=APPROVED"` // Approval status
-    Date     string   `json:"date"`   // The date of publication e.g. '2025-04-07'
-    Tags     []string `json:"tags"`   // Relevant tags for article
-    Authors  []struct {
-      Name  string `json:"name"`
-      Email string `json:"email,omitempty"`
-    } `json:"authors"`
-    Metadata struct {
-      UpdatedAt  string `json:"updatedAt,omitempty"`  // ISO timestamp of last update
-      ApprovedBy int    `json:"approvedBy,omitempty"` // ID of approver
-    } `json:"metadata,omitempty"`
-    Extra any `json:"extra"` // Arbitrary extra data
+	Title    string   `json:"title"`
+	Subtitle string   `json:"subtitle,omitempty" jsonschema:"required=false"`
+	Draft    bool     `json:"draft,omitempty"`  // True when in draft state
+	Status   string   `json:"status,omitempty" jsonschema:"enum=PENDING,enum=APPROVED"` // Approval status
+	Date     string   `json:"date"`   // The date of publication e.g. '2025-04-07'
+	Tags     []string `json:"tags"`   // Relevant tags for article
+	Authors  []struct {
+		Name  string `json:"name"`
+		Email string `json:"email,omitempty"`
+	} `json:"authors"`
+	Metadata struct {
+		UpdatedAt  string `json:"updatedAt,omitempty"`  // ISO timestamp of last update
+		ApprovedBy int    `json:"approvedBy,omitempty"` // ID of approver
+	} `json:"metadata,omitempty"`
+	Extra any `json:"extra"` // Arbitrary extra data
 }
 ```
 
@@ -473,37 +473,11 @@ run the prompt. To pass input to the prompt, call the prompt as in the following
 example:
 
 ```go
-package main
+menuPrompt = genkit.LookupPrompt(g, "menu")
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := menuPrompt.Execute(context.Background(),
+    ai.WithInput(map[string]any{"theme": "medieval"}),
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	menuPrompt := genkit.LookupPrompt(g, "menu")
-
-	resp, err := menuPrompt.Execute(ctx,
-		ai.WithInput(map[string]any{"theme": "medieval"}),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-	// ... process response ...
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
 ```
 
 Note that because the input schema declared the `theme` property to be optional
@@ -579,37 +553,11 @@ The URL can be `https:` or base64-encoded `data:` URIs for "inline" image usage.
 In code, this would be:
 
 ```go
-package main
+multimodalPrompt = genkit.LookupPrompt(g, "multimodal")
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+resp, err := multimodalPrompt.Execute(context.Background(),
+    ai.WithInput(map[string]any{"photoUrl": "https://example.com/photo.jpg"}),
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	multimodalPrompt := genkit.LookupPrompt(g, "multimodal")
-
-	resp, err := multimodalPrompt.Execute(ctx,
-		ai.WithInput(map[string]any{"photoUrl": "https://example.com/photo.jpg"}),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-	// ... process response ...
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
 ```
 
 See also [Multimodal input](./models.md#multimodal-input), on the
@@ -683,30 +631,7 @@ Help the user decide between these vacation destinations:
 You can also define partials in code using `genkit.DefinePartial()`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	genkit.DefinePartial(g, "personality", "Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.")
-
-	// ... rest of your code ...
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+genkit.DefinePartial(g, "personality", "Talk like a {% verbatim %}{{#if style}}{{style}}{{else}}{% endverbatim %}helpful assistant{% verbatim %}{{/if}}{% endverbatim %}.")
 ```
 
 Code-defined partials are available in all prompts.
@@ -717,33 +642,9 @@ You can define custom helpers to process and manage data inside of a prompt.
 Helpers are registered globally using `genkit.DefineHelper()`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-	"strings"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	genkit.DefineHelper(g, "shout", func(input string) string {
-		return strings.ToUpper(input)
-	})
-
-	// ... rest of your code ...
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+genkit.DefineHelper(g, "shout", func(input string) string {
+    return strings.ToUpper(input)
+})
 ```
 
 Once a helper is defined you can use it in any prompt:
@@ -795,120 +696,52 @@ However, if you have use cases that are not well supported by this setup, you
 can also define prompts in code using the `genkit.DefinePrompt()` function:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
 type GeoQuery struct {
-	CountryCount int `json:"countryCount"`
+    CountryCount int `json:"countryCount"`
 }
 
 type CountryList struct {
-	Countries []string `json:"countries"`
+    Countries []string `json:"countries"`
 }
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	geographyPrompt, err := genkit.DefinePrompt(
-		g, "GeographyPrompt",
-		ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
-		ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
-		ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5}),
-		ai.WithInputType(GeoQuery{CountryCount: 10}), // Defaults to 10.
-		ai.WithOutputType(CountryList{}),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	resp, err := geographyPrompt.Execute(ctx, ai.WithInput(GeoQuery{CountryCount: 15}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var list CountryList
-	if err := resp.Output(&list); err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("Countries: %s", list.Countries)
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
+geographyPrompt, err := genkit.DefinePrompt(
+    g, "GeographyPrompt",
+    ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
+    ai.WithPrompt("Give me the {% verbatim %}{{countryCount}}{% endverbatim %} biggest countries in the world by inhabitants."),
+    ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5}),
+    ai.WithInputType(GeoQuery{CountryCount: 10}) // Defaults to 10.
+    ai.WithOutputType(CountryList{}),
+)
+if err != nil {
+    log.Fatal(err)
 }
+
+resp, err := geographyPrompt.Execute(context.Background(), ai.WithInput(GeoQuery{CountryCount: 15}))
+if err != nil {
+    log.Fatal(err)
+}
+
+var list CountryList
+if err := resp.Output(&list); err != nil {
+    log.Fatal(err)
+}
+
+log.Println("Countries: %s", list.Countries)
 ```
 
 Prompts may also be rendered into a `GenerateActionOptions` which may then be
 processed and passed into `genkit.GenerateWithRequest()`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-type GeoQuery struct {
-	CountryCount int `json:"countryCount"`
+actionOpts, err := geographyPrompt.Render(ctx, ai.WithInput(GeoQuery{CountryCount: 15}))
+if err != nil {
+    log.Fatal(err)
 }
 
-type CountryList struct {
-	Countries []string `json:"countries"`
-}
+// Do something with the value...
+actionOpts.Config = &googlegenai.GeminiConfig{Temperature: 0.8}
 
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	geographyPrompt, err := genkit.DefinePrompt(
-		g, "GeographyPrompt",
-		ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
-		ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
-		ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5}),
-		ai.WithInputType(GeoQuery{CountryCount: 10}), // Defaults to 10.
-		ai.WithOutputType(CountryList{}),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	actionOpts, err := geographyPrompt.Render(ctx, ai.WithInput(GeoQuery{CountryCount: 15}))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Do something with the value...
-	actionOpts.Config = &googlegenai.GeminiConfig{Temperature: 0.8}
-
-	resp, err := genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil) // No middleware or streaming
-	if err != nil {
-		log.Fatal(err)
-	}
-	// ... process response ...
-
-	// Blocks end of program execution to use the developer UI.
-	select {}
-}
+resp, err := genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil) // No middleware or streaming
 ```
 
 Note that all prompt options carry over to `GenerateActionOptions` with the

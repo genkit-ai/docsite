@@ -46,12 +46,12 @@ them in our [GitHub repository](https://github.com/firebase/genkit/).
             genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
         )
         if err != nil {
-            log.Fatalf("could not initialize Genkit: %v", err) // Corrected format specifier
+            log.Fatalf("could not initialize Genkit: %v", err)
         }
 
         resp, err := genkit.Generate(ctx, g, ai.WithPrompt("What is the meaning of life?"))
         if err != nil {
-            log.Fatalf("could not generate model response: %v", err) // Corrected format specifier
+            log.Fatalf("could not generate model response: %v", err)
         }
 
         log.Println(resp.Text())

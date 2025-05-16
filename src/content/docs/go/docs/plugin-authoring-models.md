@@ -200,17 +200,8 @@ also export the following:
     models. Often, this can be:
 
     ```go
-    package myplugin
-
-    import (
-    	"github.com/firebase/genkit/go/ai"
-    	"github.com/firebase/genkit/go/genkit"
-    )
-
-    // Model returns a specific model registered by this plugin.
     func Model(g *genkit.Genkit, name string) *ai.Model {
-    	// providerID should be defined as a constant in your package
-    	return genkit.LookupModel(g, providerID, name)
+        return genkit.LookupModel(g, providerID, name)
     }
     ```
 
@@ -218,17 +209,8 @@ also export the following:
     config that can validate the type and be passed around together:
 
     ```go
-    package myplugin
-
-    import (
-    	"github.com/firebase/genkit/go/ai"
-    )
-
-    // ModelRef creates a typed reference to a model provided by this plugin,
-    // associating it with its specific configuration type.
     func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
-    	// providerID should be defined as a constant in your package
-    	return ai.NewModelRef(providerID+"/"+name, config)
+        return ai.NewModelRef(name, config)
     }
     ```
 
