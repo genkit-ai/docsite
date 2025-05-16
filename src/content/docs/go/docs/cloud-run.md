@@ -168,7 +168,7 @@ flow.
         genkit start -- go run .
         ```
 
-    3.  In the developer UI (http://localhost:4000/), run the flow:
+    3.  In the developer UI (`http://localhost:4000/`), run the flow:
 
         1.  Click **jokesFlow**.
 
@@ -219,3 +219,4 @@ it with `curl`:
 curl -X POST https://<service-url>/menuSuggestionFlow \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -H "Content-Type: application/json" -d '"bananas"'
+```

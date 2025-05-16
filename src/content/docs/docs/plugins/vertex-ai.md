@@ -22,7 +22,7 @@ The Vertex AI plugin provides interfaces to several AI services:
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save @genkit-ai/vertexai
 ```
 
@@ -52,7 +52,7 @@ The plugin requires you to specify your Google Cloud project ID, the [region](ht
      - If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), this is set automatically.
      - On your local dev environment, do this by running:
 
-       ```posix-terminal
+       ```bash
        gcloud auth application-default login --project YOUR_PROJECT_ID
        ```
 
@@ -64,21 +64,17 @@ The plugin requires you to specify your Google Cloud project ID, the [region](ht
 
 ### Generative AI Models
 
-This plugin statically exports references to its supported generative AI models:
+The Vertex AI plugin allows you to use various Gemini, Imagen, and other Vertex AI models:
 
 ```ts
 import { vertexAI } from "@genkit-ai/vertexai";
-```
 
-You can use these references to specify which model `ai.generate()` uses:
-
-```ts
 const ai = genkit({
   plugins: [vertexAI({ location: "us-central1" })],
 });
 
 const llmResponse = await ai.generate({
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model("gemini-2.0-flash"),
   prompt: "What should I do when I visit Melbourne?",
 });
 ```
@@ -113,28 +109,7 @@ await ai.generate({
 })
 ```
 
-This plugin also statically exports a reference to the Gecko text embedding model:
-
-```ts
-import { textEmbedding004 } from "@genkit-ai/vertexai";
-```
-
-You can use this reference to specify which embedder an indexer or retriever uses. For example, if you use Chroma DB:
-
-```ts
-const ai = genkit({
-  plugins: [
-    chroma([
-      {
-        embedder: textEmbedding004,
-        collectionName: "my-collection",
-      },
-    ]),
-  ],
-});
-```
-
-Or you can generate embeddings directly:
+You can also use Vertex AI text embedding models for generating embeddings:
 
 ```ts
 const ai = genkit({
@@ -142,22 +117,37 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: textEmbedding004,
+  embedder: vertexAI.embedder('text-embedding-004'),
   content: "How many widgets do you have in stock?",
+});
+```
+
+For Chroma DB or other vector databases, you can specify the embedder like this:
+
+```ts
+const ai = genkit({
+  plugins: [
+    chroma([
+      {
+        embedder: vertexAI.embedder('text-embedding-004'),
+        collectionName: "my-collection",
+      },
+    ]),
+  ],
 });
 ```
 
 This plugin can also handle multimodal embeddings:
 
 ```ts
-import { multimodalEmbedding001, vertexAI } from "@genkit-ai/vertexai";
+import { vertexAI } from "@genkit-ai/vertexai";
 
 const ai = genkit({
-  plugins: [vertextAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: "us-central1" })],
 });
 
 const embeddings = await ai.embed({
-  embedder: multimodalEmbedding001,
+  embedder: vertexAI.embedder('multimodal-embedding-001'),
   content: {
     content: [
       {
@@ -174,19 +164,19 @@ const embeddings = await ai.embed({
 Imagen3 model allows generating images from user prompt:
 
 ```ts
-import { imagen3 } from "@genkit-ai/vertexai";
+import { vertexAI } from "@genkit-ai/vertexai";
 
 const ai = genkit({
   plugins: [vertexAI({ location: "us-central1" })],
 });
 
 const response = await ai.generate({
-  model: imagen3,
+  model: vertexAI.model('imagen-3.0-generate-002'),
   output: { format: "media" },
   prompt: "a banana riding a bicycle",
 });
 
-return response.media();
+return response.media;
 ```
 
 and even advanced editing of existing images:
@@ -200,7 +190,7 @@ const baseImg = fs.readFileSync("base.png", { encoding: "base64" });
 const maskImg = fs.readFileSync("mask.png", { encoding: "base64" });
 
 const response = await ai.generate({
-  model: imagen3,
+  model: vertexAI.model('imagen-3.0-generate-002'),
   output: { format: "media" },
   prompt: [
     { media: { url: `data:image/png;base64,${baseImg}` } },
@@ -217,7 +207,7 @@ const response = await ai.generate({
   },
 });
 
-return response.media();
+return response.media;
 ```
 
 Refer to [Imagen model documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api#edit_images_2) for more detailed options.
@@ -230,18 +220,13 @@ Here's a sample configuration for enabling Vertex AI Model Garden models:
 
 ```ts
 import { genkit } from "genkit";
-import {
-  claude3Haiku,
-  claude3Sonnet,
-  claude3Opus,
-  vertexAIModelGarden,
-} from "@genkit-ai/vertexai/modelgarden";
+import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
       location: "us-central1",
-      models: [claude3Haiku, claude3Sonnet, claude3Opus],
+      models: ["claude-3-haiku", "claude-3-sonnet", "claude-3-opus"],
     }),
   ],
 });
@@ -251,7 +236,7 @@ Then use them as regular models:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: claude3Sonnet,
+  model: "claude-3-sonnet",
   prompt: "What should I do when I visit Melbourne?",
 });
 ```
@@ -264,13 +249,13 @@ Here's sample configuration for Llama 3.1 405b in Vertex AI plugin:
 
 ```ts
 import { genkit } from "genkit";
-import { llama31, vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
+import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
       location: "us-central1",
-      models: [llama31],
+      models: ["llama3-405b-instruct-maas"],
     }),
   ],
 });
@@ -280,7 +265,7 @@ Then use it as a regular model:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: llama31,
+  model: "llama3-405b-instruct-maas",
   prompt: "Write a function that adds two numbers together",
 });
 ```
@@ -293,18 +278,13 @@ Here's a sample configuration for enabling Vertex AI Model Garden models:
 
 ```ts
 import { genkit } from "genkit";
-import {
-  mistralLarge,
-  mistralNemo,
-  codestral,
-  vertexAIModelGarden,
-} from "@genkit-ai/vertexai/modelgarden";
+import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
       location: "us-central1",
-      models: [mistralLarge, mistralNemo, codestral],
+      models: ["mistral-large", "mistral-nemo", "codestral"],
     }),
   ],
 });
@@ -314,7 +294,7 @@ Then use them as regular models:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: mistralLarge,
+  model: "mistral-large",
   prompt: "Write a function that adds two numbers together",
   config: {
     version: "mistral-large-2411", // Optional: specify model version
@@ -328,15 +308,15 @@ const llmResponse = await ai.generate({
 
 The models support:
 
-- `mistralLarge`: Latest Mistral large model with function calling capabilities
-- `mistralNemo`: Optimized for efficiency and speed
+- `mistral-large`: Latest Mistral large model with function calling capabilities
+- `mistral-nemo`: Optimized for efficiency and speed
 - `codestral`: Specialized for code generation tasks
 
 Each model supports streaming responses and function calling:
 
 ```ts
 const response = await ai.generateStream({
-  model: mistralLarge,
+  model: "mistral-large",
   prompt: "What should I cook tonight?",
   tools: ["recipe-finder"],
   config: {
@@ -475,7 +455,6 @@ To use Vertex AI Vector Search:
 
    ```ts
    import { genkit } from "genkit";
-   import { textEmbedding004 } from "@genkit-ai/vertexai";
    import { vertexAIVectorSearch } from "@genkit-ai/vertexai/vectorsearch";
 
    const ai = genkit({
@@ -491,7 +470,7 @@ To use Vertex AI Vector Search:
              publicDomainName: VECTOR_SEARCH_PUBLIC_DOMAIN_NAME,
              documentRetriever: firestoreDocumentRetriever,
              documentIndexer: firestoreDocumentIndexer,
-             embedder: textEmbedding004,
+             embedder: vertexAI.embedder('text-embedding-004'),
            },
          ],
        }),
@@ -550,7 +529,7 @@ You can define a caching mechanism in your application like this:
 
 ```ts
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [vertexAI({ location: "us-central1" })],
 });
 
 const llmResponse = await ai.generate({
@@ -563,7 +542,7 @@ const llmResponse = await ai.generate({
       role: "model",
       content: [
         {
-          text: "Based on War and Peace, here is some analysis of Pierre Bezukhov’s character.",
+          text: "Based on War and Peace, here is some analysis of Pierre Bezukhov's character.",
         },
       ],
       metadata: {
@@ -574,7 +553,7 @@ const llmResponse = await ai.generate({
     },
   ],
   model: vertexAI.model('gemini-2.0-flash'),
-  prompt: "Describe Pierre’s transformation throughout the novel.",
+  prompt: "Describe Pierre's transformation throughout the novel.",
 });
 ```
 
@@ -610,7 +589,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model("gemini-2.0-flash"),
   prompt: "Analyze the relationship between Pierre and Natasha.",
 });
 ```

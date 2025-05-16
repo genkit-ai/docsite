@@ -291,7 +291,7 @@ func main() {
 }
 ```
 
-See [Generating content with AI models](../models.md) for more information.
+See [Generating content with AI models](/go/docs/models) for more information.
 
 ### Embedding models
 
@@ -335,16 +335,16 @@ func main() {
 
 The following models are supported:
 
--   **Google AI**
+- **Google AI**
 
-    `text-embedding-004` and `embedding-001`
+  `text-embedding-004` and `embedding-001`
 
--   **Vertex AI**
+- **Vertex AI**
 
-    `textembedding-gecko@003`, `textembedding-gecko@002`,
-    `textembedding-gecko@001`, `text-embedding-004`,
-    `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`,
-    and `multimodalembedding`
+  `textembedding-gecko@003`, `textembedding-gecko@002`,
+  `textembedding-gecko@001`, `text-embedding-004`,
+  `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`,
+  and `multimodalembedding`
 
 Embedder references have an `Embed()` method that calls the Google AI API:
 
@@ -399,4 +399,4 @@ You can also pass an Embedder to an indexer's `Index()` method and a retriever's
 // }
 ```
 
-See [Retrieval-augmented generation (RAG)](../rag.md) for more information.
+See [Retrieval-augmented generation (RAG)](/go/docs/rag) for more information.

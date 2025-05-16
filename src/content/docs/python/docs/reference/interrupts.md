@@ -3,36 +3,36 @@ title: Tool Interrupts
 description: Learn how to use interrupts to pause and resume LLM generation loops in Genkit Python.
 ---
 
-_Interrupts_ are a special kind of [tool](/python/reference/tools/) that can pause the
+_Interrupts_ are a special kind of [tool](/python/docs/reference/tools/) that can pause the
 LLM generation-and-tool-calling loop to return control back to you. When
-you're ready, you can then *resume* generation by sending *replies* that the LLM
+you're ready, you can then _resume_ generation by sending _replies_ that the LLM
 processes for further generation.
 
 The most common uses for interrupts fall into a few categories:
 
-*   **Human-in-the-Loop:** Enabling the user of an interactive AI
-    to clarify needed information or confirm the LLM's action
-    before it is completed, providing a measure of safety and confidence.
-*   **Async Processing:** Starting an asynchronous task that can only be
-    completed out-of-band, such as sending an approval notification to
-    a human reviewer or kicking off a long-running background process.
-*   **Exit from an Autonomous Task:** Providing the model a way
-    to mark a task as complete, in a workflow that might iterate through
-    a long series of tool calls.
+- **Human-in-the-Loop:** Enabling the user of an interactive AI
+  to clarify needed information or confirm the LLM's action
+  before it is completed, providing a measure of safety and confidence.
+- **Async Processing:** Starting an asynchronous task that can only be
+  completed out-of-band, such as sending an approval notification to
+  a human reviewer or kicking off a long-running background process.
+- **Exit from an Autonomous Task:** Providing the model a way
+  to mark a task as complete, in a workflow that might iterate through
+  a long series of tool calls.
 
 ## Before you begin
 
 All of the examples documented here assume that you have already set up a
 project with Genkit dependencies installed. If you want to run the code
 examples on this page, first complete the steps in the
-[Get started](/python/get-started/) guide.
+[Get started](/python/docs/get-started/) guide.
 
 Before diving too deeply, you should also be familiar with the following
 concepts:
 
-*   [Generating content](/python/reference/models/) with AI models.
-*   Genkit's system for [defining input and output schemas](/python/reference/flows/).
-*   General methods of [tool-calling](/python/reference/tools/).
+- [Generating content](/python/docs/reference/models/) with AI models.
+- Genkit's system for [defining input and output schemas](/python/docs/reference/flows/).
+- General methods of [tool-calling](/python/docs/reference/tools/).
 
 ## Overview of interrupts
 
@@ -123,3 +123,4 @@ response = await ai.generate(
     tool_responses=[tool_response(interrupted_response.interrupts[0], 'b')],
     tools=['ask_question'],
 )
+```

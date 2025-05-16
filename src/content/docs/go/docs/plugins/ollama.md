@@ -147,4 +147,4 @@ func main() {
 }
 ```
 
-See [Generating content](../models.md) for more information.
+See [Generating content](/go/docs/models) for more information.

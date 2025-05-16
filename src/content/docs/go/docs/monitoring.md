@@ -11,7 +11,7 @@ export and trace inspection using the developer UI.
 Genkit is fully instrumented with [OpenTelemetry](https://opentelemetry.io/) and
 provides hooks to export telemetry data.
 
-The [Google Cloud plugin](./plugins/google-cloud.md) exports telemetry to
+The [Google Cloud plugin](/go/docs/plugins/google-cloud) exports telemetry to
 Cloud's operations suite.
 
 ## Trace store

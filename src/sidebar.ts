@@ -1,7 +1,23 @@
 const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
   { label: "Developer tools", slug: "docs/devtools" },
-  { label: "API stability channels", slug: "docs/api-stability" },
+  { 
+    label: "Tutorials",
+    items: [
+      { label: "Chat with a PDF", slug: "docs/tutorials/tutorial-chat-with-a-pdf" },
+      { label: "Summarize YouTube videos", slug: "docs/tutorials/tutorial-summarize-youtube-videos" },
+      { 
+        label: "Agentic barista Angular app", 
+        link: "https://developers.google.com/solutions/learn/agentic-barista",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        }, 
+      }
+    ],
+  },
   {
     label: "Building AI workflows",
     items: [
@@ -16,15 +32,10 @@ const JS_SIDEBAR = [
         slug: "docs/dotprompt",
       },
       { label: "Persistent chat sessions", slug: "docs/chat" },
+      { label: "Tool calling", slug: "docs/tool-calling" },
       {
-        label: "Tools",
-        items: [
-          { label: "Tool calling", slug: "docs/tool-calling" },
-          {
-            label: "Pause generation using interrupts",
-            slug: "docs/interrupts",
-          },
-        ],
+        label: "Pause generation using interrupts",
+        slug: "docs/interrupts",
       },
       {
         label: "Retrieval-augmented generation (RAG)",
@@ -77,17 +88,6 @@ const JS_SIDEBAR = [
     ],
   },
   {
-    label: "Writing plugins",
-    items: [
-      // NOTE: Deployment links were incorrectly placed here before, removed them.
-      { label: "Overview", slug: "docs/plugin-authoring" },
-      {
-        label: "Writing an Evaluator Plugin",
-        slug: "docs/plugin-authoring-evaluator",
-      },
-    ],
-  },
-  {
     label: "Plugins",
     items: [
       { label: "Google AI", slug: "docs/plugins/google-genai" },
@@ -116,32 +116,52 @@ const JS_SIDEBAR = [
   },
   {
     label: "Framework Integrations",
-    items: [{ label: "Using Genkit with Next.js", slug: "docs/nextjs" }],
+    items: [
+      { label: "Using Genkit with Next.js", slug: "docs/nextjs" },
+      { label: "Using Genkit with Angular", slug: "docs/angular" }
+    ],
   },
   {
-    label: "Migration Guides",
+    label: "Writing plugins",
     items: [
-      // Added 0.9->1.0 link to main Genkit section previously
+      // NOTE: Deployment links were incorrectly placed here before, removed them.
+      { label: "Overview", slug: "docs/plugin-authoring" },
       {
-        label: "Migrate from 0.5 to 0.9",
-        slug: "docs/migrating-from-0.5",
+        label: "Writing an Evaluator Plugin",
+        slug: "docs/plugin-authoring-evaluator",
       },
     ],
   },
+  // {
+  //   label: "Migration Guides",
+  //   items: [
+  //     // Added 0.9->1.0 link to main Genkit section previously
+  //     {
+  //       label: "Migrate from 0.5 to 0.9",
+  //       slug: "docs/migrating-from-0.5",
+  //     },
+  //   ],
+  // },
   {
     label: "Community",
     items: [{ label: "Connect with us", slug: "docs/feedback" }],
   },
   {
-    label: "API reference",
-    link: "https://js.api.genkit.dev/",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-    },
+    label: "Reference",
+    items: [
+      {
+        label: "API reference",
+        link: "https://js.api.genkit.dev/",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+          // style: "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
+        },
+      },
+      { label: "API stability channels", slug: "docs/api-stability" },
+    ],
   },
 ];
 
@@ -196,16 +216,20 @@ const GO_SIDEBAR = [
       },
     ],
   },
-  {
-    label: "API Reference",
-    link: "https://pkg.go.dev/github.com/firebase/genkit/go",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-    },
+  { 
+    label: "Reference",
+    items: [
+      {
+        label: "API Reference",
+        link: "https://pkg.go.dev/github.com/firebase/genkit/go",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        },
+      },
+    ]
   },
 ];
 const PYTHON_SIDEBAR = [
@@ -226,16 +250,20 @@ const PYTHON_SIDEBAR = [
       { label: "Dev Local Vector Store", slug: "python/docs/reference/plugins/dev-local-vectorstore" },
     ],
   },
-  {
-    label: "API Reference",
-    link: "https://python.api.genkit.dev/reference/api/",
-    attrs: {
-      "data-external": true,
-      target: "_blank",
-      class: "external-icon",
-      style:
-        "font-weight: 500; font-size: var(--sl-text-sm); color: var(--sl-color-white);",
-    },
+  { 
+    label: "Reference",
+    items: [
+      {
+        label: "API Reference",
+        link: "https://python.api.genkit.dev/reference/api/",
+        attrs: {
+          "data-external": true,
+          target: "_blank",
+          class: "external-icon",
+          rel: "noopener",
+        },
+      },
+    ]
   },
 ];
 
