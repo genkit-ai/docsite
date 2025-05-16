@@ -87,11 +87,6 @@ from genkit.plugins.google_genai import (
 )
 from genkit.plugins.firebase.firestore import FirestoreVectorStore, DistanceMeasure
 
-# Assume EMBEDDING_MODEL and firestore_client are defined and configured appropriately
-# e.g., EMBEDDING_MODEL = vertexai_name('text-embedding-004')
-# e.g., from google.cloud import firestore
-#       firestore_client = firestore.Client()
-
 ai = Genkit(
     plugins=[
         VertexAI(),
@@ -100,9 +95,9 @@ ai = Genkit(
                 collection='mycollection',
                 vector_field='embedding',
                 content_field='text',
-                embedder=EMBEDDING_MODEL, # Replace with actual embedder model name
+                embedder=EMBEDDING_MODEL,
                 distance_measure=DistanceMeasure.EUCLIDEAN,
-                firestore_client=firestore_client, # Replace with actual client instance
+                firestore_client=firestore_client,
         ),
     ],
 )
@@ -113,17 +108,15 @@ async def qa_flow(query: str):
         query=Document.from_text(query),
         retriever='firestore/my_firestore_retriever'
     )
-    # Ensure a model is specified either in Genkit config or here
-    response = await ai.generate(prompt=query, docs=docs, model=vertexai_name('gemini-1.5-flash')) # Example model
+    response = await ai.generate(prompt=query, docs=docs)
     return response.text
 ```
 
 #### Run the retriever flow
 
 ```python
-# Assuming qa_flow is defined as above and ai instance is configured
-# result = await qa_flow('Recommend a dessert from the menu while avoiding dairy and nuts')
-# print(result)
+result = await qa_flow('Recommend a dessert from the menu while avoiding dairy and nuts')
+print(result)
 ```
 
 The output for this command should contain a response from the model, grounded
@@ -145,7 +138,6 @@ from genkit.types import (
     Document,
     ActionRunContext
 )
-from genkit.ai import Genkit # Assuming 'ai' is your configured Genkit instance
 
 async def my_retriever(request: RetrieverRequest, ctx: ActionRunContext):
     """Example of a retriever.
@@ -154,8 +146,6 @@ async def my_retriever(request: RetrieverRequest, ctx: ActionRunContext):
         request: The request to the retriever.
         ctx: The context of the retriever.
     """
-    # Replace with your actual document fetching logic
-    print(f"Retrieving documents for query: {request.query.text}")
     return RetrieverResponse(documents=[Document.from_text('Hello'), Document.from_text('World')])
 
 
@@ -165,9 +155,8 @@ ai.define_retriever(name='my_retriever', fn=my_retriever)
 Then you'll be able to use your retriever with `ai.retrieve`:
 
 ```python
-# Assuming 'ai' is your configured Genkit instance and 'query' is defined
-# docs = await ai.retrieve(
-#     query=Document.from_text(query),
-#     retriever='my_retriever'
-# )
-# print(docs)
+docs = await ai.retrieve(
+    query=Document.from_text(query), 
+    retriever='my_retriever'
+)
+```
