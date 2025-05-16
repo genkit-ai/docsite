@@ -80,12 +80,12 @@ the retriever example, this example uses Firestore Vector Store.
 
 
 ```python
-from genkit.ai import Genkit
+from genkit.ai import Genkit, Document
 from genkit.plugins.google_genai import (
     VertexAI,
     vertexai_name,
 )
-from genkit.plugins.firebase.firestore import FirestoreVectorStore
+from genkit.plugins.firebase.firestore import FirestoreVectorStore, DistanceMeasure
 
 ai = Genkit(
     plugins=[
@@ -105,7 +105,7 @@ ai = Genkit(
 @ai.flow()
 async def qa_flow(query: str):
     docs = await ai.retrieve(
-        query=Document.from_text(query), 
+        query=Document.from_text(query),
         retriever='firestore/my_firestore_retriever'
     )
     response = await ai.generate(prompt=query, docs=docs)
