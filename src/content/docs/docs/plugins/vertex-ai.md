@@ -22,7 +22,7 @@ The Vertex AI plugin provides interfaces to several AI services:
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save @genkit-ai/vertexai
 ```
 
@@ -52,7 +52,7 @@ The plugin requires you to specify your Google Cloud project ID, the [region](ht
      - If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), this is set automatically.
      - On your local dev environment, do this by running:
 
-       ```posix-terminal
+       ```bash
        gcloud auth application-default login --project YOUR_PROJECT_ID
        ```
 
