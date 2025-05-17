@@ -16,8 +16,8 @@ npm i --save @genkit-ai/googleai
 To use this plugin, specify it when you initialize Genkit:
 
 ```ts
-import { genkit } from "genkit";
-import { googleAI } from "@genkit-ai/googleai";
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -44,7 +44,7 @@ Configure the plugin to use your API key by doing one of the following:
 The recommended way to reference models is through the helper function provided by the plugin:
 
 ```ts
-import { googleAI } from "@genkit-ai/googleai";
+import { googleAI } from '@genkit-ai/googleai';
 
 // Referencing models
 const model = googleAI.model('gemini-2.0-flash');
@@ -62,7 +62,7 @@ const ai = genkit({
   model: googleAI.model('gemini-2.0-flash'), // Set default model
 });
 
-const llmResponse = await ai.generate("Tell me a joke.");
+const llmResponse = await ai.generate('Tell me a joke.');
 ```
 
 or use embedders (ex. `text-embedding-004`) with `embed` or retrievers:
@@ -83,24 +83,24 @@ const embeddings = await ai.embed({
 You can use files uploaded to the Gemini Files API with Genkit:
 
 ```ts
-import { GoogleAIFileManager } from "@google/generative-ai/server";
-import { genkit } from "genkit";
-import { googleAI } from "@genkit-ai/googleai";
+import { GoogleAIFileManager } from '@google/generative-ai/server';
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
 });
 
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-const uploadResult = await fileManager.uploadFile("path/to/file.jpg", {
-  mimeType: "image/jpeg",
-  displayName: "Your Image",
+const uploadResult = await fileManager.uploadFile('path/to/file.jpg', {
+  mimeType: 'image/jpeg',
+  displayName: 'Your Image',
 });
 
 const response = await ai.generate({
-  model: googleAI.model("gemini-2.0-flash"),
+  model: googleAI.model('gemini-2.0-flash'),
   prompt: [
-    { text: "Describe this image:" },
+    { text: 'Describe this image:' },
     {
       media: {
         contentType: uploadResult.file.mimeType,
@@ -135,7 +135,7 @@ const ai = genkit({
 
 const llmResponse = await ai.generate({
   prompt: `Suggest an item for the menu of fish themed restruant`,
-  model: googleAI.model("tunedModels/my-example-model-apbm8oqbvuv2"),
+  model: googleAI.model('tunedModels/my-example-model-apbm8oqbvuv2'),
 });
 ```
 
@@ -157,14 +157,14 @@ const ai = genkit({
 const llmResponse = await ai.generate({
   messages: [
     {
-      role: "user",
-      content: [{ text: "Here is the relevant text from War and Peace." }],
+      role: 'user',
+      content: [{ text: 'Here is the relevant text from War and Peace.' }],
     },
     {
-      role: "model",
+      role: 'model',
       content: [
         {
-          text: "Based on War and Peace, here is some analysis of Pierre Bezukhov’s character.",
+          text: 'Based on War and Peace, here is some analysis of Pierre Bezukhov’s character.',
         },
       ],
       metadata: {
@@ -174,8 +174,8 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model("gemini-2.0-flash-001"),
-  prompt: "Describe Pierre’s transformation throughout the novel.",
+  model: googleAI.model('gemini-2.0-flash-001'),
+  prompt: 'Describe Pierre’s transformation throughout the novel.',
 });
 ```
 
@@ -189,21 +189,21 @@ In this setup:
 For applications referencing long documents, such as _War and Peace_ or _Lord of the Rings_, you can structure your queries to reuse cached contexts:
 
 ```ts
-const fs = require("fs/promises");
+const fs = require('fs/promises');
 
-const textContent = await fs.readFile("path/to/war_and_peace.txt", "utf-8");
+const textContent = await fs.readFile('path/to/war_and_peace.txt', 'utf-8');
 
 const llmResponse = await ai.generate({
   messages: [
     {
-      role: "user",
+      role: 'user',
       content: [{ text: textContent }], // Include the large text as context
     },
     {
-      role: "model",
+      role: 'model',
       content: [
         {
-          text: "This analysis is based on the provided text from War and Peace.",
+          text: 'This analysis is based on the provided text from War and Peace.',
         },
       ],
       metadata: {
@@ -213,8 +213,8 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model("gemini-2.0-flash-001"),
-  prompt: "Analyze the relationship between Pierre and Natasha.",
+  model: googleAI.model('gemini-2.0-flash-001'),
+  prompt: 'Analyze the relationship between Pierre and Natasha.',
 });
 ```
 
@@ -225,7 +225,7 @@ The Gemini models are multi-modal, and other modes of content are allowed to be 
 For example, to cache a long piece of video content, you must first upload using the file manager from the Google AI SDK:
 
 ```ts
-import { GoogleAIFileManager } from "@google/generative-ai/server";
+import { GoogleAIFileManager } from '@google/generative-ai/server';
 ```
 
 ```ts
@@ -233,8 +233,8 @@ const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
 
 // Upload video to Google AI using the Gemini Files API
 const uploadResult = await fileManager.uploadFile(videoFilePath, {
-  mimeType: "video/mp4", // Adjust according to the video format
-  displayName: "Uploaded Video for Analysis",
+  mimeType: 'video/mp4', // Adjust according to the video format
+  displayName: 'Uploaded Video for Analysis',
 });
 
 const fileUri = uploadResult.file.uri;
@@ -246,21 +246,21 @@ Now you may configure the cache in your calls to `ai.generate`:
 const analyzeVideoResponse = await ai.generate({
   messages: [
     {
-      role: "user",
+      role: 'user',
       content: [
         {
           media: {
             url: fileUri, // Use the uploaded file URL
-            contentType: "video/mp4",
+            contentType: 'video/mp4',
           },
         },
       ],
     },
     {
-      role: "model",
+      role: 'model',
       content: [
         {
-          text: "This video seems to contain several key moments. I will analyze it now and prepare to answer your questions.",
+          text: 'This video seems to contain several key moments. I will analyze it now and prepare to answer your questions.',
         },
       ],
       // Everything up to (including) this message will be cached.
@@ -269,7 +269,7 @@ const analyzeVideoResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model("gemini-2.0-flash-001"),
+  model: googleAI.model('gemini-2.0-flash-001'),
   prompt: query,
 });
 ```

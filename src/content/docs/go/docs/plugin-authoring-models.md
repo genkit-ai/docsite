@@ -199,20 +199,20 @@ also export the following:
 - A `Model()` function, which returns references to your plugin's defined
   models. Often, this can be:
 
-    ```go
-    func Model(g *genkit.Genkit, name string) *ai.Model {
-        return genkit.LookupModel(g, providerID, name)
-    }
-    ```
+  ```go
+  func Model(g *genkit.Genkit, name string) *ai.Model {
+      return genkit.LookupModel(g, providerID, name)
+  }
+  ```
 
 - A `ModelRef` function, which creates a model reference paired with its
   config that can validate the type and be passed around together:
 
-    ```go
-    func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
-        return ai.NewModelRef(name, config)
-    }
-    ```
+  ```go
+  func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
+      return ai.NewModelRef(name, config)
+  }
+  ```
 
 - **Optional**: A `DefineModel()` function, which lets users define models
   that your plugin can provide, but that you do not automatically define.

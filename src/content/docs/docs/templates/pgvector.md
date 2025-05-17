@@ -7,16 +7,16 @@ following example as a starting point and modify it to work with your database
 schema.
 
 ```ts
-import { genkit, z, Document } from "genkit";
-import { googleAI, textEmbedding004 } from "@genkit-ai/googleai";
-import { toSql } from "pgvector";
-import postgres from "postgres";
+import { genkit, z, Document } from 'genkit';
+import { googleAI, textEmbedding004 } from '@genkit-ai/googleai';
+import { toSql } from 'pgvector';
+import postgres from 'postgres';
 
 const ai = genkit({
   plugins: [googleAI()],
 });
 
-const sql = postgres({ ssl: false, database: "recaps" });
+const sql = postgres({ ssl: false, database: 'recaps' });
 
 const QueryOptions = z.object({
   show: z.string(),
@@ -25,7 +25,7 @@ const QueryOptions = z.object({
 
 const sqlRetriever = ai.defineRetriever(
   {
-    name: "pgvector-myTable",
+    name: 'pgvector-myTable',
     configSchema: QueryOptions,
   },
   async (input, options) => {
@@ -47,7 +47,7 @@ const sqlRetriever = ai.defineRetriever(
         return Document.fromText(content, metadata);
       }),
     };
-  }
+  },
 );
 ```
 
@@ -57,7 +57,7 @@ And here's how to use the retriever in a flow:
 // Simple flow to use the sqlRetriever
 export const askQuestionsOnGoT = ai.defineFlow(
   {
-    name: "askQuestionsOnGoT",
+    name: 'askQuestionsOnGoT',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
@@ -66,7 +66,7 @@ export const askQuestionsOnGoT = ai.defineFlow(
       retriever: sqlRetriever,
       query: inputQuestion,
       options: {
-        show: "Game of Thrones",
+        show: 'Game of Thrones',
       },
     });
     console.log(docs);
@@ -74,6 +74,6 @@ export const askQuestionsOnGoT = ai.defineFlow(
     // Continue with using retrieved docs
     // in RAG prompts.
     //...
-  }
+  },
 );
 ```

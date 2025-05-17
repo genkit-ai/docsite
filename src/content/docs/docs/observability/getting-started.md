@@ -51,7 +51,7 @@ Import `enableFirebaseTelemetry` into your Genkit configuration file (the
 file where `genkit(...)` is initalized), and call it:
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry();
 ```

@@ -33,11 +33,11 @@ If you want to locally run flows that use this plugin, you also need the [Google
 To use this plugin, specify it when you initialize Genkit:
 
 ```ts
-import { genkit } from "genkit";
-import { vertexAI } from "@genkit-ai/vertexai";
+import { genkit } from 'genkit';
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 ```
 
@@ -67,15 +67,15 @@ The plugin requires you to specify your Google Cloud project ID, the [region](ht
 The Vertex AI plugin allows you to use various Gemini, Imagen, and other Vertex AI models:
 
 ```ts
-import { vertexAI } from "@genkit-ai/vertexai";
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
 const llmResponse = await ai.generate({
-  model: vertexAI.model("gemini-2.0-flash"),
-  prompt: "What should I do when I visit Melbourne?",
+  model: vertexAI.model('gemini-2.0-flash'),
+  prompt: 'What should I do when I visit Melbourne?',
 });
 ```
 
@@ -113,12 +113,12 @@ You can also use Vertex AI text embedding models for generating embeddings:
 
 ```ts
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
 const embeddings = await ai.embed({
   embedder: vertexAI.embedder('text-embedding-004'),
-  content: "How many widgets do you have in stock?",
+  content: 'How many widgets do you have in stock?',
 });
 ```
 
@@ -130,7 +130,7 @@ const ai = genkit({
     chroma([
       {
         embedder: vertexAI.embedder('text-embedding-004'),
-        collectionName: "my-collection",
+        collectionName: 'my-collection',
       },
     ]),
   ],
@@ -140,10 +140,10 @@ const ai = genkit({
 This plugin can also handle multimodal embeddings:
 
 ```ts
-import { vertexAI } from "@genkit-ai/vertexai";
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
 const embeddings = await ai.embed({
@@ -152,8 +152,8 @@ const embeddings = await ai.embed({
     content: [
       {
         media: {
-          url: "gs://cloud-samples-data/generative-ai/video/pixel8.mp4",
-          contentType: "video/mp4",
+          url: 'gs://cloud-samples-data/generative-ai/video/pixel8.mp4',
+          contentType: 'video/mp4',
         },
       },
     ],
@@ -164,16 +164,16 @@ const embeddings = await ai.embed({
 Imagen3 model allows generating images from user prompt:
 
 ```ts
-import { vertexAI } from "@genkit-ai/vertexai";
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
 const response = await ai.generate({
   model: vertexAI.model('imagen-3.0-generate-002'),
-  output: { format: "media" },
-  prompt: "a banana riding a bicycle",
+  output: { format: 'media' },
+  prompt: 'a banana riding a bicycle',
 });
 
 return response.media;
@@ -183,26 +183,26 @@ and even advanced editing of existing images:
 
 ```ts
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
-const baseImg = fs.readFileSync("base.png", { encoding: "base64" });
-const maskImg = fs.readFileSync("mask.png", { encoding: "base64" });
+const baseImg = fs.readFileSync('base.png', { encoding: 'base64' });
+const maskImg = fs.readFileSync('mask.png', { encoding: 'base64' });
 
 const response = await ai.generate({
   model: vertexAI.model('imagen-3.0-generate-002'),
-  output: { format: "media" },
+  output: { format: 'media' },
   prompt: [
     { media: { url: `data:image/png;base64,${baseImg}` } },
     {
       media: { url: `data:image/png;base64,${maskImg}` },
-      metadata: { type: "mask" },
+      metadata: { type: 'mask' },
     },
-    { text: "replace the background with foo bar baz" },
+    { text: 'replace the background with foo bar baz' },
   ],
   config: {
     editConfig: {
-      editMode: "outpainting",
+      editMode: 'outpainting',
     },
   },
 });
@@ -219,14 +219,14 @@ If you have access to Claude 3 models ([haiku](https://console.cloud.google.com/
 Here's a sample configuration for enabling Vertex AI Model Garden models:
 
 ```ts
-import { genkit } from "genkit";
-import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
+import { genkit } from 'genkit';
+import { vertexAIModelGarden } from '@genkit-ai/vertexai/modelgarden';
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
-      location: "us-central1",
-      models: ["claude-3-haiku", "claude-3-sonnet", "claude-3-opus"],
+      location: 'us-central1',
+      models: ['claude-3-haiku', 'claude-3-sonnet', 'claude-3-opus'],
     }),
   ],
 });
@@ -236,8 +236,8 @@ Then use them as regular models:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: "claude-3-sonnet",
-  prompt: "What should I do when I visit Melbourne?",
+  model: 'claude-3-sonnet',
+  prompt: 'What should I do when I visit Melbourne?',
 });
 ```
 
@@ -248,14 +248,14 @@ First you'll need to enable [Llama 3.1 API Service](https://console.cloud.google
 Here's sample configuration for Llama 3.1 405b in Vertex AI plugin:
 
 ```ts
-import { genkit } from "genkit";
-import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
+import { genkit } from 'genkit';
+import { vertexAIModelGarden } from '@genkit-ai/vertexai/modelgarden';
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
-      location: "us-central1",
-      models: ["llama3-405b-instruct-maas"],
+      location: 'us-central1',
+      models: ['llama3-405b-instruct-maas'],
     }),
   ],
 });
@@ -265,8 +265,8 @@ Then use it as a regular model:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: "llama3-405b-instruct-maas",
-  prompt: "Write a function that adds two numbers together",
+  model: 'llama3-405b-instruct-maas',
+  prompt: 'Write a function that adds two numbers together',
 });
 ```
 
@@ -277,14 +277,14 @@ If you have access to Mistral models ([Mistral Large](https://console.cloud.goog
 Here's a sample configuration for enabling Vertex AI Model Garden models:
 
 ```ts
-import { genkit } from "genkit";
-import { vertexAIModelGarden } from "@genkit-ai/vertexai/modelgarden";
+import { genkit } from 'genkit';
+import { vertexAIModelGarden } from '@genkit-ai/vertexai/modelgarden';
 
 const ai = genkit({
   plugins: [
     vertexAIModelGarden({
-      location: "us-central1",
-      models: ["mistral-large", "mistral-nemo", "codestral"],
+      location: 'us-central1',
+      models: ['mistral-large', 'mistral-nemo', 'codestral'],
     }),
   ],
 });
@@ -294,14 +294,14 @@ Then use them as regular models:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: "mistral-large",
-  prompt: "Write a function that adds two numbers together",
+  model: 'mistral-large',
+  prompt: 'Write a function that adds two numbers together',
   config: {
-    version: "mistral-large-2411", // Optional: specify model version
+    version: 'mistral-large-2411', // Optional: specify model version
     temperature: 0.7, // Optional: control randomness (0-1)
     maxOutputTokens: 1024, // Optional: limit response length
     topP: 0.9, // Optional: nucleus sampling parameter
-    stopSequences: ["###"], // Optional: stop generation at sequences
+    stopSequences: ['###'], // Optional: stop generation at sequences
   },
 });
 ```
@@ -316,11 +316,11 @@ Each model supports streaming responses and function calling:
 
 ```ts
 const response = await ai.generateStream({
-  model: "mistral-large",
-  prompt: "What should I cook tonight?",
-  tools: ["recipe-finder"],
+  model: 'mistral-large',
+  prompt: 'What should I cook tonight?',
+  tools: ['recipe-finder'],
   config: {
-    version: "mistral-large-2411",
+    version: 'mistral-large-2411',
     temperature: 1,
   },
 });
@@ -335,22 +335,22 @@ for await (const chunk of response.stream) {
 To use the evaluators from Vertex AI Rapid Evaluation, add an `evaluation` block to your `vertexAI` plugin configuration.
 
 ```ts
-import { genkit } from "genkit";
+import { genkit } from 'genkit';
 import {
   vertexAIEvaluation,
   VertexAIEvaluationMetricType,
-} from "@genkit-ai/vertexai/evaluation";
+} from '@genkit-ai/vertexai/evaluation';
 
 const ai = genkit({
   plugins: [
     vertexAIEvaluation({
-      location: "us-central1",
+      location: 'us-central1',
       metrics: [
         VertexAIEvaluationMetricType.SAFETY,
         {
           type: VertexAIEvaluationMetricType.ROUGE,
           metricSpec: {
-            rougeType: "rougeLsum",
+            rougeType: 'rougeLsum',
           },
         },
       ],
@@ -393,21 +393,21 @@ To use Vertex AI Vector Search:
    import {
      getFirestoreDocumentIndexer,
      getFirestoreDocumentRetriever,
-   } from "@genkit-ai/vertexai/vectorsearch";
+   } from '@genkit-ai/vertexai/vectorsearch';
 
-   import { initializeApp } from "firebase-admin/app";
-   import { getFirestore } from "firebase-admin/firestore";
+   import { initializeApp } from 'firebase-admin/app';
+   import { getFirestore } from 'firebase-admin/firestore';
 
    initializeApp({ projectId: PROJECT_ID });
    const db = getFirestore();
 
    const firestoreDocumentRetriever = getFirestoreDocumentRetriever(
      db,
-     FIRESTORE_COLLECTION
+     FIRESTORE_COLLECTION,
    );
    const firestoreDocumentIndexer = getFirestoreDocumentIndexer(
      db,
-     FIRESTORE_COLLECTION
+     FIRESTORE_COLLECTION,
    );
    ```
 
@@ -417,20 +417,20 @@ To use Vertex AI Vector Search:
    import {
      getBigQueryDocumentIndexer,
      getBigQueryDocumentRetriever,
-   } from "@genkit-ai/vertexai/vectorsearch";
-   import { BigQuery } from "@google-cloud/bigquery";
+   } from '@genkit-ai/vertexai/vectorsearch';
+   import { BigQuery } from '@google-cloud/bigquery';
 
    const bq = new BigQuery({ projectId: PROJECT_ID });
 
    const bigQueryDocumentRetriever = getBigQueryDocumentRetriever(
      bq,
      BIGQUERY_TABLE,
-     BIGQUERY_DATASET
+     BIGQUERY_DATASET,
    );
    const bigQueryDocumentIndexer = getBigQueryDocumentIndexer(
      bq,
      BIGQUERY_TABLE,
-     BIGQUERY_DATASET
+     BIGQUERY_DATASET,
    );
    ```
 
@@ -454,8 +454,8 @@ To use Vertex AI Vector Search:
 4. Add a `vectorSearchOptions` block to your `vertexAI` plugin configuration:
 
    ```ts
-   import { genkit } from "genkit";
-   import { vertexAIVectorSearch } from "@genkit-ai/vertexai/vectorsearch";
+   import { genkit } from 'genkit';
+   import { vertexAIVectorSearch } from '@genkit-ai/vertexai/vectorsearch';
 
    const ai = genkit({
      plugins: [
@@ -492,7 +492,7 @@ To use Vertex AI Vector Search:
    import {
      vertexAiIndexerRef,
      vertexAiRetrieverRef,
-   } from "@genkit-ai/vertexai/vectorsearch";
+   } from '@genkit-ai/vertexai/vectorsearch';
 
    // ... inside your flow function:
 
@@ -529,17 +529,17 @@ You can define a caching mechanism in your application like this:
 
 ```ts
 const ai = genkit({
-  plugins: [vertexAI({ location: "us-central1" })],
+  plugins: [vertexAI({ location: 'us-central1' })],
 });
 
 const llmResponse = await ai.generate({
   messages: [
     {
-      role: "user",
-      content: [{ text: "Here is the relevant text from War and Peace." }],
+      role: 'user',
+      content: [{ text: 'Here is the relevant text from War and Peace.' }],
     },
     {
-      role: "model",
+      role: 'model',
       content: [
         {
           text: "Based on War and Peace, here is some analysis of Pierre Bezukhov's character.",
@@ -567,19 +567,19 @@ In this setup:
 For applications referencing long documents, such as _War and Peace_ or _Lord of the Rings_, you can structure your queries to reuse cached contexts:
 
 ```ts
-const textContent = await fs.readFile("path/to/war_and_peace.txt", "utf-8");
+const textContent = await fs.readFile('path/to/war_and_peace.txt', 'utf-8');
 
 const llmResponse = await ai.generate({
   messages: [
     {
-      role: "user",
+      role: 'user',
       content: [{ text: textContent }], // Include the large text as context
     },
     {
-      role: "model",
+      role: 'model',
       content: [
         {
-          text: "This analysis is based on the provided text from War and Peace.",
+          text: 'This analysis is based on the provided text from War and Peace.',
         },
       ],
       metadata: {
@@ -589,8 +589,8 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: vertexAI.model("gemini-2.0-flash"),
-  prompt: "Analyze the relationship between Pierre and Natasha.",
+  model: vertexAI.model('gemini-2.0-flash'),
+  prompt: 'Analyze the relationship between Pierre and Natasha.',
 });
 ```
 

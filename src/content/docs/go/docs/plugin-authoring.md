@@ -59,44 +59,44 @@ const providerID = "yourplugin"
 Every plugin should define and export the following symbols to conform to the
 `genkit.Plugin` interface:
 
--   A struct type that encapsulates all of the configuration options accepted by
-    the plugin.
+- A struct type that encapsulates all of the configuration options accepted by
+  the plugin.
 
-    For any plugin options that are secret values, such as API keys, you should
-    offer both a config option and a default environment variable to configure
-    it. This lets your plugin take advantage of the secret-management features
-    offered by many hosting providers (such as Cloud Secret Manager, which you
-    can use with Cloud Run). For example:
+  For any plugin options that are secret values, such as API keys, you should
+  offer both a config option and a default environment variable to configure
+  it. This lets your plugin take advantage of the secret-management features
+  offered by many hosting providers (such as Cloud Secret Manager, which you
+  can use with Cloud Run). For example:
 
-    ```go
-    type MyPlugin struct {
-        APIKey string
-        // Other options you may allow to configure...
-    }
-    ```
+  ```go
+  type MyPlugin struct {
+      APIKey string
+      // Other options you may allow to configure...
+  }
+  ```
 
--   A `Name()` method on the struct that returns the provider ID.
+- A `Name()` method on the struct that returns the provider ID.
 
--   An `Init()` method on the struct with a declaration like the following:
+- An `Init()` method on the struct with a declaration like the following:
 
-    ```go
-    func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
-    ```
+  ```go
+  func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
+  ```
 
-    In this function, perform any setup steps required by your plugin. For
-    example:
+  In this function, perform any setup steps required by your plugin. For
+  example:
 
-    -   Confirm that any required configuration values are specified and assign
-        default values to any unspecified optional settings.
-    -   Verify that the given configuration options are valid together.
-    -   Create any shared resources required by the rest of your plugin. For
-        example, create clients for any services your plugin accesses.
+  - Confirm that any required configuration values are specified and assign
+    default values to any unspecified optional settings.
+  - Verify that the given configuration options are valid together.
+  - Create any shared resources required by the rest of your plugin. For
+    example, create clients for any services your plugin accesses.
 
-    To the extent possible, the resources provided by your plugin shouldn't
-    assume that any other plugins have been installed before this one.
+  To the extent possible, the resources provided by your plugin shouldn't
+  assume that any other plugins have been installed before this one.
 
-    This method will be called automatically during `genkit.Init()` when the
-    user passes the plugin into the `WithPlugins()` option.
+  This method will be called automatically during `genkit.Init()` when the
+  user passes the plugin into the `WithPlugins()` option.
 
 ## Building plugin features
 

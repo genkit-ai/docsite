@@ -16,9 +16,9 @@ pip3 install genkit-plugin-firebase
 
 ## Prerequisites
 
-*   A Firebase project with Cloud Firestore enabled.
-*   The `genkit` package installed.
-*   `gcloud` CLI for managing credentials and Firestore indexes.
+- A Firebase project with Cloud Firestore enabled.
+- The `genkit` package installed.
+- `gcloud` CLI for managing credentials and Firestore indexes.
 
 ## Configuration
 
@@ -52,12 +52,12 @@ ai = Genkit(
 
 ### Configuration Options
 
-*   **name** (str): A unique name for this retriever instance.
-*   **collection** (str): The name of the Firestore collection to query.
-*   **vector_field** (str): The name of the field in the Firestore documents that contains the vector embedding.
-*   **content_field** (str): The name of the field in the Firestore documents that contains the text content.
-*   **embedder** (str): The name of the embedding model to use. Must match a configured embedder in your Genkit project.
-*   **firestore_client**: A `google.cloud.firestore.Client` object that will be used for all queries to the vectorstore.
+- **name** (str): A unique name for this retriever instance.
+- **collection** (str): The name of the Firestore collection to query.
+- **vector_field** (str): The name of the field in the Firestore documents that contains the vector embedding.
+- **content_field** (str): The name of the field in the Firestore documents that contains the text content.
+- **embedder** (str): The name of the embedding model to use. Must match a configured embedder in your Genkit project.
+- **firestore_client**: A `google.cloud.firestore.Client` object that will be used for all queries to the vectorstore.
 
 ## Usage
 
@@ -178,8 +178,8 @@ gcloud firestore indexes composite create \
   --field-config=vector-config='{"dimension":<YOUR_DIMENSION_COUNT>,"flat": {}}',field-path=<YOUR_VECTOR_FIELD>
 ```
 
-*   Replace `<YOUR_FIREBASE_PROJECT_ID>` with the ID of your Firebase project.
-*   Replace `<YOUR_COLLECTION_NAME>` with the name of your Firestore collection (e.g., `my_collection`).
-*   Replace `<YOUR_DIMENSION_COUNT>` with the correct dimension for your embedding model. Common values are:
-    *   `768` for `text-embedding-004` (Vertex AI)
-*   Replace `<YOUR_VECTOR_FIELD>` with the name of the field containing vector embeddings (e.g., `embedding`).
+- Replace `<YOUR_FIREBASE_PROJECT_ID>` with the ID of your Firebase project.
+- Replace `<YOUR_COLLECTION_NAME>` with the name of your Firestore collection (e.g., `my_collection`).
+- Replace `<YOUR_DIMENSION_COUNT>` with the correct dimension for your embedding model. Common values are:
+  - `768` for `text-embedding-004` (Vertex AI)
+- Replace `<YOUR_VECTOR_FIELD>` with the name of the field containing vector embeddings (e.g., `embedding`).

@@ -44,15 +44,15 @@ a function that calls `generate()`:
 ```typescript
 export const menuSuggestionFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
   },
   async (restaurantTheme) => {
     const { text } = await ai.generate({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
     return text;
-  }
+  },
 );
 ```
 
@@ -73,7 +73,7 @@ Here's a refinement of the last example, which defines a flow that takes a
 string as input and outputs an object:
 
 ```typescript
-import { z } from "genkit";
+import { z } from 'genkit';
 
 const MenuItemSchema = z.object({
   dishname: z.string(),
@@ -82,13 +82,13 @@ const MenuItemSchema = z.object({
 
 export const menuSuggestionFlowWithSchema = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
     outputSchema: MenuItemSchema,
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -96,7 +96,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
       throw new Error("Response doesn't satisfy schema.");
     }
     return output;
-  }
+  },
 );
 ```
 
@@ -109,13 +109,13 @@ string, which the flow returns.
 ```typescript
 export const menuSuggestionFlowMarkdown = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -123,7 +123,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
       throw new Error("Response doesn't satisfy schema.");
     }
     return `**${output.dishname}**: ${output.description}`;
-  }
+  },
 );
 ```
 
@@ -132,7 +132,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
 Once you've defined a flow, you can call it from your Node.js code:
 
 ```typescript
-const { text } = await menuSuggestionFlow("bistro");
+const { text } = await menuSuggestionFlow('bistro');
 ```
 
 The argument to the flow must conform to the input schema, if you defined one.
@@ -142,7 +142,7 @@ example, if you set the output schema to `MenuItemSchema`, the flow output will
 contain its properties:
 
 ```typescript
-const { dishname, description } = await menuSuggestionFlowWithSchema("bistro");
+const { dishname, description } = await menuSuggestionFlowWithSchema('bistro');
 ```
 
 ## Streaming flows
@@ -159,14 +159,14 @@ Here's an example of a flow that supports streaming:
 ```typescript
 export const menuSuggestionStreamingFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
     inputSchema: z.string(),
     streamSchema: z.string(),
     outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
   },
   async (restaurantTheme, { sendChunk }) => {
     const response = await ai.generateStream({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
 
@@ -181,7 +181,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
       theme: restaurantTheme,
       menuItem: (await response.response).text,
     };
-  }
+  },
 );
 ```
 
@@ -205,7 +205,7 @@ Streaming flows are also callable, but they immediately return a response object
 rather than a promise:
 
 ```typescript
-const response = menuSuggestionStreamingFlow.stream("Danube");
+const response = menuSuggestionStreamingFlow.stream('Danube');
 ```
 
 The response object has a stream property, which you can use to iterate over the
@@ -213,7 +213,7 @@ streaming output of the flow as it's generated:
 
 ```typescript
 for await (const chunk of response.stream) {
-  console.log("chunk", chunk);
+  console.log('chunk', chunk);
 }
 ```
 
@@ -283,30 +283,30 @@ const PrixFixeMenuSchema = z.object({
 
 export const complexMenuSuggestionFlow = ai.defineFlow(
   {
-    name: "complexMenuSuggestionFlow",
+    name: 'complexMenuSuggestionFlow',
     inputSchema: z.string(),
     outputSchema: PrixFixeMenuSchema,
   },
   async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model("gemini-2.0-flash") });
-    await chat.send("What makes a good prix fixe menu?");
+    const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
+    await chat.send('What makes a good prix fixe menu?');
     await chat.send(
-      "What are some ingredients, seasonings, and cooking techniques that " +
-        `would work for a ${theme} themed menu?`
+      'What are some ingredients, seasonings, and cooking techniques that ' +
+        `would work for a ${theme} themed menu?`,
     );
     const { output } = await chat.send({
       prompt:
         `Based on our discussion, invent a prix fixe menu for a ${theme} ` +
-        "themed restaurant.",
+        'themed restaurant.',
       output: {
         schema: PrixFixeMenuSchema,
       },
     });
     if (!output) {
-      throw new Error("No data generated.");
+      throw new Error('No data generated.');
     }
     return output;
-  }
+  },
 );
 ```
 
@@ -337,17 +337,17 @@ some unspecified method, and the second step includes the menu as context for a
 `generate()` call.
 
 ```ts
-import { run } from "genkit";
+import { run } from 'genkit';
 
 export const menuQuestionFlow = ai.defineFlow(
   {
-    name: "menuQuestionFlow",
+    name: 'menuQuestionFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
   async (input: string): Promise<string> => {
     const menu = await ai.run(
-      "retrieve-daily-menu",
+      'retrieve-daily-menu',
       async (): Promise<string> => {
         // Retrieve today's menu. (This could be a database access or simply
         // fetching the menu from your website.)
@@ -355,16 +355,16 @@ export const menuQuestionFlow = ai.defineFlow(
         // ...
 
         return menu;
-      }
+      },
     );
     const { text } = await ai.generate({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       system: "Help the user answer questions about today's menu.",
       prompt: input,
       docs: [{ content: [{ text: menu }] }],
     });
     return text;
-  }
+  },
 );
 ```
 
@@ -386,26 +386,26 @@ feature of `firebase-functions/https`. `onCallGenkit` wraps your flow in a
 callable function. You may set an auth policy and configure App Check.
 
 ```typescript
-import { hasClaim, onCallGenkit } from "firebase-functions/https";
-import { defineSecret } from "firebase-functions/params";
+import { hasClaim, onCallGenkit } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
 
-const apiKey = defineSecret("GOOGLE_AI_API_KEY");
+const apiKey = defineSecret('GOOGLE_AI_API_KEY');
 
 const menuSuggestionFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
   },
   async (restaurantTheme) => {
     // ...
-  }
+  },
 );
 
 export const menuSuggestion = onCallGenkit(
   {
     secrets: [apiKey],
-    authPolicy: hasClaim("email_verified"),
+    authPolicy: hasClaim('email_verified'),
   },
-  menuSuggestionFlow
+  menuSuggestionFlow,
 );
 ```
 
@@ -421,15 +421,15 @@ To deploy flows using any Node.js hosting platform, such as Cloud Run, define
 your flows using `defineFlow()` and then call `startFlowServer()`:
 
 ```typescript
-import { startFlowServer } from "@genkit-ai/express";
+import { startFlowServer } from '@genkit-ai/express';
 
 export const menuSuggestionFlow = ai.defineFlow(
   {
-    name: "menuSuggestionFlow",
+    name: 'menuSuggestionFlow',
   },
   async (restaurantTheme) => {
     // ...
-  }
+  },
 );
 
 startFlowServer({
@@ -451,11 +451,11 @@ as shown below. You can also specify a custom port (it will use the PORT
 environment variable if set) or specify CORS settings.
 
 ```typescript
-export const flowA = ai.defineFlow({ name: "flowA" }, async (subject) => {
+export const flowA = ai.defineFlow({ name: 'flowA' }, async (subject) => {
   // ...
 });
 
-export const flowB = ai.defineFlow({ name: "flowB" }, async (subject) => {
+export const flowB = ai.defineFlow({ name: 'flowB' }, async (subject) => {
   // ...
 });
 
@@ -463,7 +463,7 @@ startFlowServer({
   flows: [flowB],
   port: 4567,
   cors: {
-    origin: "*",
+    origin: '*',
   },
 });
 ```

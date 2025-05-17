@@ -50,22 +50,22 @@ manually, you can add your own auth context manually.
 
 ```ts
 // Error: Authorization required.
-await selfSummaryFlow({ uid: "abc-def" });
+await selfSummaryFlow({ uid: 'abc-def' });
 
 // Error: You may only summarize your own profile data.
 await selfSummaryFlow.run(
-  { uid: "abc-def" },
+  { uid: 'abc-def' },
   {
-    context: { auth: { uid: "hij-klm" } },
-  }
+    context: { auth: { uid: 'hij-klm' } },
+  },
 );
 
 // Success
 await selfSummaryFlow(
-  { uid: "abc-def" },
+  { uid: 'abc-def' },
   {
-    context: { auth: { uid: "abc-def" } },
-  }
+    context: { auth: { uid: 'abc-def' } },
+  },
 );
 ```
 
@@ -176,24 +176,24 @@ function.
 <!-- prettier-ignore: see note above -->
 
 ```ts
-import { onCallGenkit } from "firebase-functions/https";
+import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow(
   {
-    name: "selfSummaryFlow",
+    name: 'selfSummaryFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
   async (input) => {
     // Flow logic here...
-  }
+  },
 );
 
 export const selfSummary = onCallGenkit(
   {
-    invoker: "private",
+    invoker: 'private',
   },
-  selfSummaryFlow
+  selfSummaryFlow,
 );
 ```
 
@@ -266,8 +266,8 @@ export const selfSummaryFlow = ai.defineFlow(
 You could secure a simple "flow server" express app by writing:
 
 ```ts
-import { apiKey } from "genkit";
-import { startFlowServer, withContext } from "@genkit-ai/express";
+import { apiKey } from 'genkit';
+import { startFlowServer, withContext } from '@genkit-ai/express';
 
 startFlowServer({
   flows: [withContext(selfSummaryFlow, apiKey(process.env.REQUIRED_API_KEY))],
@@ -295,8 +295,8 @@ tools work in other frameworks like Next.js as well. Here is an example of a
 Firebase app built on Next.js.
 
 ```ts
-import { appRoute } from "@genkit-ai/express";
-import { firebaseContext } from "@genkit-ai/firebase";
+import { appRoute } from '@genkit-ai/express';
+import { firebaseContext } from '@genkit-ai/firebase';
 
 export const POST = appRoute(selfSummaryFlow, {
   contextProvider: firebaseContext,

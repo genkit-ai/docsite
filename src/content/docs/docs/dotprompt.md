@@ -51,7 +51,7 @@ Greet a guest{{#if name}} named {{name}}{{/if}}{{#if style}} in the style of {{s
 The portion in the triple-dashes is YAML front matter, similar to the front
 matter format used by GitHub Markdown and Jekyll; the rest of the file is the
 prompt, which can optionally use <a href="https://handlebarsjs.com/guide/" target="_blank">Handlebars
-</a> templates. The following sections will go into more detail about each of 
+</a> templates. The following sections will go into more detail about each of
 the parts that make a `.prompt` file and how to use them.
 
 ## Before you begin
@@ -224,7 +224,7 @@ const response2 = await helloPrompt(
     config: {
       temperature: 0.4,
     },
-  }
+  },
 );
 ```
 
@@ -287,7 +287,7 @@ const response3 = await helloPrompt(
       maxOutputTokens: 400,
       stopSequences: ['<end>', '<fin>'],
     },
-  }
+  },
 );
 ```
 
@@ -369,7 +369,7 @@ interface Article {
   /** true when in draft state */
   draft?: boolean | null;
   /** approval status */
-  status?: "PENDING" | "APPROVED" | null;
+  status?: 'PENDING' | 'APPROVED' | null;
   /** the date of publication e.g. '2024-04-09' */
   date: string;
   /** relevant tags for article */
@@ -437,7 +437,7 @@ const MenuItemSchema = ai.defineSchema(
     description: z.string(),
     calories: z.coerce.number(),
     allergens: z.array(z.string()),
-  })
+  }),
 );
 ```
 
@@ -473,7 +473,7 @@ const description = output?.description;
 The portion of a `.prompt` file that follows the front matter (if present) is
 the prompt itself, which will be passed to the model. While this prompt could be
 a simple text string, very often you will want to incorporate user input into
-the prompt. To do so, you can specify your prompt using the 
+the prompt. To do so, you can specify your prompt using the
 <a href="https://handlebarsjs.com/guide/" target="_blank">Handlebars</a> templating language.
 Prompt templates can include placeholders that refer to the values defined by
 your prompt's input schema.
@@ -661,7 +661,7 @@ You can also define partials in code using `definePartial`:
 ```ts
 ai.definePartial(
   'personality',
-  'Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.'
+  'Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.',
 );
 ```
 

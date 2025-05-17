@@ -28,7 +28,7 @@ const menuLookupTool = ai.defineTool(
   async (input) => {
     // Retrieve the menu from a database, website, etc.
     // ...
-  }
+  },
 );
 
 const reservationTool = ai.defineTool(
@@ -43,19 +43,19 @@ const reservationTool = ai.defineTool(
       .string()
       .describe(
         "true if the reservation was successfully booked and false if there's" +
-          ' no table available for the requested time'
+          ' no table available for the requested time',
       ),
   },
   async (input) => {
     // Access your database to try to make the reservation.
     // ...
-  }
+  },
 );
 ```
 
 ```typescript
 const chat = ai.chat({
-  model: googleAI.model("gemini-2.0-flash"),
+  model: googleAI.model('gemini-2.0-flash'),
   system:
     "You are an AI customer service agent for Pavel's Cafe. Use the tools " +
     'available to you to help the customer. If you cannot help the ' +

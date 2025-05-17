@@ -3,7 +3,7 @@ title: Chat with a PDF file
 description: Learn how to build a conversational application that allows users to extract information from PDF documents using natural language.
 ---
 
-This tutorial demonstrates how to build a conversational application that 
+This tutorial demonstrates how to build a conversational application that
 allows users to extract information from PDF documents using natural language.
 
 1. [Set up your project](#1-set-up-your-project)
@@ -19,8 +19,8 @@ allows users to extract information from PDF documents using natural language.
 
 Before starting work, you should have these prerequisites set up:
 
-* [Node.js v20+](https://nodejs.org/en/download)
-* [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
+- [Node.js v20+](https://nodejs.org/en/download)
+- [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
 
 ## Implementation Steps
 
@@ -29,7 +29,7 @@ After setting up your dependencies, you can build the project.
 ### 1. Set up your project
 
 1. Create a directory structure and a file to hold
-your source code.
+   your source code.
 
    ```bash
    mkdir -p chat-with-a-pdf/src && \
@@ -45,46 +45,47 @@ your source code.
 
 3. Install the pdf-parse module.
 
-    ```bash
-    npm i pdf-parse && npm i -D @types/pdf-parse
-    ```
+   ```bash
+   npm i pdf-parse && npm i -D @types/pdf-parse
+   ```
 
 4. Install the following Genkit dependencies to use Genkit in your project:
 
-    ```bash
-    npm i genkit @genkit-ai/googleai
-    ```
+   ```bash
+   npm i genkit @genkit-ai/googleai
+   ```
 
-    * `genkit` provides Genkit core capabilities.
-    * `@genkit-ai/googleai` provides access to the Google AI Gemini models.
+   - `genkit` provides Genkit core capabilities.
+   - `@genkit-ai/googleai` provides access to the Google AI Gemini models.
 
 5. Get and configure your model API key
 
-    To use the Gemini API, which this tutorial uses, you must first
-    configure an API key. If you don't already have one,
-    [create a key](https://makersuite.google.com/app/apikey) in Google AI Studio.
+   To use the Gemini API, which this tutorial uses, you must first
+   configure an API key. If you don't already have one,
+   [create a key](https://makersuite.google.com/app/apikey) in Google AI Studio.
 
-    The Gemini API provides a generous free-of-charge tier and does not require a
-    credit card to get started.
+   The Gemini API provides a generous free-of-charge tier and does not require a
+   credit card to get started.
 
-    After creating your API key, set the `GEMINI_API_KEY` environment 
-    variable to your key with the following command:
+   After creating your API key, set the `GEMINI_API_KEY` environment
+   variable to your key with the following command:
 
-    ```bash
-    export GEMINI_API_KEY=<your API key>
-    ```
+   ```bash
+   export GEMINI_API_KEY=<your API key>
+   ```
 
 :::note
 Although this tutorial uses the Gemini API from AI Studio, Genkit
 supports a wide variety of model providers, including:
+
 - [Gemini from Vertex AI.](https://firebase.google.com/docs/genkit/plugins/vertex-ai#generative_ai_models)
 - Anthropic's Claude 3 models and Llama 3.1 through the
-[Vertex AI Model Garden](https://firebase.google.com/docs/genkit/plugins/vertex-ai#anthropic_claude_3_on_vertex_ai_model_garden),
-as well as community plugins.
+  [Vertex AI Model Garden](https://firebase.google.com/docs/genkit/plugins/vertex-ai#anthropic_claude_3_on_vertex_ai_model_garden),
+  as well as community plugins.
 - Open source models through
-[Ollama](https://firebase.google.com/docs/genkit/plugins/ollama).
+  [Ollama](https://firebase.google.com/docs/genkit/plugins/ollama).
 - [Community-supported providers](https://firebase.google.com/docs/genkit/models#models-supported) such as OpenAI and Cohere.
-:::
+  :::
 
 ### 2. Import the required dependencies
 
@@ -96,16 +97,16 @@ import { googleAI } from '@genkit-ai/googleai';
 import { genkit } from 'genkit/beta'; // chat is a beta feature
 import pdf from 'pdf-parse';
 import fs from 'fs';
-import { createInterface } from "node:readline/promises";
+import { createInterface } from 'node:readline/promises';
 ```
 
-* The first line imports the `googleAI` 
-  plugin from the `@genkit-ai/googleai` package, enabling access to 
+- The first line imports the `googleAI`
+  plugin from the `@genkit-ai/googleai` package, enabling access to
   Google's Gemini models.
-* The next two lines import the `pdf-parse` library for parsing PDF files 
+- The next two lines import the `pdf-parse` library for parsing PDF files
   and the `fs` module for file system operations.
-* The final line imports the `createInterface` function from the 
-  `node:readline/promises` module, which is used to create a command-line 
+- The final line imports the `createInterface` function from the
+  `node:readline/promises` module, which is used to create a command-line
   interface for user interaction.
 
 ### 3. Configure Genkit and the default model
@@ -116,7 +117,7 @@ default model.
 ```typescript
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model("gemini-2.0-flash"),
+  model: googleAI.model('gemini-2.0-flash'),
 });
 ```
 
@@ -126,17 +127,12 @@ You can then add a skeleton for the code and error-handling.
 (async () => {
   try {
     // Step 1: get command line arguments
-
     // Step 2: load PDF file
-
     // Step 3: construct prompt
-
     // Step 4: start chat
-
     // Step 5: chat loop
-
   } catch (error) {
-    console.error("Error parsing PDF or interacting with Genkit:", error);
+    console.error('Error parsing PDF or interacting with Genkit:', error);
   }
 })(); // <-- don't forget the trailing parentheses to call the function!
 ```
@@ -144,43 +140,45 @@ You can then add a skeleton for the code and error-handling.
 ### 4. Load and parse the PDF
 
 1. Add code to read the PDF filename that was passed
-in from the command line.
+   in from the command line.
 
-  ```typescript
-      // Step 1: get command line arguments
-      const filename = process.argv[2];
-      if (!filename) {
-        console.error("Please provide a filename as a command line argument.");
-        process.exit(1);
-      }
-  ```
+```typescript
+// Step 1: get command line arguments
+const filename = process.argv[2];
+if (!filename) {
+  console.error('Please provide a filename as a command line argument.');
+  process.exit(1);
+}
+```
 
 2. Add code to load the contents of the PDF file.
 
-  ```typescript
-      // Step 2: load PDF file
-      let dataBuffer = fs.readFileSync(filename);
-      const { text } = await pdf(dataBuffer);
-  ```
+```typescript
+// Step 2: load PDF file
+let dataBuffer = fs.readFileSync(filename);
+const { text } = await pdf(dataBuffer);
+```
 
 ### 5. Set up the prompt
 
 Add code to set up the prompt:
 
 ```typescript
-    // Step 3: construct prompt
-    const prefix = process.argv[3] || "Sample prompt: Answer the user's questions about the contents of this PDF file.";
-    const prompt = `
+// Step 3: construct prompt
+const prefix =
+  process.argv[3] ||
+  "Sample prompt: Answer the user's questions about the contents of this PDF file.";
+const prompt = `
       ${prefix}
       Context:
       ${text}
     `;
 ```
 
-* The first `const` declaration defines a default prompt if the user doesn't
-pass in one of their own from the command line.
-* The second `const` declaration interpolates the prompt prefix and the full
-text of the PDF file into the prompt for the model.
+- The first `const` declaration defines a default prompt if the user doesn't
+  pass in one of their own from the command line.
+- The second `const` declaration interpolates the prompt prefix and the full
+  text of the PDF file into the prompt for the model.
 
 ### 6. Implement the UI
 
@@ -188,10 +186,10 @@ Add the following code to start the chat and
 implement the UI:
 
 ```typescript
-    // Step 4: start chat
-    const chat = ai.chat({ system: prompt });
-    const readline = createInterface(process.stdin, process.stdout);
-    console.log("You're chatting with Gemini. Ctrl-C to quit.\n");
+// Step 4: start chat
+const chat = ai.chat({ system: prompt });
+const readline = createInterface(process.stdin, process.stdout);
+console.log("You're chatting with Gemini. Ctrl-C to quit.\n");
 ```
 
 The first `const` declaration starts the chat with the model by
@@ -206,12 +204,12 @@ send that input to the model using `chat.send`. This part
 of the app loops until the user presses _CTRL + C_.
 
 ```typescript
-    // Step 5: chat loop
-    while (true) {
-      const userInput = await readline.question("> ");
-      const { text } = await chat.send(userInput);
-      console.log(text);
-    }
+// Step 5: chat loop
+while (true) {
+  const userInput = await readline.question('> ');
+  const { text } = await chat.send(userInput);
+  console.log(text);
+}
 ```
 
 ### 8. Run the app

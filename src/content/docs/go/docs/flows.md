@@ -181,7 +181,6 @@ menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
     })
 ```
 
-
 The `string` type in `StreamCallback[string]` specifies the type of
 values your flow streams. This does not necessarily need to be the same
 type as the return type, which is the type of the flow's complete output
@@ -272,7 +271,7 @@ but this section gives brief overviews of your deployment options.
 ### `net/http` Server
 
 To deploy a flow using any Go hosting platform, such as Cloud Run, define
-your flow using `genkit.DefineFlow()` and start a `net/http` server with the 
+your flow using `genkit.DefineFlow()` and start a `net/http` server with the
 provided flow handler using `genkit.Handler()`:
 
 ```go
@@ -320,7 +319,7 @@ func main() {
 manages its lifecycle, including capturing interrupt signals to ease local
 development, but you may use your own method.
 
-To serve all the flows defined in your codebase, you can use 
+To serve all the flows defined in your codebase, you can use
 `genkit.ListFlows()`:
 
 ```go

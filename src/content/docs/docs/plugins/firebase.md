@@ -115,14 +115,16 @@ during initialization or the singleton may be initialized with application
 default credentials depending on plugin initialization order.
 
 ```js
-import {initializeApp} from "firebase-admin/app";
-import {getFirestore} from "firebase-admin/firestore";
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 
 const app = initializeApp();
 let firestore = getFirestore(app);
 
 if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
-  const serviceAccountCreds = JSON.parse(process.env.GCLOUD_SERVICE_ACCOUNT_CREDS);
+  const serviceAccountCreds = JSON.parse(
+    process.env.GCLOUD_SERVICE_ACCOUNT_CREDS,
+  );
   const authOptions = { credentials: serviceAccountCreds };
   firestore.settings(authOptions);
 }
@@ -301,13 +303,15 @@ to call them.
 import { onCallGenkit } from 'firebase-functions/https';
 import { defineSecret } from 'firebase-functions/params';
 
-export const exampleFlow = ai.defineFlow({
-  name: "exampleFlow",
-}, async (prompt) => {
+export const exampleFlow = ai.defineFlow(
+  {
+    name: 'exampleFlow',
+  },
+  async (prompt) => {
     // Flow logic goes here.
 
     return response;
-  }
+  },
 );
 
 // WARNING: This has no authentication or app check protections.

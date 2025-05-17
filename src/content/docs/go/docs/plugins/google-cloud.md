@@ -117,27 +117,27 @@ You will see all logs that are associated with your deployed flow, including `co
 
 For specific log lines, it is possible to navigate to their respective traces by clicking on the extended menu ![Log line menu icon](../resources/cloud-ops-log-menu-icon.png) icon and selecting "View in trace details".
 
- ![View in trace details option in log menu](../resources/cloud-ops-view-trace-details.png)
+![View in trace details option in log menu](../resources/cloud-ops-view-trace-details.png)
 
 This will bring up a trace preview pane providing a quick glance of the details of the trace. To get to the full details, click the "View in Trace" link at the top right of the pane.
 
- ![View in Trace link in trace preview pane](../resources/cloud-ops-view-in-trace.png)
+![View in Trace link in trace preview pane](../resources/cloud-ops-view-in-trace.png)
 
 The most prominent navigation element in Cloud Trace is the trace scatter plot. It contains all collected traces in a given time span.
 
- ![Cloud Trace scatter plot](../resources/cloud-ops-trace-graph.png)
+![Cloud Trace scatter plot](../resources/cloud-ops-trace-graph.png)
 
 Clicking on each data point will show its details below the scatter plot.
 
- ![Cloud Trace details view](../resources/cloud-ops-trace-view.png)
+![Cloud Trace details view](../resources/cloud-ops-trace-view.png)
 
 The detailed view contains the flow shape, including all steps, and important timing information. Cloud Trace has the ability to interleave all logs associated with a given trace within this view. Select the "Show expanded" option in the "Logs & events" drop down.
 
- ![Show expanded option in Logs & events dropdown](../resources/cloud-ops-show-expanded.png)
+![Show expanded option in Logs & events dropdown](../resources/cloud-ops-show-expanded.png)
 
 The resultant view allows detailed examination of logs in the context of the trace, including prompts and LLM responses.
 
- ![Trace details view with expanded logs](../resources/cloud-ops-output-logs.png)
+![Trace details view with expanded logs](../resources/cloud-ops-output-logs.png)
 
 ### Metrics
 
