@@ -14,7 +14,7 @@ const ogUrl = new URL('ogimage.png?v=1', site).href;
 // https://astro.build/config
 export default defineConfig({
   // TODO: Update to genkit.dev before launch
-  site: "https://genkit-dev-astro.web.app/",
+  site: "https://genkit.dev/",
   markdown: {
     shikiConfig: {
       langAlias: { dotprompt: "handlebars" },
