@@ -3,6 +3,8 @@ title: Tool Interrupts
 description: Learn how to use interrupts to pause and resume LLM generation loops in Genkit Python.
 ---
 
+import ExampleLink from "@/examples/ExampleLink.astro";
+
 _Interrupts_ are a special kind of [tool](/python/docs/reference/tools/) that can pause the
 LLM generation-and-tool-calling loop to return control back to you. When
 you're ready, you can then _resume_ generation by sending _replies_ that the LLM

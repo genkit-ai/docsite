@@ -1,21 +1,27 @@
 const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
   { label: "Developer tools", slug: "docs/devtools" },
-  { 
+  {
     label: "Tutorials",
     items: [
-      { label: "Chat with a PDF", slug: "docs/tutorials/tutorial-chat-with-a-pdf" },
-      { label: "Summarize YouTube videos", slug: "docs/tutorials/tutorial-summarize-youtube-videos" },
-      { 
-        label: "Agentic barista Angular app", 
+      {
+        label: "Chat with a PDF",
+        slug: "docs/tutorials/tutorial-chat-with-a-pdf",
+      },
+      {
+        label: "Summarize YouTube videos",
+        slug: "docs/tutorials/tutorial-summarize-youtube-videos",
+      },
+      {
+        label: "Agentic barista Angular app",
         link: "https://developers.google.com/solutions/learn/agentic-barista",
         attrs: {
           "data-external": true,
           target: "_blank",
           class: "external-icon",
           rel: "noopener",
-        }, 
-      }
+        },
+      },
     ],
   },
   {
@@ -118,7 +124,7 @@ const JS_SIDEBAR = [
     label: "Framework Integrations",
     items: [
       { label: "Using Genkit with Next.js", slug: "docs/nextjs" },
-      { label: "Using Genkit with Angular", slug: "docs/angular" }
+      { label: "Using Genkit with Angular", slug: "docs/angular" },
     ],
   },
   {
@@ -216,7 +222,7 @@ const GO_SIDEBAR = [
       },
     ],
   },
-  { 
+  {
     label: "Reference",
     items: [
       {
@@ -229,28 +235,43 @@ const GO_SIDEBAR = [
           rel: "noopener",
         },
       },
-    ]
+    ],
   },
 ];
 const PYTHON_SIDEBAR = [
   { label: "Get started", slug: "python/docs/get-started" },
   { label: "Deploy with Cloud Run", slug: "python/docs/cloud-run" },
   { label: "Deploy with Flask", slug: "python/docs/flask" },
-  { label: "Generating content with AI models", slug: "python/docs/reference/models" },
+  {
+    label: "Generating content with AI models",
+    slug: "python/docs/reference/models",
+  },
   { label: "Defining AI workflows", slug: "python/docs/reference/flows" },
   { label: "Tool (function) calling", slug: "python/docs/reference/tools" },
   { label: "Tool interrupts", slug: "python/docs/reference/interrupts" },
-  { label: "Retrieval-augmented generation (RAG)", slug: "python/docs/reference/rag" },
+  {
+    label: "Retrieval-augmented generation (RAG)",
+    slug: "python/docs/reference/rag",
+  },
   {
     label: "Plugins",
     items: [
-      { label: "Google GenAI", slug: "python/docs/reference/plugins/google-genai" },
-      { label: "Firestore Vector Store", slug: "python/docs/reference/plugins/firestore" },
+      {
+        label: "Google GenAI",
+        slug: "python/docs/reference/plugins/google-genai",
+      },
+      {
+        label: "Firestore Vector Store",
+        slug: "python/docs/reference/plugins/firestore",
+      },
       { label: "Ollama", slug: "python/docs/reference/plugins/ollama" },
-      { label: "Dev Local Vector Store", slug: "python/docs/reference/plugins/dev-local-vectorstore" },
+      {
+        label: "Dev Local Vector Store",
+        slug: "python/docs/reference/plugins/dev-local-vectorstore",
+      },
     ],
   },
-  { 
+  {
     label: "Reference",
     items: [
       {
@@ -263,7 +284,7 @@ const PYTHON_SIDEBAR = [
           rel: "noopener",
         },
       },
-    ]
+    ],
   },
 ];
 
