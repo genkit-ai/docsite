@@ -97,9 +97,7 @@ import { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 /**
  * Score an individual test case for delciousness.
  */
-export async function deliciousnessScore<
-  CustomModelOptions extends z.ZodTypeAny,
->(
+export async function deliciousnessScore<CustomModelOptions extends z.ZodTypeAny>(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
@@ -147,9 +145,7 @@ import { EvaluatorAction } from 'genkit/evaluator';
 /**
  * Create the Deliciousness evaluator action.
  */
-export function createDeliciousnessEvaluator<
-  ModelCustomOptions extends z.ZodTypeAny,
->(
+export function createDeliciousnessEvaluator<ModelCustomOptions extends z.ZodTypeAny>(
   ai: Genkit,
   judge: ModelArgument<ModelCustomOptions>,
   judgeConfig?: z.infer<ModelCustomOptions>,
@@ -209,10 +205,7 @@ export const EvalResponse = z.object({
 
 ```ts
 const ScoreSchema = z.object({
-  id: z
-    .string()
-    .describe('Optional ID to differentiate multiple scores')
-    .optional(),
+  id: z.string().describe('Optional ID to differentiate multiple scores').optional(),
   score: z.union([z.number(), z.string(), z.boolean()]).optional(),
   error: z.string().optional(),
   details: z
@@ -256,17 +249,13 @@ const US_PHONE_REGEX = /[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4}/i;
 /**
  * Scores whether a datapoint output contains a US Phone number.
  */
-export async function usPhoneRegexScore(
-  dataPoint: BaseEvalDataPoint,
-): Promise<Score> {
+export async function usPhoneRegexScore(dataPoint: BaseEvalDataPoint): Promise<Score> {
   const d = dataPoint;
   if (!d.output || typeof d.output !== 'string') {
     throw new Error('String output is required for regex matching');
   }
   const matches = US_PHONE_REGEX.test(d.output as string);
-  const reasoning = matches
-    ? `Output matched US_PHONE_REGEX`
-    : `Output did not match US_PHONE_REGEX`;
+  const reasoning = matches ? `Output matched US_PHONE_REGEX` : `Output did not match US_PHONE_REGEX`;
   return {
     score: matches,
     details: { reasoning },
@@ -317,9 +306,7 @@ evaluators within the plugin context registers them with the plugin.
 ```ts
 import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
 
-export function myCustomEvals<
-  ModelCustomOptions extends z.ZodTypeAny,
->(options: {
+export function myCustomEvals<ModelCustomOptions extends z.ZodTypeAny>(options: {
   judge: ModelArgument<ModelCustomOptions>;
   judgeConfig?: ModelCustomOptions;
 }): GenkitPlugin {

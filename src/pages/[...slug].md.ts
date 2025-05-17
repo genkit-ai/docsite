@@ -31,9 +31,7 @@ export async function getStaticPaths() {
           const rawContent = await fs.readFile(filePath, 'utf-8');
 
           // --- Check for <LLMs> tag ---
-          const llmMatch = rawContent.match(
-            /<LLMSummary>([\s\S]*?)<\/LLMSummary>/,
-          );
+          const llmMatch = rawContent.match(/<LLMSummary>([\s\S]*?)<\/LLMSummary>/);
 
           if (llmMatch && llmMatch[1]) {
             // --- Case 1: <LLMs> tag found ---
@@ -48,9 +46,7 @@ export async function getStaticPaths() {
 
             // 1b. Generate .full.md path (Processed full content + title)
             //    Apply standard frontmatter/import removal to the *entire* raw content
-            let fullProcessedContent = rawContent
-              .replace(/^---\s*[\s\S]*?---/, '')
-              .trim();
+            let fullProcessedContent = rawContent.replace(/^---\s*[\s\S]*?---/, '').trim();
             const fullLines = fullProcessedContent.split('\n');
             let fullFirstNonImportIndex = 0;
             for (let i = 0; i < fullLines.length; i++) {
@@ -63,10 +59,7 @@ export async function getStaticPaths() {
                 break;
               }
             }
-            fullProcessedContent = fullLines
-              .slice(fullFirstNonImportIndex)
-              .join('\n')
-              .trim();
+            fullProcessedContent = fullLines.slice(fullFirstNonImportIndex).join('\n').trim();
             fullProcessedContent = `# ${title}\n\n${fullProcessedContent}`; // Prepend title
 
             entryPaths.push({
@@ -78,9 +71,7 @@ export async function getStaticPaths() {
             // Apply standard processing:
 
             // 2a. Remove frontmatter block
-            let standardProcessedContent = rawContent
-              .replace(/^---\s*[\s\S]*?---/, '')
-              .trim();
+            let standardProcessedContent = rawContent.replace(/^---\s*[\s\S]*?---/, '').trim();
 
             // 2b. Remove ONLY leading import statements
             const lines = standardProcessedContent.split('\n');
@@ -99,10 +90,7 @@ export async function getStaticPaths() {
               }
             }
             // Keep lines from the first non-import line onwards
-            standardProcessedContent = lines
-              .slice(firstNonImportIndex)
-              .join('\n')
-              .trim();
+            standardProcessedContent = lines.slice(firstNonImportIndex).join('\n').trim();
 
             // 2c. Prepend H1 title
             standardProcessedContent = `# ${title}\n\n${standardProcessedContent}`;
@@ -115,10 +103,7 @@ export async function getStaticPaths() {
           }
           // --- End Content Processing ---
         } catch (err) {
-          console.error(
-            `Error reading or processing file for slug ${slug} (${filePath}}):`,
-            err,
-          );
+          console.error(`Error reading or processing file for slug ${slug} (${filePath}}):`, err);
           // If error, entryPaths remains empty and gets filtered out later
         }
 

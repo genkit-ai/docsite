@@ -659,10 +659,7 @@ Help the user decide between these vacation destinations:
 You can also define partials in code using `definePartial`:
 
 ```ts
-ai.definePartial(
-  'personality',
-  'Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.',
-);
+ai.definePartial('personality', 'Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.');
 ```
 
 Code-defined partials are available in all prompts.

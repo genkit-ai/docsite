@@ -117,12 +117,9 @@ function and is now called `sendChunk`.
 **Old:**
 
 ```ts
-const flow = ai.defineStreamingFlow(
-  { name: 'banana' },
-  async (input, streamingCallback) => {
-    streamingCallback({ chunk: 1 });
-  },
-);
+const flow = ai.defineStreamingFlow({ name: 'banana' }, async (input, streamingCallback) => {
+  streamingCallback({ chunk: 1 });
+});
 
 const { stream } = await flow();
 for await (const chunk of stream) {
@@ -133,12 +130,9 @@ for await (const chunk of stream) {
 **New:**
 
 ```ts
-const flow = ai.defineFlow(
-  { name: 'banana' },
-  async (input, { context, sendChunk }) => {
-    sendChunk({ chunk: 1 });
-  },
-);
+const flow = ai.defineFlow({ name: 'banana' }, async (input, { context, sendChunk }) => {
+  sendChunk({ chunk: 1 });
+});
 
 const { stream, output } = flow.stream(input);
 for await (const chunk of stream) {
@@ -182,9 +176,7 @@ export const generatePoem = onFlow(
     streamSchema: z.string(),
   },
   async (type, streamingCallback) => {
-    const { stream, response } = await ai.generateStream(
-      `Tell me a longish ${type ?? 'dad'} joke.`,
-    );
+    const { stream, response } = await ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       streamingCallback(chunk.text);
     }
@@ -215,9 +207,7 @@ export const jokeTeller = ai.defineFlow(
     streamSchema: z.string(),
   },
   async (type, { sendChunk }) => {
-    const { stream, response } = ai.generateStream(
-      `Tell me a longish ${type ?? 'dad'} joke.`,
-    );
+    const { stream, response } = ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       sendChunk(chunk.text);
     }

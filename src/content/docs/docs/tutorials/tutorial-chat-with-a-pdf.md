@@ -165,9 +165,7 @@ Add code to set up the prompt:
 
 ```typescript
 // Step 3: construct prompt
-const prefix =
-  process.argv[3] ||
-  "Sample prompt: Answer the user's questions about the contents of this PDF file.";
+const prefix = process.argv[3] || "Sample prompt: Answer the user's questions about the contents of this PDF file.";
 const prompt = `
       ${prefix}
       Context:

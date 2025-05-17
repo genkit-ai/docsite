@@ -143,10 +143,7 @@ npm i -D --save @types/pdf-parse
 ### Add a local vector store to your configuration
 
 ```ts
-import {
-  devLocalIndexerRef,
-  devLocalVectorstore,
-} from '@genkit-ai/dev-local-vectorstore';
+import { devLocalIndexerRef, devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { vertexAI } from '@genkit-ai/vertexai';
 import { z, genkit } from 'genkit';
 
@@ -228,14 +225,10 @@ export const indexMenu = ai.defineFlow(
     filePath = path.resolve(filePath);
 
     // Read the pdf.
-    const pdfTxt = await ai.run('extract-text', () =>
-      extractTextFromPdf(filePath),
-    );
+    const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
 
     // Divide the pdf text into segments.
-    const chunks = await ai.run('chunk-it', async () =>
-      chunk(pdfTxt, chunkingConfig),
-    );
+    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
     // Convert chunks of text into documents to store in the index.
     const documents = chunks.map((text) => {
@@ -476,9 +469,7 @@ export const customReranker = ai.defineReranker(
       };
     });
 
-    return rerankedDocs
-      .sort((a, b) => b.metadata.score - a.metadata.score)
-      .slice(0, options.k || 3);
+    return rerankedDocs.sort((a, b) => b.metadata.score - a.metadata.score).slice(0, options.k || 3);
   },
 );
 ```

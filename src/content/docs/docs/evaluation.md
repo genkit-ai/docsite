@@ -56,10 +56,7 @@ This section explains how to perform inference-based evaluation using Genkit.
         name: 'dummyRetriever',
       },
       async (i) => {
-        const facts = [
-          "Dog is man's best friend",
-          'Dogs have evolved and were domesticated from wolves',
-        ];
+        const facts = ["Dog is man's best friend", 'Dogs have evolved and were domesticated from wolves'];
         // Just return facts as documents.
         return { documents: facts.map((t) => Document.fromText(t)) };
       },
@@ -478,9 +475,7 @@ export const synthesizeQuestions = ai.defineFlow(
     // `extractText` loads the PDF and extracts its contents as text.
     const pdfTxt = await ai.run('extract-text', () => extractText(filePath));
 
-    const chunks = await ai.run('chunk-it', async () =>
-      chunk(pdfTxt, chunkingConfig),
-    );
+    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
     const questions: string[] = [];
     for (var i = 0; i < chunks.length; i++) {

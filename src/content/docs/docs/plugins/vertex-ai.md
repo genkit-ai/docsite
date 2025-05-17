@@ -336,10 +336,7 @@ To use the evaluators from Vertex AI Rapid Evaluation, add an `evaluation` block
 
 ```ts
 import { genkit } from 'genkit';
-import {
-  vertexAIEvaluation,
-  VertexAIEvaluationMetricType,
-} from '@genkit-ai/vertexai/evaluation';
+import { vertexAIEvaluation, VertexAIEvaluationMetricType } from '@genkit-ai/vertexai/evaluation';
 
 const ai = genkit({
   plugins: [
@@ -390,10 +387,7 @@ To use Vertex AI Vector Search:
    **Cloud Firestore**
 
    ```ts
-   import {
-     getFirestoreDocumentIndexer,
-     getFirestoreDocumentRetriever,
-   } from '@genkit-ai/vertexai/vectorsearch';
+   import { getFirestoreDocumentIndexer, getFirestoreDocumentRetriever } from '@genkit-ai/vertexai/vectorsearch';
 
    import { initializeApp } from 'firebase-admin/app';
    import { getFirestore } from 'firebase-admin/firestore';
@@ -401,37 +395,20 @@ To use Vertex AI Vector Search:
    initializeApp({ projectId: PROJECT_ID });
    const db = getFirestore();
 
-   const firestoreDocumentRetriever = getFirestoreDocumentRetriever(
-     db,
-     FIRESTORE_COLLECTION,
-   );
-   const firestoreDocumentIndexer = getFirestoreDocumentIndexer(
-     db,
-     FIRESTORE_COLLECTION,
-   );
+   const firestoreDocumentRetriever = getFirestoreDocumentRetriever(db, FIRESTORE_COLLECTION);
+   const firestoreDocumentIndexer = getFirestoreDocumentIndexer(db, FIRESTORE_COLLECTION);
    ```
 
    **BigQuery**
 
    ```ts
-   import {
-     getBigQueryDocumentIndexer,
-     getBigQueryDocumentRetriever,
-   } from '@genkit-ai/vertexai/vectorsearch';
+   import { getBigQueryDocumentIndexer, getBigQueryDocumentRetriever } from '@genkit-ai/vertexai/vectorsearch';
    import { BigQuery } from '@google-cloud/bigquery';
 
    const bq = new BigQuery({ projectId: PROJECT_ID });
 
-   const bigQueryDocumentRetriever = getBigQueryDocumentRetriever(
-     bq,
-     BIGQUERY_TABLE,
-     BIGQUERY_DATASET,
-   );
-   const bigQueryDocumentIndexer = getBigQueryDocumentIndexer(
-     bq,
-     BIGQUERY_TABLE,
-     BIGQUERY_DATASET,
-   );
+   const bigQueryDocumentRetriever = getBigQueryDocumentRetriever(bq, BIGQUERY_TABLE, BIGQUERY_DATASET);
+   const bigQueryDocumentIndexer = getBigQueryDocumentIndexer(bq, BIGQUERY_TABLE, BIGQUERY_DATASET);
    ```
 
    **Other**
@@ -489,10 +466,7 @@ To use Vertex AI Vector Search:
 5. Now that everything is configured, you can use the indexer and retriever in your Genkit application:
 
    ```ts
-   import {
-     vertexAiIndexerRef,
-     vertexAiRetrieverRef,
-   } from '@genkit-ai/vertexai/vectorsearch';
+   import { vertexAiIndexerRef, vertexAiRetrieverRef } from '@genkit-ai/vertexai/vectorsearch';
 
    // ... inside your flow function:
 

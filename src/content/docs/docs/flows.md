@@ -291,13 +291,10 @@ export const complexMenuSuggestionFlow = ai.defineFlow(
     const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
     await chat.send('What makes a good prix fixe menu?');
     await chat.send(
-      'What are some ingredients, seasonings, and cooking techniques that ' +
-        `would work for a ${theme} themed menu?`,
+      'What are some ingredients, seasonings, and cooking techniques that ' + `would work for a ${theme} themed menu?`,
     );
     const { output } = await chat.send({
-      prompt:
-        `Based on our discussion, invent a prix fixe menu for a ${theme} ` +
-        'themed restaurant.',
+      prompt: `Based on our discussion, invent a prix fixe menu for a ${theme} ` + 'themed restaurant.',
       output: {
         schema: PrixFixeMenuSchema,
       },
@@ -346,17 +343,14 @@ export const menuQuestionFlow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (input: string): Promise<string> => {
-    const menu = await ai.run(
-      'retrieve-daily-menu',
-      async (): Promise<string> => {
-        // Retrieve today's menu. (This could be a database access or simply
-        // fetching the menu from your website.)
+    const menu = await ai.run('retrieve-daily-menu', async (): Promise<string> => {
+      // Retrieve today's menu. (This could be a database access or simply
+      // fetching the menu from your website.)
 
-        // ...
+      // ...
 
-        return menu;
-      },
-    );
+      return menu;
+    });
     const { text } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
       system: "Help the user answer questions about today's menu.",

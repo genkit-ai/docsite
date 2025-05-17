@@ -152,10 +152,7 @@ Add the following code to pass a multimodal prompt to the model:
 ```typescript
 // Step 3: process video
 const { text } = await ai.generate({
-  prompt: [
-    { text: prompt },
-    { media: { url: videoURL, contentType: 'video/mp4' } },
-  ],
+  prompt: [{ text: prompt }, { media: { url: videoURL, contentType: 'video/mp4' } }],
 });
 console.log(text);
 ```

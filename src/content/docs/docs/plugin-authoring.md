@@ -208,13 +208,7 @@ First, define the type for your plugin function including the helper methods:
 
 ```ts
 import { GenkitPlugin } from 'genkit/plugin';
-import {
-  ModelReference,
-  EmbedderReference,
-  modelRef,
-  embedderRef,
-  z,
-} from 'genkit';
+import { ModelReference, EmbedderReference, modelRef, embedderRef, z } from 'genkit';
 
 // Define your model's specific config schema if it has one
 const MyModelConfigSchema = z.object({
@@ -292,10 +286,7 @@ myPlugin.model = (
   });
 };
 
-myPlugin.embedder = (
-  name: string,
-  config?: Record<string, any>,
-): EmbedderReference => {
+myPlugin.embedder = (name: string, config?: Record<string, any>): EmbedderReference => {
   return embedderRef({
     name: `myPlugin/${name}`,
     config,
