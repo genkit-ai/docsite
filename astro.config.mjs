@@ -4,17 +4,17 @@ import starlight from "@astrojs/starlight";
 import tailwind from "@astrojs/tailwind";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
+import sitemap from "@astrojs/sitemap";
 import { sidebar } from "./src/sidebar";
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
 
-// TODO -- This has to be updated to the final URL for docsite
-const site = 'https://genkit-dev-astro.web.app/';
-const ogUrl = new URL('ogimage.png?v=1', site).href;
+const site = "https://genkit.dev/";
+const ogUrl = new URL("ogimage.png?v=1", site).href;
 
 // https://astro.build/config
 export default defineConfig({
   // TODO: Update to genkit.dev before launch
-  site: "https://genkit.dev/",
+  site,
   markdown: {
     shikiConfig: {
       langAlias: { dotprompt: "handlebars" },
@@ -22,7 +22,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      favicon: 'favicon.ico',
+      favicon: "favicon.ico",
       expressiveCode: {
         themes: [GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME],
       },
@@ -35,14 +35,14 @@ export default defineConfig({
       },
       head: [
         {
-          tag: 'meta',
-          attrs: { 
-            property: 'og:image',
+          tag: "meta",
+          attrs: {
+            property: "og:image",
             content: ogUrl,
             width: "1085",
             height: "377",
           },
-	},
+        },
         {
           tag: "link",
           attrs: {
@@ -175,5 +175,6 @@ export default defineConfig({
       customCss: ["./src/tailwind.css"],
     }),
     tailwind({ applyBaseStyles: false }),
+    sitemap(),
   ],
 });
