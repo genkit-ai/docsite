@@ -16,14 +16,14 @@ npm i --save genkitx-pinecone
 To use this plugin, specify it when you initialize Genkit:
 
 ```ts
-import { genkit } from "genkit";
-import { pinecone } from "genkitx-pinecone";
+import { genkit } from 'genkit';
+import { pinecone } from 'genkitx-pinecone';
 
 const ai = genkit({
   plugins: [
     pinecone([
       {
-        indexId: "bob-facts",
+        indexId: 'bob-facts',
         embedder: textEmbedding004,
       },
     ]),
@@ -52,8 +52,8 @@ ways to do this:
 Import retriever and indexer references like so:
 
 ```ts
-import { pineconeRetrieverRef } from "genkitx-pinecone";
-import { pineconeIndexerRef } from "genkitx-pinecone";
+import { pineconeRetrieverRef } from 'genkitx-pinecone';
+import { pineconeIndexerRef } from 'genkitx-pinecone';
 ```
 
 Then, use these references with `ai.retrieve()` and `ai.index()`:
@@ -64,7 +64,7 @@ let docs = await ai.retrieve({ retriever: pineconeRetrieverRef, query });
 
 // To specify an index:
 export const bobFactsRetriever = pineconeRetrieverRef({
-  indexId: "bob-facts",
+  indexId: 'bob-facts',
 });
 docs = await ai.retrieve({ retriever: bobFactsRetriever, query });
 ```
@@ -75,7 +75,7 @@ await ai.index({ indexer: pineconeIndexerRef, documents });
 
 // To specify an index:
 export const bobFactsIndexer = pineconeIndexerRef({
-  indexId: "bob-facts",
+  indexId: 'bob-facts',
 });
 await ai.index({ indexer: bobFactsIndexer, documents });
 ```

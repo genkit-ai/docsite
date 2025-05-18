@@ -29,10 +29,10 @@ to Lisa?"
 
 This approach has several advantages:
 
-*   It can be more cost-effective because you don't have to retrain the model.
-*   You can continuously update your data source and the LLM can immediately
-    make use of the updated information.
-*   You now have the potential to cite references in your LLM's responses.
+- It can be more cost-effective because you don't have to retrain the model.
+- You can continuously update your data source and the LLM can immediately
+  make use of the updated information.
+- You now have the potential to cite references in your LLM's responses.
 
 On the other hand, using RAG naturally means longer prompts, and some LLM API
 services charge for each input token you send. Ultimately, you must evaluate the
@@ -42,8 +42,8 @@ RAG is a very broad area and there are many different techniques used to achieve
 the best quality RAG. The core Genkit framework offers three main abstractions
 to help you do RAG:
 
-*   **Embedders**: transforms documents into a vector representation
-*   **Retrievers**: retrieve documents from an "index", given a query.
+- **Embedders**: transforms documents into a vector representation
+- **Retrievers**: retrieve documents from an "index", given a query.
 
 These definitions are broad on purpose because Genkit is un-opinionated about
 what an "index" is or how exactly documents are retrieved from it. Genkit only
@@ -77,7 +77,6 @@ of Genkit and you should use the SDKs/APIs provided by the vector store you are 
 
 The following example shows how you might use a retriever in a RAG flow. Like
 the retriever example, this example uses Firestore Vector Store.
-
 
 ```python
 from genkit.ai import Genkit, Document
@@ -156,7 +155,7 @@ Then you'll be able to use your retriever with `ai.retrieve`:
 
 ```python
 docs = await ai.retrieve(
-    query=Document.from_text(query), 
+    query=Document.from_text(query),
     retriever='my_retriever'
 )
 ```

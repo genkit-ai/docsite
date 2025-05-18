@@ -16,14 +16,14 @@ npm i --save genkitx-chromadb
 To use this plugin, specify it when you initialize Genkit:
 
 ```ts
-import { genkit } from "genkit";
-import { chroma } from "genkitx-chromadb";
+import { genkit } from 'genkit';
+import { chroma } from 'genkitx-chromadb';
 
 const ai = genkit({
   plugins: [
     chroma([
       {
-        collectionName: "bob_collection",
+        collectionName: 'bob_collection',
         embedder: textEmbedding004,
       },
     ]),
@@ -53,8 +53,8 @@ addition, there are two optional parameters:
 Import retriever and indexer references like so:
 
 ```ts
-import { chromaRetrieverRef } from "genkitx-chromadb";
-import { chromaIndexerRef } from "genkitx-chromadb";
+import { chromaRetrieverRef } from 'genkitx-chromadb';
+import { chromaIndexerRef } from 'genkitx-chromadb';
 ```
 
 Then, use the references with `ai.retrieve()` and `ai.index()`:
@@ -65,7 +65,7 @@ let docs = await ai.retrieve({ retriever: chromaRetrieverRef, query });
 
 // To specify an index:
 export const bobFactsRetriever = chromaRetrieverRef({
-  collectionName: "bob-facts",
+  collectionName: 'bob-facts',
 });
 docs = await ai.retrieve({ retriever: bobFactsRetriever, query });
 ```
@@ -76,7 +76,7 @@ await ai.index({ indexer: chromaIndexerRef, documents });
 
 // To specify an index:
 export const bobFactsIndexer = chromaIndexerRef({
-  collectionName: "bob-facts",
+  collectionName: 'bob-facts',
 });
 await ai.index({ indexer: bobFactsIndexer, documents });
 ```

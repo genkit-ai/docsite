@@ -143,12 +143,9 @@ npm i -D --save @types/pdf-parse
 ### Add a local vector store to your configuration
 
 ```ts
-import {
-  devLocalIndexerRef,
-  devLocalVectorstore,
-} from "@genkit-ai/dev-local-vectorstore";
-import { vertexAI } from "@genkit-ai/vertexai";
-import { z, genkit } from "genkit";
+import { devLocalIndexerRef, devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
+import { vertexAI } from '@genkit-ai/vertexai';
+import { z, genkit } from 'genkit';
 
 const ai = genkit({
   plugins: [
@@ -158,8 +155,8 @@ const ai = genkit({
     // the local vector store requires an embedder to translate from text to vector
     devLocalVectorstore([
       {
-        indexName: "menuQA",
-        embedder: vertexAI.embedder("text-embedding-005"),
+        indexName: 'menuQA',
+        embedder: vertexAI.embedder('text-embedding-005'),
       },
     ]),
   ],
@@ -177,7 +174,7 @@ out-of-the-box for simple testing and prototyping (_do not use in production_)
 #### Create the indexer
 
 ```ts
-export const menuPdfIndexer = devLocalIndexerRef("menuQA");
+export const menuPdfIndexer = devLocalIndexerRef('menuQA');
 ```
 
 #### Create chunking config
@@ -193,9 +190,9 @@ sentence, with an overlap between chunks of 100 characters.
 const chunkingConfig = {
   minLength: 1000,
   maxLength: 2000,
-  splitter: "sentence",
+  splitter: 'sentence',
   overlap: 100,
-  delimiters: "",
+  delimiters: '',
 } as any;
 ```
 
@@ -205,11 +202,11 @@ documentation](https://www.npmjs.com/package/llm-chunk).
 #### Define your indexer flow
 
 ```ts
-import { Document } from "genkit/retriever";
-import { chunk } from "llm-chunk";
-import { readFile } from "fs/promises";
-import path from "path";
-import pdf from "pdf-parse";
+import { Document } from 'genkit/retriever';
+import { chunk } from 'llm-chunk';
+import { readFile } from 'fs/promises';
+import path from 'path';
+import pdf from 'pdf-parse';
 
 async function extractTextFromPdf(filePath: string) {
   const pdfFile = path.resolve(filePath);
@@ -220,22 +217,18 @@ async function extractTextFromPdf(filePath: string) {
 
 export const indexMenu = ai.defineFlow(
   {
-    name: "indexMenu",
-    inputSchema: z.string().describe("PDF file path"),
+    name: 'indexMenu',
+    inputSchema: z.string().describe('PDF file path'),
     outputSchema: z.void(),
   },
   async (filePath: string) => {
     filePath = path.resolve(filePath);
 
     // Read the pdf.
-    const pdfTxt = await ai.run("extract-text", () =>
-      extractTextFromPdf(filePath)
-    );
+    const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
 
     // Divide the pdf text into segments.
-    const chunks = await ai.run("chunk-it", async () =>
-      chunk(pdfTxt, chunkingConfig)
-    );
+    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
     // Convert chunks of text into documents to store in the index.
     const documents = chunks.map((text) => {
@@ -247,7 +240,7 @@ export const indexMenu = ai.defineFlow(
       indexer: menuPdfIndexer,
       documents,
     });
-  }
+  },
 );
 ```
 
@@ -267,14 +260,14 @@ the indexer example, this example uses Genkit's file-based vector retriever,
 which you should not use in production.
 
 ```ts
-import { devLocalRetrieverRef } from "@genkit-ai/dev-local-vectorstore";
-import { vertexAI } from "@genkit-ai/vertexai";
+import { devLocalRetrieverRef } from '@genkit-ai/dev-local-vectorstore';
+import { vertexAI } from '@genkit-ai/vertexai';
 
 // Define the retriever reference
-export const menuRetriever = devLocalRetrieverRef("menuQA");
+export const menuRetriever = devLocalRetrieverRef('menuQA');
 
 export const menuQAFlow = ai.defineFlow(
-  { name: "menuQA", inputSchema: z.string(), outputSchema: z.string() },
+  { name: 'menuQA', inputSchema: z.string(), outputSchema: z.string() },
   async (input: string) => {
     // retrieve relevant documents
     const docs = await ai.retrieve({
@@ -299,7 +292,7 @@ Question: ${input}`,
     });
 
     return text;
-  }
+  },
 );
 ```
 
@@ -326,36 +319,36 @@ RAG techniques (such as reranking or prompt extensions) on top.
 Simple retrievers let you easily convert existing code into retrievers:
 
 ```ts
-import { z } from "genkit";
-import { searchEmails } from "./db";
+import { z } from 'genkit';
+import { searchEmails } from './db';
 
 ai.defineSimpleRetriever(
   {
-    name: "myDatabase",
+    name: 'myDatabase',
     configSchema: z
       .object({
         limit: z.number().optional(),
       })
       .optional(),
     // we'll extract "message" from the returned email item
-    content: "message",
+    content: 'message',
     // and several keys to use as metadata
-    metadata: ["from", "to", "subject"],
+    metadata: ['from', 'to', 'subject'],
   },
   async (query, config) => {
     const result = await searchEmails(query.text, { limit: config.limit });
     return result.data.emails;
-  }
+  },
 );
 ```
 
 ### Custom Retrievers
 
 ```ts
-import { CommonRetrieverOptionsSchema } from "genkit/retriever";
-import { z } from "genkit";
+import { CommonRetrieverOptionsSchema } from 'genkit/retriever';
+import { z } from 'genkit';
 
-export const menuRetriever = devLocalRetrieverRef("menuQA");
+export const menuRetriever = devLocalRetrieverRef('menuQA');
 
 const advancedMenuRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   preRerankK: z.number().max(1000),
@@ -375,7 +368,7 @@ const advancedMenuRetriever = ai.defineRetriever(
     });
     const rerankedDocs = await rerank(docs);
     return rerankedDocs.slice(0, options.k || 3);
-  }
+  },
 );
 ```
 
@@ -411,31 +404,31 @@ Vertex AI reranker.
 
 ```ts
 const FAKE_DOCUMENT_CONTENT = [
-  "pythagorean theorem",
-  "e=mc^2",
-  "pi",
-  "dinosaurs",
-  "quantum mechanics",
-  "pizza",
-  "harry potter",
+  'pythagorean theorem',
+  'e=mc^2',
+  'pi',
+  'dinosaurs',
+  'quantum mechanics',
+  'pizza',
+  'harry potter',
 ];
 
 export const rerankFlow = ai.defineFlow(
   {
-    name: "rerankFlow",
+    name: 'rerankFlow',
     inputSchema: z.object({ query: z.string() }),
     outputSchema: z.array(
       z.object({
         text: z.string(),
         score: z.number(),
-      })
+      }),
     ),
   },
   async ({ query }) => {
     const documents = FAKE_DOCUMENT_CONTENT.map((text) => ({ content: text }));
 
     const rerankedDocuments = await ai.rerank({
-      reranker: "vertexai/semantic-ranker-512",
+      reranker: 'vertexai/semantic-ranker-512',
       query: { content: query },
       documents,
     });
@@ -444,7 +437,7 @@ export const rerankFlow = ai.defineFlow(
       text: doc.content,
       score: doc.metadata.score,
     }));
-  }
+  },
 );
 ```
 
@@ -461,7 +454,7 @@ custom model. Here’s a simple example of defining a custom reranker:
 ```ts
 export const customReranker = ai.defineReranker(
   {
-    name: "custom/reranker",
+    name: 'custom/reranker',
     configSchema: z.object({
       k: z.number().optional(),
     }),
@@ -476,10 +469,8 @@ export const customReranker = ai.defineReranker(
       };
     });
 
-    return rerankedDocs
-      .sort((a, b) => b.metadata.score - a.metadata.score)
-      .slice(0, options.k || 3);
-  }
+    return rerankedDocs.sort((a, b) => b.metadata.score - a.metadata.score).slice(0, options.k || 3);
+  },
 );
 ```
 

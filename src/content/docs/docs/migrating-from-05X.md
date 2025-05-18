@@ -56,13 +56,13 @@ The following steps will help you migrate from Genkit 0.5 to Genkit 0.9 quickly.
 - Remove zod imports
 
   ```js
-  import * as z from "zod";
+  import * as z from 'zod';
   ```
 
 - Import `genkit` and `zod` from `genkit`
 
   ```js
-  import { z, genkit } from "genkit";
+  import { z, genkit } from 'genkit';
   ```
 
 ### 4. Update your code
@@ -100,9 +100,9 @@ Configuration for Genkit is now done per instance. Telemetry and logging is conf
 - Set your logging level independently
 
   ```js
-  import { logger } from "genkit/logging";
+  import { logger } from 'genkit/logging';
 
-  logger.setLogLevel("debug");
+  logger.setLogLevel('debug');
   ```
 
 See the [Monitoring and Logging](/docs/observability/getting-started) documentation for more details on how to configure telemetry and logging.
@@ -224,7 +224,7 @@ import * as z from 'zod';
 **New:**
 
 ```js
-import { genkit, z } from "genkit";
+import { genkit, z } from 'genkit';
 ```
 
 Genkit plugins still must be installed and imported individually.
@@ -376,14 +376,14 @@ In Genkit 0.9, those methods have been replaced by getter properties. This simpl
 **Old:**
 
 ```js
-const response = await generate({ prompt: "hi" });
+const response = await generate({ prompt: 'hi' });
 console.log(response.text());
 ```
 
 **New:**
 
 ```js
-const response = await ai.generate("hi");
+const response = await ai.generate('hi');
 console.log(response.text);
 ```
 
@@ -449,8 +449,8 @@ const history = response.messages;
 In Genkit 0.9, the Chat API has been redesigned for easier session management and interaction. Here’s how you can leverage it for both synchronous and streaming chat experiences:
 
 ```js
-import { genkit } from "genkit";
-import { gemini15Flash, googleAI } from "@genkit-ai/googleai";
+import { genkit } from 'genkit';
+import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -458,9 +458,9 @@ const ai = genkit({
 });
 
 const session = ai.createSession({ store: firestoreSessionStore() });
-const chat = await session.chat({ system: "talk like a pirate" });
+const chat = await session.chat({ system: 'talk like a pirate' });
 
-let response = await chat.send("hi, my name is Pavel");
+let response = await chat.send('hi, my name is Pavel');
 console.log(response.text()); // "hi Pavel, I'm llm"
 
 // continue the conversation
@@ -468,7 +468,7 @@ response = await chat.send("what's my name");
 console.log(response.text()); // "Pavel"
 
 // can stream
-const { response, stream } = await chat.sendStream("bye");
+const { response, stream } = await chat.sendStream('bye');
 for await (const chunk of stream) {
   console.log(chunk.text());
 }
@@ -477,5 +477,5 @@ console.log((await response).text());
 // can load session from the store
 const prevSession = await ai.loadSession(session.id, { store });
 const prevChat = await prevSession.chat();
-await prevChat.send("bye");
+await prevChat.send('bye');
 ```

@@ -37,9 +37,9 @@ ai = Genkit(
 
 ### Configuration Options
 
-*   **name** (str): A unique name for this vector store instance. This is used as the `retriever` argument to `ai.retrieve`.
-*   **embedder** (str): The name of the embedding model to use. Must match a configured embedder in your Genkit project.
-*   **embedder_options** (dict, optional): Options to pass to the embedder.
+- **name** (str): A unique name for this vector store instance. This is used as the `retriever` argument to `ai.retrieve`.
+- **embedder** (str): The name of the embedding model to use. Must match a configured embedder in your Genkit project.
+- **embedder_options** (dict, optional): Options to pass to the embedder.
 
 ## Usage
 
@@ -82,3 +82,4 @@ docs = await ai.retrieve(
     retriever='my_vectorstore', # Matches the 'name' in DevLocalVectorStore config
 )
 # print(docs) # Process the retrieved documents
+```

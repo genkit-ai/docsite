@@ -27,10 +27,10 @@ it automatically exports logs to Genkit Monitoring when the Firebase
 Telemetry plugin is enabled.
 
 ```typescript
-import { logger } from "genkit/logging";
+import { logger } from 'genkit/logging';
 
 // Set the desired log level
-logger.setLogLevel("debug");
+logger.setLogLevel('debug');
 ```
 
 ## Production Observability

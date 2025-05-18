@@ -262,8 +262,8 @@ config:
   topP: 0.4
   maxOutputTokens: 400
   stopSequences:
-    - "<end>"
-    - "<fin>"
+    - '<end>'
+    - '<fin>'
 ---
 ```
 

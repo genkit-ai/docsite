@@ -73,7 +73,7 @@ ai.startFlowServer({
 **New:**
 
 ```ts
-import { startFlowServer } from "@genkit-ai/express";
+import { startFlowServer } from '@genkit-ai/express';
 startFlowServer({
   flows: [myFlow1, myFlow2],
 });
@@ -93,9 +93,9 @@ The `run` function for custom trace blocks has moved to part of the `genkit` obj
 **Old:**
 
 ```ts
-ai.defineFlow({ name: "banana" }, async (input) => {
-  const step = await run("myCode", async () => {
-    return "something";
+ai.defineFlow({ name: 'banana' }, async (input) => {
+  const step = await run('myCode', async () => {
+    return 'something';
   });
 });
 ```
@@ -103,9 +103,9 @@ ai.defineFlow({ name: "banana" }, async (input) => {
 **New:**
 
 ```ts
-ai.defineFlow({ name: "banana" }, async (input) => {
-  const step = await ai.run("myCode", async () => {
-    return "something";
+ai.defineFlow({ name: 'banana' }, async (input) => {
+  const step = await ai.run('myCode', async () => {
+    return 'something';
   });
 });
 ```
@@ -117,12 +117,9 @@ function and is now called `sendChunk`.
 **Old:**
 
 ```ts
-const flow = ai.defineStreamingFlow(
-  { name: "banana" },
-  async (input, streamingCallback) => {
-    streamingCallback({ chunk: 1 });
-  }
-);
+const flow = ai.defineStreamingFlow({ name: 'banana' }, async (input, streamingCallback) => {
+  streamingCallback({ chunk: 1 });
+});
 
 const { stream } = await flow();
 for await (const chunk of stream) {
@@ -133,12 +130,9 @@ for await (const chunk of stream) {
 **New:**
 
 ```ts
-const flow = ai.defineFlow(
-  { name: "banana" },
-  async (input, { context, sendChunk }) => {
-    sendChunk({ chunk: 1 });
-  }
-);
+const flow = ai.defineFlow({ name: 'banana' }, async (input, { context, sendChunk }) => {
+  sendChunk({ chunk: 1 });
+});
 
 const { stream, output } = flow.stream(input);
 for await (const chunk of stream) {
@@ -151,7 +145,7 @@ FlowAuth auth is now called context. You can access auth as a field inside conte
 **Old:**
 
 ```ts
-ai.defineFlow({ name: "banana" }, async (input) => {
+ai.defineFlow({ name: 'banana' }, async (input) => {
   const auth = getFlowAuth();
   // ...
 });
@@ -160,7 +154,7 @@ ai.defineFlow({ name: "banana" }, async (input) => {
 **New:**
 
 ```ts
-ai.defineFlow({ name: "banana" }, async (input, { context }) => {
+ai.defineFlow({ name: 'banana' }, async (input, { context }) => {
   const auth = context.auth;
 });
 ```
@@ -171,36 +165,34 @@ ai.defineFlow({ name: "banana" }, async (input, { context }) => {
 **Old**
 
 ```ts
-import { onFlow } from "@genkit-ai/firebase/functions";
+import { onFlow } from '@genkit-ai/firebase/functions';
 
 export const generatePoem = onFlow(
   ai,
   {
-    name: "jokeTeller",
+    name: 'jokeTeller',
     inputSchema: z.string().nullable(),
     outputSchema: z.string(),
     streamSchema: z.string(),
   },
   async (type, streamingCallback) => {
-    const { stream, response } = await ai.generateStream(
-      `Tell me a longish ${type ?? "dad"} joke.`
-    );
+    const { stream, response } = await ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       streamingCallback(chunk.text);
     }
     return (await response).text;
-  }
+  },
 );
 ```
 
 **New:**
 
 ```ts
-import { onCallGenkit } from "firebase-functions/https";
-import { defineSecret } from "firebase-functions/params";
-import { genkit, z } from "genkit";
+import { onCallGenkit } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
+import { genkit, z } from 'genkit';
 
-const apiKey = defineSecret("GEMINI_API_KEY");
+const apiKey = defineSecret('GEMINI_API_KEY');
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -209,20 +201,18 @@ const ai = genkit({
 
 export const jokeTeller = ai.defineFlow(
   {
-    name: "jokeTeller",
+    name: 'jokeTeller',
     inputSchema: z.string().nullable(),
     outputSchema: z.string(),
     streamSchema: z.string(),
   },
   async (type, { sendChunk }) => {
-    const { stream, response } = ai.generateStream(
-      `Tell me a longish ${type ?? "dad"} joke.`
-    );
+    const { stream, response } = ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       sendChunk(chunk.text);
     }
     return (await response).text;
-  }
+  },
 );
 
 export const tellJoke = onCallGenkit({ secrets: [apiKey] }, jokeTeller);
@@ -236,14 +226,14 @@ is now server-dependent.
 ```ts
 export const simpleFlow = ai.defineFlow(
   {
-    name: "simpleFlow",
+    name: 'simpleFlow',
     authPolicy: (auth, input) => {
       // auth policy
     },
   },
   async (input) => {
     // Flow logic here...
-  }
+  },
 );
 ```
 
@@ -323,23 +313,23 @@ You can define separate templates for prompt and system messages:
 
 ```ts
 const hello = ai.definePrompt({
-  name: "hello",
-  system: "talk like a pirate.",
-  prompt: "hello {% verbatim %}{{ name }}{% endverbatim %}",
+  name: 'hello',
+  system: 'talk like a pirate.',
+  prompt: 'hello {% verbatim %}{{ name }}{% endverbatim %}',
   input: {
     schema: z.object({
       name: z.string(),
     }),
   },
 });
-const { text } = await hello({ name: "Genkit" });
+const { text } = await hello({ name: 'Genkit' });
 ```
 
 Alternatively, you can define multi-message prompts in the messages field:
 
 ```ts
 const hello = ai.definePrompt({
-  name: "hello",
+  name: 'hello',
   messages:
     '{% verbatim %}{{ role "system" }}{% endverbatim %} talk like a pirate. {% verbatim %}{{ role "user" }}{% endverbatim %} hello {% verbatim %}{{ name }}{% endverbatim %}',
   input: {
@@ -354,7 +344,7 @@ Instead of prompt templates you can use a function:
 
 ```ts
 ai.definePrompt({
-  name: "hello",
+  name: 'hello',
   prompt: async (input, { context }) => {
     return `hello ${input.name}`;
   },
@@ -370,8 +360,8 @@ You can access the context (including auth information) from within the prompt:
 
 ```ts
 const hello = ai.definePrompt({
-  name: "hello",
-  messages: "hello {% verbatim %}{{ @auth.email }}{% endverbatim %}",
+  name: 'hello',
+  messages: 'hello {% verbatim %}{{ @auth.email }}{% endverbatim %}',
 });
 ```
 

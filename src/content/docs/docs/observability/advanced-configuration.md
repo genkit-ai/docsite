@@ -40,7 +40,7 @@ To export telemetry when running locally set the `forceDevExport` option to
 `true`.
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({ forceDevExport: true });
 ```
@@ -52,7 +52,7 @@ Note: Shipping to production with a frequent export interval may
 increase the cost for exported telemetry.
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({
   forceDevExport: true,
@@ -74,13 +74,13 @@ To selectively disable or enable instrumentations that are eligible for auto
 instrumentation, update the `autoInstrumentationConfig` field:
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({
   autoInstrumentationConfig: {
-    "@opentelemetry/instrumentation-fs": { enabled: false },
-    "@opentelemetry/instrumentation-dns": { enabled: false },
-    "@opentelemetry/instrumentation-net": { enabled: false },
+    '@opentelemetry/instrumentation-fs': { enabled: false },
+    '@opentelemetry/instrumentation-dns': { enabled: false },
+    '@opentelemetry/instrumentation-net': { enabled: false },
   },
 });
 ```
@@ -100,7 +100,7 @@ To help you control how customer data is stored, you can disable the logging of
 input and output by adding the following to your configuration:
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({
   disableLoggingInputAndOutput: true,
@@ -116,7 +116,7 @@ from Google Cloud logging.
 To disable metrics collection, add the following to your configuration:
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({
   disableMetrics: true,
@@ -132,7 +132,7 @@ Metrics.
 To disable trace collection, add the following to your configuration:
 
 ```typescript
-import { enableFirebaseTelemetry } from "@genkit-ai/firebase";
+import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 
 enableFirebaseTelemetry({
   disableTraces: true,

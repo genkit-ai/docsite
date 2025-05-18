@@ -44,8 +44,8 @@ This section explains how to perform inference-based evaluation using Genkit.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
     ```js
-    import { genkit, z, Document } from "genkit";
-    import { googleAI } from "@genkit-ai/googleai";
+    import { genkit, z, Document } from 'genkit';
+    import { googleAI } from '@genkit-ai/googleai';
 
     // Initialize Genkit
     export const ai = genkit({ plugins: [googleAI()] });
@@ -53,22 +53,19 @@ This section explains how to perform inference-based evaluation using Genkit.
     // Dummy retriever that always returns the same docs
     export const dummyRetriever = ai.defineRetriever(
       {
-        name: "dummyRetriever",
+        name: 'dummyRetriever',
       },
       async (i) => {
-        const facts = [
-          "Dog is man's best friend",
-          "Dogs have evolved and were domesticated from wolves",
-        ];
+        const facts = ["Dog is man's best friend", 'Dogs have evolved and were domesticated from wolves'];
         // Just return facts as documents.
         return { documents: facts.map((t) => Document.fromText(t)) };
-      }
+      },
     );
 
     // A simple question-answering flow
     export const qaFlow = ai.defineFlow(
       {
-        name: "qaFlow",
+        name: 'qaFlow',
         inputSchema: z.string(),
         outputSchema: z.string(),
       },
@@ -79,26 +76,26 @@ This section explains how to perform inference-based evaluation using Genkit.
         });
 
         const llmResponse = await ai.generate({
-          model: googleAI.model("gemini-2.0-flash"),
+          model: googleAI.model('gemini-2.0-flash'),
           prompt: `Answer this question with the given context ${query}`,
           docs: factDocs,
         });
         return llmResponse.text;
-      }
+      },
     );
     ```
 
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
 
     ```js
-    import { genkitEval, GenkitMetric } from "@genkit-ai/evaluator";
-    import { googleAI } from "@genkit-ai/googleai";
+    import { genkitEval, GenkitMetric } from '@genkit-ai/evaluator';
+    import { googleAI } from '@genkit-ai/googleai';
 
     export const ai = genkit({
       plugins: [
         ...// Add this plugin to your Genkit initialization block
         genkitEval({
-          judge: googleAI.model("gemini-2.0-flash"),
+          judge: googleAI.model('gemini-2.0-flash'),
           metrics: [GenkitMetric.MALICIOUSNESS],
         }),
       ],
@@ -347,7 +344,7 @@ example:
 ```js
 export const qaFlow = ai.defineFlow(
   {
-    name: "qaFlow",
+    name: 'qaFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
@@ -356,7 +353,7 @@ export const qaFlow = ai.defineFlow(
       retriever: dummyRetriever,
       query,
     });
-    const factDocsModified = await ai.run("factModified", async () => {
+    const factDocsModified = await ai.run('factModified', async () => {
       // Let us use only facts that are considered silly. This is a
       // hypothetical step for demo purposes, you may perform any
       // arbitrary task inside a step and reference it in custom
@@ -367,12 +364,12 @@ export const qaFlow = ai.defineFlow(
     });
 
     const llmResponse = await ai.generate({
-      model: googleAI.model("gemini-2.0-flash"),
+      model: googleAI.model('gemini-2.0-flash'),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocsModified,
     });
     return llmResponse.text;
-  }
+  },
 );
 ```
 
@@ -394,9 +391,9 @@ In the tools config file, add the following code:
 module.exports = {
   evaluators: [
     {
-      actionRef: "/flow/qaFlow",
+      actionRef: '/flow/qaFlow',
       extractors: {
-        context: { outputOf: "factModified" },
+        context: { outputOf: 'factModified' },
       },
     },
   ],
@@ -443,21 +440,21 @@ Here is an example flow that uses a PDF file to generate potential user
 questions.
 
 ```ts
-import { genkit, z } from "genkit";
-import { googleAI } from "@genkit-ai/googleai";
-import { chunk } from "llm-chunk"; // npm i llm-chunk
-import path from "path";
-import { readFile } from "fs/promises";
-import pdf from "pdf-parse"; // npm i pdf-parse
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
+import { chunk } from 'llm-chunk'; // npm i llm-chunk
+import path from 'path';
+import { readFile } from 'fs/promises';
+import pdf from 'pdf-parse'; // npm i pdf-parse
 
 const ai = genkit({ plugins: [googleAI()] });
 
 const chunkingConfig = {
   minLength: 1000, // number of minimum characters into chunk
   maxLength: 2000, // number of maximum characters into chunk
-  splitter: "sentence", // paragraph | sentence
+  splitter: 'sentence', // paragraph | sentence
   overlap: 100, // number of overlap chracters
-  delimiters: "", // regex for base split method
+  delimiters: '', // regex for base split method
 } as any;
 
 async function extractText(filePath: string) {
@@ -469,23 +466,21 @@ async function extractText(filePath: string) {
 
 export const synthesizeQuestions = ai.defineFlow(
   {
-    name: "synthesizeQuestions",
-    inputSchema: z.string().describe("PDF file path"),
+    name: 'synthesizeQuestions',
+    inputSchema: z.string().describe('PDF file path'),
     outputSchema: z.array(z.string()),
   },
   async (filePath) => {
     filePath = path.resolve(filePath);
     // `extractText` loads the PDF and extracts its contents as text.
-    const pdfTxt = await ai.run("extract-text", () => extractText(filePath));
+    const pdfTxt = await ai.run('extract-text', () => extractText(filePath));
 
-    const chunks = await ai.run("chunk-it", async () =>
-      chunk(pdfTxt, chunkingConfig)
-    );
+    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
     const questions: string[] = [];
     for (var i = 0; i < chunks.length; i++) {
       const qResponse = await ai.generate({
-        model: googleAI.model("gemini-2.0-flash"),
+        model: googleAI.model('gemini-2.0-flash'),
         prompt: {
           text: `Generate one question about the text below: ${chunks[i]}`,
         },
@@ -493,7 +488,7 @@ export const synthesizeQuestions = ai.defineFlow(
       questions.push(qResponse.text);
     }
     return questions;
-  }
+  },
 );
 ```
 

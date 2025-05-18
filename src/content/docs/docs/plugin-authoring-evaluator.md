@@ -91,24 +91,22 @@ It is the responsibility of the evaluator to validate that all fields
 required for evaluation are present.
 
 ```ts
-import { ModelArgument } from "genkit";
-import { BaseEvalDataPoint, Score } from "genkit/evaluator";
+import { ModelArgument } from 'genkit';
+import { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 
 /**
  * Score an individual test case for delciousness.
  */
-export async function deliciousnessScore<
-  CustomModelOptions extends z.ZodTypeAny
->(
+export async function deliciousnessScore<CustomModelOptions extends z.ZodTypeAny>(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: CustomModelOptions
+  judgeConfig?: CustomModelOptions,
 ): Promise<Score> {
   const d = dataPoint;
   // Validate the input has required fields
   if (!d.output) {
-    throw new Error("Output is required for Deliciousness detection");
+    throw new Error('Output is required for Deliciousness detection');
   }
 
   // Hydrate the prompt and generate an evaluation result
@@ -120,7 +118,7 @@ export async function deliciousnessScore<
     {
       model: judgeLlm,
       config: judgeConfig,
-    }
+    },
   );
 
   // Parse the output
@@ -142,23 +140,21 @@ export async function deliciousnessScore<
 The final step is to write a function that defines the `EvaluatorAction`.
 
 ```ts
-import { EvaluatorAction } from "genkit/evaluator";
+import { EvaluatorAction } from 'genkit/evaluator';
 
 /**
  * Create the Deliciousness evaluator action.
  */
-export function createDeliciousnessEvaluator<
-  ModelCustomOptions extends z.ZodTypeAny
->(
+export function createDeliciousnessEvaluator<ModelCustomOptions extends z.ZodTypeAny>(
   ai: Genkit,
   judge: ModelArgument<ModelCustomOptions>,
-  judgeConfig?: z.infer<ModelCustomOptions>
+  judgeConfig?: z.infer<ModelCustomOptions>,
 ): EvaluatorAction {
   return ai.defineEvaluator(
     {
       name: `myCustomEvals/deliciousnessEvaluator`,
-      displayName: "Deliciousness",
-      definition: "Determines if output is considered delicous.",
+      displayName: 'Deliciousness',
+      definition: 'Determines if output is considered delicous.',
       isBilled: true,
     },
     async (datapoint: BaseEvalDataPoint) => {
@@ -167,7 +163,7 @@ export function createDeliciousnessEvaluator<
         testCaseId: datapoint.testCaseId,
         evaluation: score,
       };
-    }
+    },
   );
 }
 ```
@@ -209,10 +205,7 @@ export const EvalResponse = z.object({
 
 ```ts
 const ScoreSchema = z.object({
-  id: z
-    .string()
-    .describe("Optional ID to differentiate multiple scores")
-    .optional(),
+  id: z.string().describe('Optional ID to differentiate multiple scores').optional(),
   score: z.union([z.number(), z.string(), z.boolean()]).optional(),
   error: z.string().optional(),
   details: z
@@ -249,24 +242,20 @@ As with the LLM-based evaluator, define the scoring function. In this case,
 the scoring function does not need a judge LLM.
 
 ```ts
-import { BaseEvalDataPoint, Score } from "genkit/evaluator";
+import { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 
 const US_PHONE_REGEX = /[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4}/i;
 
 /**
  * Scores whether a datapoint output contains a US Phone number.
  */
-export async function usPhoneRegexScore(
-  dataPoint: BaseEvalDataPoint
-): Promise<Score> {
+export async function usPhoneRegexScore(dataPoint: BaseEvalDataPoint): Promise<Score> {
   const d = dataPoint;
-  if (!d.output || typeof d.output !== "string") {
-    throw new Error("String output is required for regex matching");
+  if (!d.output || typeof d.output !== 'string') {
+    throw new Error('String output is required for regex matching');
   }
   const matches = US_PHONE_REGEX.test(d.output as string);
-  const reasoning = matches
-    ? `Output matched US_PHONE_REGEX`
-    : `Output did not match US_PHONE_REGEX`;
+  const reasoning = matches ? `Output matched US_PHONE_REGEX` : `Output did not match US_PHONE_REGEX`;
   return {
     score: matches,
     details: { reasoning },
@@ -277,8 +266,8 @@ export async function usPhoneRegexScore(
 #### Define the evaluator action
 
 ```ts
-import { Genkit } from "genkit";
-import { BaseEvalDataPoint, EvaluatorAction } from "genkit/evaluator";
+import { Genkit } from 'genkit';
+import { BaseEvalDataPoint, EvaluatorAction } from 'genkit/evaluator';
 
 /**
  * Configures a regex evaluator to match a US phone number.
@@ -287,8 +276,8 @@ export function createUSPhoneRegexEvaluator(ai: Genkit): EvaluatorAction {
   return ai.defineEvaluator(
     {
       name: `myCustomEvals/usPhoneRegexEvaluator`,
-      displayName: "Regex Match for US PHONE NUMBER",
-      definition: "Uses Regex to check if output matches a US phone number",
+      displayName: 'Regex Match for US PHONE NUMBER',
+      definition: 'Uses Regex to check if output matches a US phone number',
       isBilled: false,
     },
     async (datapoint: BaseEvalDataPoint) => {
@@ -297,7 +286,7 @@ export function createUSPhoneRegexEvaluator(ai: Genkit): EvaluatorAction {
         testCaseId: datapoint.testCaseId,
         evaluation: score,
       };
-    }
+    },
   );
 }
 ```
@@ -315,16 +304,14 @@ and the regex-based US phone number evaluator. Instantiating these
 evaluators within the plugin context registers them with the plugin.
 
 ```ts
-import { GenkitPlugin, genkitPlugin } from "genkit/plugin";
+import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
 
-export function myCustomEvals<
-  ModelCustomOptions extends z.ZodTypeAny
->(options: {
+export function myCustomEvals<ModelCustomOptions extends z.ZodTypeAny>(options: {
   judge: ModelArgument<ModelCustomOptions>;
   judgeConfig?: ModelCustomOptions;
 }): GenkitPlugin {
   // Define the new plugin
-  return genkitPlugin("myCustomEvals", async (ai: Genkit) => {
+  return genkitPlugin('myCustomEvals', async (ai: Genkit) => {
     const { judge, judgeConfig } = options;
 
     // The plugin instatiates our custom evaluators within the context

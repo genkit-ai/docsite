@@ -54,25 +54,25 @@ npm install -D genkit-cli typescript tsx
 In `src/index.ts`, define a sample flow and configure the flow server:
 
 ```typescript
-  import { genkit } from 'genkit';
-  import { googleAI } from '@genkit-ai/googleai';
-  import { startFlowServer } from '@genkit-ai/express';
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
+import { startFlowServer } from '@genkit-ai/express';
 
-  const ai = genkit({
-    plugins: [googleAI()],
-    model: googleAI.model('gemini-2.0-flash'),
-  });
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.0-flash'),
+});
 
-  const helloFlow = ai.defineFlow(
+const helloFlow = ai.defineFlow(
   {
-    name: "helloFlow",
+    name: 'helloFlow',
     inputSchema: z.object({ name: z.string() }),
     outputSchema: z.string(),
   },
   async (input) => {
-    const { text } = ai.generate("Say hello to ${input.name}");
+    const { text } = ai.generate('Say hello to ${input.name}');
     return text;
-  }
+  },
 );
 
 startFlowServer({

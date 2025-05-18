@@ -61,7 +61,7 @@ const ai = genkit({
 
 async function main() {
   // make a generation request
-  const { text } = await ai.generate("Hello, Gemini!");
+  const { text } = await ai.generate('Hello, Gemini!');
   console.log(text);
 }
 
@@ -85,4 +85,4 @@ with additional Genkit capabilities, see the following guides:
 - [Managing prompts](/docs/dotprompt): Learn how Genkit helps you manage
   your prompts and configuration together as code.
 - [Integrating in an app](https://developers.google.com/solutions/learn/agentic-barista):
-Walk through a deployed example of multiple Genkit flows powering a web app.
+  Walk through a deployed example of multiple Genkit flows powering a web app.
