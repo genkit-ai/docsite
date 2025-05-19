@@ -98,17 +98,15 @@ const JS_SIDEBAR = [
     items: [
       { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
+      { label: "Ollama", slug: "docs/plugins/ollama" },
       { label: "Firebase", slug: "docs/plugins/firebase" },
-      {
-        label: "Partner & 3P Plugins",
-        items: [
-          { label: "Overview", slug: "docs/plugins/third-party-plugins" },
-          { label: "Pinecone", slug: "docs/plugins/pinecone" },
-          { label: "ChromaDB", slug: "docs/plugins/chroma" },
-          { label: "Ollama", slug: "docs/plugins/ollama" },
-          { label: "pgvector", slug: "docs/plugins/pgvector" },
-        ],
-      },
+      { label: "LanceDB", slug: "docs/plugins/lancedb" },
+      { label: "Astra DB", slug: "docs/plugins/astra-db" },
+      { label: "Auth0 AI", slug: "docs/plugins/auth0" },
+      { label: "ChromaDB", slug: "docs/plugins/chroma" },
+      { label: "Neo4j", slug: "docs/plugins/neo4j" },
+      { label: "pgvector", slug: "docs/plugins/pgvector" },
+      { label: "Pinecone", slug: "docs/plugins/pinecone" },
     ],
   },
   {
@@ -211,13 +209,13 @@ const GO_SIDEBAR = [
     items: [
       { label: "Google Generative AI", slug: "go/docs/plugins/google-genai" },
       { label: "Google Cloud", slug: "go/docs/plugins/google-cloud" },
+      { label: "Ollama", slug: "go/docs/plugins/ollama" },
+      { label: "pgvector", slug: "go/docs/plugins/pgvector" },
+      { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
       {
         label: "Partner & 3P Plugins",
         items: [
           { label: "Overview", slug: "go/docs/plugins/third-party-plugins" },
-          { label: "Ollama", slug: "go/docs/plugins/ollama" },
-          { label: "pgvector", slug: "go/docs/plugins/pgvector" },
-          { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
         ],
       },
     ],
