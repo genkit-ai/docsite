@@ -3,9 +3,7 @@ title: Google Generative AI plugin
 description: Learn how to configure and use the Genkit Google Generative AI plugin for Go to access Gemini models via the Gemini API or Vertex AI API.
 ---
 
-The Google Generative AI plugin provides interfaces to Google's Gemini models
-through either the [Gemini API](https://ai.google.dev/docs/gemini_api_overview)
-or the [Vertex AI API](https://cloud.google.com/vertex-ai/generative-ai/docs/).
+The Google Generative AI plugin provides interfaces to Google's Gemini models through either the Gemini API or the Vertex AI Gemini API.
 
 ## Configuration
 
@@ -13,30 +11,15 @@ The configuration depends on which provider you choose:
 
 ### Google AI
 
-To use this plugin, import the `googlegenai` package and pass
+To use this plugin, import the `googlegenai` package and pass 
 `googlegenai.GoogleAI` to `WithPlugins()` in the Genkit initializer:
 
 ```go
-package main
+import "github.com/firebase/genkit/go/plugins/googlegenai"
+```
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	// Example initialization
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-	log.Println("Genkit initialized with GoogleAI plugin.")
-	// ... rest of application logic ...
-}
+```go
+g, err := genkit.Init(context.Background(), ai.WithPlugins(&googlegenai.GoogleAI{}))
 ```
 
 The plugin requires an API key for the Gemini API, which you can get from
@@ -49,26 +32,7 @@ Configure the plugin to use your API key by doing one of the following:
 - Specify the API key when you initialize the plugin:
 
   ```go
-  package main
-
-  import (
-  	"context"
-  	"log"
-
-  	"github.com/firebase/genkit/go/genkit"
-  	"github.com/firebase/genkit/go/plugins/googlegenai"
-  )
-
-  func main() {
-  	ctx := context.Background()
-  	// Example initialization with API key
-  	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: "YOUR_API_KEY"})) // Replace with your key or env var logic
-  	if err != nil {
-  		log.Fatalf("Genkit init failed: %v", err)
-  	}
-  	log.Println("Genkit initialized with GoogleAI plugin (API Key provided).")
-  	// ... rest of application logic ...
-  }
+  ai.WithPlugins(&googlegenai.GoogleAI{APIKey: "YOUR_API_KEY"})
   ```
 
   However, don't embed your API key directly in code! Use this feature only
@@ -80,27 +44,11 @@ To use this plugin, import the `googlegenai` package and pass
 `googlegenai.VertexAI` to `WithPlugins()` in the Genkit initializer:
 
 ```go
-package main
+import "github.com/firebase/genkit/go/plugins/googlegenai"
+```
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	// Example initialization
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-	log.Println("Genkit initialized with VertexAI plugin.")
-	// ... rest of application logic ...
-}
-
+```go
+g, err := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.VertexAI{}))
 ```
 
 The plugin requires you to specify your Google Cloud project ID, the
@@ -114,26 +62,7 @@ credentials.
   You can also pass this value directly:
 
   ```go
-  package main
-
-  import (
-  	"context"
-  	"log"
-
-  	"github.com/firebase/genkit/go/genkit"
-  	"github.com/firebase/genkit/go/plugins/googlegenai"
-  )
-
-  func main() {
-  	ctx := context.Background()
-  	// Example initialization with Project ID
-  	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{ProjectID: "my-project-id"}))
-  	if err != nil {
-  		log.Fatalf("Genkit init failed: %v", err)
-  	}
-  	log.Println("Genkit initialized with VertexAI plugin (ProjectID provided).")
-  	// ... rest of application logic ...
-  }
+  genkit.WithPlugins(&googlegenai.VertexAI{ProjectID: "my-project-id"})
   ```
 
 - By default, `googlegenai.VertexAI` gets the Vertex AI API location from the
@@ -142,195 +71,75 @@ credentials.
   You can also pass this value directly:
 
   ```go
-  package main
-
-  import (
-  	"context"
-  	"log"
-
-  	"github.com/firebase/genkit/go/genkit"
-  	"github.com/firebase/genkit/go/plugins/googlegenai"
-  )
-
-  func main() {
-  	ctx := context.Background()
-  	// Example initialization with Location
-  	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{Location: "us-central1"}))
-  	if err != nil {
-  		log.Fatalf("Genkit init failed: %v", err)
-  	}
-  	log.Println("Genkit initialized with VertexAI plugin (Location provided).")
-  	// ... rest of application logic ...
-  }
+  genkit.WithPlugins(&googlegenai.VertexAI{Location: "us-central1"})
   ```
 
 - To provide API credentials, you need to set up Google Cloud Application
   Default Credentials.
 
-  1.  To specify your credentials:
+  1. To specify your credentials:
 
-      - If you're running your flow from a Google Cloud environment (Cloud
-        Functions, Cloud Run, and so on), this is set automatically.
+     - If you're running your flow from a Google Cloud environment (Cloud
+       Functions, Cloud Run, and so on), this is set automatically.
 
-      - On your local dev environment, do this by running:
+     - On your local dev environment, do this by running:
 
-        ```bash
-        gcloud auth application-default login
-        ```
+       ```shell
+       gcloud auth application-default login
+       ```
 
-      - For other environments, see the [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc)
-        docs.
+     - For other environments, see the [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc)
+       docs.
 
-  2.  In addition, make sure the account is granted the Vertex AI User IAM role
-      (`roles/aiplatform.user`). See the Vertex AI [access control](https://cloud.google.com/vertex-ai/generative-ai/docs/access-control)
-      docs.
+  2. In addition, make sure the account is granted the Vertex AI User IAM role
+     (`roles/aiplatform.user`). See the Vertex AI [access control](https://cloud.google.com/vertex-ai/generative-ai/docs/access-control)
+     docs.
 
 ## Usage
 
 ### Generative models
 
 To get a reference to a supported model, specify its identifier to
-either `googlegenai.GoogleAIModel` or `googlegenai.VertexAIModel`:
+either `googlegenai.GoogleAIModel` or `googlgenai.VertexAIModel`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	model := googlegenai.GoogleAIModel(g, "gemini-1.5-flash") // Updated model name
-	if model == nil {
-		log.Fatal("Model gemini-1.5-flash not found for GoogleAI")
-	}
-	log.Println("Model reference obtained:", model.Name())
-	// Use the model...
-}
+model := googlegenai.GoogleAIModel(g, "gemini-2.0-flash")
 ```
 
 Alternatively, you may create a `ModelRef` which pairs the model name with its
 config:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	modelRef := googlegenai.GoogleAIModelRef("gemini-1.5-flash", &googlegenai.GeminiConfig{ // Updated model name
-		Temperature:     0.5,
-		MaxOutputTokens: 500,
-		// Other configuration...
-	})
-
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(modelRef), ai.WithPrompt("Tell me a joke."))
-	if err != nil {
-		log.Fatalf("Generate failed: %v", err)
-	}
-
-	log.Println(resp.Text())
-}
+modelRef := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.GeminiConfig{
+    Temperature: 0.5,
+    MaxOutputTokens: 500,
+    // Other configuration...
+})
 ```
 
 The following models are supported: `gemini-1.5-pro`, `gemini-1.5-flash`,
-`gemini-1.0-pro`, and other experimental models. Check the Google AI and Vertex AI documentation for the latest list.
+`gemini-2.0-pro`, `gemini-2.0-flash`, and other experimental models.
 
 Model references have a `Generate()` method that calls the Google API:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	modelRef := googlegenai.GoogleAIModelRef("gemini-1.5-flash", nil) // Config can be nil for defaults
-
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(modelRef), ai.WithPrompt("Tell me a joke."))
-	if err != nil {
-		log.Fatalf("Generate failed: %v", err) // Corrected error handling
-	}
-
-	log.Println(resp.Text())
+resp, err := genkit.Generate(ctx, g, ai.WithModel(modelRef), ai.WithPrompt("Tell me a joke."))
+if err != nil {
+      return err
 }
+
+log.Println(resp.Text())
 ```
 
-See [Generating content with AI models](/go/docs/models) for more information.
+See [Generating content with AI models](../models.md) for more information.
 
 ### Embedding models
 
 To get a reference to a supported embedding model, specify its identifier to
-either `googlegenai.GoogleAIEmbedder` or `googlegenai.VertexAIEmbedder`:
+either `googlegenai.GoogleAIEmbedder` or `googlgenai.VertexAIEmbedder`:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	embeddingModel := googlegenai.GoogleAIEmbedder(g, "text-embedding-004")
-	if embeddingModel == nil {
-		log.Fatal("Embedder text-embedding-004 not found for GoogleAI")
-	}
-	log.Println("Embedder reference obtained:", embeddingModel.Name())
-
-	// Example usage
-	userInput := "This is the text to embed."
-	resp, err := ai.Embed(ctx, embeddingModel, ai.WithText(userInput))
-	if err != nil {
-		log.Fatalf("Embedding failed: %v", err)
-	}
-	log.Printf("Generated %d embeddings.\n", len(resp.Embeddings))
-}
+embeddingModel := googlegenai.GoogleAIEmbedder(g, "text-embedding-004")
 ```
 
 The following models are supported:
@@ -341,42 +150,17 @@ The following models are supported:
 
 - **Vertex AI**
 
-  `textembedding-gecko@003`, `textembedding-gecko@002`,
+  `textembedding-gecko@003`, `textembedding-gecko@002`, 
   `textembedding-gecko@001`, `text-embedding-004`,
-  `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`,
+  `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`, 
   and `multimodalembedding`
 
 Embedder references have an `Embed()` method that calls the Google AI API:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-	embeddingModel := googlegenai.GoogleAIEmbedder(g, "text-embedding-004")
-	if embeddingModel == nil {
-		log.Fatal("Embedder not found")
-	}
-
-	userInput := "Embed this text."
-	resp, err := ai.Embed(ctx, embeddingModel, ai.WithText(userInput))
-	if err != nil {
-		log.Fatalf("Embedding failed: %v", err) // Corrected error handling
-	}
-	log.Printf("Generated %d embeddings.\n", len(resp.Embeddings))
+resp, err := ai.Embed(ctx, embeddingModel, ai.WithDocs(userInput))
+if err != nil {
+      return err
 }
 ```
 
@@ -384,19 +168,16 @@ You can also pass an Embedder to an indexer's `Index()` method and a retriever's
 `Retrieve()` method:
 
 ```go
-// Assuming myIndexer and myRetriever are defined elsewhere
-// and docsToIndex and userInput are available
-
-// Indexing example (conceptual)
-// if err := ai.Index(ctx, myIndexer, ai.WithDocs(docsToIndex...)); err != nil {
-//	  log.Fatalf("Indexing failed: %v", err) // Corrected error handling
-// }
-
-// Retrieval example (conceptual)
-// resp, err := ai.Retrieve(ctx, myRetriever, ai.WithText(userInput)) // Use ai.WithText for query
-// if err != nil {
-//	  log.Fatalf("Retrieval failed: %v", err) // Corrected error handling
-// }
+if err := ai.Index(ctx, myIndexer, ai.WithDocs(docsToIndex...)); err != nil {
+      return err
+}
 ```
 
-See [Retrieval-augmented generation (RAG)](/go/docs/rag) for more information.
+```go
+resp, err := ai.Retrieve(ctx, myRetriever, ai.WithDocs(userInput))
+if err != nil {
+      return err
+}
+```
+
+See [Retrieval-augmented generation (RAG)](../rag.md) for more information.

@@ -15,7 +15,7 @@ page.
 Use the Ollama CLI to download the models you are interested in. For example:
 
 ```bash
-ollama pull gemma:2b # Example: pulling gemma 2b model
+ollama pull gemma3
 ```
 
 For development, you can run Ollama on your development machine. Deployed apps
@@ -28,123 +28,42 @@ To use this plugin, pass `ollama.Ollama` to `WithPlugins()` in the Genkit
 initializer, specifying the address of your Ollama server:
 
 ```go
-package main
+import "github.com/firebase/genkit/go/plugins/ollama"
+```
 
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/ollama"
-)
-
-func main() {
-	ctx := context.Background()
-	// Example initialization
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{ServerAddress: "http://127.0.0.1:11434"}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-	log.Println("Genkit initialized with Ollama plugin.")
-	// ... rest of application logic ...
-}
+```go
+g, err := genkit.Init(context.Background(), genkit.WithPlugins(&ollama.Ollama{ServerAddress: "http://127.0.0.1:11434"}))
 ```
 
 ## Usage
 
 To generate content, you first need to create a model definition based on the
-model you installed and want to use. For example, if you installed Gemma 2b:
+model you installed and want to use. For example, if you installed Gemma 2:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/ollama"
+model := ollama.DefineModel(
+    ollama.ModelDefinition{
+        Name: "gemma3",
+        Type: "chat", // "chat" or "generate"
+    },
+    &ai.ModelInfo{
+        Multiturn:  true,
+        SystemRole: true,
+        Tools:      false,
+        Media:      false,
+    },
 )
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{ServerAddress: "http://127.0.0.1:11434"}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	// Define the Ollama model you want to use
-	model := ollama.DefineModel(g, // Pass the genkit instance 'g'
-		ollama.ModelDefinition{
-			Name: "gemma:2b", // Match the model name pulled via `ollama pull`
-			Type: "generate", // Use "generate" for text completion, "chat" for chat models
-		},
-		// Provide ModelInfo about the model's capabilities
-		&ai.ModelInfo{
-			Label: "Ollama Gemma 2b", // User-friendly label
-			Supports: &ai.ModelSupports{
-				// Adjust these based on the specific Ollama model's capabilities
-				Multiturn:  false, // Gemma 2b base model might not be chat-tuned
-				SystemRole: false,
-				Tools:      false,
-				Media:      false,
-			},
-		},
-	)
-	if model == nil {
-		log.Fatal("Failed to define Ollama model")
-	}
-	log.Println("Ollama model defined:", model.Name())
-
-	// Now you can use the 'model' reference
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("Tell me a joke."))
-	if err != nil {
-		log.Fatalf("Generate failed: %v", err)
-	}
-
-	log.Println(resp.Text())
-}
-
 ```
 
 Then, you can use the model reference to send requests to your Ollama server:
 
 ```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/ollama"
-)
-
-func main() {
-	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{ServerAddress: "http://127.0.0.1:11434"}))
-	if err != nil {
-		log.Fatalf("Genkit init failed: %v", err)
-	}
-
-	// Assume 'model' is defined as in the previous example
-	model := ollama.DefineModel(g,
-		ollama.ModelDefinition{Name: "gemma:2b", Type: "generate"},
-		&ai.ModelInfo{Supports: &ai.ModelSupports{}}, // Simplified ModelInfo for brevity
-	)
-	if model == nil {
-		log.Fatal("Failed to define Ollama model")
-	}
-
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("Tell me a joke."))
-	if err != nil {
-		log.Fatalf("Generate failed: %v", err) // Corrected error handling
-	}
-
-	log.Println(resp.Text())
+resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("Tell me a joke."))
+if err != nil {
+    return err
 }
+
+log.Println(resp.Text())
 ```
 
 See [Generating content](/go/docs/models) for more information.

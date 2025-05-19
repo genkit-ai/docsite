@@ -12,7 +12,9 @@ To use this plugin, import the `pinecone` package and call `pinecone.Init()`:
 
 ```go
 import "github.com/firebase/genkit/go/plugins/pinecone"
+```
 
+```go
 if err := (&pinecone.Pinecone{}).Init(ctx, g); err != nil {
 	return err
 }
@@ -27,7 +29,7 @@ Configure the plugin to use your API key by doing one of the following:
 
   ```go
   if err := (&pinecone.Pinecone{APIKey: pineconeAPIKey}).Init(ctx, g); err != nil {
-  	return err
+	return err
   }
   ```
 

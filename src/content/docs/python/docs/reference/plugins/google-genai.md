@@ -26,20 +26,19 @@ To use the Google Gemini API, you need an API key.
 from genkit.ai import Genkit
 from genkit.plugins.google_genai import GoogleAI
 
-# Option 1: Configure via environment variable GEMINI_API_KEY
-# Ensure GEMINI_API_KEY is set in your environment
 ai = Genkit(
   plugins=[GoogleAI()],
-  model='googleai/gemini-1.5-flash', # Optional: Set a default model
+  model='googleai/gemini-2.0-flash', 
 )
-
-# Option 2: Provide API key directly
-# ai = Genkit(
-#   plugins=[GoogleAI(api_key='YOUR_GEMINI_API_KEY')]
-# )
 ```
 
-You will need to set the `GEMINI_API_KEY` environment variable, or you can provide the API Key directly during plugin initialization.
+You will need to set GEMINI_API_KEY environment variable or you can provide the API Key directly:
+
+```python
+ai = Genkit(
+  plugins=[GoogleAI(api_key='...')]
+)
+```
 
 ### Gemini API in Vertex AI (`VertexAI`)
 
@@ -49,20 +48,19 @@ To use models via Vertex AI, ensure you have authenticated with Google Cloud (e.
 from genkit.ai import Genkit
 from genkit.plugins.google_genai import VertexAI
 
-# Basic configuration (uses default project and location from gcloud)
 ai = Genkit(
   plugins=[VertexAI()],
-  model='vertexai/gemini-1.5-flash', # Optional: Set a default model
+  model='vertexai/gemini-2.0-flash', # optional
 )
-
-# Explicit configuration
-# ai = Genkit(
-#   plugins=[VertexAI(
-#     location='us-central1', # Specify the desired region
-#     project='your-gcp-project-id', # Specify your Google Cloud project ID
-#     # Other configuration options can be added here
-#   )],
-# )
 ```
 
 You can specify the `location` and `project` ID, among other configuration options available in the `VertexAI` constructor.
+
+```python
+ai = Genkit(
+  plugins=[VertexAI(
+    location='us-east1',
+    project='my-project-id',
+  )],
+)
+```

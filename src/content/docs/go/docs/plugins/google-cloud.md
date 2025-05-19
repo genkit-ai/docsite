@@ -36,40 +36,12 @@ To enable exporting to Google Cloud Tracing, Logging, and Monitoring, import the
 gets automatically exported.
 
 ```go
-package main
+import "github.com/firebase/genkit/go/plugins/googlecloud"
+```
 
-import (
-	"context"
-	"log"
-	"time" // Import time package for duration
-
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlecloud"
-	"golang.org/x/exp/slog" // Import slog for log level
-)
-
-func main() {
-	ctx := context.Background()
-
-	// Example initialization
-	err := googlecloud.Init(ctx, &googlecloud.Config{
-		ProjectID:      "your-gcp-project-id", // Replace with your Project ID
-		ForceExport:    false,                 // Set to true to force export in dev env
-		MetricInterval: 60 * time.Second,      // Example: 60 seconds interval
-		LogLevel:       slog.LevelInfo,        // Example: Info level
-	})
-	if err != nil {
-		log.Fatalf("Failed to initialize Google Cloud plugin: %v", err)
-	}
-
-	// Initialize Genkit with the plugin (if not already done elsewhere)
-	// g, err := genkit.Init(ctx, genkit.WithPlugins(&googlecloud.Plugin{})) // Plugin instance might be needed depending on usage
-	// if err != nil {
-	// 	log.Fatalf("Genkit initialization failed: %v", err)
-	// }
-
-	log.Println("Google Cloud plugin initialized successfully.")
-	// ... rest of your application logic ...
+```go
+if err := (&googlecloud.GoogleCloud{ProjectID: "your-google-cloud-project"}).Init(ctx, g); err != nil {
+	return err
 }
 ```
 
