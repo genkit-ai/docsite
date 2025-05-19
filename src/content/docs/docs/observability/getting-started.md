@@ -33,7 +33,7 @@ and on the Google Cloud Console.
    Logging, Metrics, and Trace, which are paid services. View the
    [Google Cloud Observability pricing](https://cloud.google.com/stackdriver/pricing) page for pricing details and to learn about free-of-charge tier limits.
 
-3. Write a Genkit feature by following the [Get Started Guide](https://firebase.google.com/docs/genkit/get-started), and prepare your code for deployment by using one of the following guides:
+3. Write a Genkit feature by following the [Get Started Guide](/docs/get-started), and prepare your code for deployment by using one of the following guides:
 
    a. [Deploy flows using Cloud Functions for Firebase](/docs/firebase)
    b. [Deploy flows using Cloud Run](/docs/cloud-run)
