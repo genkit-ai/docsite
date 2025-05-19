@@ -2,7 +2,7 @@
 title: Astra DB plugin
 ---
 
-This plugin provides a [Astra DB](https://docs.datastax.com/en/astra-db-serverless/index.html) retriever and indexer for [Genkit](https://firebase.google.com/docs/genkit).
+This plugin provides a [Astra DB](https://docs.datastax.com/en/astra-db-serverless/index.html) retriever and indexer for Genkit.
 
 ## Installation
 

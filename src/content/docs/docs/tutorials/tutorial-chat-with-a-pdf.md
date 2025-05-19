@@ -78,13 +78,13 @@ After setting up your dependencies, you can build the project.
 Although this tutorial uses the Gemini API from AI Studio, Genkit
 supports a wide variety of model providers, including:
 
-- [Gemini from Vertex AI.](https://firebase.google.com/docs/genkit/plugins/vertex-ai#generative_ai_models)
+- [Gemini from Vertex AI.](/docs/plugins/vertex-ai#generative-ai-models)
 - Anthropic's Claude 3 models and Llama 3.1 through the
-  [Vertex AI Model Garden](https://firebase.google.com/docs/genkit/plugins/vertex-ai#anthropic_claude_3_on_vertex_ai_model_garden),
+  [Vertex AI Model Garden](/docs/plugins/vertex-ai#anthropic-claude-3-on-vertex-ai-model-garden),
   as well as community plugins.
 - Open source models through
-  [Ollama](https://firebase.google.com/docs/genkit/plugins/ollama).
-- [Community-supported providers](https://firebase.google.com/docs/genkit/models#models-supported) such as OpenAI and Cohere.
+  [Ollama](/docs/plugins/ollama).
+- [Community-supported providers](/docs/models#models-supported-by-genkit) such as OpenAI and Cohere.
   :::
 
 ### 2. Import the required dependencies
