@@ -293,7 +293,7 @@ export const sidebar = [
   {
     label: "Genkit JS",
     items: JS_SIDEBAR,
-    collapsed: true,
+    collapsed: false,
   },
   {
     label: "Genkit Go",
