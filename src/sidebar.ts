@@ -96,6 +96,7 @@ const JS_SIDEBAR = [
   {
     label: "Plugins",
     items: [
+      { label: "Overview", slug: "docs/plugins" },
       { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
       { label: "Ollama", slug: "docs/plugins/ollama" },
