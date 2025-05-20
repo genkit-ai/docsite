@@ -8,7 +8,7 @@ The Neo4j plugin provides indexer and retriever implementations that use the
 ## Installation
 
 ```bash
-npm i --save genkitx-neo4j
+npm install genkitx-neo4j
 ```
 
 ## Configuration

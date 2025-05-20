@@ -8,7 +8,7 @@ The Chroma plugin provides indexer and retriever implementations that use the
 ## Installation
 
 ```bash
-npm i --save genkitx-chromadb
+npm install genkitx-chromadb
 ```
 
 ## Configuration
