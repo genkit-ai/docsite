@@ -17,10 +17,10 @@ The following steps will help you migrate from Genkit 0.5 to Genkit 0.9 quickly.
   npm uninstall -g genkit && npm uninstall genkit
   ```
 
-- Install the new CLI
+- Install the new CLI globally
 
   ```bash
-  npm i -D genkit-cli
+  npm i -g genkit-cli
   ```
 
 ### 2. Update your dependencies
