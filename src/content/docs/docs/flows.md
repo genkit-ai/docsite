@@ -71,6 +71,13 @@ can define schemas for them using Zod, in much the same way as you define the
 output schema of a `generate()` call; however, unlike with `generate()`, you can
 also specify an input schema.
 
+While it's not mandatory to wrap your input and output schemas in `z.object()`, it's considered best practice for these reasons:
+
+- **Better developer experience**: Wrapping schemas in objects provides a better experience in the Developer UI by giving you labeled input fields. 
+- **Future-proof API design**: Object-based schemas allow for easy extensibility in the future. You can add new fields to your input or output schemas without breaking existing clients, which is a core principle of robust API design.
+
+All examples in this documentation use object-based schemas to follow these best practices.
+
 Here's a refinement of the last example, which defines a flow that takes a
 string as input and outputs an object:
 
