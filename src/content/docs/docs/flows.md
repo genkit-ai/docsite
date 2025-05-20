@@ -46,7 +46,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
     inputSchema: z.object({ theme: z.string() }),
-    outputSchema: z.object({ text: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
   },
   async ({ theme }) => {
     const { text } = await ai.generate({
@@ -120,7 +120,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
     inputSchema: z.object({ theme: z.string() }),
-    outputSchema: z.object({ result: z.string() }),
+    outputSchema: z.object({ formattedMenuItem: z.string() }),
   },
   async ({ theme }) => {
     const { output } = await ai.generate({
@@ -131,7 +131,9 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
     if (output == null) {
       throw new Error("Response doesn't satisfy schema.");
     }
-    return { result: `**${output.dishname}**: ${output.description}` };
+    return { 
+      formattedMenuItem: `**${output.dishname}**: ${output.description}`
+    };
   },
 );
 ```
@@ -343,8 +345,6 @@ some unspecified method, and the second step includes the menu as context for a
 `generate()` call.
 
 ```ts
-import { run } from 'genkit';
-
 export const menuQuestionFlow = ai.defineFlow(
   {
     name: 'menuQuestionFlow',
@@ -398,10 +398,11 @@ const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
     inputSchema: z.object({ theme: z.string() }),
-    outputSchema: z.object({ result: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
   },
   async ({ theme }) => {
     // ...
+    return { menuItem: "Generated menu item would go here" };
   },
 );
 
@@ -462,10 +463,11 @@ export const flowA = ai.defineFlow(
   { 
     name: 'flowA',
     inputSchema: z.object({ subject: z.string() }),
-    outputSchema: z.object({ result: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
   }, 
   async ({ subject }) => {
     // ...
+    return { response: "Generated response would go here" };
   }
 );
 
@@ -473,10 +475,11 @@ export const flowB = ai.defineFlow(
   { 
     name: 'flowB',
     inputSchema: z.object({ subject: z.string() }),
-    outputSchema: z.object({ result: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
   }, 
   async ({ subject }) => {
     // ...
+    return { response: "Generated response would go here" };
   }
 );
 

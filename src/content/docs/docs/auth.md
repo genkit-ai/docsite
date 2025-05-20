@@ -30,7 +30,7 @@ const ai = genkit({ ... });
 export const selfSummaryFlow = ai.defineFlow( {
   name: 'selfSummaryFlow',
   inputSchema: z.object({ uid: z.string() }),
-  outputSchema: z.string(),
+  outputSchema: z.object({ profileSummary: z.string() }),
 }, async (input, { context }) => {
   if (!context.auth) {
     throw new UserFacingErrorError('UNAUTHENTICATED', 'Unauthenticated');
@@ -39,6 +39,7 @@ export const selfSummaryFlow = ai.defineFlow( {
     throw new UserFacingError('PERMISSION_DENIED', 'You may only summarize your own profile data.');
   }
   // Flow logic here...
+  return { profileSummary: "User profile summary would go here" };
 });
 ```
 
@@ -95,11 +96,12 @@ export const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
     inputSchema: z.object({ uid: z.string() }),
-    outputSchema: z.string(),
+    outputSchema: z.object({ profileSummary: z.string() }),
     authPolicy: ...
   },
   async (input) => {
     await readDatabase(input.uid);
+    return { profileSummary: "User profile summary would go here" };
   }
 );
 ```
@@ -135,10 +137,11 @@ const ai = genkit({ ... });;
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.object({ prompt: z.string() }),
-  outputSchema: z.object({ result: z.string() }),
-}, async ({ prompt }) => {
+  inputSchema: z.object({ userQuery: z.string() }),
+  outputSchema: z.object({ profileSummary: z.string() }),
+}, async ({ userQuery }) => {
   // Flow logic here...
+  return { profileSummary: "User profile summary based on query would go here" };
 });
 
 export const selfSummary = onCallGenkit({
@@ -177,11 +180,12 @@ import { onCallGenkit } from 'firebase-functions/https';
 const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
-    inputSchema: z.object({ prompt: z.string() }),
-    outputSchema: z.object({ result: z.string() }),
+    inputSchema: z.object({ userQuery: z.string() }),
+    outputSchema: z.object({ profileSummary: z.string() }),
   },
-  async ({ prompt }) => {
+  async ({ userQuery }) => {
     // Flow logic here...
+    return { profileSummary: "User profile summary based on query would go here" };
   },
 );
 
@@ -206,10 +210,11 @@ import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.object({ prompt: z.string() }),
-  outputSchema: z.object({ result: z.string() }),
-}, async ({ prompt }) => {
+  inputSchema: z.object({ userQuery: z.string() }),
+  outputSchema: z.object({ profileSummary: z.string() }),
+}, async ({ userQuery }) => {
   // Flow logic here...
+  return { profileSummary: "User profile summary based on query would go here" };
 });
 
 export const selfSummary = onCallGenkit({
@@ -249,10 +254,11 @@ export const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
     inputSchema: z.object({ uid: z.string() }),
-    outputSchema: z.string(),
+    outputSchema: z.object({ profileSummary: z.string() }),
   },
   async (input) => {
     // Flow logic here...
+    return { profileSummary: "User profile summary would go here" };
   }
 );
 ```
