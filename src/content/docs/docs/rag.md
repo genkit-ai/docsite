@@ -137,7 +137,7 @@ determines what food items are available.
 ```bash
 npm install llm-chunk pdf-parse @genkit-ai/dev-local-vectorstore
 
-npm i -D --save @types/pdf-parse
+npm install --save-dev @types/pdf-parse
 ```
 
 ### Add a local vector store to your configuration

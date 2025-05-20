@@ -46,13 +46,13 @@ After setting up your dependencies, you can build the project.
 3. Install the pdf-parse module.
 
    ```bash
-   npm i pdf-parse && npm i -D @types/pdf-parse
+   npm install pdf-parse && npm install --save-dev @types/pdf-parse
    ```
 
 4. Install the following Genkit dependencies to use Genkit in your project:
 
    ```bash
-   npm i genkit @genkit-ai/googleai
+   npm install genkit @genkit-ai/googleai
    ```
 
    - `genkit` provides Genkit core capabilities.

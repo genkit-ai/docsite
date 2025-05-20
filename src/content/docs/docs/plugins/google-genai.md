@@ -8,7 +8,7 @@ through the [Gemini API](https://ai.google.dev/docs/gemini_api_overview).
 ## Installation
 
 ```bash
-npm i --save @genkit-ai/googleai
+npm install @genkit-ai/googleai
 ```
 
 ## Configuration

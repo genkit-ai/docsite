@@ -46,7 +46,7 @@ After setting up your dependencies, you can build the project.
 3. Install the following Genkit dependencies to use Genkit in your project:
 
    ```bash
-   npm i genkit @genkit-ai/googleai
+   npm install genkit @genkit-ai/googleai
    ```
 
    - `genkit` provides Genkit core capabilities.

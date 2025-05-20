@@ -44,7 +44,7 @@ and on the Google Cloud Console.
 Install the `@genkit-ai/firebase` plugin in your project:
 
 ```bash
-npm i @genkit-ai/firebase
+npm install @genkit-ai/firebase
 ```
 
 Import `enableFirebaseTelemetry` into your Genkit configuration file (the

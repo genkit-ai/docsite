@@ -32,9 +32,9 @@ cd genkitx-my-plugin
 
 npm init -y
 
-npm i --save genkit
+npm install genkit
 
-npm i --save-dev typescript
+npm install --save-dev typescript
 
 npx tsc --init
 ```
