@@ -10,10 +10,10 @@ Genkit provides two key developer tools:
 
 ### Command Line Interface (CLI)
 
-Install the CLI in your project using:
+Install the CLI globally using:
 
 ```bash
-npm install -D genkit-cli
+npm install -g genkit-cli
 ```
 
 The CLI supports various commands to facilitate working with Genkit projects:
@@ -30,7 +30,7 @@ The CLI supports various commands to facilitate working with Genkit projects:
 For a full list of commands, use:
 
 ```bash
-npx genkit --help
+genkit --help
 ```
 
 ### Genkit Developer UI
@@ -44,7 +44,7 @@ in your code by attaching to a running code process.
 To start the UI, run the following command:
 
 ```bash
-npx genkit start -- <command to run your code>
+genkit start -- <command to run your code>
 ```
 
 The `<command to run your code>` will vary based on your project's setup and
@@ -52,13 +52,13 @@ the file you want to execute. Here are some examples:
 
 ```bash
 # Running a typical development server
-npx genkit start -- npm run dev
+genkit start -- npm run dev
 
 # Running a TypeScript file directly
-npx genkit start -- npx tsx --watch src/index.ts
+genkit start -- npx tsx --watch src/index.ts
 
 # Running a JavaScript file directly
-npx genkit start -- node --watch src/index.js
+genkit start -- node --watch src/index.js
 ```
 
 Including the `--watch` option will enable the Developer UI to notice and
@@ -79,7 +79,7 @@ Alternatively, you can use add the `-o` option to the start command to
 automatically open the Developer UI in your default browser tab.
 
 ```
-npx genkit start -o -- <command to run your code>
+genkit start -o -- <command to run your code>
 ```
 
 ![Genkit Developer UI](../../../assets/dev_ui/genkit_dev_ui_home.png)
@@ -101,11 +101,11 @@ to deliver and enhance the quality of its services and to analyze usage.
 To opt-out of analytics, you can run the following command:
 
 ```bash
-npx genkit config set analyticsOptOut true
+genkit config set analyticsOptOut true
 ```
 
 You can view the current setting by running:
 
 ```bash
-npx genkit config get analyticsOptOut
+genkit config get analyticsOptOut
 ```

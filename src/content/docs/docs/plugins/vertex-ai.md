@@ -23,7 +23,7 @@ The Vertex AI plugin provides interfaces to several AI services:
 ## Installation
 
 ```bash
-npm i --save @genkit-ai/vertexai
+npm install @genkit-ai/vertexai
 ```
 
 If you want to locally run flows that use this plugin, you also need the [Google Cloud CLI tool](https://cloud.google.com/sdk/docs/install) installed.

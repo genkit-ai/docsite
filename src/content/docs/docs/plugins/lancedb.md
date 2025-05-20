@@ -7,7 +7,7 @@ The LanceDB plugin provides indexer and retriever implementations that use [Lanc
 ## Installation
 
 ```bash
-npm i --save genkitx-lancedb
+npm install genkitx-lancedb
 ```
 
 ## Configuration

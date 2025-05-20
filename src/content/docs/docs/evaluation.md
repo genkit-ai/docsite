@@ -442,10 +442,10 @@ questions.
 ```ts
 import { genkit, z } from 'genkit';
 import { googleAI } from '@genkit-ai/googleai';
-import { chunk } from 'llm-chunk'; // npm i llm-chunk
+import { chunk } from 'llm-chunk'; // npm install llm-chunk
 import path from 'path';
 import { readFile } from 'fs/promises';
-import pdf from 'pdf-parse'; // npm i pdf-parse
+import pdf from 'pdf-parse'; // npm install pdf-parse
 
 const ai = genkit({ plugins: [googleAI()] });
 

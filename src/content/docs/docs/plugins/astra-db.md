@@ -7,7 +7,7 @@ This plugin provides a [Astra DB](https://docs.datastax.com/en/astra-db-serverle
 ## Installation
 
 ```bash
-npm i --save genkitx-astra-db
+npm install genkitx-astra-db
 ```
 
 ## Prerequisites

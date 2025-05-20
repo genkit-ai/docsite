@@ -8,7 +8,7 @@ The Ollama plugin provides interfaces to any of the local LLMs supported by
 ## Installation
 
 ```bash
-npm i --save genkitx-ollama
+npm install genkitx-ollama
 ```
 
 ## Configuration

@@ -8,7 +8,7 @@ The Pinecone plugin provides indexer and retriever implementations that use the
 ## Installation
 
 ```bash
-npm i --save genkitx-pinecone
+npm install genkitx-pinecone
 ```
 
 ## Configuration

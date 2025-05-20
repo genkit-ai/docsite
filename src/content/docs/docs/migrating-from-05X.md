@@ -17,10 +17,10 @@ The following steps will help you migrate from Genkit 0.5 to Genkit 0.9 quickly.
   npm uninstall -g genkit && npm uninstall genkit
   ```
 
-- Install the new CLI
+- Install the new CLI globally
 
   ```bash
-  npm i -D genkit-cli
+  npm install -g genkit-cli
   ```
 
 ### 2. Update your dependencies
@@ -34,7 +34,7 @@ The following steps will help you migrate from Genkit 0.5 to Genkit 0.9 quickly.
 - Install the new consolidated `genkit` package
 
   ```bash
-  npm i --save genkit
+  npm install genkit
   ```
 
 - Upgrade all plugin versions (example below)
@@ -157,7 +157,7 @@ The command-line interface (CLI) has undergone significant updates in Genkit 0.9
 To install the CLI:
 
 ```bash
-npm i -g genkit-cli
+npm install -g genkit-cli
 ```
 
 Some changes have been made to the `genkit start` command:
@@ -203,13 +203,13 @@ Previously, the Genkit libraries were separated into several modules, which you 
 **Old:**
 
 ```bash
-npm i @genkit-ai/core @genkit-ai/ai @genkit-ai/flow @genkit-ai/dotprompt
+npm install @genkit-ai/core @genkit-ai/ai @genkit-ai/flow @genkit-ai/dotprompt
 ```
 
 **New:**
 
 ```bash
-npm i genkit
+npm install genkit
 ```
 
 **Old:**

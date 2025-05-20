@@ -44,7 +44,7 @@ npm init -y
 ```bash
 npm install --save genkit @genkit-ai/googleai
 
-npm install -D genkit-cli typescript tsx
+npm install -g genkit-cli typescript tsx
 ```
 
 ## 2. Configure your Genkit app
@@ -149,7 +149,7 @@ curl -X POST "http://127.0.0.1:3400/menuSuggestionFlow" \
 You can use the Developer UI to test flows interactively during development:
 
 ```bash
-npx genkit start -- npm run start
+genkit start -- npm run start
 ```
 
 Navigate to `http://localhost:4000/flows` to
