@@ -127,8 +127,6 @@ long as your app client is also using the
 [Firebase Auth SDK](https://firebase.google.com/docs/auth).
 You can use Firebase Auth to protect your flows defined with `onCallGenkit()`:
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { genkit } from 'genkit';
 import { onCallGenkit } from 'firebase-functions/https';
@@ -137,9 +135,9 @@ const ai = genkit({ ... });;
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.string(),
-  outputSchema: z.string(),
-}, async (input) => {
+  inputSchema: z.object({ prompt: z.string() }),
+  outputSchema: z.object({ result: z.string() }),
+}, async ({ prompt }) => {
   // Flow logic here...
 });
 
@@ -173,18 +171,16 @@ can execute the function. You can instead provide the email address of a user
 or service account that should be granted permission to call this exact
 function.
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ prompt: z.string() }),
+    outputSchema: z.object({ result: z.string() }),
   },
-  async (input) => {
+  async ({ prompt }) => {
     // Flow logic here...
   },
 );
@@ -205,16 +201,14 @@ Firebase plugin for genkit includes first-class support for
 [Firebase App Check](https://firebase.google.com/docs/app-check). Do this by
 adding the following configuration options to your `onCallGenkit()`:
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.string(),
-  outputSchema: z.string(),
-}, async (input) => {
+  inputSchema: z.object({ prompt: z.string() }),
+  outputSchema: z.object({ result: z.string() }),
+}, async ({ prompt }) => {
   // Flow logic here...
 });
 

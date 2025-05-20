@@ -66,21 +66,21 @@ This section explains how to perform inference-based evaluation using Genkit.
     export const qaFlow = ai.defineFlow(
       {
         name: 'qaFlow',
-        inputSchema: z.string(),
-        outputSchema: z.string(),
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.object({ answer: z.string() }),
       },
-      async (query) => {
+      async ({ query }) => {
         const factDocs = await ai.retrieve({
           retriever: dummyRetriever,
           query,
         });
 
-        const llmResponse = await ai.generate({
+        const { text } = await ai.generate({
           model: googleAI.model('gemini-2.0-flash'),
           prompt: `Answer this question with the given context ${query}`,
           docs: factDocs,
         });
-        return llmResponse.text;
+        return { answer: text };
       },
     );
     ```
@@ -345,10 +345,10 @@ example:
 export const qaFlow = ai.defineFlow(
   {
     name: 'qaFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ query: z.string() }),
+    outputSchema: z.object({ answer: z.string() }),
   },
-  async (query) => {
+  async ({ query }) => {
     const factDocs = await ai.retrieve({
       retriever: dummyRetriever,
       query,
@@ -363,12 +363,12 @@ export const qaFlow = ai.defineFlow(
       return factDocs.filter((d) => isSillyFact(d.text));
     });
 
-    const llmResponse = await ai.generate({
+    const { text } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocsModified,
     });
-    return llmResponse.text;
+    return { answer: text };
   },
 );
 ```
@@ -467,10 +467,10 @@ async function extractText(filePath: string) {
 export const synthesizeQuestions = ai.defineFlow(
   {
     name: 'synthesizeQuestions',
-    inputSchema: z.string().describe('PDF file path'),
-    outputSchema: z.array(z.string()),
+    inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
+    outputSchema: z.object({ questions: z.array(z.string()) }),
   },
-  async (filePath) => {
+  async ({ filePath }) => {
     filePath = path.resolve(filePath);
     // `extractText` loads the PDF and extracts its contents as text.
     const pdfTxt = await ai.run('extract-text', () => extractText(filePath));
@@ -479,15 +479,15 @@ export const synthesizeQuestions = ai.defineFlow(
 
     const questions: string[] = [];
     for (var i = 0; i < chunks.length; i++) {
-      const qResponse = await ai.generate({
+      const { text } = await ai.generate({
         model: googleAI.model('gemini-2.0-flash'),
         prompt: {
           text: `Generate one question about the text below: ${chunks[i]}`,
         },
       });
-      questions.push(qResponse.text);
+      questions.push(text);
     }
-    return questions;
+    return { questions };
   },
 );
 ```
