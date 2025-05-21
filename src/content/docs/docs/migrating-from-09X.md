@@ -202,16 +202,16 @@ const ai = genkit({
 export const jokeTeller = ai.defineFlow(
   {
     name: 'jokeTeller',
-    inputSchema: z.string().nullable(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ type: z.string().nullable() }),
+    outputSchema: z.object({ joke: z.string() }),
     streamSchema: z.string(),
   },
-  async (type, { sendChunk }) => {
+  async ({ type }, { sendChunk }) => {
     const { stream, response } = ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       sendChunk(chunk.text);
     }
-    return (await response).text;
+    return { joke: (await response).text };
   },
 );
 

@@ -218,28 +218,46 @@ async function extractTextFromPdf(filePath: string) {
 export const indexMenu = ai.defineFlow(
   {
     name: 'indexMenu',
-    inputSchema: z.string().describe('PDF file path'),
-    outputSchema: z.void(),
+    inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      documentsIndexed: z.number(),
+      error: z.string().optional(),
+    }),
   },
-  async (filePath: string) => {
-    filePath = path.resolve(filePath);
+  async ({ filePath }) => {
+    try {
+      filePath = path.resolve(filePath);
 
-    // Read the pdf.
-    const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
+      // Read the pdf
+      const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
 
-    // Divide the pdf text into segments.
-    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
+      // Divide the pdf text into segments
+      const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
-    // Convert chunks of text into documents to store in the index.
-    const documents = chunks.map((text) => {
-      return Document.fromText(text, { filePath });
-    });
+      // Convert chunks of text into documents to store in the index.
+      const documents = chunks.map((text) => {
+        return Document.fromText(text, { filePath });
+      });
 
-    // Add documents to the index.
-    await ai.index({
-      indexer: menuPdfIndexer,
-      documents,
-    });
+      // Add documents to the index
+      await ai.index({
+        indexer: menuPdfIndexer,
+        documents,
+      });
+
+      return {
+        success: true,
+        documentsIndexed: documents.length,
+      };
+    } catch (err) {
+      // For unexpected errors that throw exceptions
+      return {
+        success: false,
+        documentsIndexed: 0,
+        error: err instanceof Error ? err.message : String(err)
+      };
+    }
   },
 );
 ```
@@ -247,7 +265,7 @@ export const indexMenu = ai.defineFlow(
 #### Run the indexer flow
 
 ```bash
-genkit flow:run indexMenu '"menu.pdf"'
+genkit flow:run indexMenu '{"filePath": "menu.pdf"}'
 ```
 
 After running the `indexMenu` flow, the vector database will be seeded with
@@ -267,12 +285,16 @@ import { vertexAI } from '@genkit-ai/vertexai';
 export const menuRetriever = devLocalRetrieverRef('menuQA');
 
 export const menuQAFlow = ai.defineFlow(
-  { name: 'menuQA', inputSchema: z.string(), outputSchema: z.string() },
-  async (input: string) => {
+  { 
+    name: 'menuQA', 
+    inputSchema: z.object({ query: z.string() }), 
+    outputSchema: z.object({ answer: z.string() }) 
+  },
+  async ({ query }) => {
     // retrieve relevant documents
     const docs = await ai.retrieve({
       retriever: menuRetriever,
-      query: input,
+      query,
       options: { k: 3 },
     });
 
@@ -287,11 +309,11 @@ Use only the context provided to answer the question.
 If you don't know, do not make up an answer.
 Do not add or change items on the menu.
 
-Question: ${input}`,
+Question: ${query}`,
       docs,
     });
 
-    return text;
+    return { answer: text };
   },
 );
 ```
@@ -299,7 +321,7 @@ Question: ${input}`,
 #### Run the retriever flow
 
 ```bash
-genkit flow:run menuQA '"Recommend a dessert from the menu while avoiding dairy and nuts"'
+genkit flow:run menuQA '{"query": "Recommend a dessert from the menu while avoiding dairy and nuts"}'
 ```
 
 The output for this command should contain a response from the model, grounded

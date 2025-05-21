@@ -30,7 +30,7 @@ const ai = genkit({ ... });
 export const selfSummaryFlow = ai.defineFlow( {
   name: 'selfSummaryFlow',
   inputSchema: z.object({ uid: z.string() }),
-  outputSchema: z.string(),
+  outputSchema: z.object({ profileSummary: z.string() }),
 }, async (input, { context }) => {
   if (!context.auth) {
     throw new UserFacingErrorError('UNAUTHENTICATED', 'Unauthenticated');
@@ -39,6 +39,7 @@ export const selfSummaryFlow = ai.defineFlow( {
     throw new UserFacingError('PERMISSION_DENIED', 'You may only summarize your own profile data.');
   }
   // Flow logic here...
+  return { profileSummary: "User profile summary would go here" };
 });
 ```
 
@@ -95,11 +96,12 @@ export const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
     inputSchema: z.object({ uid: z.string() }),
-    outputSchema: z.string(),
+    outputSchema: z.object({ profileSummary: z.string() }),
     authPolicy: ...
   },
   async (input) => {
     await readDatabase(input.uid);
+    return { profileSummary: "User profile summary would go here" };
   }
 );
 ```
@@ -127,8 +129,6 @@ long as your app client is also using the
 [Firebase Auth SDK](https://firebase.google.com/docs/auth).
 You can use Firebase Auth to protect your flows defined with `onCallGenkit()`:
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { genkit } from 'genkit';
 import { onCallGenkit } from 'firebase-functions/https';
@@ -137,10 +137,11 @@ const ai = genkit({ ... });;
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.string(),
-  outputSchema: z.string(),
-}, async (input) => {
+  inputSchema: z.object({ userQuery: z.string() }),
+  outputSchema: z.object({ profileSummary: z.string() }),
+}, async ({ userQuery }) => {
   // Flow logic here...
+  return { profileSummary: "User profile summary based on query would go here" };
 });
 
 export const selfSummary = onCallGenkit({
@@ -173,19 +174,18 @@ can execute the function. You can instead provide the email address of a user
 or service account that should be granted permission to call this exact
 function.
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ userQuery: z.string() }),
+    outputSchema: z.object({ profileSummary: z.string() }),
   },
-  async (input) => {
+  async ({ userQuery }) => {
     // Flow logic here...
+    return { profileSummary: "User profile summary based on query would go here" };
   },
 );
 
@@ -205,17 +205,16 @@ Firebase plugin for genkit includes first-class support for
 [Firebase App Check](https://firebase.google.com/docs/app-check). Do this by
 adding the following configuration options to your `onCallGenkit()`:
 
-<!-- prettier-ignore: see note above -->
-
 ```ts
 import { onCallGenkit } from 'firebase-functions/https';
 
 const selfSummaryFlow = ai.defineFlow({
   name: 'selfSummaryFlow',
-  inputSchema: z.string(),
-  outputSchema: z.string(),
-}, async (input) => {
+  inputSchema: z.object({ userQuery: z.string() }),
+  outputSchema: z.object({ profileSummary: z.string() }),
+}, async ({ userQuery }) => {
   // Flow logic here...
+  return { profileSummary: "User profile summary based on query would go here" };
 });
 
 export const selfSummary = onCallGenkit({
@@ -255,10 +254,11 @@ export const selfSummaryFlow = ai.defineFlow(
   {
     name: 'selfSummaryFlow',
     inputSchema: z.object({ uid: z.string() }),
-    outputSchema: z.string(),
+    outputSchema: z.object({ profileSummary: z.string() }),
   },
   async (input) => {
     // Flow logic here...
+    return { profileSummary: "User profile summary would go here" };
   }
 );
 ```

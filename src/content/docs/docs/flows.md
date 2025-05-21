@@ -45,13 +45,15 @@ a function that calls `generate()`:
 export const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     const { text } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
-      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
-    return text;
+    return { text };
   },
 );
 ```
@@ -69,6 +71,13 @@ can define schemas for them using Zod, in much the same way as you define the
 output schema of a `generate()` call; however, unlike with `generate()`, you can
 also specify an input schema.
 
+While it's not mandatory to wrap your input and output schemas in `z.object()`, it's considered best practice for these reasons:
+
+- **Better developer experience**: Wrapping schemas in objects provides a better experience in the Developer UI by giving you labeled input fields. 
+- **Future-proof API design**: Object-based schemas allow for easy extensibility in the future. You can add new fields to your input or output schemas without breaking existing clients, which is a core principle of robust API design.
+
+All examples in this documentation use object-based schemas to follow these best practices.
+
 Here's a refinement of the last example, which defines a flow that takes a
 string as input and outputs an object:
 
@@ -83,13 +92,13 @@ const MenuItemSchema = z.object({
 export const menuSuggestionFlowWithSchema = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
-    inputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
     outputSchema: MenuItemSchema,
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     const { output } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
-      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
     if (output == null) {
@@ -110,19 +119,21 @@ string, which the flow returns.
 export const menuSuggestionFlowMarkdown = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ formattedMenuItem: z.string() }),
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     const { output } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
-      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
     if (output == null) {
       throw new Error("Response doesn't satisfy schema.");
     }
-    return `**${output.dishname}**: ${output.description}`;
+    return { 
+      formattedMenuItem: `**${output.dishname}**: ${output.description}`
+    };
   },
 );
 ```
@@ -132,7 +143,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
 Once you've defined a flow, you can call it from your Node.js code:
 
 ```typescript
-const { text } = await menuSuggestionFlow('bistro');
+const { text } = await menuSuggestionFlow({ theme: 'bistro' });
 ```
 
 The argument to the flow must conform to the input schema, if you defined one.
@@ -142,7 +153,7 @@ example, if you set the output schema to `MenuItemSchema`, the flow output will
 contain its properties:
 
 ```typescript
-const { dishname, description } = await menuSuggestionFlowWithSchema('bistro');
+const { dishname, description } = await menuSuggestionFlowWithSchema({ theme: 'bistro' });
 ```
 
 ## Streaming flows
@@ -160,14 +171,14 @@ Here's an example of a flow that supports streaming:
 export const menuSuggestionStreamingFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
-    inputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
     streamSchema: z.string(),
     outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
   },
-  async (restaurantTheme, { sendChunk }) => {
+  async ({ theme }, { sendChunk }) => {
     const response = await ai.generateStream({
       model: googleAI.model('gemini-2.0-flash'),
-      prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
 
     for await (const chunk of response.stream) {
@@ -178,7 +189,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
     }
 
     return {
-      theme: restaurantTheme,
+      theme,
       menuItem: (await response.response).text,
     };
   },
@@ -205,7 +216,7 @@ Streaming flows are also callable, but they immediately return a response object
 rather than a promise:
 
 ```typescript
-const response = menuSuggestionStreamingFlow.stream('Danube');
+const response = menuSuggestionStreamingFlow.stream({ theme: 'Danube' });
 ```
 
 The response object has a stream property, which you can use to iterate over the
@@ -233,14 +244,14 @@ complete output conforms to `outputSchema`.
 You can run flows from the command line using the Genkit CLI tool:
 
 ```bash
-genkit flow:run menuSuggestionFlow '"French"'
+genkit flow:run menuSuggestionFlow '{"theme": "French"}'
 ```
 
 For streaming flows, you can print the streaming output to the console by adding
 the `-s` flag:
 
 ```bash
-genkit flow:run menuSuggestionFlow '"French"' -s
+genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s
 ```
 
 Running a flow from the command line is useful for testing a flow, or for
@@ -284,10 +295,10 @@ const PrixFixeMenuSchema = z.object({
 export const complexMenuSuggestionFlow = ai.defineFlow(
   {
     name: 'complexMenuSuggestionFlow',
-    inputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
     outputSchema: PrixFixeMenuSchema,
   },
-  async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
+  async ({ theme }): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
     const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
     await chat.send('What makes a good prix fixe menu?');
     await chat.send(
@@ -334,15 +345,13 @@ some unspecified method, and the second step includes the menu as context for a
 `generate()` call.
 
 ```ts
-import { run } from 'genkit';
-
 export const menuQuestionFlow = ai.defineFlow(
   {
     name: 'menuQuestionFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ question: z.string() }),
+    outputSchema: z.object({ answer: z.string() }),
   },
-  async (input: string): Promise<string> => {
+  async ({ question }): Promise<{ answer: string }> => {
     const menu = await ai.run('retrieve-daily-menu', async (): Promise<string> => {
       // Retrieve today's menu. (This could be a database access or simply
       // fetching the menu from your website.)
@@ -354,10 +363,10 @@ export const menuQuestionFlow = ai.defineFlow(
     const { text } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
       system: "Help the user answer questions about today's menu.",
-      prompt: input,
+      prompt: question,
       docs: [{ content: [{ text: menu }] }],
     });
-    return text;
+    return { answer: text };
   },
 );
 ```
@@ -388,9 +397,12 @@ const apiKey = defineSecret('GOOGLE_AI_API_KEY');
 const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     // ...
+    return { menuItem: "Generated menu item would go here" };
   },
 );
 
@@ -420,8 +432,10 @@ import { startFlowServer } from '@genkit-ai/express';
 export const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ result: z.string() }),
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     // ...
   },
 );
@@ -437,7 +451,7 @@ can call a flow with a POST request as follows:
 
 ```bash
 curl -X POST "http://localhost:3400/menuSuggestionFlow" \
-  -H "Content-Type: application/json"  -d '{"data": "banana"}'
+  -H "Content-Type: application/json"  -d '{"data": {"theme": "banana"}}'
 ```
 
 If needed, you can customize the flows server to serve a specific list of flows,
@@ -445,13 +459,29 @@ as shown below. You can also specify a custom port (it will use the PORT
 environment variable if set) or specify CORS settings.
 
 ```typescript
-export const flowA = ai.defineFlow({ name: 'flowA' }, async (subject) => {
-  // ...
-});
+export const flowA = ai.defineFlow(
+  { 
+    name: 'flowA',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
+  }, 
+  async ({ subject }) => {
+    // ...
+    return { response: "Generated response would go here" };
+  }
+);
 
-export const flowB = ai.defineFlow({ name: 'flowB' }, async (subject) => {
-  // ...
-});
+export const flowB = ai.defineFlow(
+  { 
+    name: 'flowB',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
+  }, 
+  async ({ subject }) => {
+    // ...
+    return { response: "Generated response would go here" };
+  }
+);
 
 startFlowServer({
   flows: [flowB],
