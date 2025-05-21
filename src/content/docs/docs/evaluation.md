@@ -134,13 +134,13 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 
    a. Click the **Add example** button to open the example editor panel.
 
-   b. Only the `input` field is required. Enter `"Who is man's best friend?"` in the `input` field, and click **Save** to add the example has to your dataset.
+   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example has to your dataset.
 
    c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
 
    ```
-   "Can I give milk to my cats?"
-   "From which animals did dogs evolve?"
+   {"query": "Can I give milk to my cats?"}
+   {"query": "From which animals did dogs evolve?"}
    ```
 
 By the end of this step, your dataset should have 3 examples in it, with the
@@ -253,10 +253,10 @@ field and an optional `reference` field, like below:
 ```json
 [
   {
-    "input": "What is the French word for Cheese?"
+    "input": {"query": "What is the French word for Cheese?"}
   },
   {
-    "input": "What green vegetable looks like cauliflower?",
+    "input": {"query": "What green vegetable looks like cauliflower?"},
     "reference": "Broccoli"
   }
 ]
@@ -468,7 +468,11 @@ export const synthesizeQuestions = ai.defineFlow(
   {
     name: 'synthesizeQuestions',
     inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
-    outputSchema: z.object({ questions: z.array(z.string()) }),
+    outputSchema: z.object({ 
+      questions: z.array(z.object({
+         query: z.string() 
+      })) 
+    }),
   },
   async ({ filePath }) => {
     filePath = path.resolve(filePath);
@@ -477,15 +481,15 @@ export const synthesizeQuestions = ai.defineFlow(
 
     const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
-    const questions: string[] = [];
+    const questions = [];
     for (var i = 0; i < chunks.length; i++) {
       const { text } = await ai.generate({
         model: googleAI.model('gemini-2.0-flash'),
         prompt: {
-          text: `Generate one question about the text below: ${chunks[i]}`,
+          text: `Generate one question about the following text: ${chunks[i]}`,
         },
       });
-      questions.push(text);
+      questions.push({ query: text });
     }
     return { questions };
   },
@@ -496,5 +500,5 @@ You can then use this command to export the data into a file and use for
 evaluation.
 
 ```bash
-genkit flow:run synthesizeQuestions '"my_input.pdf"' --output synthesizedQuestions.json
+genkit flow:run synthesizeQuestions '{"filePath": "my_input.pdf"}' --output synthesizedQuestions.json
 ```
