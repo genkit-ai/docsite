@@ -148,35 +148,53 @@ async function extractTextFromPdf(filePath: string) {
 export const indexMenu = ai.defineFlow(
   {
     name: 'indexMenu',
-    inputSchema: z.string().describe('PDF file path'),
-    outputSchema: z.void(),
+    inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      documentsIndexed: z.number(),
+      error: z.string().optional(),
+    }),
   },
-  async (filePath: string) => {
-    filePath = path.resolve(filePath);
+  async ({ filePath }) => {
+    try {
+      filePath = path.resolve(filePath);
 
-    // Read the pdf
-    const pdfTxt = await ai.run('extract-text', () =>
-      extractTextFromPdf(filePath)
-    );
+      // Read the pdf
+      const pdfTxt = await ai.run('extract-text', () =>
+        extractTextFromPdf(filePath)
+      );
 
-    // Divide the pdf text into segments
-    const chunks = await ai.run('chunk-it', async () =>
-      chunk(pdfTxt, chunkingConfig)
-    );
+      // Divide the pdf text into segments
+      const chunks = await ai.run('chunk-it', async () =>
+        chunk(pdfTxt, chunkingConfig)
+      );
 
-    // Convert chunks of text into documents to store in the index
-    const documents = chunks.map((text) => {
-      return Document.fromText(text, { filePath });
-    });
+      // Convert chunks of text into documents to store in the index
+      const documents = chunks.map((text) => {
+        return Document.fromText(text, { filePath });
+      });
 
-    // Add documents to the index
-    await ai.index({
-      indexer: menuPdfIndexer,
-      documents,
-      options: {
-        writeMode: WriteMode.Overwrite,
-      }
-    });
+      // Add documents to the index
+      await ai.index({
+        indexer: menuPdfIndexer,
+        documents,
+        options: {
+          writeMode: WriteMode.Overwrite,
+        }
+      });
+
+      return {
+        success: true,
+        documentsIndexed: documents.length,
+      };
+    } catch (err) {
+      // For unexpected errors that throw exceptions
+      return {
+        success: false,
+        documentsIndexed: 0,
+        error: err instanceof Error ? err.message : String(err)
+      };
+    }
   }
 );
 
@@ -188,47 +206,38 @@ export const menuRetriever = lancedbRetrieverRef({
 
 // Define retrieval flow
 export const menuQAFlow = ai.defineFlow(
-  { name: "Menu", inputSchema: z.string(), outputSchema: z.string() },
-  async (input: string) => {
+  { 
+    name: "Menu", 
+    inputSchema: z.object({ query: z.string() }), 
+    outputSchema: z.object({ answer: z.string() }) 
+  },
+  async ({ query }) => {
     // Retrieve relevant documents
     const docs = await ai.retrieve({
       retriever: menuRetriever,
-      query: input,
+      query,
       options: { 
         k: 3,
       },
     });
 
-    const extractedContent = docs.map(doc => {
-      if (doc.content && Array.isArray(doc.content) && doc.content.length > 0) {
-        if (doc.content[0].media && doc.content[0].media.url) {
-          return doc.content[0].media.url;
-        }
-      }
-      return "No content found";
-    });
-
-    console.log("Extracted content:", extractedContent);
-
     // Generate response using retrieved documents
     const { text } = await ai.generate({
       model: googleAI.model('gemini-2.0-flash'),
       prompt: `
-You are acting as a helpful AI assistant that can answer 
-questions about the food available on the menu at Genkit Grub Pub.
+        You are acting as a helpful AI assistant that can answer 
+        questions about the food available on the menu at Genkit Grub Pub.
 
-Use only the context provided to answer the question.
-If you don't know, do not make up an answer.
-Do not add or change items on the menu.
+        Use only the context provided to answer the question.
+        If you don't know, do not make up an answer.
+        Do not add or change items on the menu.
 
-Context:
-${extractedContent.join('\n\n')}
-
-Question: ${input}`,
+        Question: ${query}
+      `,
       docs,
     });
     
-    return text;
+    return { answer: text };
   }
 );
 ```

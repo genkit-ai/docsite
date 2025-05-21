@@ -219,27 +219,45 @@ export const indexMenu = ai.defineFlow(
   {
     name: 'indexMenu',
     inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
-    outputSchema: z.void(),
+    outputSchema: z.object({
+      success: z.boolean(),
+      documentsIndexed: z.number(),
+      error: z.string().optional(),
+    }),
   },
   async ({ filePath }) => {
-    filePath = path.resolve(filePath);
+    try {
+      filePath = path.resolve(filePath);
 
-    // Read the pdf.
-    const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
+      // Read the pdf
+      const pdfTxt = await ai.run('extract-text', () => extractTextFromPdf(filePath));
 
-    // Divide the pdf text into segments.
-    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
+      // Divide the pdf text into segments
+      const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
 
-    // Convert chunks of text into documents to store in the index.
-    const documents = chunks.map((text) => {
-      return Document.fromText(text, { filePath });
-    });
+      // Convert chunks of text into documents to store in the index.
+      const documents = chunks.map((text) => {
+        return Document.fromText(text, { filePath });
+      });
 
-    // Add documents to the index.
-    await ai.index({
-      indexer: menuPdfIndexer,
-      documents,
-    });
+      // Add documents to the index
+      await ai.index({
+        indexer: menuPdfIndexer,
+        documents,
+      });
+
+      return {
+        success: true,
+        documentsIndexed: documents.length,
+      };
+    } catch (err) {
+      // For unexpected errors that throw exceptions
+      return {
+        success: false,
+        documentsIndexed: 0,
+        error: err instanceof Error ? err.message : String(err)
+      };
+    }
   },
 );
 ```
