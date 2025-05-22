@@ -28,6 +28,7 @@ const JS_SIDEBAR = [
     label: "Building AI workflows",
     items: [
       { label: "Generating content", slug: "docs/models" },
+      { label: "Generating video with AI models", slug: "docs/video-generation" },
       {
         label: "Passing information through context",
         slug: "docs/context",

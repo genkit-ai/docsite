@@ -1,0 +1,208 @@
+---
+title: Generating video with AI models
+---
+
+import ExampleLink from '@/components/ExampleLink.astro';
+
+## Generating video with AI models
+
+Video generation models can create realistic video content from text descriptions. These models take a text prompt and generate a video that matches the description. The video generation process can take significant time, so Genkit uses the Long-Running Operation (LRO) pattern to handle these asynchronous operations.
+
+### Before you begin
+
+If you want to run the code examples on this page, first complete the steps in the [Getting started](/docs/get-started) guide. All of the examples assume that you have already installed Genkit as a dependency in your project and configured the appropriate model plugins.
+
+### The generateVideo() method
+
+In Genkit, you can generate video content using the `generateVideo()` method. This method follows the Long-Running Operation pattern, which is designed for operations that may take a significant amount of time to complete.
+
+The simplest `generateVideo()` call specifies the video generation model you want to use and a text prompt:
+
+```ts
+import { googleAI } from '@genkit-ai/googleai';
+import { genkit } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+async function generateVideo() {
+  // Initial request to start the video generation
+  let operation = await ai.generateVideo({
+    model: googleAI.model('veo-2.0-generate-001'),
+    prompt: 'banana riding a bicycle down Times Square',
+    config: {
+      aspectRatio: "16:9",
+    }
+  });
+
+  console.log("Video generation started...");
+  
+  // Simple polling approach
+  while (!operation.done) {
+    // Sleep between polls
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Poll for updates
+    operation = await operation.poll();
+    console.log("Checking status...");
+  }
+
+  // Access results once complete
+  const result = operation.result;
+  console.log("Video generation complete!");
+  console.log(`Video URL: ${result.media.url}`);
+  
+  return result;
+}
+
+generateVideo();
+```
+
+### Understanding the Long-Running Operation pattern
+
+Video generation is a computationally intensive process that can take anywhere from seconds to minutes to complete. Rather than keeping an HTTP connection open for the entire duration, the Long-Running Operation pattern provides a way to start an operation and check its status periodically.
+
+The key components of this pattern in Genkit are:
+
+1. **Starting the operation**: Call `ai.generateVideo()` to initiate the video generation process.
+2. **Checking status**: Use the returned operation object to check if the process is complete.
+3. **Polling for updates**: Call `operation.poll()` periodically to get the latest status.
+4. **Accessing results**: Once `operation.done` is `true`, access the final result via `operation.result`.
+
+### Operation properties and methods
+
+The operation object returned by `generateVideo()` has the following important properties and methods:
+
+- **operation.done**: A boolean property that indicates whether the operation has completed. When `true`, the result is available.
+- **operation.poll()**: A method that checks for updates and returns an updated operation object. This is used to monitor the progress of the operation.
+- **operation.result**: The final result of the operation, available only when `operation.done` is `true`. For video generation, this typically includes a URL to the generated video file.
+
+### Configuration options
+
+You can customize the video generation process by providing configuration options in the `config` parameter:
+
+```ts
+const operation = await ai.generateVideo({
+  model: googleAI.model('veo-2.0-generate-001'),
+  prompt: 'banana riding a bicycle down Times Square',
+  config: {
+    aspectRatio: "16:9",
+    duration: 5,  // Duration in seconds
+    resolution: "720p",
+  }
+});
+```
+
+The available configuration options depend on the specific video generation model being used. Common options include:
+
+- **aspectRatio**: The aspect ratio of the generated video (e.g., "16:9", "4:3", "1:1").
+- **duration**: The desired duration of the video in seconds.
+- **resolution**: The resolution of the generated video (e.g., "720p", "1080p").
+
+### Handling the generated video
+
+Once the operation is complete, you can access the generated video through the `result.media.url` property. This URL can point to different locations depending on the model and configuration:
+
+- A local file path (e.g., `file:///tmp/video.mp4`)
+- A data URL containing the video data
+- A remote URL where the video can be downloaded
+
+Here's an example of how to handle the generated video:
+
+```ts
+// Once operation is complete
+if (operation.done) {
+  const result = operation.result;
+  
+  if (result.media.url.startsWith('file://')) {
+    // Handle local file
+    const filePath = result.media.url.replace('file://', '');
+    console.log(`Video saved to: ${filePath}`);
+  } else if (result.media.url.startsWith('data:')) {
+    // Handle data URL
+    // You can convert this to a Blob and save or display it
+    const videoBlob = dataUrlToBlob(result.media.url);
+    // Save or display the blob
+  } else {
+    // Handle remote URL
+    console.log(`Video available at: ${result.media.url}`);
+  }
+}
+```
+
+### Implementing more advanced polling strategies
+
+The simple polling approach shown earlier works well for basic use cases, but you might want to implement more sophisticated polling strategies for production applications:
+
+```ts
+async function generateVideoWithBackoff() {
+  let operation = await ai.generateVideo({
+    model: googleAI.model('veo-2.0-generate-001'),
+    prompt: 'banana riding a bicycle down Times Square',
+  });
+  
+  // Exponential backoff polling
+  let delay = 1000; // Start with 1 second
+  const maxDelay = 10000; // Maximum 10 seconds
+  const backoffFactor = 1.5;
+  
+  while (!operation.done) {
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    operation = await operation.poll();
+    console.log("Checking status...");
+    
+    // Increase delay for next poll (with maximum cap)
+    delay = Math.min(delay * backoffFactor, maxDelay);
+  }
+  
+  return operation.result;
+}
+```
+
+### Error handling
+
+Video generation operations can fail for various reasons, such as invalid prompts, model limitations, or service issues. It's important to implement proper error handling:
+
+```ts
+async function generateVideoWithErrorHandling() {
+  try {
+    let operation = await ai.generateVideo({
+      model: googleAI.model('veo-2.0-generate-001'),
+      prompt: 'banana riding a bicycle down Times Square',
+    });
+    
+    // Set a timeout to avoid polling indefinitely
+    const startTime = Date.now();
+    const timeoutMs = 5 * 60 * 1000; // 5 minutes
+    
+    while (!operation.done) {
+      // Check for timeout
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error("Video generation timed out after 5 minutes");
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      try {
+        operation = await operation.poll();
+      } catch (pollError) {
+        console.error("Error polling operation:", pollError);
+        throw pollError;
+      }
+    }
+    
+    return operation.result;
+  } catch (error) {
+    console.error("Video generation failed:", error);
+    throw error;
+  }
+}
+```
+
+### Next steps
+
+- Learn more about the specific video generation models available through different model plugins.
+- Explore how to integrate generated videos into your applications.
+- Check out the [Developer UI](/docs/devtools) to experiment with video generation interactively.
