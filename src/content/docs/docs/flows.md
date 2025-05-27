@@ -188,9 +188,11 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
       sendChunk(chunk.text);
     }
 
+    const { text: menuItem } = await response;
+
     return {
       theme,
-      menuItem: (await response).text,
+      menuItem,
     };
   },
 );
