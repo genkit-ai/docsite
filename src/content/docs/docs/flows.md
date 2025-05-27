@@ -176,21 +176,21 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
     outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
   },
   async ({ theme }, { sendChunk }) => {
-    const response = await ai.generateStream({
+    const { stream, response } = ai.generateStream({
       model: googleAI.model('gemini-2.0-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
 
-    for await (const chunk of response.stream) {
+    for await (const chunk of stream) {
       // Here, you could process the chunk in some way before sending it to
-      // the output stream via streamingCallback(). In this example, we output
+      // the output stream via sendChunk(). In this example, we output
       // the text of the chunk, unmodified.
       sendChunk(chunk.text);
     }
 
     return {
       theme,
-      menuItem: (await response.response).text,
+      menuItem: (await response).text,
     };
   },
 );
