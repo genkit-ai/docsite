@@ -24,8 +24,8 @@ sample flow.
 export GENKIT_PROJECT_HOME=~/tmp/genkit-express-project
 
 mkdir -p $GENKIT_PROJECT_HOME
-
 cd $GENKIT_PROJECT_HOME
+mkdir src
 ```
 
 1. **Initialize a Node.js project:**
@@ -38,8 +38,8 @@ npm init -y
 
 ```bash
 npm install --save genkit @genkit-ai/googleai
-
-npm install -g genkit-cli typescript tsx
+npm install --save-dev typescript tsx
+npm install -g genkit-cli
 ```
 
 ## 2. Configure your Genkit app
@@ -65,7 +65,7 @@ const helloFlow = ai.defineFlow(
     outputSchema: z.object({ greeting: z.string() }),
   },
   async (input) => {
-    const { text } = ai.generate('Say hello to ${input.name}');
+    const { text } = await ai.generate('Say hello to ${input.name}');
     return { greeting: text };
   },
 );

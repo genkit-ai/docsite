@@ -18,6 +18,8 @@ If you don't already have a Next.js project that you want to add generative AI f
 npx create-next-app@latest
 ```
 
+When prompted, choose **Yes** to use a `src/` directory. This keeps your project organized by separating source code from configuration files.
+
 ## Install Genkit dependencies
 
 Install the Genkit dependencies into your Next.js app:
@@ -51,26 +53,39 @@ Install the Genkit dependencies into your Next.js app:
 
 ## Define Genkit flows
 
-Create a new directory in your Next.js project to contain your Genkit flows. For example, create `src/genkit/` and add your flow definitions there:
+Create a new directory in your Next.js project to contain your Genkit flows. Create `src/genkit/` and add your flow definitions there:
 
 For example, create `src/genkit/menuSuggestionFlow.ts`:
 
 ```ts
 import { googleAI } from '@genkit-ai/googleai';
-import { genkit } from 'genkit';
+import { genkit, z } from 'genkit';
 
 const ai = genkit({
   plugins: [googleAI()],
 });
 
-export const menuSuggestionFlow = ai.defineFlow('menuSuggestionFlow', async (restaurantTheme, streamingCallback) => {
-  const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'),
-    prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
-    streamingCallback: (chunk) => streamingCallback?.(chunk.text),
-  });
-  return text;
-});
+export const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
+    streamSchema: z.string(),
+  },
+  async ({ theme }, { sendChunk }) => {
+    const { stream, response } = ai.generateStream({
+      model: googleAI.model('gemini-2.0-flash'),
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk.text);
+    }
+
+    const { text } = await response;
+    return { menuItem: text };
+  }
+);
 ```
 
 ## Create API routes
@@ -108,12 +123,12 @@ export default function Home() {
 
     try {
       // Regular (non-streaming) approach
-      const suggestion = await runFlow<typeof menuSuggestionFlow>({
+      const result = await runFlow<typeof menuSuggestionFlow>({
         url: '/api/menuSuggestion',
-        input: theme,
+        input: { theme },
       });
 
-      setMenuItem(suggestion);
+      setMenuItem(result.menuItem);
     } catch (error) {
       console.error('Error generating menu item:', error);
     } finally {
@@ -130,17 +145,17 @@ export default function Home() {
       // Streaming approach
       const result = streamFlow<typeof menuSuggestionFlow>({
         url: '/api/menuSuggestion',
-        input: theme,
+        input: { theme },
       });
 
       // Process the stream chunks as they arrive
-      for await (const chunk of result.stream()) {
-        setStreamedText((prev) => prev + chunk.output);
+      for await (const chunk of result.stream) {
+        setStreamedText((prev) => prev + chunk);
       }
 
       // Get the final complete response
-      const finalOutput = await result.output();
-      setMenuItem(finalOutput);
+      const finalOutput = await result.output;
+      setMenuItem(finalOutput.menuItem);
     } catch (error) {
       console.error('Error streaming menu item:', error);
     } finally {
@@ -200,7 +215,7 @@ const result = await runFlow<typeof menuSuggestionFlow>({
   headers: {
     Authorization: 'Bearer your-token-here',
   },
-  input: theme,
+  input: { theme },
 });
 ```
 
