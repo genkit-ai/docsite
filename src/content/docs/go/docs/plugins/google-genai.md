@@ -131,7 +131,7 @@ if err != nil {
 log.Println(resp.Text())
 ```
 
-See [Generating content with AI models](../models.md) for more information.
+See [Generating content with AI models](/go/docs/models) for more information.
 
 ### Embedding models
 
@@ -180,4 +180,4 @@ if err != nil {
 }
 ```
 
-See [Retrieval-augmented generation (RAG)](../rag.md) for more information.
+See [Retrieval-augmented generation (RAG)](/go/docs/rag) for more information.
