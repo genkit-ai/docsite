@@ -210,6 +210,18 @@ const response = await helloPrompt();
 const { text } = await helloPrompt();
 ```
 
+Or you can also run the prompt in streaming mode:
+
+```ts
+const { response, stream } = helloPrompt.stream();
+
+for await (const chunk of stream) {
+  console.log(chunk.text);
+}
+// optional final (aggregated) response
+console.log((await response).text);
+```
+
 A callable prompt takes two optional parameters: the input to the prompt (see
 the section below on [specifying input schemas](#input-and-output-schemas)), and a configuration
 object, similar to that of the `generate()` method. For example:
@@ -227,6 +239,12 @@ const response2 = await helloPrompt(
   },
 );
 ```
+
+Similarly for streaming:
+
+```ts
+const { stream } = helloPrompt.stream(input, options);
+``` 
 
 Any parameters you pass to the prompt call will override the same parameters
 specified in the prompt file.
