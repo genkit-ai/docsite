@@ -29,12 +29,12 @@ ng add @angular/ssr --server-routing
 
 ## Install Genkit dependencies
 
-Install the Genkit dependencies into your Angular app, the same way you would for any Genkit project:
+Install the Genkit dependencies into your Angular app:
 
 1. Install the core Genkit library:
 
    ```bash
-   npm install --save genkit
+   npm install genkit
    ```
 
 2. Install at least one model plugin.
@@ -42,7 +42,7 @@ Install the Genkit dependencies into your Angular app, the same way you would fo
    For example, to use Google AI:
 
    ```bash
-   npm install --save @genkit-ai/googleai
+   npm install @genkit-ai/googleai
    ```
 
    Or to use Vertex AI:
@@ -57,13 +57,7 @@ Install the Genkit dependencies into your Angular app, the same way you would fo
    npm install @genkit-ai/express
    ```
 
-4. Install Zod:
-
-   ```bash
-   npm install zod
-   ```
-
-5. Install the Genkit CLI globally. The tsx tool is also recommended as a development dependency, as it makes testing your code more convenient. Both of these dependencies are optional, however.
+4. Install the Genkit CLI globally. The tsx tool is also recommended as a development dependency, as it makes testing your code more convenient. Both of these dependencies are optional, however.
 
    ```bash
    npm install -g genkit-cli
@@ -72,9 +66,9 @@ Install the Genkit dependencies into your Angular app, the same way you would fo
 
 ## Define Genkit flows
 
-Create a new file in your Angular project to contain your Genkit flows: for example, `src/genkit.ts`. This file can contain your flows without modification.
+Create a new directory in your Angular project to contain your Genkit flows. Create `src/genkit/` and add your flow definitions there:
 
-For example:
+For example, create `src/genkit/menuSuggestionFlow.ts`:
 
 ```ts
 import { googleAI } from '@genkit-ai/googleai';
@@ -82,19 +76,28 @@ import { genkit, z } from 'genkit';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.0-flash'),
 });
 
 export const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
+    streamSchema: z.string(),
   },
-  async (restaurantTheme) => {
-    const { text } = await ai.generate(`Invent a menu item for a ${restaurantTheme} themed restaurant.`);
-    return text;
-  },
+  async ({ theme }, { sendChunk }) => {
+    const { stream, response } = ai.generateStream({
+      model: googleAI.model('gemini-2.0-flash'),
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk.text);
+    }
+
+    const { text } = await response;
+    return { menuItem: text };
+  }
 );
 ```
 
@@ -104,7 +107,7 @@ Add the following imports to `src/server.ts`:
 
 ```ts
 import { expressHandler } from '@genkit-ai/express';
-import { menuSuggestionFlow } from './genkit';
+import { menuSuggestionFlow } from './genkit/menuSuggestionFlow';
 ```
 
 Add the following line following your `app` variable initialization:
@@ -116,14 +119,16 @@ app.use(express.json());
 Then, add a route to serve your flow:
 
 ```ts
-app.post('/menu', expressHandler(menuSuggestionFlow));
+app.post('/api/menuSuggestion', expressHandler(menuSuggestionFlow));
 ```
 
-## Call your flows
+## Call your flows from the frontend
 
-Now, you can run your flows from your client application.
+In your frontend code, you can now call your flows using the Genkit client library. You can use both non-streaming and streaming approaches:
 
-For example, you can replace the contents of `src/app/app.component.ts` with the following:
+### Non-streaming Flow Calls
+
+Replace the contents of `src/app/app.component.ts` with the following:
 
 ```ts
 import { Component, resource, signal } from '@angular/core';
@@ -141,7 +146,10 @@ export class AppComponent {
 
   menuResource = resource({
     request: () => this.theme(),
-    loader: ({ request }) => runFlow({ url: 'menu', input: request }),
+    loader: ({ request }) => runFlow({ 
+      url: 'http://localhost:4200/api/menuSuggestion', 
+      input: { theme: request } 
+    }),
   });
 }
 ```
@@ -149,13 +157,136 @@ export class AppComponent {
 Make corresponding updates to `src/app/app.component.html`:
 
 ```html
-<h3>Generate a custom menu item</h3>
-<input type="text" [(ngModel)]="menuInput" />
-<button (click)="this.theme.set(menuInput)">Generate</button>
-<br />
-@if (menuResource.isLoading()) { Loading... } @else {
-<pre>{{menuResource.value()}}</pre>
+<main>
+  <h3>Generate a custom menu item</h3>
+  <label for="theme">Suggest a menu item for a restaurant with this theme: </label>
+  <input type="text" id="theme" [(ngModel)]="menuInput" />
+  <button (click)="this.theme.set(menuInput)">Generate</button>
+  <br />
+  <br />
+  @if (menuResource.isLoading()) { 
+    <div>Loading...</div> 
+  } @else if (menuResource.value()) {
+    <div>
+      <h4>Generated Menu Item:</h4>
+      <pre>{{ menuResource.value().menuItem }}</pre>
+    </div>
+  }
+</main>
+```
+
+### Streaming Flow Calls
+
+For streaming responses, you can extend your component:
+
+```ts
+import { Component, resource, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { runFlow, streamFlow } from 'genkit/beta/client';
+
+@Component({
+  selector: 'app-root',
+  imports: [FormsModule],
+  templateUrl: './app.component.html',
+})
+export class AppComponent {
+  menuInput = '';
+  theme = signal('');
+  streamedText = signal('');
+  isStreaming = signal(false);
+
+  menuResource = resource({
+    request: () => this.theme(),
+    loader: ({ request }) => runFlow({ 
+      url: 'http://localhost:4200/api/menuSuggestion', 
+      input: { theme: request } 
+    }),
+  });
+
+  async streamMenuItem() {
+    const theme = this.menuInput;
+    if (!theme) return;
+
+    this.isStreaming.set(true);
+    this.streamedText.set('');
+
+    try {
+      const result = streamFlow({
+        url: 'http://localhost:4200/api/menuSuggestion',
+        input: { theme },
+      });
+
+      // Process the stream chunks as they arrive
+      for await (const chunk of result.stream) {
+        this.streamedText.update(prev => prev + chunk);
+      }
+
+      // Get the final complete response
+      const finalOutput = await result.output;
+      console.log('Final output:', finalOutput);
+    } catch (error) {
+      console.error('Error streaming menu item:', error);
+    } finally {
+      this.isStreaming.set(false);
+    }
+  }
 }
+```
+
+And update the template to include streaming:
+
+```html
+<main>
+  <h3>Generate a custom menu item</h3>
+  <label for="theme">Suggest a menu item for a restaurant with this theme: </label>
+  <input type="text" id="theme" [(ngModel)]="menuInput" />
+  <br />
+  <br />
+  <button (click)="this.theme.set(menuInput)" [disabled]="menuResource.isLoading()">
+    Generate
+  </button>
+  <button (click)="streamMenuItem()" [disabled]="isStreaming()">
+    Stream Generation
+  </button>
+  <br />
+
+  @if (streamedText()) {
+    <div>
+      <h4>Streaming Output:</h4>
+      <pre>{{ streamedText() }}</pre>
+    </div>
+  }
+
+  @if (menuResource.isLoading()) { 
+    <div>Loading...</div> 
+  } @else if (menuResource.value()) {
+    <div>
+      <h4>Generated Menu Item:</h4>
+      <pre>{{ menuResource.value().menuItem }}</pre>
+    </div>
+  }
+
+  @if (isStreaming()) {
+    <div>Streaming...</div>
+  }
+</main>
+```
+
+## Authentication (Optional)
+
+If you need to add authentication to your API routes, you can pass headers with your requests:
+
+```ts
+menuResource = resource({
+  request: () => this.theme(),
+  loader: ({ request }) => runFlow({ 
+    url: 'http://localhost:4200/api/menuSuggestion',
+    headers: {
+      Authorization: 'Bearer your-token-here',
+    },
+    input: { theme: request } 
+  }),
+});
 ```
 
 ## Test your app locally
@@ -196,7 +327,7 @@ ng serve
 All of Genkit's development tools continue to work as normal. For example, to load your flows in the developer UI:
 
 ```bash
-genkit start -- ng serve
+genkit start -- npx tsx --watch src/genkit/menuSuggestionFlow.ts
 ```
 
 ## Deploy your app
@@ -209,4 +340,4 @@ When you deploy your app, you will need to make sure the credentials for any ext
 
 ## Next steps
 
-- [Explore Genkit in a deployed angular app](https://developers.google.com/solutions/learn/agentic-barista): Walk through a reference implementation of multiple Genkit flows powering an Angular app, and then jump into the code in Firebase Studio.
+- [Explore Genkit in a deployed Angular app](https://developers.google.com/solutions/learn/agentic-barista): Walk through a reference implementation of multiple Genkit flows powering an Angular app, and then jump into the code in Firebase Studio.
