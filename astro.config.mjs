@@ -177,4 +177,7 @@ export default defineConfig({
     tailwind({ applyBaseStyles: false }),
     sitemap(),
   ],
+  redirects: {
+    "/discord": 'https://discord.gg/qXt5zzQKpc',
+  },
 });
