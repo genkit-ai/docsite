@@ -2,11 +2,6 @@
 title: Deploy flows to any Node.js platform
 ---
 
-<!--
-TODO: Add Next docs too. Maybe we need a web-hosting page that deploy-node
-and cloud-run links to, which links to express, next, and maybe cloud functions
--->
-
 Genkit has built-in integrations that help you deploy your flows to
 Cloud Functions for Firebase and Google Cloud Run, but you can also deploy your
 flows to any platform that can serve an Express.js app, whether it’s a cloud
@@ -29,8 +24,8 @@ sample flow.
 export GENKIT_PROJECT_HOME=~/tmp/genkit-express-project
 
 mkdir -p $GENKIT_PROJECT_HOME
-
 cd $GENKIT_PROJECT_HOME
+mkdir src
 ```
 
 1. **Initialize a Node.js project:**
@@ -43,8 +38,8 @@ npm init -y
 
 ```bash
 npm install --save genkit @genkit-ai/googleai
-
-npm install -g genkit-cli typescript tsx
+npm install --save-dev typescript tsx
+npm install -g genkit-cli
 ```
 
 ## 2. Configure your Genkit app
@@ -54,7 +49,7 @@ npm install -g genkit-cli typescript tsx
 In `src/index.ts`, define a sample flow and configure the flow server:
 
 ```typescript
-import { genkit } from 'genkit';
+import { genkit, z } from 'genkit';
 import { googleAI } from '@genkit-ai/googleai';
 import { startFlowServer } from '@genkit-ai/express';
 
@@ -67,16 +62,16 @@ const helloFlow = ai.defineFlow(
   {
     name: 'helloFlow',
     inputSchema: z.object({ name: z.string() }),
-    outputSchema: z.string(),
+    outputSchema: z.object({ greeting: z.string() }),
   },
   async (input) => {
-    const { text } = ai.generate('Say hello to ${input.name}');
-    return text;
+    const { text } = await ai.generate('Say hello to ${input.name}');
+    return { greeting: text };
   },
 );
 
 startFlowServer({
-  flows: [menuSuggestionFlow],
+  flows: [helloFlow],
 });
 ```
 
@@ -139,9 +134,9 @@ npm start
 In another terminal window, test the endpoint:
 
 ```bash
-curl -X POST "http://127.0.0.1:3400/menuSuggestionFlow" \
+curl -X POST "http://127.0.0.1:3400/helloFlow" \
   -H "Content-Type: application/json" \
-  -d '{"data": "banana"}'
+  -d '{"data": {"name": "Genkit"}}'
 ```
 
 ## Optional: Start the Developer UI
