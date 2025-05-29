@@ -110,6 +110,10 @@ export const recipeGeneratorFlow = ai.defineFlow(
       },
     });
     
+    if (!output) {
+      throw new Error('Failed to generate recipe - AI returned null output');
+    }
+
     // Return the structured recipe
     return output;
   }
