@@ -336,7 +336,7 @@ UI, located at `localhost:4000/evaluate`.
 This feature is only available in the Node.js SDK.
 :::
 
-You can speed up evaluations by processing the inputs in batches using the CLI and Dev UI. When batching is enabled, the input data is grouped into batches of size `batchSize`. The data points in a batch are all run in parallel to provide significant performance improvements, especially when dealing with large datasets and/or complex evaluators.
+You can speed up evaluations by processing the inputs in batches using the CLI and Dev UI. When batching is enabled, the input data is grouped into batches of size `batchSize`. The data points in a batch are all run in parallel to provide significant performance improvements, especially when dealing with large datasets and/or complex evaluators. By default (when the flag is omitted), batching is disabled.
 
 The `batchSize` option has been integrated into the `eval:flow` and `eval:run` CLI commands. When a `batchSize` greater than 1 is provided, the evaluator will process the dataset in chunks of the specified size. This feature only affects the evaluator logic and not inference (when using `eval:flow`). Here are some examples of enabling batching with the CLI:
 
