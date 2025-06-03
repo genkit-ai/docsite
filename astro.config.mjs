@@ -1,7 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import tailwind from "@astrojs/tailwind";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import sitemap from "@astrojs/sitemap";
@@ -174,7 +173,6 @@ export default defineConfig({
       sidebar,
       customCss: ["./src/tailwind.css"],
     }),
-    tailwind({ applyBaseStyles: false }),
     sitemap(),
   ],
   redirects: {

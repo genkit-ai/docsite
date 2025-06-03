@@ -1,6 +1,4 @@
 import colors from "tailwindcss/colors";
-import base from "tailwindcss/base";
-import starlightPlugin from "@astrojs/starlight-tailwind";
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -8,10 +6,8 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Your preferred accent color. Indigo is closest to Starlight’s defaults.
+        // Accent and grayscale colors
         accent: colors.blue,
-
-        // Your preferred gray scale. Zinc is closest to Starlight’s defaults.
         gray: colors.zinc,
       },
       fontFamily: {
@@ -19,5 +15,5 @@ export default {
       },
     },
   },
-  plugins: [starlightPlugin()],
+  plugins: [],
 };
