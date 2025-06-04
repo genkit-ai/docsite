@@ -205,6 +205,155 @@ Include defined tools in your prompts to generate content.
   </TabItem>
 </Tabs>
 
+### Limiting Tool Call Iterations with `maxTurns`
+
+When working with tools that might trigger multiple sequential calls, you can control resource usage and prevent runaway execution using the `maxTurns` parameter. This sets a hard limit on how many back-and-forth interactions the model can have with your tools in a single generation cycle.
+
+**Why use maxTurns?**
+- **Cost Control**: Prevents unexpected API usage charges from excessive tool calls
+- **Performance**: Ensures responses complete within reasonable timeframes
+- **Safety**: Guards against infinite loops in complex tool interactions
+- **Predictability**: Makes your application behavior more deterministic
+
+The default value is 5 turns, which works well for most scenarios. Each "turn" represents one complete cycle where the model can make tool calls and receive responses.
+
+**Example: Web Research Agent**
+
+Consider a research agent that might need to search multiple times to find comprehensive information:
+
+```ts
+const webSearch = ai.defineTool(
+  {
+    name: 'webSearch',
+    description: 'Search the web for current information',
+    inputSchema: z.object({
+      query: z.string().describe('Search query'),
+    }),
+    outputSchema: z.string(),
+  },
+  async (input) => {
+    // Simulate web search API call
+    return `Search results for "${input.query}": [relevant information here]`;
+  },
+);
+
+const response = await ai.generate({
+  prompt: 'Research the latest developments in quantum computing, including recent breakthroughs, key companies, and future applications.',
+  tools: [webSearch],
+  maxTurns: 8, // Allow up to 8 research iterations
+});
+```
+
+**Example: Financial Calculator**
+
+Here's a more complex scenario where an agent might need multiple calculation steps:
+
+```ts
+const calculator = ai.defineTool(
+  {
+    name: 'calculator',
+    description: 'Perform mathematical calculations',
+    inputSchema: z.object({
+      expression: z.string().describe('Mathematical expression to evaluate'),
+    }),
+    outputSchema: z.number(),
+  },
+  async (input) => {
+    // Safe evaluation of mathematical expressions
+    return eval(input.expression); // In production, use a safe math parser
+  },
+);
+
+const stockAnalyzer = ai.defineTool(
+  {
+    name: 'stockAnalyzer',
+    description: 'Get current stock price and basic metrics',
+    inputSchema: z.object({
+      symbol: z.string().describe('Stock symbol (e.g., AAPL)'),
+    }),
+    outputSchema: z.object({
+      price: z.number(),
+      change: z.number(),
+      volume: z.number(),
+    }),
+  },
+  async (input) => {
+    // Simulate stock API call
+    return {
+      price: 150.25,
+      change: 2.50,
+      volume: 45000000
+    };
+  },
+);
+```
+
+<Tabs>
+  <TabItem label="Generate">
+    ```typescript
+    const response = await ai.generate({
+      prompt: 'Calculate the total value of my portfolio: 100 shares of AAPL, 50 shares of GOOGL, and 200 shares of MSFT. Also calculate what percentage each holding represents.',
+      tools: [calculator, stockAnalyzer],
+      maxTurns: 12, // Multiple stock lookups + calculations needed
+    });
+    ```
+  </TabItem>
+  <TabItem label="definePrompt">
+    ```typescript
+    const portfolioAnalysisPrompt = ai.definePrompt(
+      {
+        name: "portfolioAnalysis",
+        tools: [calculator, stockAnalyzer],
+        maxTurns: 12,
+      },
+      "Calculate the total value of my portfolio: {{holdings}}. Also calculate what percentage each holding represents."
+    );
+
+    const response = await portfolioAnalysisPrompt({ 
+      holdings: "100 shares of AAPL, 50 shares of GOOGL, and 200 shares of MSFT" 
+    });
+    ```
+  </TabItem>
+  <TabItem label="Prompt file">
+    ```dotprompt
+    ---
+    tools: [calculator, stockAnalyzer]
+    maxTurns: 12
+    input:
+      schema:
+        holdings: string
+    ---
+
+    Calculate the total value of my portfolio: {{holdings}}. Also calculate what percentage each holding represents.
+    ```
+
+    Then execute the prompt:
+
+    ```typescript
+    const portfolioAnalysisPrompt = ai.prompt("portfolioAnalysis");
+
+    const response = await portfolioAnalysisPrompt({ 
+      holdings: "100 shares of AAPL, 50 shares of GOOGL, and 200 shares of MSFT" 
+    });
+    ```
+  </TabItem>
+  <TabItem label="Chat">
+    ```typescript
+    const chat = ai.chat({
+      system: "You are a financial analysis assistant. Use the available tools to provide accurate calculations and current market data.",
+      tools: [calculator, stockAnalyzer],
+      maxTurns: 12,
+    });
+
+    const response = await chat.send("Calculate the total value of my portfolio: 100 shares of AAPL, 50 shares of GOOGL, and 200 shares of MSFT. Also calculate what percentage each holding represents.");
+    ```
+  </TabItem>
+</Tabs>
+
+**What happens when maxTurns is reached?**
+
+When the limit is hit, Genkit stops the tool-calling loop and returns the model's current response, even if it was in the middle of using tools. The model will typically provide a partial answer or explain that it couldn't complete all the requested operations.
+
 ### Dynamically defining tools at runtime
 
 As most things in Genkit tools need to be predefined during your app's
@@ -344,4 +493,3 @@ while (true) {
   generateOptions.messages = llmResponse.messages;
   generateOptions.prompt = toolResponses;
 }
-```
