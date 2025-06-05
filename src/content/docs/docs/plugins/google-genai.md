@@ -139,6 +139,138 @@ const llmResponse = await ai.generate({
 });
 ```
 
+## Text-to-Speech (TTS) Models
+
+The Google Generative AI plugin provides access to text-to-speech capabilities through the Gemini TTS models. These models can convert text into natural-sounding speech for various applications such as voice assistants, accessibility features, or interactive content.
+
+### Basic Usage
+
+To generate audio using the Gemini TTS model:
+
+```ts
+import { googleAI } from '@genkit-ai/googleai';
+import { writeFile } from 'node:fs/promises';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: { voiceName: 'Algenib' },
+      },
+    },
+  },
+  prompt: 'Say that Genkit is an amazing Gen AI library',
+});
+
+// Handle the audio data (returned as a data URL)
+if (response.media?.url) {
+  // Extract base64 data from the data URL
+  const audioBuffer = Buffer.from(
+    response.media.url.substring(response.media.url.indexOf(',') + 1),
+    'base64'
+  );
+  
+  // Save to a file
+  await writeFile('output.wav', audioBuffer);
+}
+```
+
+### Multi-speaker Audio Generation
+
+You can generate audio with multiple speakers, each with their own voice:
+
+```ts
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      multiSpeakerVoiceConfig: {
+        speakerVoiceConfigs: [
+          {
+            speaker: 'Speaker1',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Algenib' },
+            },
+          },
+          {
+            speaker: 'Speaker2',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Achernar' },
+            },
+          },
+        ],
+      },
+    },
+  },
+  prompt: `Here's the dialog:
+    Speaker1: "Genkit is an amazing Gen AI library!"
+    Speaker2: "I thought it was a framework."`,
+});
+```
+
+When using multi-speaker configuration, the model automatically detects speaker labels in the text (like "Speaker1:" and "Speaker2:") and applies the corresponding voice to each speaker's lines.
+
+### Configuration Options
+
+The Gemini TTS models support various configuration options:
+
+#### Voice Selection
+
+You can choose from different pre-built voices with unique characteristics:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: { 
+      voiceName: 'Algenib' // Other options: 'Achernar', 'Ankaa', etc.
+    },
+  },
+}
+```
+
+#### Speech Emphasis
+
+You can use markdown-style formatting in your prompt to add emphasis:
+
+- Bold text (`**like this**`) for stronger emphasis
+- Italic text (`*like this*`) for moderate emphasis
+
+Example:
+
+```ts
+prompt: 'Genkit is an **amazing** Gen AI *library*!'
+```
+
+#### Advanced Speech Parameters
+
+For more control over the generated speech:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: { 
+      voiceName: 'Algenib',
+      speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
+      pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
+      volumeGainDb: 0.0,  // Range: -96.0 to 16.0, default is 0.0
+    },
+  },
+}
+```
+
+- `speakingRate`: Controls the speed of speech (higher values = faster speech)
+- `pitch`: Adjusts the pitch of the voice (higher values = higher pitch)
+- `volumeGainDb`: Controls the volume (higher values = louder)
+
+For more detailed information about the Gemini TTS models and their configuration options, see the [Google AI Speech Generation documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
 ## Context Caching
 
 The Google Generative AI plugin supports **context caching**, which allows models to reuse previously cached content to optimize performance and reduce latency for repetitive tasks. This feature is especially useful for conversational flows or scenarios where the model references a large body of text consistently across multiple requests.
@@ -164,7 +296,7 @@ const llmResponse = await ai.generate({
       role: 'model',
       content: [
         {
-          text: 'Based on War and Peace, here is some analysis of Pierre Bezukhov’s character.',
+          text: `Based on War and Peace, here is some analysis of Pierre Bezukhov's character.`,
         },
       ],
       metadata: {
@@ -175,7 +307,7 @@ const llmResponse = await ai.generate({
     },
   ],
   model: googleAI.model('gemini-2.0-flash-001'),
-  prompt: 'Describe Pierre’s transformation throughout the novel.',
+  prompt: `Describe Pierre's transformation throughout the novel`,
 });
 ```
 

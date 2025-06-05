@@ -491,6 +491,150 @@ See the code samples for:
 - [Vertex Vector Search + Firestore](https://github.com/firebase/genkit/tree/main/js/testapps/vertexai-vector-search-firestore)
 - [Vertex Vector Search + a custom DB](https://github.com/firebase/genkit/tree/main/js/testapps/vertexai-vector-search-custom)
 
+## Text-to-Speech (TTS) Models
+
+The Vertex AI plugin provides access to text-to-speech capabilities through Gemini TTS models. These models can convert text into natural-sounding speech for various applications.
+
+### Basic Usage
+
+To generate audio using a Vertex AI TTS model:
+
+```ts
+import { vertexAI } from '@genkit-ai/vertexai';
+import { writeFile } from 'node:fs/promises';
+
+const ai = genkit({
+  plugins: [vertexAI({ location: 'us-central1' })],
+});
+
+const response = await ai.generate({
+  model: vertexAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: { voiceName: 'Algenib' },
+      },
+    },
+  },
+  prompt: 'Say that Genkit is an amazing Gen AI library',
+});
+
+// Handle the audio data (returned as a data URL)
+if (response.media?.url) {
+  // Extract base64 data from the data URL
+  const audioBuffer = Buffer.from(
+    response.media.url.substring(response.media.url.indexOf(',') + 1),
+    'base64'
+  );
+  
+  // Save to a file
+  await writeFile('output.wav', audioBuffer);
+}
+```
+
+### Multi-speaker Audio Generation
+
+You can generate audio with multiple speakers, each with their own voice:
+
+```ts
+const response = await ai.generate({
+  model: vertexAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      multiSpeakerVoiceConfig: {
+        speakerVoiceConfigs: [
+          {
+            speaker: 'Speaker1',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Algenib' },
+            },
+          },
+          {
+            speaker: 'Speaker2',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Achernar' },
+            },
+          },
+        ],
+      },
+    },
+  },
+  prompt: `Here's the dialog:
+    Speaker1: "Genkit is an amazing Gen AI library!"
+    Speaker2: "I thought it was a framework."`,
+});
+```
+
+### Configuration Options
+
+The Vertex AI TTS models support a wide range of configuration options:
+
+#### Voice Selection
+
+Vertex AI offers multiple pre-built voices with different characteristics:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: { 
+      voiceName: 'Algenib' // Other options include: 'Achernar', 'Ankaa', etc.
+    },
+  },
+}
+```
+
+#### Speech Emphasis and Prosody Control
+
+You can use markdown-style formatting in your prompt to add emphasis:
+
+- Bold text (`**like this**`) for stronger emphasis
+- Italic text (`*like this*`) for moderate emphasis
+
+Example:
+
+```ts
+prompt: 'Genkit is an **amazing** Gen AI *library*!'
+```
+
+#### Advanced Speech Parameters
+
+For more precise control over the generated speech:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: { 
+      voiceName: 'Algenib',
+      speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
+      pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
+      volumeGainDb: 0.0,  // Range: -96.0 to 16.0, default is 0.0
+    },
+  },
+}
+```
+
+- `speakingRate`: Controls the speed of speech (higher values = faster speech)
+- `pitch`: Adjusts the pitch of the voice (higher values = higher pitch)
+- `volumeGainDb`: Controls the volume (higher values = louder)
+
+#### SSML Support
+
+For advanced speech synthesis control, you can use Speech Synthesis Markup Language (SSML) in your prompts:
+
+```ts
+prompt: `<speak>
+  Here is a <break time="1s"/> pause.
+  <prosody rate="slow" pitch="+2st">This text is spoken slowly and with a higher pitch.</prosody>
+  <say-as interpret-as="cardinal">12345</say-as>
+</speak>`
+```
+
+Note: When using SSML, you must wrap your entire prompt in `<speak>` tags.
+
+For more detailed information about the Vertex AI TTS models and their configuration options, see the [Vertex AI Speech Generation documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/generate-speech).
+
 ## Context Caching
 
 The Vertex AI Genkit plugin supports **Context Caching**, which allows models to reuse previously cached content to optimize token usage when dealing with large pieces of content. This feature is especially useful for conversational flows or scenarios where the model references a large piece of content consistently across multiple requests.
