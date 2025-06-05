@@ -437,29 +437,3 @@ ragFlow := genkit.DefineFlow(g, "rag-qa", func(ctx context.Context, query string
     return response.Text(), nil
 })
 ```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Plugin not found error**: Ensure Firebase plugin is included in `genkit.Init()`
-2. **Authentication failures**: Verify Firebase credentials and project ID
-3. **Firestore permission errors**: Check Firestore security rules
-4. **Empty retrieval results**: Verify collection name and document structure
-
-### Debugging
-
-Enable verbose logging to debug issues:
-
-```go
-import "log/slog"
-
-// Enable debug logging
-slog.SetLogLoggerLevel(slog.LevelDebug)
-```
-
-## See also
-
-- [Retrieval-augmented generation (RAG)](/go/docs/rag) - Learn about RAG patterns in Genkit
-- [Creating flows](/go/docs/flows) - Build AI workflows with Firebase data
-- [Generating content](/go/docs/models) - Use retrieved context in generation 
