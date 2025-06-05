@@ -209,7 +209,10 @@ const GO_SIDEBAR = [
     items: [
       { label: "Google Generative AI", slug: "go/docs/plugins/google-genai" },
       { label: "Google Cloud", slug: "go/docs/plugins/google-cloud" },
+      { label: "Firebase", slug: "go/docs/plugins/firebase" },
+      { label: "MCP (Model Context Protocol)", slug: "go/docs/plugins/mcp" },
       { label: "Ollama", slug: "go/docs/plugins/ollama" },
+      { label: "OpenAI-Compatible APIs", slug: "go/docs/plugins/openai" },
       { label: "pgvector", slug: "go/docs/plugins/pgvector" },
       { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
       {
