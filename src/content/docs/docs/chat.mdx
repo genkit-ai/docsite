@@ -5,7 +5,7 @@ title: Creating persistent chat sessions
 import ExampleLink from '@/components/ExampleLink.astro';
 
 :::caution[Beta]
-This feature of Genkit is in **Beta,** which means it is not yet part of Genkit's stable API. APIs of beta features may change in minor version releases.
+This feature of Genkit is in **Beta,** which means it is not yet part of Genkit's stable API. APIs of beta features may change in minor version releases. Session persistence functionality is experimental and may undergo significant changes.
 :::
 
 Many of your users will have interacted with large language models for the first
@@ -28,7 +28,11 @@ the [Getting started](/docs/get-started) guide. All of the examples assume that 
 have already installed Genkit as a dependency in your project.
 
 Note that the chat API is currently in beta and must be used from the
-`genkit/beta` package.
+`genkit/beta` package:
+
+```ts
+import { genkit } from 'genkit/beta';
+```
 
 ## Chat session basics
 
@@ -90,7 +94,7 @@ possible because Genkit does a few things behind the scenes:
 - Retrieves the chat history, if any exists, from storage (more on persistence
   and storage later)
 - Sends the request to the model, as with `generate()`, but automatically
-  include the chat history
+  includes the chat history
 - Saves the model response into the chat history
 
 ### Model configuration
@@ -112,7 +116,7 @@ const chat = ai.chat({
 
 In addition to persisting a chat session's message history, you can also persist
 any arbitrary JavaScript object. Doing so can let you manage state in a more
-structured way then relying only on information in the message history.
+structured way than relying only on information in the message history.
 
 To include state in a session, you need to instantiate a session explicitly:
 
@@ -163,10 +167,67 @@ const chat = session.chat({
 await chat.send('change user name to Kevin');
 ```
 
+## Streaming responses
+
+For applications that need to display responses as they are generated, you can use the `sendStream()` method to receive incremental responses:
+
+```ts
+const chat = ai.chat({
+  model: googleAI.model('gemini-2.0-flash'),
+});
+
+const { stream, response } = await chat.sendStream('Tell me a story about a robot');
+
+for await (const chunk of stream) {
+  if (chunk.text) {
+    process.stdout.write(chunk.text);
+  }
+}
+
+// Get the complete response
+const finalResponse = await response;
+console.log(finalResponse.text);
+```
+
+The `sendStream()` method accepts the same parameters as `send()` but returns an object with both a `stream` for accessing chunks as they're generated, and a `response` promise that resolves to the complete response once streaming is finished.
+
+## Accessing chat history
+
+You can directly access the chat message history using the `messages` accessor:
+
+```ts
+const chat = ai.chat();
+await chat.send('Hello!');
+await chat.send('How are you?');
+
+// Access the full conversation history
+const history = chat.messages;
+console.log(`Chat has ${history.length} messages`);
+```
+
+Each message in the history contains information about the role (user or assistant), content, and timestamp.
+
+## Session properties
+
+Chat instances provide direct access to session information:
+
+```ts
+const session = ai.createSession();
+const chat = session.chat();
+
+// Access session ID
+console.log(`Session ID: ${chat.sessionId}`);
+
+// Access the full session object
+console.log(`Session state:`, chat.session.state);
+```
+
+The session ID is particularly important when implementing persistence, as it allows you to retrieve the session later.
+
 ## Multi-thread sessions
 
 A single session can contain multiple chat threads. Each thread has its own
-message history, but they share a single session state.
+message history, but they share a single session state. This is useful for applications that need to maintain different conversational contexts while sharing underlying state.
 
 ```ts
 const lawyerChat = session.chat('lawyerThread', {
@@ -175,6 +236,20 @@ const lawyerChat = session.chat('lawyerThread', {
 const pirateChat = session.chat('pirateThread', {
   system: 'talk like a pirate',
 });
+
+// Send messages to different threads
+await lawyerChat.send("What's your opinion on this contract?");
+await pirateChat.send("Where's the treasure?");
+
+// Both threads share the same session state
+console.log(lawyerChat.session.state); // Same as pirateChat.session.state
+```
+
+You can retrieve specific threads later by using the thread ID:
+
+```ts
+// Retrieve the lawyer thread from the session
+const lawyerChatAgain = session.chat('lawyerThread');
 ```
 
 ## Session persistence (EXPERIMENTAL)
@@ -193,6 +268,9 @@ To add persistence to a chat session, you need to implement Genkit's
 state to individual JSON files:
 
 ```ts
+import { SessionStore, SessionData } from 'genkit/beta';
+import { readFile, writeFile } from 'fs/promises';
+
 class JsonSessionStore<S = any> implements SessionStore<S> {
   async get(sessionId: string): Promise<SessionData<S> | undefined> {
     try {
@@ -238,3 +316,18 @@ const session = await ai.loadSession(sessionId, {
   store: new JsonSessionStore(),
 });
 ```
+
+## Comparison with the generate() API
+
+While the `generate()` API is designed for one-off content generation, the Chat API builds on this foundation to provide:
+
+1. **Message history management**: Automatically tracks and stores conversation history
+2. **Session state**: Maintains arbitrary application state alongside the conversation
+3. **Persistence options**: Allows for storing conversations across application restarts
+4. **Multiple threads**: Enables different conversation contexts within a single session
+
+For users familiar with `generate()`, you can think of the Chat API as adding a layer of stateful conversation management while still leveraging the same underlying model capabilities.
+
+## API Reference
+
+For complete details on all Chat API methods and properties, see the [API reference documentation](https://js.api.genkit.dev/classes/genkit._.Chat.html).
