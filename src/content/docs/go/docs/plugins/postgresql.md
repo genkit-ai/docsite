@@ -22,13 +22,13 @@ To use this plugin, follow these steps:
 		pEngine, err := NewPostgresEngine(ctx,
 				WithUser('user'),
 				WithPassword('password'),
-				WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+				WithCloudSQLInstance('my-project', 'us-central1', 'my-instance'),
 				WithDatabase('my-database')
 		```
 	- Using email authentication
 		```go
 		pEngine, err := NewPostgresEngine(ctx,
-			WithCloudSQLInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+			WithCloudSQLInstance('my-project', 'us-central1', 'my-instance'),
 			WithDatabase('my-database'),
 			WithIAMAccountEmail('mail@company.com'))
 		```
