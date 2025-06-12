@@ -7,7 +7,7 @@ import sitemap from "@astrojs/sitemap";
 import { sidebar } from "./src/sidebar";
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
 
-const site = "https://genkit.dev/";
+const site = "https://genkit.dev";
 const ogUrl = new URL("ogimage.png?v=1", site).href;
 
 // https://astro.build/config
