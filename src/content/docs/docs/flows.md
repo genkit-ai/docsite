@@ -50,7 +50,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
   async ({ theme }) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
     return { text };
@@ -97,7 +97,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
   },
   async ({ theme }) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -124,7 +124,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
   async ({ theme }) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -177,7 +177,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   },
   async ({ theme }, { sendChunk }) => {
     const { stream, response } = ai.generateStream({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
 
@@ -301,7 +301,7 @@ export const complexMenuSuggestionFlow = ai.defineFlow(
     outputSchema: PrixFixeMenuSchema,
   },
   async ({ theme }): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
+    const chat = ai.chat({ model: googleAI.model('gemini-2.5-flash') });
     await chat.send('What makes a good prix fixe menu?');
     await chat.send(
       'What are some ingredients, seasonings, and cooking techniques that ' + `would work for a ${theme} themed menu?`,
@@ -363,7 +363,7 @@ export const menuQuestionFlow = ai.defineFlow(
       return menu;
     });
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       system: "Help the user answer questions about today's menu.",
       prompt: question,
       docs: [{ content: [{ text: menu }] }],

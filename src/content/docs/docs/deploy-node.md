@@ -55,7 +55,7 @@ import { startFlowServer } from '@genkit-ai/express';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.0-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
 });
 
 const helloFlow = ai.defineFlow(

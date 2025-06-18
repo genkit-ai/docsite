@@ -103,14 +103,14 @@ To get a reference to a supported model, specify its identifier to
 either `googlegenai.GoogleAIModel` or `googlgenai.VertexAIModel`:
 
 ```go
-model := googlegenai.GoogleAIModel(g, "gemini-2.0-flash")
+model := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
 ```
 
 Alternatively, you may create a `ModelRef` which pairs the model name with its
 config:
 
 ```go
-modelRef := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.GeminiConfig{
+modelRef := googlegenai.GoogleAIModelRef("gemini-2.5-flash", &googlegenai.GeminiConfig{
     Temperature: 0.5,
     MaxOutputTokens: 500,
     // Other configuration...
@@ -118,7 +118,7 @@ modelRef := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.Gemini
 ```
 
 The following models are supported: `gemini-1.5-pro`, `gemini-1.5-flash`,
-`gemini-2.0-pro`, `gemini-2.0-flash`, and other experimental models.
+`gemini-2.0-pro`, `gemini-2.5-flash`, and other experimental models.
 
 Model references have a `Generate()` method that calls the Google API:
 
