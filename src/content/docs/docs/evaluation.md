@@ -76,7 +76,7 @@ This section explains how to perform inference-based evaluation using Genkit.
         });
 
         const { text } = await ai.generate({
-          model: googleAI.model('gemini-2.0-flash'),
+          model: googleAI.model('gemini-2.5-flash'),
           prompt: `Answer this question with the given context ${query}`,
           docs: factDocs,
         });
@@ -95,7 +95,7 @@ This section explains how to perform inference-based evaluation using Genkit.
       plugins: [
         ...// Add this plugin to your Genkit initialization block
         genkitEval({
-          judge: googleAI.model('gemini-2.0-flash'),
+          judge: googleAI.model('gemini-2.5-flash'),
           metrics: [GenkitMetric.MALICIOUSNESS],
         }),
       ],
@@ -385,7 +385,7 @@ export const qaFlow = ai.defineFlow(
     });
 
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Answer this question with the given context ${query}`,
       docs: factDocsModified,
     });
@@ -505,7 +505,7 @@ export const synthesizeQuestions = ai.defineFlow(
     const questions = [];
     for (var i = 0; i < chunks.length; i++) {
       const { text } = await ai.generate({
-        model: googleAI.model('gemini-2.0-flash'),
+        model: googleAI.model('gemini-2.5-flash'),
         prompt: {
           text: `Generate one question about the following text: ${chunks[i]}`,
         },

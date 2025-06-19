@@ -339,7 +339,7 @@ const ai = genkit({
     vertexAI(),
     ...
     myCustomEvals({
-      judge: googleAI.model("gemini-2.0-flash"),
+      judge: googleAI.model("gemini-2.5-flash"),
     }),
   ],
   ...

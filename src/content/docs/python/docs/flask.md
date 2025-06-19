@@ -31,7 +31,7 @@ Prerequisites: make sure you have everything installed from the [Get Started](/p
 
     ai = Genkit(
         plugins=[GoogleGenai()],
-        model=google_genai_name('gemini-2.0-flash'),
+        model=google_genai_name('gemini-2.5-flash'),
     )
 
     app = Flask(__name__)

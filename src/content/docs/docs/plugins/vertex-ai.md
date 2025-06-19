@@ -74,7 +74,7 @@ const ai = genkit({
 });
 
 const llmResponse = await ai.generate({
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model('gemini-2.5-flash'),
   prompt: 'What should I do when I visit Melbourne?',
 });
 ```
@@ -91,7 +91,7 @@ const ai = genkit({
 });
 
 await ai.generate({
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model('gemini-2.5-flash'),
   prompt: '...',
   config: {
     googleSearchRetrieval: {
@@ -497,7 +497,7 @@ The Vertex AI Genkit plugin supports **Context Caching**, which allows models to
 
 ### How to Use Context Caching
 
-To enable context caching, ensure your model supports it. For example, `gemini-2.0-flash` and `gemini-2.0-pro` are models that support context caching, and you will have to specify version number `001`.
+To enable context caching, ensure your model supports it. For example, `gemini-2.5-flash` and `gemini-2.0-pro` are models that support context caching, and you will have to specify version number `001`.
 
 You can define a caching mechanism in your application like this:
 
@@ -526,7 +526,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model('gemini-2.5-flash'),
   prompt: "Describe Pierre's transformation throughout the novel.",
 });
 ```
@@ -563,7 +563,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: vertexAI.model('gemini-2.0-flash'),
+  model: vertexAI.model('gemini-2.5-flash'),
   prompt: 'Analyze the relationship between Pierre and Natasha.',
 });
 ```
@@ -576,7 +576,7 @@ const llmResponse = await ai.generate({
 
 ### Supported Models for Context Caching
 
-Only specific models, such as `gemini-2.0-flash` and `gemini-2.0-pro`, support context caching, and currently only on version numbers `001`. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
+Only specific models, such as `gemini-2.5-flash` and `gemini-2.0-pro`, support context caching, and currently only on version numbers `001`. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
 
 ### Further Reading
 

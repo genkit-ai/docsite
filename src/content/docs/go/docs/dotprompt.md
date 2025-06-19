@@ -216,7 +216,7 @@ section about [specifying input schemas](#input-and-output-schemas)), configurat
 
 ```go
 resp, err := helloPrompt.Execute(context.Background(),
-	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithModelName("googleai/gemini-2.5-flash"),
 	ai.WithInput(map[string]any{"name": "John"}),
 	ai.WithConfig(&googlegenai.GeminiConfig{Temperature: 0.5})
 )
@@ -255,7 +255,7 @@ configuration values for your prompt:
 
 ```yaml
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 config:
   temperature: 1.4
   topK: 50
@@ -292,7 +292,7 @@ passed to a `genkit.Generate()` request or a flow definition:
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     theme?: string
@@ -452,7 +452,7 @@ You already saw this in action in the section on input and output schemas:
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     theme?: string
@@ -490,7 +490,7 @@ Handlebars's `#if` helper:
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     theme?: string
@@ -519,7 +519,7 @@ The `{{role}}` helper provides a straightforward way to construct multi-message 
 
 ```dotprompt
 ---
-model: vertexai/gemini-2.0-flash
+model: vertexai/gemini-2.5-flash
 input:
   schema:
     userQuestion: string
@@ -539,7 +539,7 @@ use the `{{media}}` helper:
 
 ```dotprompt
 ---
-model: vertexai/gemini-2.0-flash
+model: vertexai/gemini-2.5-flash
 input:
   schema:
     photoUrl: string
@@ -580,7 +580,7 @@ This can then be included in other prompts:
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     name: string
@@ -612,7 +612,7 @@ members of a list.
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     destinations(array):
@@ -651,7 +651,7 @@ Once a helper is defined you can use it in any prompt:
 
 ```dotprompt
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 input:
   schema:
     name: string

@@ -72,7 +72,7 @@ Perform these steps to get started quickly with Genkit.
         // Initialize Genkit
         g, err := genkit.Init(ctx,
             genkit.WithPlugins(&googlegenai.GoogleAI{}),
-            genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
         )
         if err != nil {
             log.Fatalf("Genkit initialization error: %v", err)
@@ -93,7 +93,7 @@ Perform these steps to get started quickly with Genkit.
         }
         factsRetriever := genkit.DefineRetriever(g, "local", "dogFacts", dummyRetrieverFunc)
 
-        m := googlegenai.GoogleAIModel(g, "gemini-2.0-flash")
+        m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
         if m == nil {
             log.Fatal("failed to find model")
         }
@@ -105,7 +105,7 @@ Perform these steps to get started quickly with Genkit.
                 return "", fmt.Errorf("retrieval failed: %w", err)
             }
             llmResponse, err := genkit.Generate(ctx, g,
-                ai.WithModelName("googleai/gemini-2.0-flash"),
+                ai.WithModelName("googleai/gemini-2.5-flash"),
                 ai.WithPrompt("Answer this question with the given context: %s", query),
                 ai.WithDocs(factDocs.Documents...)
             )
@@ -141,7 +141,7 @@ Perform these steps to get started quickly with Genkit.
                 &googlegenai.GoogleAI{},
                 &evaluators.GenkitEval{Metrics: metrics}, // Add this plugin
             ),
-            genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
         )
     }
     ```

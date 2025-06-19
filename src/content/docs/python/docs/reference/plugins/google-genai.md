@@ -28,7 +28,7 @@ from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
   plugins=[GoogleAI()],
-  model='googleai/gemini-2.0-flash', 
+  model='googleai/gemini-2.5-flash', 
 )
 ```
 
@@ -50,7 +50,7 @@ from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(
   plugins=[VertexAI()],
-  model='vertexai/gemini-2.0-flash', # optional
+  model='vertexai/gemini-2.5-flash', # optional
 )
 ```
 

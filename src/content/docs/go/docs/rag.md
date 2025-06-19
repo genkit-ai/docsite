@@ -308,7 +308,7 @@ genkit.DefineFlow(
 
     // Call Generate, including the menu information in your prompt.
     return genkit.GenerateText(ctx, g,
-        ai.WithModelName("googleai/gemini-2.0-flash"),
+        ai.WithModelName("googleai/gemini-2.5-flash"),
         ai.WithDocs(resp.Documents),
         ai.WithSystem(`
 You are acting as a helpful AI assistant that can answer questions about the
