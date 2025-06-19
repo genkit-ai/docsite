@@ -28,7 +28,7 @@ To use this plugin, follow these steps:
 	- Using email authentication
 		```go
 		pEngine, err := alloydb.NewPostgresEngine(ctx,
-			WithCloudSQLInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+			WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
 			WithDatabase('my-database'),
 			WithIAMAccountEmail('mail@company.com'))
 		```
@@ -94,29 +94,30 @@ cfg := &alloydb.Config{
 	EmbedderOptions:       nil,
 }
 
-indexer, err := alloydb.DefineIndexer(ctx, g, postgres, cfg)
+doc, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
-	return err
+  retrun err
 }
 
-d1 := ai.DocumentFromText( 
-	"The product features include..." , 
-	map[string]any{
-		"source": "website", 
-		"category": "product-docs", 
-		"custom_id": "doc-123"})
+docs := []*ai.Document{{
+        Content: []*ai.Part{{
+        Kind:        ai.PartText,
+        ContentType: "text/plain",
+        Text:        "The product features include...",
+        }},
+      Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+  }}
 
-err := ai.Index(ctx, indexer, ai.WithIndexerDocs(d1))
-if err != nil {
-	return err
+if err := doc.Index(ctx, docs); err != nil {
+    return err
 }
 ```
 
-Similarly, to retrieve documents from an index, first create a retriever
-definition:
+Similarly, to retrieve documents from an index,use the retriever
+method:
 
 ```go
-retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
+doc,  retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
   retrun err
 }
@@ -137,10 +138,6 @@ if err != nil {
 It's also posible to use the Retrieve method from Retriever
 
 ```go
-retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
-if err != nil {
-  retrun err
-}
 
 d2 := ai.DocumentFromText( "The product features include..." , nil)
 
