@@ -76,7 +76,7 @@ To use this plugin, follow these steps:
 
 ## Usage
 
-To add documents to a Postgresql index, first create an index definition that specifies the features of the table:
+To add documents to a Postgresql index, first create a retrieve definition that specifies the features of the table:
 
 ```go
 cfg := &postgresql.Config{
@@ -91,64 +91,29 @@ cfg := &postgresql.Config{
 	EmbedderOptions:       nil,
 }
 
-indexer, err := postgresql.DefineIndexer(ctx, g, postgres, cfg)
-if err != nil {
-	return err
-}
-
-d1 := ai.DocumentFromText( 
-	"The product features include..." , 
-	map[string]any{
-		"source": "website", 
-		"category": "product-docs", 
-		"custom_id": "doc-123"})
-
-err := ai.Index(ctx, indexer, ai.WithIndexerDocs(d1))
-if err != nil {
-	return err
-}
-
-```
-
-It's also posible to use the Index method from Indexer 
-
-```go
-
-cfg := &postgresql.Config{
-	TableName:             'documents',
-	SchemaName:            'public',
-	ContentColumn:         "content",
-	EmbeddingColumn:       "embedding",
-	MetadataColumns:       []string{"source", "category"},
-	IDColumn:              "custom_id",
-	MetadataJSONColumn:    "custom_metadata",
-	Embedder:              embedder,
-	EmbedderOptions:       nil,
-}
-
-indexer, err := postgresql.DefineIndexer(ctx, g, postgres, cfg)
-if err != nil {
-	return err
-}
-
-
-reqIndexer := &ai.IndexerRequest{
-	Documents: []*ai.Document{d1},
-	Options:   nil}
-
-err = indexer.Index(ctx, reqIndexer)
-
-```
-
-Similarly, to retrieve documents from an index, first create a retriever
-definition:
-
-```go
-retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
+doc, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
   retrun err
 }
 
+docs := []*ai.Document{{
+        Content: []*ai.Part{{
+        Kind:        ai.PartText,
+        ContentType: "text/plain",
+        Text:        "The product features include...",
+        }},
+      Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+  }}
+
+if err := doc.Index(ctx, docs); err != nil {
+    return err
+}
+
+```
+
+Similarly, to retrieve documents from an index, use the retrieve method:
+
+```go
 d2 := ai.DocumentFromText( "The product features include..." , nil)
 
 resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
@@ -162,10 +127,10 @@ if err != nil {
 }
 ```
 
-It's also posible to use the Retrieve method from Retriever
+It's also possible to use the Retrieve method from Retriever
 
 ```go
-retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
+_, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
   retrun err
 }
