@@ -25,7 +25,7 @@ async function main() {
   const go = await indexLang('go', 'src/content/docs/go/docs');
   const python = await indexLang('python', 'src/content/docs/python/docs');
 
-  await writeFile(`public/docs-bundle.json`, JSON.stringify({ ...js, ...go, ...python }, undefined, 2));
+  await writeFile(`public/docs-bundle-experimental.json`, JSON.stringify({ ...js, ...go, ...python }, undefined, 2));
 }
 
 interface Doc {
