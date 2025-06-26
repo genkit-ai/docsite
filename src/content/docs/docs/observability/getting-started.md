@@ -47,6 +47,19 @@ Install the `@genkit-ai/firebase` plugin in your project:
 npm install @genkit-ai/firebase
 ```
 
+### Environment-based configuration
+
+If you intend to use the default configuration for Firebase Genkit Monitoring, you can enable telemetry by setting the `ENABLE_FIREBASE_MONITORING` environment variable.
+
+```bash
+export ENABLE_FIREBASE_MONITORING=true
+```
+
+### Programmatic configuration
+
+You can also enable Firebase Genkit Monitoring in code. This is useful
+if you want to tweak any configuration settings like metric export interval or setting up your local environment to export telemetry.
+
 Import `enableFirebaseTelemetry` into your Genkit configuration file (the
 file where `genkit(...)` is initalized), and call it:
 
