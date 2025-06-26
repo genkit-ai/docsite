@@ -217,6 +217,73 @@ Genkit supports additional evaluators through plugins, like the Vertex Rapid Eva
 
 ## Advanced use
 
+### Evaluation comparison
+
+The Developer UI offers visual tools for side-by-side comparison of multiple
+evaluation runs. This feature allows you to analyze variations across different
+executions within a unified interface, making it easier to assess changes in
+output quality. Additionally, you can highlight outputs based on the performance
+of specific metrics, indicating improvements or regressions.
+
+When comparing evaluations, one run is designated as the _Baseline_. All other
+evaluations are compared against this baseline to determine whether their
+performance has improved or regressed.
+
+#### Prerequisites
+
+To use the evaluation comparison feature, the following conditions must be met:
+
+- Evaluations must originate from a dataset source. Evaluations from file
+  sources are not comparable.
+- All evaluations being compared must be from the same dataset.
+- For metric highlighting, all evaluations must use at least one common
+  metric that produces a `number` or `boolean` score.
+
+#### Comparing evaluations
+
+1.  Ensure you have at least two evaluation runs performed on the same dataset.
+    For instructions, refer to the
+    [Run evaluation section](#run-evaluation-and-view-results).
+
+2.  In the Developer UI, navigate to the **Datasets** page.
+
+3.  Select the relevant dataset and open its **Evaluations** tab. You should see
+    all evaluation runs associated with that dataset.
+
+4.  Choose one evaluation to serve as the baseline for comparison.
+
+5.  On the evaluation results page, click the **+ Comparison** button. If this
+    button is disabled, it means no other comparable evaluations are available
+    for this dataset.
+
+6.  A new column will appear with a dropdown menu. Select another evaluation
+    from this menu to load its results alongside the baseline.
+
+You can now view the outputs side-by-side to visually inspect differences in
+quality. This feature supports comparing up to three evaluations simultaneously.
+
+##### Metric highlighting (Optional)
+
+If your evaluations include metrics, you can enable metric highlighting to
+color-code the results. This feature helps you quickly identify changes in
+performance: improvements are colored green, while regressions are red.
+
+Note that highlighting is only supported for numeric and boolean metrics, and
+the selected metric must be present in all evaluations being compared.
+
+To enable metric highlighting:
+
+1.  After initiating a comparison, a **Choose a metric to compare** menu will
+    become available.
+
+2.  Select a metric from the dropdown. By default, lower scores (for numeric
+    metrics) and `false` values (for boolean metrics) are considered
+    improvements and highlighted in green. You can reverse this logic by
+    ticking the checkbox in the menu.
+
+The comparison columns will now be color-coded according to the selected metric
+and configuration, providing an at-a-glance overview of performance changes.
+
 ### Evaluation using the CLI
 
 Genkit CLI provides a rich API for performing evaluation. This is especially
@@ -253,10 +320,10 @@ field and an optional `reference` field, like below:
 ```json
 [
   {
-    "input": {"query": "What is the French word for Cheese?"}
+    "input": { "query": "What is the French word for Cheese?" }
   },
   {
-    "input": {"query": "What green vegetable looks like cauliflower?"},
+    "input": { "query": "What green vegetable looks like cauliflower?" },
     "reference": "Broccoli"
   }
 ]
@@ -343,6 +410,7 @@ The `batchSize` option has been integrated into the `eval:flow` and `eval:run` C
 ```bash
 genkit eval:flow myFlow --input yourDataset.json --evaluators=custom/myEval --batchSize 10
 ```
+
 Or, with `eval:run`
 
 ```bash
@@ -489,10 +557,12 @@ export const synthesizeQuestions = ai.defineFlow(
   {
     name: 'synthesizeQuestions',
     inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
-    outputSchema: z.object({ 
-      questions: z.array(z.object({
-         query: z.string() 
-      })) 
+    outputSchema: z.object({
+      questions: z.array(
+        z.object({
+          query: z.string(),
+        }),
+      ),
     }),
   },
   async ({ filePath }) => {
