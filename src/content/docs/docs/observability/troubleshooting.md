@@ -45,16 +45,50 @@ into when using Genkit Monitoring.
     [ADC](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment)
     documentation for more information.
 
+## Request count does not match traces count
+
+You may have noticed that at low volume (<1 query per second) your metric counts (request count or failed paths request count) are not matching the number of traces being returned in the traces table. Below you'll find the three most common reasons for this happening.
+
+### Metrics are exported at a different cadence than traces
+
+This should be eventually consistent, but you may be looking at the dashboard when traces have exported but metrics have not or metrics have exported and traces have not.
+
+You can reduce the likelihood of this happening by adjusting the metric export interval to be more frequent. By default, metrics are exported every 5 minutes. The minimum allowable export interval is 5 seconds.
+
+:::note
+Exporting metrics more frequently could result in increased cost.
+:::
+
+```typescript
+enableFirebaseTelemetry({
+  // Override the export interval to 3 minutes
+  metricExportIntervalMillis: 180_000,
+  // Override the export timeout to 3 minutes
+  metricExportTimeoutMillis: 180_000,
+});
+```
+
+### Intermittent network issues
+
+Occasionally you may have transient network issues that result in a failure to upload telemetry data. These failures are logged to Google Cloud logging. To see the specific failure reason, look for a log that starts with --
+
+> Unable to send telemetry to Google Cloud: Error: Send TimeSeries failed:
+
 ### Telemetry upload reliability in Firebase Functions / Cloud Run
 
 When Genkit is hosted in Google Cloud Run (including Cloud Functions for
-Firebase), telemetry-data upload may be less reliable as the container switches
-to the "idle"
+Firebase), telemetry-data upload may be less reliable as the container switches to the "idle"
 [lifecycle state](https://cloud.google.com/blog/topics/developers-practitioners/lifecycle-container-cloud-run).
 If higher reliability is important to you, consider changing
 [CPU allocation](https://cloud.google.com/run/docs/configuring/cpu-allocation)
-to **always allocated** in the Google Cloud Console.
+to **Instance-based billing** (previously called **CPU always allocated**) in the Google Cloud Console.
 
 :::note
-The **always allocated** setting impacts pricing.
+The **Instance-based billing** setting impacts pricing. Check [Cloud Run pricing](https://cloud.google.com/run/pricing) before enabling this setting.
 :::
+
+To switch to instance-based billing, run
+
+```bash
+gcloud run services update YOUR-SERVICE --no-cpu-throttling
+```
