@@ -42,7 +42,7 @@ async function indexLang(lang: string, dir: string) {
   for (const file of docFiles) {
     const markdown = await readFile(path.resolve(dir, file), { encoding: 'utf8' });
     const { frontmatter, body } = await extractFrontmatterAndBody(markdown);
-    const headers = body.match(/#.*\n/gm)?.join('\n') ?? '';
+    const headers = body.match(/^#.*\n/gm)?.join('') ?? '';
 
     documents[`${lang}/${file}`] = {
       text: body,
