@@ -30,6 +30,7 @@ async function main() {
 
 interface Doc {
   title: string;
+  description?: string;
   text: string;
   lang: string;
   headers: string;
@@ -47,6 +48,7 @@ async function indexLang(lang: string, dir: string) {
     documents[`${lang}/${file}`] = {
       text: body,
       title: frontmatter.title || file,
+      description: frontmatter.description,
       lang,
       headers,
     };
