@@ -2,49 +2,40 @@
 title: Defining AI workflows
 ---
 
-The core of your app's AI features are generative model requests, but it's rare
-that you can simply take user input, pass it to the model, and display the model
-output back to the user. Usually, there are pre- and post-processing steps that
-must accompany the model call. For example:
+AI applications rarely involve just a single model call. Most real-world AI features require a series of coordinated steps: retrieving context, processing user input, calling models, validating outputs, and combining results from multiple sources.
 
-- Retrieving contextual information to send with the model call
-- Retrieving the history of the user's current session, for example in a chat
-  app
-- Using one model to reformat the user input in a way that's suitable to pass
-  to another model
-- Evaluating the "safety" of a model's output before presenting it to the user
-- Combining the output of several models
+Genkit **flows** provide a structured way to define these multi-step AI workflows. Think of flows as enhanced functions that wrap your AI logic with additional development, debugging, and deployment capabilities.
 
-Every step of this workflow must work together for any AI-related task to
-succeed.
+## Why are Genkit flows?
 
-In Genkit, you represent this tightly-linked logic using a construction called a
-flow. Flows are written just like functions, using ordinary TypeScript code, but
-they add additional capabilities intended to ease the development of AI
-features:
+Genkit flows are lightweight wrappers around your AI logic that provide the following benefits:
 
-- **Type safety**: Input and output schemas defined using Zod, which provides
-  both static and runtime type checking
-- **Integration with developer UI**: Debug flows independently of your
-  application code using the developer UI. In the developer UI, you can run
-  flows and view traces for each step of the flow.
-- **Simplified deployment**: Deploy flows directly as web API endpoints, using
-  Cloud Functions for Firebase or any platform that can host a web app.
+- **Type safety**: Input and output validation using [Zod](https://zod.dev/) schemas
+- **Development tools**: Debug and test flows using the Developer UI
+- **Easy deployment**: Expose flows directly as web API endpoints
+- **Observability**: Automatically trace each step of a flow for inspection and debugging
 
-Unlike similar features in other frameworks, Genkit's flows are lightweight and
-unobtrusive, and don't force your app to conform to any specific abstraction.
-All of the flow's logic is written in standard TypeScript, and code inside a
-flow doesn't need to be flow-aware.
+## Setup
 
-## Defining and calling flows
-
-In its simplest form, a flow just wraps a function. The following example wraps
-a function that calls `generate()`:
+All examples assume the following Genkit setup:
 
 ```typescript
-export const menuSuggestionFlow = ai.defineFlow(
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+```
+
+## Creating your first flow
+
+Define a flow by providing a name, input and output schemas, and a core async function:
+
+```ts
+export const menuSuggestionTextFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionFlow',
+    name: 'menuSuggestionTextFlow',
     inputSchema: z.object({ theme: z.string() }),
     outputSchema: z.object({ menuItem: z.string() }),
   },
@@ -53,45 +44,41 @@ export const menuSuggestionFlow = ai.defineFlow(
       model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
-    return { text };
-  },
+    return { menuItem: text };
+  }
 );
 ```
 
-Just by wrapping your `generate()` calls like this, you add some functionality:
-doing so lets you run the flow from the Genkit CLI and from the developer UI,
-and is a requirement for several of Genkit's features, including deployment and
-observability (later sections discuss these topics).
+Wrapping a function in a flow allows you to test and inspect it with the Genkit CLI or Developer UI, and deploy it as an API endpoint.
 
-### Input and output schemas
+## Working with schemas
 
-One of the most important advantages Genkit flows have over directly calling a
-model API is type safety of both inputs and outputs. When defining flows, you
-can define schemas for them using Zod, in much the same way as you define the
-output schema of a `generate()` call; however, unlike with `generate()`, you can
-also specify an input schema.
+Zod schemas are central to how flows provide type safety and validation. They offer two key benefits:
 
-While it's not mandatory to wrap your input and output schemas in `z.object()`, it's considered best practice for these reasons:
+- **Type safety**: Full TypeScript inference with IDE autocomplete and compile-time error checking
+- **Runtime validation**: Catches invalid inputs and ensures outputs match expectations
 
-- **Better developer experience**: Wrapping schemas in objects provides a better experience in the Developer UI by giving you labeled input fields. 
-- **Future-proof API design**: Object-based schemas allow for easy extensibility in the future. You can add new fields to your input or output schemas without breaking existing clients, which is a core principle of robust API design.
+### Schema best practices
 
-All examples in this documentation use object-based schemas to follow these best practices.
+Always wrap schemas in `z.object()`, even for simple datatypes. This approach provides:
 
-Here's a refinement of the last example, which defines a flow that takes a
-string as input and outputs an object:
+- Labeled fields for better autocomplete and Developer UI experience
+- Flexibility to add fields later without breaking changes
+- Improved code readability and structure
 
-```typescript
-import { z } from 'genkit';
+### Structured output example
 
+Here's how to work with more complex, structured data:
+
+```ts
 const MenuItemSchema = z.object({
-  dishname: z.string(),
+  dishName: z.string(),
   description: z.string(),
-});
+}); 
 
-export const menuSuggestionFlowWithSchema = ai.defineFlow(
+export const menuSuggestionObjectFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionFlow',
+    name: 'menuSuggestionObjectFlow',
     inputSchema: z.object({ theme: z.string() }),
     outputSchema: MenuItemSchema,
   },
@@ -101,79 +88,75 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
-    if (output == null) {
-      throw new Error("Response doesn't satisfy schema.");
+
+    if (!output) {
+      throw new Error("Failed to generate valid menu item");
     }
+
     return output;
-  },
+  }
 );
 ```
 
-Note that the schema of a flow does not necessarily have to line up with the
-schema of the `generate()` calls within the flow (in fact, a flow might not even
-contain `generate()` calls). Here's a variation of the example that passes a
-schema to `generate()`, but uses the structured output to format a simple
-string, which the flow returns.
+### Transforming output
 
-```typescript
-export const menuSuggestionFlowMarkdown = ai.defineFlow(
+Flow schemas don't need to match internal model calls exactly. You can reshape the output for display or downstream use:
+
+```ts
+export const formattedMenuFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionFlow',
+    name: 'formattedMenuFlow',
     inputSchema: z.object({ theme: z.string() }),
     outputSchema: z.object({ formattedMenuItem: z.string() }),
   },
   async ({ theme }) => {
+    // Generate structured data internally
     const { output } = await ai.generate({
       model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
-    if (output == null) {
-      throw new Error("Response doesn't satisfy schema.");
+    
+    if (!output) {
+      throw new Error("Failed to generate menu item");
     }
+    
+    // Transform and format for output
     return { 
-      formattedMenuItem: `**${output.dishname}**: ${output.description}`
+      formattedMenuItem: `**${output.dishName}**: ${output.description}`
     };
   },
 );
 ```
 
-### Calling flows
+## Calling flows
 
-Once you've defined a flow, you can call it from your Node.js code:
+Call flows like any async function:
 
-```typescript
-const { text } = await menuSuggestionFlow({ theme: 'bistro' });
+```ts
+const result = await menuSuggestionTextFlow({ theme: 'bistro' });
+console.log(result.menuItem);
 ```
 
-The argument to the flow must conform to the input schema, if you defined one.
+When using a structured output:
 
-If you defined an output schema, the flow response will conform to it. For
-example, if you set the output schema to `MenuItemSchema`, the flow output will
-contain its properties:
-
-```typescript
-const { dishname, description } = await menuSuggestionFlowWithSchema({ theme: 'bistro' });
+```ts
+const { dishName, description } = await menuSuggestionObjectFlow({ theme: 'bistro' });
 ```
+
+TypeScript will enforce schema validation and assist with autocomplete.
 
 ## Streaming flows
 
-Flows support streaming using an interface similar to `generate()`'s streaming
-interface. Streaming is useful when your flow generates a large amount of
-output, because you can present the output to the user as it's being generated,
-which improves the perceived responsiveness of your app. As a familiar example,
-chat-based LLM interfaces often stream their responses to the user as they are
-generated.
+For a more responsive user experience, streaming flows let you display partial results as they become available:
 
-Here's an example of a flow that supports streaming:
-
-```typescript
-export const menuSuggestionStreamingFlow = ai.defineFlow(
+```ts
+export const streamingMenuFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionFlow',
+    name: 'streamingMenuFlow',
     inputSchema: z.object({ theme: z.string() }),
-    streamSchema: z.string(),
-    outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
+    streamSchema: z.object({ menuItemChunk: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
   },
   async ({ theme }, { sendChunk }) => {
     const { stream, response } = ai.generateStream({
@@ -182,150 +165,83 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
     });
 
     for await (const chunk of stream) {
-      // Here, you could process the chunk in some way before sending it to
-      // the output stream via sendChunk(). In this example, we output
-      // the text of the chunk, unmodified.
-      sendChunk(chunk.text);
+      sendChunk({ menuItemChunk: chunk.text });
     }
 
     const { text: menuItem } = await response;
-
-    return {
-      theme,
-      menuItem,
-    };
-  },
+    return { menuItem };
+  }
 );
 ```
 
-- The `streamSchema` option specifies the type of values your flow streams.
-  This does not necessarily need to be the same type as the `outputSchema`,
-  which is the type of the flow's complete output.
-- The second parameter to your flow definition is called `sideChannel`. It
-  provides features such as request context and the `sendChunk` callback.
-  The `sendChunk` callback takes a single parameter, of
-  the type specified by `streamSchema`. Whenever data becomes available within
-  your flow, send the data to the output stream by calling this function.
+**Key concepts for streaming:**
+- `streamSchema`: Defines the type of individual chunks sent during streaming
+- `outputSchema`: Defines the type of the final complete result
+- `sendChunk()`: Callback to send data to the output stream as it becomes available
 
-In the above example, the values streamed by the flow are directly coupled to
-the values streamed by the `generate()` call inside the flow. Although this is
-often the case, it doesn't have to be: you can output values to the stream using
-the callback as often as is useful for your flow.
-
-### Calling streaming flows
-
-Streaming flows are also callable, but they immediately return a response object
-rather than a promise:
+### Consuming streaming flows
 
 ```typescript
-const response = menuSuggestionStreamingFlow.stream({ theme: 'Danube' });
-```
+// Start streaming
+const response = streamingMenuFlow.stream({ theme: 'Italian' });
 
-The response object has a stream property, which you can use to iterate over the
-streaming output of the flow as it's generated:
-
-```typescript
+// Process chunks as they arrive
 for await (const chunk of response.stream) {
-  console.log('chunk', chunk);
+  console.log('Menu item part:', chunk.menuItemChunk);
 }
+
+// Get the final complete result
+const finalResult = await response.output;
+console.log('Final menu item:', finalResult.menuItem);
 ```
 
-You can also get the complete output of the flow, as you can with a
-non-streaming flow:
+## Observability
 
-```typescript
-const output = await response.output;
-```
+One of the key benefits flows provide is observability for multi-step workflows. If a flow run includes multiple generation steps, tool invocations, and even subflows, the traces for each step will be nested under the parent flow's trace.
 
-Note that the streaming output of a flow might not be the same type as the
-complete output; the streaming output conforms to `streamSchema`, whereas the
-complete output conforms to `outputSchema`.
+All Genkit components are traceable with OpenTelemetry instrumentation. Traces for Genkit flows can be inspected locally for debugging
 
-## Running flows from the command line
+## Testing in the Developer UI
 
-You can run flows from the command line using the Genkit CLI tool:
+The Developer UI is a local tool for testing and inspecting Genkit flows with a visual interface. It's one of the key advantages of using flows, allowing you to test and debug your AI logic independently from your main application.
+
+### Start the Developer UI
+
+Run the following command from your project directory:
 
 ```bash
-genkit flow:run menuSuggestionFlow '{"theme": "French"}'
+genkit start -- npx tsx --watch src/your-code.ts
 ```
 
-For streaming flows, you can print the streaming output to the console by adding
-the `-s` flag:
+This starts your app and launches the Developer UI at http://localhost:4000 by default.
 
-```bash
-genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s
-```
+:::note
+The command after `--` should run the file that defines or imports your Genkit flows. You can use `tsx`, `node`, or other commands based on your setup.
+:::
 
-Running a flow from the command line is useful for testing a flow, or for
-running flows that perform tasks needed on an ad hoc basis&mdash;for example, to
-run a flow that ingests a document into your vector database.
+### Run and inspect flows
 
-## Debugging flows
+In the Developer UI:
 
-One of the advantages of encapsulating AI logic within a flow is that you can
-test and debug the flow independently from your app using the Genkit developer
-UI.
+1. Select your flow from the list of available flows
+2. Enter sample input in JSON format
+3. Click **Run**
 
-To start the developer UI, run the following commands from your project
-directory:
+After running a flow, you'll see the generated output along with a visual trace of the execution process for debugging and optimization. Click **View trace** or click any steps in the trace column for closer inspection.
 
-```bash
-genkit start -- tsx --watch src/your-code.ts
-```
+<video
+  controls
+  preload="metadata"
+  muted
+  width="100%"
+  style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+  poster="/videos/devui-flow-runner-poster.png"
+>
+  <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
 
-From the **Run** tab of developer UI, you can run any of the flows defined in
-your project:
-
-![Genkit DevUI flows](../../../assets/devui-flows.png)
-
-After you've run a flow, you can inspect a trace of the flow invocation by
-either clicking **View trace** or looking on the **Inspect** tab.
-
-In the trace viewer, you can see details about the execution of the entire flow,
-as well as details for each of the individual steps within the flow. For
-example, consider the following flow, which contains several generation
-requests:
-
-```typescript
-const PrixFixeMenuSchema = z.object({
-  starter: z.string(),
-  soup: z.string(),
-  main: z.string(),
-  dessert: z.string(),
-});
-
-export const complexMenuSuggestionFlow = ai.defineFlow(
-  {
-    name: 'complexMenuSuggestionFlow',
-    inputSchema: z.object({ theme: z.string() }),
-    outputSchema: PrixFixeMenuSchema,
-  },
-  async ({ theme }): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model('gemini-2.5-flash') });
-    await chat.send('What makes a good prix fixe menu?');
-    await chat.send(
-      'What are some ingredients, seasonings, and cooking techniques that ' + `would work for a ${theme} themed menu?`,
-    );
-    const { output } = await chat.send({
-      prompt: `Based on our discussion, invent a prix fixe menu for a ${theme} ` + 'themed restaurant.',
-      output: {
-        schema: PrixFixeMenuSchema,
-      },
-    });
-    if (!output) {
-      throw new Error('No data generated.');
-    }
-    return output;
-  },
-);
-```
-
-When you run this flow, the trace viewer shows you details about each generation
-request including its output:
-
-![Genkit DevUI flows](../../../assets/devui-inspect.png)
-
-### Flow steps
+### Flow 
 
 In the last example, you saw that each `generate()` call showed up as a separate
 step in the trace viewer. Each of Genkit's fundamental actions show up as
