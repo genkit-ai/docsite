@@ -44,7 +44,7 @@ interacting with an LLM:
 1.  The calling application prompts the LLM with a request. The prompt includes
     a list of tools, including at least one for an interrupt that the LLM
     can use to generate a response.
-2.  The LLM either generates either a complete response or a tool call request
+2.  The LLM generates either a complete response or a tool call request
     in a specific format. To the LLM, an interrupt call looks like any
     other tool call.
 3.  If the LLM calls an interrupting tool,
