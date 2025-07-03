@@ -4,7 +4,7 @@ title: MCP Toolbox for Databases
 
 [MCP Toolbox for Databases](https://github.com/googleapis/genai-toolbox) is an open source MCP server for databases. It was designed with enterprise-grade and production-quality in mind. It enables you to develop tools easier, faster, and more securely by handling the complexities such as connection pooling, authentication, and more.
 
-Toolbox Tools can be easily integrated with Genkit applications. For more
+Toolbox Tools can be seemlessly integrated with Genkit applications. For more
 information on [getting
 started](https://googleapis.github.io/genai-toolbox/getting-started/) or
 [configuring](https://googleapis.github.io/genai-toolbox/getting-started/configure/)
