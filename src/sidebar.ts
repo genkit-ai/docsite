@@ -107,6 +107,7 @@ const JS_SIDEBAR = [
       { label: "Neo4j", slug: "docs/plugins/neo4j" },
       { label: "pgvector", slug: "docs/plugins/pgvector" },
       { label: "Pinecone", slug: "docs/plugins/pinecone" },
+      { label: "Toolbox", slug: "docs/plugins/toolbox" },
     ],
   },
   {
