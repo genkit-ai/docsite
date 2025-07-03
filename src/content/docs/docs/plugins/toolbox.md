@@ -11,9 +11,7 @@ started](https://googleapis.github.io/genai-toolbox/getting-started/) or
 Toolbox, see the
 [documentation](https://googleapis.github.io/genai-toolbox/getting-started/introduction/).
 
-
-![architecture](../../../../../assets/mcp_db_toolbox.png)
-
+![architecture](./assets/mcp_db_toolbox.png)
 
 ### Configure and deploy
 
