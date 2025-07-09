@@ -2,8 +2,6 @@
 title: Cloud SQL for PostgreSQL plugin
 ---
 
-# Cloud SQL for PostgreSQL plugin
-
 The Cloud SQL for PostgreSQL plugin provides indexer and retriever implementations that use PostgreSQL with the pgvector extension for vector similarity search.
 
 ## Installation
@@ -254,4 +252,4 @@ console.log(productDocs.documents[0].metadata.category); // e.g., "api-docs"
 console.log(productDocs.documents[0].metadata.lastUpdated); // e.g., "2024-03-15"
 ```
 
-See the [Retrieval-augmented generation](../rag.md) page for a general discussion on indexers and retrievers.
+See the [Retrieval-augmented generation](http://../rag.md) page for a general discussion on indexers and retrievers.

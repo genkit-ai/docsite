@@ -106,6 +106,7 @@ const JS_SIDEBAR = [
       { label: "ChromaDB", slug: "docs/plugins/chroma" },
       { label: "Neo4j", slug: "docs/plugins/neo4j" },
       { label: "pgvector", slug: "docs/plugins/pgvector" },
+      { label: "Cloud SQL for PostgreSQL", slug: "docs/plugins/cloud-sql-pg" },
       { label: "Pinecone", slug: "docs/plugins/pinecone" },
       { label: "MCP Toolbox", slug: "docs/plugins/toolbox" },
     ],
@@ -215,6 +216,8 @@ const GO_SIDEBAR = [
       { label: "Ollama", slug: "go/docs/plugins/ollama" },
       { label: "OpenAI-Compatible APIs", slug: "go/docs/plugins/openai" },
       { label: "pgvector", slug: "go/docs/plugins/pgvector" },
+      { label: "AlloyDB for PostgreSQL", slug: "go/docs/plugins/alloydb" },
+      { label: "Cloud SQl for PostgreSQL", slug: "go/docs/plugins/cloud-sql-pg" },
       { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
       {
         label: "Partner & 3P Plugins",
