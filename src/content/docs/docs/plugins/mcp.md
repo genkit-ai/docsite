@@ -62,20 +62,140 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 
 ### `createMcpHost()` Options
 
--   **`name`**: (optional, string) A name for the MCP host plugin itself. Defaults to 'genkitx-mcp'.
--   **`version`**: (optional, string) The version of the MCP host plugin. Defaults to "1.0.0".
--   **`rawToolResponses`**: (optional, boolean) When `true`, tool responses are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
--   **`mcpServers`**: (required, object) An object where each key is a client-side name (namespace) for an MCP server, and the value is the configuration for that server.
+```ts
+export interface McpHostOptions {
+  /**
+   * An optional client name for this MCP host. This name is advertised to MCP Servers
+   * as the connecting client name. Defaults to 'genkit-mcp'.
+   */
+  name?: string;
+  /**
+   * An optional version for this MCP host. Primarily for
+   * logging and identification within Genkit.
+   * Defaults to '1.0.0'.
+   */
+  version?: string;
+  /**
+   * A record for configuring multiple MCP servers. Each server connection is
+   * controlled by a `GenkitMcpClient` instance managed by `GenkitMcpHost`.
+   * The key in the record is used as the identifier for the MCP server.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * If true, tool responses from the MCP server will be returned in their raw
+   * MCP format. Otherwise (default), they are processed and potentially
+   * simplified for better compatibility with Genkit's typical data structures.
+   */
+  rawToolResponses?: boolean;
+  /**
+   * When provided, each connected MCP server will be sent the roots specified here.
+   * Overridden by any specific roots sent in the `mcpServers` config for a given server.
+   */
+  roots?: Root[];
+}
 
-    Each server configuration object can include:
-    -   **`disabled`**: (optional, boolean) If `true`, this server connection will not be attempted. Defaults to `false`.
-    -   One of the following server connection configurations:
-        -   Parameters for launching a local server process using the stdio MCP transport.
-            -   **`command`**: (required, string) Shell command path for launching the MCP server (e.g., `npx`, `python`).
-            -   **`args`**: (optional, string[]) Array of string arguments to pass to the command.
-            -   **`env`**: (optional, Record<string, string>) Key-value object of environment variables.
-        -   **`url`**: (string) The URL of a remote server to connect to using the Streamable HTTP MCP transport.
-        -   **`transport`**: An existing MCP transport object for connecting to the server.
+/**
+ * Configuration for an individual MCP server. The interface should be familiar
+ * and compatible with existing tool configurations e.g. Cursor or Claude
+ * Desktop.
+ *
+ * In addition to stdio servers, remote servers are supported via URL and
+ * custom/arbitary transports are supported as well.
+ */
+export type McpServerConfig = (
+  | McpStdioServerConfig
+  | McpStreamableHttpConfig
+  | McpTransportServerConfig
+) &
+  McpServerControls;
+
+
+export type McpStdioServerConfig = StdioServerParameters;
+
+export type McpStreamableHttpConfig = {
+  url: string;
+} & Omit<StreamableHTTPClientTransportOptions, 'sessionId'>;
+
+export type McpTransportServerConfig = {
+  transport: Transport;
+};
+
+export interface McpServerControls {
+  /** 
+   * when true, the server will be stopped and its registered components will
+   * not appear in lists/plugins/etc 
+   */
+  disabled?: boolean;
+  /** MCP roots configuration. See: https://modelcontextprotocol.io/docs/concepts/roots */
+  roots?: Root[];
+}
+
+// from '@modelcontextprotocol/sdk/client/stdio.js'
+export type StdioServerParameters = {
+  /**
+   * The executable to run to start the server.
+   */
+  command: string;
+  /**
+   * Command line arguments to pass to the executable.
+   */
+  args?: string[];
+  /**
+   * The environment to use when spawning the process.
+   *
+   * If not specified, the result of getDefaultEnvironment() will be used.
+   */
+  env?: Record<string, string>;
+  /**
+   * How to handle stderr of the child process. This matches the semantics of Node's `child_process.spawn`.
+   *
+   * The default is "inherit", meaning messages to stderr will be printed to the parent process's stderr.
+   */
+  stderr?: IOType | Stream | number;
+  /**
+   * The working directory to use when spawning the process.
+   *
+   * If not specified, the current working directory will be inherited.
+   */
+  cwd?: string;
+};
+
+// from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+export type StreamableHTTPClientTransportOptions = {
+  /**
+   * An OAuth client provider to use for authentication.
+   *
+   * When an `authProvider` is specified and the connection is started:
+   * 1. The connection is attempted with any existing access token from the `authProvider`.
+   * 2. If the access token has expired, the `authProvider` is used to refresh the token.
+   * 3. If token refresh fails or no access token exists, and auth is required, `OAuthClientProvider.redirectToAuthorization` is called, and an `UnauthorizedError` will be thrown from `connect`/`start`.
+   *
+   * After the user has finished authorizing via their user agent, and is redirected back to the MCP client application, call `StreamableHTTPClientTransport.finishAuth` with the authorization code before retrying the connection.
+   *
+   * If an `authProvider` is not provided, and auth is required, an `UnauthorizedError` will be thrown.
+   *
+   * `UnauthorizedError` might also be thrown when sending any message over the transport, indicating that the session has expired, and needs to be re-authed and reconnected.
+   */
+  authProvider?: OAuthClientProvider;
+  /**
+   * Customizes HTTP requests to the server.
+   */
+  requestInit?: RequestInit;
+  /**
+   * Custom fetch implementation used for all network requests.
+   */
+  fetch?: FetchLike;
+  /**
+   * Options to configure the reconnection behavior.
+   */
+  reconnectionOptions?: StreamableHTTPReconnectionOptions;
+  /**
+   * Session ID for the connection. This is used to identify the session on the server.
+   * When not provided and connecting to a server that supports session IDs, the server will generate a new session ID.
+   */
+  sessionId?: string;
+};
+```
 
 ## MCP Client (Single Server)
 
