@@ -99,7 +99,7 @@ Configure the plugin to use your API key by doing one of the following:
   ```
 
   However, don't embed your API key directly in code! Use this feature only in
-  conjunction with a service like Cloud Secret Manager or similar.
+  conjunction with a service like Google Cloud Secret Manager or similar.
 
 ### Usage
 
@@ -261,6 +261,10 @@ The recommended way to provide the key is through an environment variable (e.g.,
 
 As always, avoid embedding keys directly in code. Use a secret manager or environment variables.
 
+:::note
+The DeepSeek plugin is built using the `openAICompatible` plugin and consequently defaults to using the `OPENAI_API_KEY` environment variable. If you are using a dedicated DeepSeek API key, you must provide it during initialization to override this default.
+:::
+
 ### Usage
 
 Use the `deepSeek.model` helper to reference a DeepSeek model.
@@ -305,6 +309,10 @@ The plugin requires an API key from xAI, which you can get from your [xAI accoun
 The recommended way to provide the key is through an environment variable (e.g., `XAI_API_KEY`) and pass it to the plugin during initialization, as shown in the example.
 
 As always, avoid embedding keys directly in code. Use a secret manager or environment variables.
+
+:::note
+The xAI plugin is built using the `openAICompatible` plugin and consequently defaults to using the `OPENAI_API_KEY` environment variable. If you are using a dedicated xAI API key, you must provide it during initialization to override this default.
+:::
 
 ### Usage
 
