@@ -100,6 +100,7 @@ const JS_SIDEBAR = [
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
       { label: "Ollama", slug: "docs/plugins/ollama" },
       { label: "Firebase", slug: "docs/plugins/firebase" },
+      { label: "MCP", slug: "docs/plugins/mcp" },
       { label: "LanceDB", slug: "docs/plugins/lancedb" },
       { label: "Astra DB", slug: "docs/plugins/astra-db" },
       { label: "Auth0 AI", slug: "docs/plugins/auth0" },
