@@ -1,9 +1,9 @@
 ---
 title: Model Context Protocol (MCP) plugin
-description: Integrate Genkit with the Model Context Protocol (MCP) to consume and provide tools, prompts, and resources.
+description: The Genkit MCP plugin provides integration between Genkit and the Model Context Protocol (MCP).
 ---
 
-The Model Context Protocol (MCP) plugin provides integration between Genkit and the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). MCP is an open standard allowing developers to build "servers" which provide tools, resources, and prompts to clients. Genkit MCP allows Genkit developers to:
+The Genkit MCP plugin provides integration between Genkit and the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). MCP is an open standard allowing developers to build "servers" which provide tools, resources, and prompts to clients. Genkit MCP allows Genkit developers to:
 - Consume MCP tools, prompts, and resources as a client using `createMcpHost` or `createMcpClient`.
 - Provide Genkit tools and prompts as an MCP server using `createMcpServer`.
 
@@ -20,46 +20,42 @@ npm i genkit @genkit-ai/mcp
 To connect to one or more MCP servers, you use the `createMcpHost` function. This function returns a `GenkitMcpHost` instance that manages connections to the configured MCP servers.
 
 ```ts
-import { genkit } from 'genkit';
-import { createMcpHost } from '@genkit-ai/mcp';
 import { googleAI } from '@genkit-ai/googleai';
-
-// Example: Configure a MCP host for a local filesystem server
-// and a hypothetical remote Git server.
-const ALLOWED_DIRS = ['/Users/yourusername/Desktop'];
+import { createMcpHost } from '@genkit-ai/mcp';
+import { genkit } from 'genkit';
 
 const mcpHost = createMcpHost({
   name: 'myMcpClients', // A name for the host plugin itself
   mcpServers: {
     // Each key (e.g., 'fs', 'git') becomes a namespace for the server's tools.
     fs: {
-        command: 'npx',
-        args: ['-y', '@modelcontextprotocol/server-filesystem', ...ALLOWED_DIRS],
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()],
     },
-    git: { // Configuration for a second MCP server (hypothetical)
-      url: 'http://localhost:8080/mcp',
-      // disabled: true, // Optionally disable a server
+    memory: {
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-memory'],
     },
   },
 });
 
 const ai = genkit({
-  plugins: [
-    googleAI(), // Example: install model provider plugin
-  ],
+  plugins: [googleAI()],
 });
 
-// Retrieve tools from all active MCP servers
-const mcpTools = await mcpHost.getActiveTools(ai);
+(async () => {
+  // Provide MCP tools to the model of your choice.
+  const { text } = await ai.generate({
+    model: googleAI.model('gemini-2.0-flash'),
+    prompt: `Analyze all files in ${process.cwd()}.`,
+    tools: await mcpHost.getActiveTools(ai),
+    resources: await mcpHost.getActiveResources(ai),
+  });
 
-// Provide MCP tools to the model of your choice.
-const response = await ai.generate({
-  model: googleAI.model('gemini-2.0-flash'),
-  prompt: 'What are the last 5 commits in the repo `/home/yourusername/Desktop/test-repo/?`',
-  tools: mcpTools,
-});
+  console.log(text);
 
-console.log(response.text);
+  await mcpHost.close();
+})();
 ```
 
 The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handles the lifecycle and communication with the defined MCP servers.
@@ -68,7 +64,7 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 
 -   **`name`**: (optional, string) A name for the MCP host plugin itself. Defaults to 'genkitx-mcp'.
 -   **`version`**: (optional, string) The version of the MCP host plugin. Defaults to "1.0.0".
--   **`rawToolResponses`**: (optional, boolean) If `true`, tool responses from this server are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
+-   **`rawToolResponses`**: (optional, boolean) When `true`, tool responses are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
 -   **`mcpServers`**: (required, object) An object where each key is a client-side name (namespace) for an MCP server, and the value is the configuration for that server.
 
     Each server configuration object can include:
@@ -86,37 +82,39 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 For scenarios where you only need to connect to a single MCP server, or prefer to manage client instances individually, you can use `createMcpClient`.
 
 ```ts
-import { genkit } from 'genkit';
-import { createMcpClient } from '@genkit-ai/mcp';
 import { googleAI } from '@genkit-ai/googleai';
+import { createMcpClient } from '@genkit-ai/mcp';
+import { genkit } from 'genkit';
 
 const myFsClient = createMcpClient({
   name: 'myFileSystemClient', // A unique name for this client instance
-  command: 'npx',
-  args: ['-y', '@modelcontextprotocol/server-everything', '/Users/yourusername/Documents'],
+  mcpServer: {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()],
+  },
   // rawToolResponses: true, // Optional: get raw MCP responses
 });
 
 // In your Genkit configuration:
-genkit({
-  plugins: [
-    googleAI(), // Example: install model provider plugin
-  ],
+const ai = genkit({
+  plugins: [googleAI()],
 });
 
-async function runSingleClient() {
-  // Retrieve tools from this specific client
-  const fsTools = await myFsClient.getActiveTools(genkit);
+(async () => {
+  await myFsClient.ready();
 
-  const response = await genkit.generate({
+  // Retrieve tools from this specific client
+  const fsTools = await myFsClient.getActiveTools(ai);
+
+  const { text } = await ai.generate({
     model: googleAI.model('gemini-2.0-flash'), // Replace with your model
-    prompt: 'List files in my Documents folder.',
+    prompt: 'List files in ' + process.cwd(),
     tools: fsTools,
   });
-  console.log(response.text);
-}
+  console.log(text);
 
-runSingleClient();
+  await myFsClient.disable();
+})();
 ```
 
 ### `createMcpClient()` Options
@@ -124,13 +122,13 @@ runSingleClient();
 The `createMcpClient` function takes an `McpClientOptions` object:
 -   **`name`**: (required, string) A unique name for this client instance. This name will be used as the namespace for its tools and prompts.
 -   **`version`**: (optional, string) Version for this client instance. Defaults to "1.0.0".
--   Plus, all options from `McpServerConfig` (see `disabled`, `rawToolResponses`, and transport configurations under `createMcpHost` options).
+-   Additionally, it supports all options from `McpServerConfig` (e.g., `disabled`, `rawToolResponses`, and transport configurations), as detailed in the `createMcpHost` options section.
 
-### Using MCP Actions (Tools, Prompts, Resources)
+### Using MCP Actions (Tools, Prompts)
 
-Both `GenkitMcpHost` (via `getActiveTools()`, `getActiveResources()`) and `GenkitMcpClient` (via `getActiveTools()`, `getActiveResources()`) discover available tools and resources from their connected and enabled MCP server(s). These tools are standard Genkit `ToolAction` instances and can be provided to Genkit models. Resources can be used in prompts.
+Both `GenkitMcpHost` (via `getActiveTools()`) and `GenkitMcpClient` (via `getActiveTools()`) discover available tools from their connected and enabled MCP server(s). These tools are standard Genkit `ToolAction` instances and can be provided to Genkit models.
 
-MCP prompts can be fetched using `mcpHost.getPrompt(serverName, promptName)` or `mcpClient.getPrompt(promptName)`. These return an `ExecutablePrompt`.
+MCP prompts can be fetched using `McpHost.getPrompt(serverName, promptName)` or `mcpClient.getPrompt(promptName)`. These return an `ExecutablePrompt`.
 
 All MCP actions (tools, prompts, resources) are namespaced.
 - For `createMcpHost`, the namespace is the key you provide for that server in the `mcpServers` configuration (e.g., `localFs/read_file`).
@@ -140,20 +138,24 @@ All MCP actions (tools, prompts, resources) are namespaced.
 
 MCP tools return a `content` array as opposed to a structured response like most Genkit tools. The Genkit MCP plugin attempts to parse and coerce returned content:
 
-1. If content is text and valid JSON, the JSON is parsed and returned.
-2. If content is text and not valid JSON, the text is returned.
-3. If content has a single non-text part, it is returned.
-4. If content has multiple/mixed parts, the full content response is returned.
+1. If the content is text and valid JSON, it is parsed and returned as a JSON object.
+2. If the content is text but not valid JSON, the raw text is returned.
+3. If the content contains a single non-text part (e.g., an image), that part is returned directly.
+4. If the content contains multiple or mixed parts (e.g., text and an image), the full content response array is returned.
 
 ## MCP Server
 
 You can also expose all of the tools and prompts from a Genkit instance as an MCP server using the `createMcpServer` function.
 
 ```ts
-import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
 import { createMcpServer } from '@genkit-ai/mcp';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { genkit, z } from 'genkit/beta';
 
-const ai = genkit({});
+const ai = genkit({
+  plugins: [googleAI()],
+});
 
 ai.defineTool(
   {
@@ -169,11 +171,11 @@ ai.defineTool(
 
 ai.definePrompt(
   {
-    name: "happy",
-    description: "everybody together now",
+    name: 'happy',
+    description: 'everybody together now',
     input: {
       schema: z.object({
-        action: z.string().default("clap your hands").optional(),
+        action: z.string().default('clap your hands').optional(),
       }),
     },
   },
@@ -182,7 +184,7 @@ ai.definePrompt(
 
 ai.defineResource(
   {
-    name: 'my resources',
+    name: 'my resouces',
     uri: 'my://resource',
   },
   async () => {
@@ -196,10 +198,27 @@ ai.defineResource(
   }
 );
 
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+ai.defineResource(
+  {
+    name: 'file',
+    template: 'file://{path}',
+  },
+  async ({ uri }) => {
+    return {
+      content: [
+        {
+          text: `file contents for ${uri}`,
+        },
+      ],
+    };
+  }
+);
 
 // Use createMcpServer
-const server = createMcpServer(ai, { name: 'example_server', version: '0.0.1' });
+const server = createMcpServer(ai, {
+  name: 'example_server',
+  version: '0.0.1',
+});
 // Setup (async) then starts with stdio transport by default
 server.setup().then(async () => {
   await server.start();
@@ -222,8 +241,8 @@ The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start(
 
 ### Testing your MCP server
 
-You can test your MCP server using the official inspector. For example, if your server code is in `server.ts`, you could run:
+You can test your MCP server using the official inspector. For example, if your server code compiled into `dist/index.js`, you could run:
 
-    npx -y @modelcontextprotocol/inspector tsx server.ts
+    npx @modelcontextprotocol/inspector dist/index.js
 
 Once you start the inspector, you can list prompts and actions and test them out manually.
