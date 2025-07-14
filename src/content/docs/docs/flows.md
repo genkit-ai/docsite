@@ -53,7 +53,7 @@ export const menuSuggestionFlow = ai.defineFlow(
       model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
-    return { text };
+    return { menuItem: text };
   },
 );
 ```
