@@ -86,7 +86,7 @@ flow.
 
         mux := http.NewServeMux()
         mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
-        log.Fatal(server.Start(ctx, "127.0.0.1:"+os.Getenv("PORT"), mux))
+        log.Fatal(server.Start(ctx, "0.0.0.0:"+os.Getenv("PORT"), mux))
     }
     ```
 
@@ -216,7 +216,7 @@ After deployment finishes, the tool will print the service URL. You can test
 it with `curl`:
 
 ```bash
-curl -X POST https://<service-url>/menuSuggestionFlow \
+curl -X POST https://<service-url>/jokesFlow \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  -H "Content-Type: application/json" -d '"bananas"'
+  -H "Content-Type: application/json" -d '{"data": "bananas"}'
 ```
