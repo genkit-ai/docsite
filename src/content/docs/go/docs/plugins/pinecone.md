@@ -38,7 +38,7 @@ Configure the plugin to use your API key by doing one of the following:
 
 ## Usage
 
-Index your documents in pinecone. An example of indexing is provided within the pinecone plugin as shown below. This functionality should be customized by the users according to their use cases.
+Index your documents in pinecone. An example of indexing is provided within the Pinecone plugin as shown below. This functionality should be customized by the user according to their use case.
 ```go
 err = pinecone.Index(ctx, docChunks, ds, "")
 if err != nil {
