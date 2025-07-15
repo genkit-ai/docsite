@@ -3,7 +3,7 @@ title: Firebase plugin
 description: Learn how to configure and use the Genkit Firebase plugin for Go to integrate with Firebase services including Firestore for RAG applications.
 ---
 
-The Firebase plugin provides integration with Firebase services for Genkit applications. It enables you to use Firebase Firestore as a vector database for retrieval-augmented generation (RAG) applications by defining retrievers and indexers.
+The Firebase plugin provides integration with Firebase services for Genkit applications. It enables you to use Firebase Firestore as a vector database for retrieval-augmented generation (RAG) applications by defining retrievers.
 
 ## Prerequisites
 
