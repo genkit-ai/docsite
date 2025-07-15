@@ -1,5 +1,6 @@
 ---
 title: Neo4j plugin
+description: This document describes the Neo4j plugin for Genkit, which provides indexer and retriever implementations that use the Neo4j graph database for vector search capabilities.
 ---
 
 The Neo4j plugin provides indexer and retriever implementations that use the

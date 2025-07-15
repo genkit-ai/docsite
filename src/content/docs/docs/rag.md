@@ -1,5 +1,6 @@
 ---
 title: Retrieval-augmented generation (RAG)
+description: Learn how Genkit simplifies retrieval-augmented generation (RAG) by providing abstractions and plugins for indexers, embedders, and retrievers to incorporate external data into LLM responses.
 ---
 
 Genkit provides abstractions that help you build retrieval-augmented

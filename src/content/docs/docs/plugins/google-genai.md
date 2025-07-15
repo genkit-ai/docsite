@@ -1,5 +1,6 @@
 ---
 title: Google Generative AI plugin
+description: This document describes the Google Generative AI plugin for Genkit, providing interfaces to Google's Gemini models, including text-to-speech, video generation, and context caching.
 ---
 
 The Google Generative AI plugin provides interfaces to Google's Gemini models
@@ -558,4 +559,3 @@ Only specific models, such as `gemini-2.5-flash` and `gemini-1.5-pro`, support c
 ### Further Reading
 
 See more information regarding context caching on Google AI in their [documentation](https://ai.google.dev/gemini-api/docs/caching?lang=node).
-

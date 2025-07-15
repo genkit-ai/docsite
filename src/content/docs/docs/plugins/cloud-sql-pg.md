@@ -1,5 +1,6 @@
 ---
 title: Cloud SQL for PostgreSQL plugin
+description: This document describes the Cloud SQL for PostgreSQL plugin for Genkit, providing indexer and retriever implementations that use PostgreSQL with the pgvector extension for vector similarity search.
 ---
 
 The Cloud SQL for PostgreSQL plugin provides indexer and retriever implementations that use PostgreSQL with the pgvector extension for vector similarity search.

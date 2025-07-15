@@ -1,5 +1,6 @@
 ---
 title: Pinecone plugin
+description: This document describes the Pinecone plugin for Genkit, which provides indexer and retriever implementations for the Pinecone cloud vector database.
 ---
 
 The Pinecone plugin provides indexer and retriever implementations that use the

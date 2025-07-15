@@ -1,5 +1,6 @@
 ---
 title: Connect with us
+description: Learn how to connect with the Genkit community and provide feedback on your experience, including Discord and GitHub resources.
 ---
 
 We'd love to hear about your excperience with Genkit. Here's how you can get in

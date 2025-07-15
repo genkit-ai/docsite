@@ -1,5 +1,6 @@
 ---
 title: API Stability Channels
+description: This document explains the API stability channels in Genkit, including stable and beta versions, and how to use them.
 ---
 
 As of version 1.0, Genkit is considered **Generally Available (GA)** and ready
