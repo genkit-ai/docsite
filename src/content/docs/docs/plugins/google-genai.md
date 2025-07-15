@@ -297,6 +297,125 @@ speechConfig: {
 
 For more detailed information about the Gemini TTS models and their configuration options, see the [Google AI Speech Generation documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
 
+## Video Generation (Veo) Models
+
+The Google Generative AI plugin provides access to video generation capabilities through the Veo models. These models can generate videos from text prompts or manipulate existing images to create dynamic video content.
+
+### Basic Usage: Text-to-Video Generation
+
+To generate a video from a text prompt using the Veo model:
+
+```ts
+import { googleAI } from '@genkit-ai/googleai';
+import * as fs from 'fs';
+import { Readable } from 'stream';
+import { MediaPart } from 'genkit';
+import { genkit } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+ai.defineFlow('text-to-video-veo', async () => {
+  let { operation } = await ai.generate({
+    model: googleAI.model('veo-2.0-generate-001'),
+    prompt: 'A majestic dragon soaring over a mystical forest at dawn.',
+    config: {
+      durationSeconds: 5,
+      aspectRatio: '16:9',
+    },
+  });
+
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+
+  // Wait until the operation completes.
+  while (!operation.done) {
+    operation = await ai.checkOperation(operation);
+    // Sleep for 5 seconds before checking again.
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  if (operation.error) {
+    throw new Error('failed to generate video: ' + operation.error.message);
+  }
+
+  const video = operation.output?.message?.content.find((p) => !!p.media);
+  if (!video) {
+    throw new Error('Failed to find the generated video');
+  }
+  await downloadVideo(video, 'output.mp4');
+});
+
+async function downloadVideo(video: MediaPart, path: string) {
+  const fetch = (await import('node-fetch')).default;
+  // Add API key before fetching the video.
+  const videoDownloadResponse = await fetch(
+    `${video.media!.url}&key=${process.env.GEMINI_API_KEY}`
+  );
+  if (
+    !videoDownloadResponse ||
+    videoDownloadResponse.status !== 200 ||
+    !videoDownloadResponse.body
+  ) {
+    throw new Error('Failed to fetch video');
+  }
+
+  Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
+}
+```
+
+### Video Generation from Photo Reference
+
+To use a photo as reference for the video using the Veo model (e.g. to make a static photo move), you can provide an image as part of the prompt.
+
+```ts
+const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
+
+let { operation } = await ai.generate({
+  model: googleAI.model('veo-2.0-generate-001'),
+  prompt: [
+    {
+      text: 'make the subject in the photo move',
+    },
+    {
+      media: {
+        contentType: 'image/jpeg',
+        url: `data:image/jpeg;base64,${startingImage}`,
+      },
+    },
+  ],
+  config: {
+    durationSeconds: 5,
+    aspectRatio: '9:16',
+    personGeneration: 'allow_adult',
+  },
+});
+```
+
+### Configuration Options
+
+The Veo models support various configuration options.
+
+#### Veo Model Parameters
+
+Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
+
+- `negativePrompt`: Text string that describes anything you want to discourage the model from generating.
+- `aspectRatio`: Changes the aspect ratio of the generated video. Supported values are "16:9" and "9:16". The default is "16:9".
+- `personGeneration`: Allow the model to generate videos of people. The following values are supported:
+  - **Text-to-video generation**:
+    - `"dont_allow"`: Don't allow the inclusion of people or faces.
+    - `"allow_adult"`: Generate videos that include adults, but not children.
+    - `"allow_all"`: Generate videos that include adults and children.
+  - **Image-to-video generation**:
+    - `"dont_allow"`: Don't allow the inclusion of people or faces.
+    - `"allow_adult"`: Generate videos that include adults, but not children. (See Limitations)
+- `numberOfVideos`: Output videos requested, either 1 or 2.
+- `durationSeconds`: Length of each output video in seconds, between 5 and 8.
+- `enhance_prompt`: Enable or disable the prompt rewriter. Enabled by default.
+
 ## Context Caching
 
 The Google Generative AI plugin supports **context caching**, which allows models to reuse previously cached content to optimize performance and reduce latency for repetitive tasks. This feature is especially useful for conversational flows or scenarios where the model references a large body of text consistently across multiple requests.
@@ -439,3 +558,4 @@ Only specific models, such as `gemini-2.5-flash` and `gemini-1.5-pro`, support c
 ### Further Reading
 
 See more information regarding context caching on Google AI in their [documentation](https://ai.google.dev/gemini-api/docs/caching?lang=node).
+
