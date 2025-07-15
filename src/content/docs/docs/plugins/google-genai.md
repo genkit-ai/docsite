@@ -307,7 +307,7 @@ const llmResponse = await ai.generate({
     },
   ],
   model: googleAI.model('gemini-2.5-flash-001'),
-  prompt: 'Describe Pierre’s transformation throughout the novel.',
+  prompt: 'Describe Pierre’s transformation throughout the novel',
 });
 ```
 
