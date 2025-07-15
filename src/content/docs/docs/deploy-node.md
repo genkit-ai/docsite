@@ -1,5 +1,6 @@
 ---
 title: Deploy flows to any Node.js platform
+description: Learn how to deploy Genkit flows to any Node.js platform that can serve an Express.js application, including project setup, configuration, and client-side access.
 ---
 
 Genkit has built-in integrations that help you deploy your flows to

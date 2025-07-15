@@ -1,5 +1,6 @@
 ---
 title: Writing Genkit plugins
+description: Learn how to extend Genkit's capabilities by writing custom plugins, covering plugin creation, options, building models, and publishing to NPM.
 ---
 
 Genkit's capabilities are designed to be extended by plugins. Genkit plugins are configurable modules

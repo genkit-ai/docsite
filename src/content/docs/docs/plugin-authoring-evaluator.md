@@ -1,5 +1,6 @@
 ---
 title: Writing a Genkit Evaluator
+description: Learn how to write custom Genkit evaluators for heuristic and LLM-based assessments, including defining prompts, scoring functions, and evaluator actions.
 ---
 
 You can extend Genkit to support custom evaluation, using either

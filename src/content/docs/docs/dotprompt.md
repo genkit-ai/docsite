@@ -1,5 +1,6 @@
 ---
 title: Managing prompts with Dotprompt
+description: This document explains how to manage prompts using Dotprompt, a Genkit library and file format designed to streamline prompt engineering and iteration.
 ---
 
 Prompt engineering is the primary way that you, as an app developer, influence

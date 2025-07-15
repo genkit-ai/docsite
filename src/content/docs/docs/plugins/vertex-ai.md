@@ -1,5 +1,6 @@
 ---
 title: Vertex AI plugin
+description: This document describes the Vertex AI plugin for Genkit, providing interfaces to Google's generative AI models, evaluation metrics, Vector Search, and text-to-speech capabilities.
 ---
 
 The Vertex AI plugin provides interfaces to several AI services:

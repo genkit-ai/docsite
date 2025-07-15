@@ -1,5 +1,6 @@
 ---
 title: Authorization and integrity
+description: This document explains how to manage authorization and integrity in Genkit applications, covering Firebase and non-Firebase HTTP authorization.
 ---
 
 When building any public-facing application, it's extremely important to protect
