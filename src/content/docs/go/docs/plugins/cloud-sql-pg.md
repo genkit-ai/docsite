@@ -150,4 +150,4 @@ if err != nil {
 
 
 See the [Retrieval-augmented generation](/go/docs/rag) page for a general
-discussion on using indexers and retrievers for RAG.
+discussion on using retrievers for RAG.
