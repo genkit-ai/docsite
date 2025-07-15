@@ -43,7 +43,7 @@ them in our [GitHub repository](https://github.com/firebase/genkit/).
         // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
         g, err := genkit.Init(ctx,
             genkit.WithPlugins(&googlegenai.GoogleAI{}),
-            genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
         )
         if err != nil {
             log.Fatalf("could not initialize Genkit: %v", err)

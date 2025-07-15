@@ -30,7 +30,7 @@ from genkit.plugins.google_genai import (
 
 ai = Genkit(
     plugins=[GoogleGenai()],
-    model=google_genai_name('gemini-2.0-flash'),
+    model=google_genai_name('gemini-2.5-flash'),
 )
 
 app = Flask(__name__)

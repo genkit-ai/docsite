@@ -47,8 +47,8 @@ The recommended way to reference models is through the helper function provided 
 import { googleAI } from '@genkit-ai/googleai';
 
 // Referencing models
-const model = googleAI.model('gemini-2.0-flash');
-const modelPro = googleAI.model('gemini-2.0-flash-lite');
+const model = googleAI.model('gemini-2.5-flash');
+const modelPro = googleAI.model('gemini-2.5-flash-lite');
 
 // Referencing embedders
 const embedder = googleAI.embedder('text-embedding-004');
@@ -59,7 +59,7 @@ You can use these references to specify which model `generate()` uses:
 ```ts
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.0-flash'), // Set default model
+  model: googleAI.model('gemini-2.5-flash'), // Set default model
 });
 
 const llmResponse = await ai.generate('Tell me a joke.');
@@ -98,7 +98,7 @@ const uploadResult = await fileManager.uploadFile('path/to/file.jpg', {
 });
 
 const response = await ai.generate({
-  model: googleAI.model('gemini-2.0-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
   prompt: [
     { text: 'Describe this image:' },
     {
@@ -277,7 +277,7 @@ The Google Generative AI plugin supports **context caching**, which allows model
 
 ### How to Use Context Caching
 
-To enable context caching, ensure your model supports it. For example, `gemini-2.0-flash` and `gemini-1.5-pro` are models that support context caching.
+To enable context caching, ensure your model supports it. For example, `gemini-2.5-flash` and `gemini-1.5-pro` are models that support context caching.
 
 You can define a caching mechanism in your application like this:
 
@@ -306,8 +306,8 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
-  prompt: `Describe Pierre's transformation throughout the novel`,
+  model: googleAI.model('gemini-2.5-flash-001'),
+  prompt: 'Describe Pierre’s transformation throughout the novel.',
 });
 ```
 
@@ -345,7 +345,7 @@ const llmResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model('gemini-2.5-flash-001'),
   prompt: 'Analyze the relationship between Pierre and Natasha.',
 });
 ```
@@ -401,14 +401,14 @@ const analyzeVideoResponse = await ai.generate({
       },
     },
   ],
-  model: googleAI.model('gemini-2.0-flash-001'),
+  model: googleAI.model('gemini-2.5-flash-001'),
   prompt: query,
 });
 ```
 
 ### Supported Models for Context Caching
 
-Only specific models, such as `gemini-2.0-flash` and `gemini-1.5-pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
+Only specific models, such as `gemini-2.5-flash` and `gemini-1.5-pro`, support context caching. If an unsupported model is used, an error will be raised, indicating that caching cannot be applied.
 
 ### Further Reading
 

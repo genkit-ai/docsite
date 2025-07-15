@@ -1,5 +1,6 @@
 ---
 title: No new actions at runtime error
+description: Learn why defining new actions at runtime is not allowed in Genkit and how to correctly define them.
 ---
 
 Defining new actions at runtime is not allowed.
@@ -7,18 +8,18 @@ Defining new actions at runtime is not allowed.
 ✅ DO:
 
 ```ts
-const prompt = defineDotprompt({...})
+const prompt = ai.definePrompt({...})
 
-const flow = defineFlow({...}, async (input) => {
-  await prompt.generate(...);
+const myFlow = ai.defineFlow({...}, async (input) => {
+  await prompt(...);
 })
 ```
 
 ❌ DON'T:
 
 ```ts
-const flow = defineFlow({...}, async (input) => {
-  const prompt = defineDotprompt({...})
-  prompt.generate(...);
+const myFlow = ai.defineFlow({...}, async (input) => {
+  const prompt = ai.definePrompt({...})
+  await prompt(...);
 })
 ```

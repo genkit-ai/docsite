@@ -99,7 +99,7 @@ func main() {
 
 	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
 	if err != nil {
 		log.Fatalf("could not initialize Genkit: %v", err)
@@ -192,7 +192,7 @@ you can specify optional settings that control how the model generates content:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithModelName("googleai/gemini-2.5-flash"),
 	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 	ai.WithConfig(&googlegenai.GeminiConfig{
 		MaxOutputTokens: 500,
@@ -308,7 +308,7 @@ To pair a model with its config, you can create a model reference that you can
 pass into the generate call instead:
 
 ```go
-model := googlegenai.GoogleAIModelRef("gemini-2.0-flash", &googlegenai.GeminiConfig{
+model := googlegenai.GoogleAIModelRef("gemini-2.5-flash", &googlegenai.GeminiConfig{
 	MaxOutputTokens: 500,
 	StopSequences:   ["<end>", "<fin>"],
 	Temperature:     0.5,
@@ -476,7 +476,7 @@ publicly-accessible HTTPS URL.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithModelName("googleai/gemini-2.5-flash"),
 	ai.WithMessages(
 		NewUserMessage(
 			NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
@@ -496,7 +496,7 @@ if err != nil {
 }
 
 resp, err := genkit.Generate(ctx, g,
-	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithModelName("googleai/gemini-2.5-flash"),
 	ai.WithMessages(
 		NewUserMessage(
 			NewMediaPart("image/jpeg", "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(image)),

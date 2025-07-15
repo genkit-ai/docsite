@@ -63,11 +63,11 @@ flow.
         ctx := context.Background()
 
         // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
-        // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-2.0-flash"
+        // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-2.5-flash"
         // to use Vertex AI as the provider instead.
         g, err := genkit.Init(ctx,
             genkit.WithPlugins(&googlegenai.GoogleAI{}),
-            genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
         )
         if err != nil {
             log.Fatalf("failed to initialize Genkit: %w", err)

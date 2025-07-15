@@ -20,91 +20,91 @@ sample flow.
 
 1. **Create a directory for the project:**
 
-```bash
-export GENKIT_PROJECT_HOME=~/tmp/genkit-express-project
+    ```bash
+    export GENKIT_PROJECT_HOME=~/tmp/genkit-express-project
 
-mkdir -p $GENKIT_PROJECT_HOME
-cd $GENKIT_PROJECT_HOME
-mkdir src
-```
+    mkdir -p $GENKIT_PROJECT_HOME
+    cd $GENKIT_PROJECT_HOME
+    mkdir src
+    ```
 
 1. **Initialize a Node.js project:**
 
-```bash
-npm init -y
-```
+    ```bash
+    npm init -y
+    ```
 
 1. **Install Genkit and necessary dependencies:**
 
-```bash
-npm install --save genkit @genkit-ai/googleai
-npm install --save-dev typescript tsx
-npm install -g genkit-cli
-```
+    ```bash
+    npm install --save genkit @genkit-ai/googleai
+    npm install --save-dev typescript tsx
+    npm install -g genkit-cli
+    ```
 
 ## 2. Configure your Genkit app
 
 1. **Set up a sample flow and server:**
 
-In `src/index.ts`, define a sample flow and configure the flow server:
+    In `src/index.ts`, define a sample flow and configure the flow server:
 
-```typescript
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/googleai';
-import { startFlowServer } from '@genkit-ai/express';
+    ```typescript
+    import { genkit, z } from 'genkit';
+    import { googleAI } from '@genkit-ai/googleai';
+    import { startFlowServer } from '@genkit-ai/express';
 
-const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-2.0-flash'),
-});
+    const ai = genkit({
+      plugins: [googleAI()],
+      model: googleAI.model('gemini-2.5-flash'),
+    });
 
-const helloFlow = ai.defineFlow(
-  {
-    name: 'helloFlow',
-    inputSchema: z.object({ name: z.string() }),
-    outputSchema: z.object({ greeting: z.string() }),
-  },
-  async (input) => {
-    const { text } = await ai.generate('Say hello to ${input.name}');
-    return { greeting: text };
-  },
-);
+    const helloFlow = ai.defineFlow(
+      {
+        name: 'helloFlow',
+        inputSchema: z.object({ name: z.string() }),
+        outputSchema: z.object({ greeting: z.string() }),
+      },
+      async (input) => {
+        const { text } = await ai.generate('Say hello to ${input.name}');
+        return { greeting: text };
+      },
+    );
 
-startFlowServer({
-  flows: [helloFlow],
-});
-```
+    startFlowServer({
+      flows: [helloFlow],
+    });
+    ```
 
-There are also some optional parameters for `startFlowServer` you can specify:
+    There are also some optional parameters for `startFlowServer` you can specify:
 
-- `port`: the network port to listen on. If unspecified, the server listens on
-  the port defined in the PORT environment variable, and if PORT is not set,
-  defaults to 3400.
-- `cors`: the flow server's
-  [CORS policy](https://www.npmjs.com/package/cors#configuration-options).
-  If you will be accessing these endpoints from a web application, you likely
-  need to specify this.
-- `pathPrefix`: an optional path prefix to add before your flow endpoints.
-- `jsonParserOptions`: options to pass to Express's
-  [JSON body parser](https://www.npmjs.com/package/body-parser#bodyparserjsonoptions)
+    - `port`: the network port to listen on. If unspecified, the server listens on
+      the port defined in the PORT environment variable, and if PORT is not set,
+      defaults to 3400.
+    - `cors`: the flow server's
+      [CORS policy](https://www.npmjs.com/package/cors#configuration-options).
+      If you will be accessing these endpoints from a web application, you likely
+      need to specify this.
+    - `pathPrefix`: an optional path prefix to add before your flow endpoints.
+    - `jsonParserOptions`: options to pass to Express's
+      [JSON body parser](https://www.npmjs.com/package/body-parser#bodyparserjsonoptions)
 
 1. **Set up model provider credentials:**
 
-Configure the required environment variables for your model provider. This guide
-uses the Gemini API from Google AI Studio as an example.
+    Configure the required environment variables for your model provider. This guide
+    uses the Gemini API from Google AI Studio as an example.
 
-[Get an API key from Google AI Studio](https://makersuite.google.com/app/apikey)
+    [Get an API key from Google AI Studio](https://makersuite.google.com/app/apikey)
 
-After you’ve created an API key, set the `GEMINI_API_KEY` environment
-variable to your key with the following command:
+    After you’ve created an API key, set the `GEMINI_API_KEY` environment
+    variable to your key with the following command:
 
-```bash
-export GEMINI_API_KEY=<your API key>
-```
+    ```bash
+    export GEMINI_API_KEY=<your API key>
+    ```
 
-Different providers for deployment will have different ways of securing your
-API key in their environment. For security, ensure that your API key is not
-publicly exposed.
+    Different providers for deployment will have different ways of securing your
+    API key in their environment. For security, ensure that your API key is not
+    publicly exposed.
 
 ## 3. Prepare your Node.js project for deployment
 
