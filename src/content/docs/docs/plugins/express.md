@@ -1,5 +1,6 @@
 ---
 title: Express plugin
+description: The Genkit Express plugin provides utilities for conveniently exposing Genkit flows and actions via an Express HTTP server as REST APIs.
 ---
 
 The Genkit Express plugin provides utilities for conveniently exposing Genkit flows and actions via an Express HTTP server as REST APIs. This allows you to integrate your Genkit applications with existing Express-based backends or deploy them to any platform that can serve an Express.js app.
