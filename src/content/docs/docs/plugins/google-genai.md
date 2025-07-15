@@ -473,8 +473,10 @@ ai.defineFlow('text-to-video-veo', async () => {
     throw new Error('Expected the model to return an operation');
   }
 
+  // Wait until the operation completes.
   while (!operation.done) {
     operation = await ai.checkOperation(operation);
+    // Sleep for 5 seconds before checking again.
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
 
@@ -491,6 +493,7 @@ ai.defineFlow('text-to-video-veo', async () => {
 
 async function downloadVideo(video: MediaPart, path: string) {
   const fetch = (await import('node-fetch')).default;
+  // Add API key before fetching the video.
   const videoDownloadResponse = await fetch(
     `${video.media!.url}&key=${process.env.GEMINI_API_KEY}`
   );
@@ -508,7 +511,7 @@ async function downloadVideo(video: MediaPart, path: string) {
 
 ### Video Generation from Photo Reference
 
-To make a static photo move using the Veo model, you can provide an image as part of the prompt. The video downloading process is the same as described in the "Basic Usage: Text-to-Video Generation" section.
+To use a photo as reference for the video using the Veo model (e.g. to make a static photo move), you can provide an image as part of the prompt.
 
 ```ts
 const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
