@@ -66,6 +66,7 @@ const JS_SIDEBAR = [
         slug: "docs/deploy-node",
       },
       { label: "Authorization and integrity", slug: "docs/auth" },
+      { label: "Accessing flows from the client", slug: "docs/client" },
     ],
   },
   {
