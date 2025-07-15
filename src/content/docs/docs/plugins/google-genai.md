@@ -540,24 +540,18 @@ The Veo models support various configuration options.
 
 #### Veo Model Parameters
 
-(Naming conventions vary by programming language.)
+Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
 
--   `prompt`: The text prompt for the video. When present, the `image` parameter is optional.
--   `image`: The image to use as the first frame for the video. When present, the `prompt` parameter is optional.
--   `negativePrompt`: Text string that describes anything you want to discourage the model from generating.
--   `aspectRatio`: Changes the aspect ratio of the generated video. Supported values are "16:9" and "9:16". The default is "16:9".
--   `personGeneration`: Allow the model to generate videos of people. The following values are supported:
-    -   **Text-to-video generation**:
-        -   `"dont_allow"`: Don't allow the inclusion of people or faces.
-        -   `"allow_adult"`: Generate videos that include adults, but not children.
-        -   `"allow_all"`: Generate videos that include adults and children.
-    -   **Image-to-video generation**:
-        -   `"dont_allow"`: Don't allow the inclusion of people or faces.
-        -   `"allow_adult"`: Generate videos that include adults, but not children. (See Limitations)
--   `numberOfVideos`: Output videos requested, either 1 or 2.
--   `durationSeconds`: Length of each output video in seconds, between 5 and 8.
--   `enhance_prompt`: Enable or disable the prompt rewriter. Enabled by default.
-
-### Further Reading
-
-For more detailed information about the Veo models and their configuration options, refer to the [Google AI Veo documentation](https://ai.google.dev/gemini-api/docs/veo).
+- `negativePrompt`: Text string that describes anything you want to discourage the model from generating.
+- `aspectRatio`: Changes the aspect ratio of the generated video. Supported values are "16:9" and "9:16". The default is "16:9".
+- `personGeneration`: Allow the model to generate videos of people. The following values are supported:
+  - **Text-to-video generation**:
+    - `"dont_allow"`: Don't allow the inclusion of people or faces.
+    - `"allow_adult"`: Generate videos that include adults, but not children.
+    - `"allow_all"`: Generate videos that include adults and children.
+  - **Image-to-video generation**:
+    - `"dont_allow"`: Don't allow the inclusion of people or faces.
+    - `"allow_adult"`: Generate videos that include adults, but not children. (See Limitations)
+- `numberOfVideos`: Output videos requested, either 1 or 2.
+- `durationSeconds`: Length of each output video in seconds, between 5 and 8.
+- `enhance_prompt`: Enable or disable the prompt rewriter. Enabled by default.
