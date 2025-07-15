@@ -254,7 +254,7 @@ You can choose from different pre-built voices with unique characteristics:
 ```ts
 speechConfig: {
   voiceConfig: {
-    prebuiltVoiceConfig: { 
+    prebuiltVoiceConfig: {
       voiceName: 'Algenib' // Other options: 'Achernar', 'Ankaa', etc.
     },
   },
@@ -281,7 +281,7 @@ For more control over the generated speech:
 ```ts
 speechConfig: {
   voiceConfig: {
-    prebuiltVoiceConfig: { 
+    prebuiltVoiceConfig: {
       voiceName: 'Algenib',
       speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
       pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
