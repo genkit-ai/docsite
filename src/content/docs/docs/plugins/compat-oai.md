@@ -299,7 +299,7 @@ To use this plugin, import `xAI` and specify it when you initialize Genkit:
 import { genkit } from 'genkit';
 import { xAI } from '@genkit-ai/compat-oai/xai';
 
-export const ai = genkit({
+const ai = genkit({
   plugins: [xAI({ apiKey: process.env.XAI_API_KEY })],
 });
 ```
