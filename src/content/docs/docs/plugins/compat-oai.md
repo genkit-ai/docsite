@@ -1,5 +1,6 @@
 ---
 title: OpenAI-Compatible Plugin
+description: Learn how to configure and use Genkit OpenAI-comptiable plugin to access models through any OpenAI-compatible API.
 ---
 
 The `@genkit-ai/compat-oai` package provides plugins for services that are compatible with the OpenAI API specification. This includes official OpenAI services as well as other model providers and local servers that expose an OpenAI-compatible endpoint.

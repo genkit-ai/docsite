@@ -1,5 +1,6 @@
 ---
 title: DeepSeek Plugin
+description: Learn how to configure and use Genkit DeepSeek plugin to access DeepSeek models.
 ---
 
 The `@genkit-ai/compat-oai` package includes a pre-configured plugin for [DeepSeek](https://www.deepseek.com/) models.

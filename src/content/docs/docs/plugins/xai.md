@@ -1,5 +1,6 @@
 ---
 title: xAI Plugin
+description: Learn how to configure and use Genkit xAI plugin to access xAI (Grok) models.
 ---
 
 The `@genkit-ai/compat-oai` package includes a pre-configured plugin for [xAI (Grok)](https://x.ai/) models.

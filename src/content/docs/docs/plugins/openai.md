@@ -1,5 +1,6 @@
 ---
 title: OpenAI Plugin
+description: Learn how to configure and use Genkit OpenAI plugin to access various models and embedders from OpenAI.
 ---
 
 The `@genkit-ai/compat-oai` package includes a pre-configured plugin for official [OpenAI models](https://platform.openai.com/docs/models).
