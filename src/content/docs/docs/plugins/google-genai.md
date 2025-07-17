@@ -367,6 +367,17 @@ async function downloadVideo(video: MediaPart, path: string) {
 }
 ```
 
+Veo 3 uses the exact same API, just make sure you only use supported params (see below).
+
+To use the Veo 3 model, reference `veo-3.0-generate-preview`:
+
+```ts
+let { operation } = await ai.generate({
+  model: googleAI.model('veo-3.0-generate-preview'),
+  prompt: 'A cinematic shot of a an old car driving down a deserted road at sunset.',
+});
+```
+
 ### Video Generation from Photo Reference
 
 To use a photo as reference for the video using the Veo model (e.g. to make a static photo move), you can provide an image as part of the prompt.
@@ -399,23 +410,29 @@ let { operation } = await ai.generate({
 
 The Veo models support various configuration options.
 
-#### Veo Model Parameters
+#### Veo model parameters
 
-Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
+(Naming conventions vary by programming language.)
 
-- `negativePrompt`: Text string that describes anything you want to discourage the model from generating.
-- `aspectRatio`: Changes the aspect ratio of the generated video. Supported values are "16:9" and "9:16". The default is "16:9".
+- `prompt`: The text prompt for the video. When present, the `image` parameter is optional.
+- `image`: The image to use as the first frame for the video. When present, the `prompt` parameter is optional.
+- `negativePrompt`: Text string that describes anything you want to discourage the model from generating
+- `aspectRatio`: Changes the aspect ratio of the generated video.
+  - `"16:9"`: Supported in Veo 3 and Veo 2.
+  - `"9:16"`: Supported in Veo 2 only (defaults to "16:9").
 - `personGeneration`: Allow the model to generate videos of people. The following values are supported:
   - **Text-to-video generation**:
+    - `"allow_all"`: Generate videos that include adults and children. Currently the only available `personGeneration` value for Veo 3.
+    - `"dont_allow"`: Veo 2 only. Don't allow the inclusion of people or faces.
+    - `"allow_adult"`: Veo 2 only. Generate videos that include adults, but not children.
+  - **Image-to-video generation**: Veo 2 only
     - `"dont_allow"`: Don't allow the inclusion of people or faces.
     - `"allow_adult"`: Generate videos that include adults, but not children.
-    - `"allow_all"`: Generate videos that include adults and children.
-  - **Image-to-video generation**:
-    - `"dont_allow"`: Don't allow the inclusion of people or faces.
-    - `"allow_adult"`: Generate videos that include adults, but not children. (See Limitations)
-- `numberOfVideos`: Output videos requested, either 1 or 2.
-- `durationSeconds`: Length of each output video in seconds, between 5 and 8.
-- `enhance_prompt`: Enable or disable the prompt rewriter. Enabled by default.
+- `numberOfVideos`: Output videos requested
+  - `1`: Supported in Veo 3 and Veo 2
+  - `2`: Supported in Veo 2 only.
+- `durationSeconds`: Veo 2 only. Length of each output video in seconds, between 5 and 8. Not configurable for Veo 3, default setting is 8 seconds.
+- `enhancePrompt`: Veo 2 only. Enable or disable the prompt rewriter. Enabled by default. Not configurable for Veo 3, default prompt enhancer is always on.
 
 ## Context Caching
 
