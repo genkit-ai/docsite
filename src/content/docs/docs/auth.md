@@ -1,5 +1,6 @@
 ---
 title: Authorization and integrity
+description: This document explains how to manage authorization and integrity in Genkit applications, covering Firebase and non-Firebase HTTP authorization.
 ---
 
 When building any public-facing application, it's extremely important to protect
@@ -266,18 +267,18 @@ export const selfSummaryFlow = ai.defineFlow(
 You could secure a simple "flow server" express app by writing:
 
 ```ts
-import { apiKey } from 'genkit';
-import { startFlowServer, withContext } from '@genkit-ai/express';
+import { apiKey } from 'genkit/context';
+import { startFlowServer, withContextProvider } from '@genkit-ai/express';
 
 startFlowServer({
-  flows: [withContext(selfSummaryFlow, apiKey(process.env.REQUIRED_API_KEY))],
+  flows: [withContextProvider(selfSummaryFlow, apiKey(process.env.REQUIRED_API_KEY))],
 });
 ```
 
 Or you could build a custom express application using the same tools:
 
 ```ts
-import { apiKey } from "genkit";
+import { apiKey } from "genkit/context";
 import * as express from "express";
 import { expressHandler } from "@genkit-ai/express;
 

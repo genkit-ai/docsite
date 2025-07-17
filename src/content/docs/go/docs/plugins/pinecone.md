@@ -3,7 +3,7 @@ title: Pinecone plugin
 description: Learn how to configure and use the Genkit Pinecone plugin for Go to integrate with the Pinecone cloud vector database.
 ---
 
-The Pinecone plugin provides indexer and retriever implementatons that use the
+The Pinecone plugin provides retriever implementatons that use the
 [Pinecone](https://www.pinecone.io/) cloud vector database.
 
 ## Configuration
@@ -38,35 +38,15 @@ Configure the plugin to use your API key by doing one of the following:
 
 ## Usage
 
-To add documents to a Pinecone index, first create an index definition that
-specifies the name of the index and the embedding model you're using:
-
+Index your documents in pinecone. An example of indexing is provided within the Pinecone plugin as shown below. This functionality should be customized by the user according to their use case.
 ```go
-menuIndexer, err := pinecone.DefineIndexer(ctx, g, pinecone.Config{
-	IndexID:  "menu_data",                                           // Your Pinecone index
-	Embedder: googlegenai.GoogleAIEmbedder(g, "text-embedding-004"), // Embedding model of your choice
-})
+err = pinecone.Index(ctx, docChunks, ds, "")
 if err != nil {
 	return err
 }
 ```
 
-You can also optionally specify the key that Pinecone uses for document data
-(`_content`, by default).
-
-Then, call the index's `Index()` method, passing it a list of the documents you
-want to add:
-
-```go
-if err := ai.Index(
-	ctx,
-	menuIndexer,
-	ai.WithDocs(docChunks...)); err != nil {
-	return err
-}
-```
-
-Similarly, to retrieve documents from an index, first create a retriever
+To retrieve documents from an index, first create a retriever
 definition:
 
 ```go
@@ -93,4 +73,4 @@ menuInfo := resp.Documents
 ```
 
 See the [Retrieval-augmented generation](/go/docs/rag) page for a general
-discussion on using indexers and retrievers for RAG.
+discussion on using retrievers for RAG.

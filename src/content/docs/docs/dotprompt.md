@@ -1,5 +1,6 @@
 ---
 title: Managing prompts with Dotprompt
+description: This document explains how to manage prompts using Dotprompt, a Genkit library and file format designed to streamline prompt engineering and iteration.
 ---
 
 Prompt engineering is the primary way that you, as an app developer, influence
@@ -244,7 +245,7 @@ Similarly for streaming:
 
 ```ts
 const { stream } = helloPrompt.stream(input, options);
-``` 
+```
 
 Any parameters you pass to the prompt call will override the same parameters
 specified in the prompt file.
@@ -576,6 +577,8 @@ food items into all of your conversations.
 {{role "user"}}
 {{userQuestion}}
 ```
+
+Note that your final prompt must contain at least one `user` role.
 
 ### Multi-modal prompts
 

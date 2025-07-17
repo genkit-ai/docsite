@@ -1,5 +1,6 @@
 ---
 title: LanceDB plugin
+description: This document describes the LanceDB plugin for Genkit, which provides indexer and retriever implementations for LanceDB, an open-source vector database for AI applications.
 ---
 
 The LanceDB plugin provides indexer and retriever implementations that use [LanceDB](https://lancedb.com/), an open-source vector database for AI applications.
