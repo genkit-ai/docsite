@@ -412,7 +412,7 @@ The Veo models support various configuration options.
 
 #### Veo model parameters
 
-(Naming conventions vary by programming language.)
+These are the parameters that can be used in `config`.
 
 - `prompt`: The text prompt for the video. When present, the `image` parameter is optional.
 - `image`: The image to use as the first frame for the video. When present, the `prompt` parameter is optional.
