@@ -221,6 +221,7 @@ const GO_SIDEBAR = [
       { label: "AlloyDB for PostgreSQL", slug: "go/docs/plugins/alloydb" },
       { label: "Cloud SQl for PostgreSQL", slug: "go/docs/plugins/cloud-sql-pg" },
       { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
+      { label: "MCP Toolbox", slug: "go/docs/plugins/toolbox" },
       {
         label: "Partner & 3P Plugins",
         items: [
