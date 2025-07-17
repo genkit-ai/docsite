@@ -414,7 +414,6 @@ The Veo models support various configuration options.
 
 These are the parameters that can be used in `config`.
 
-- `prompt`: The text prompt for the video. When present, the `image` parameter is optional.
 - `negativePrompt`: Text string that describes anything you want to discourage the model from generating
 - `aspectRatio`: Changes the aspect ratio of the generated video.
   - `"16:9"`: Supported in Veo 3 and Veo 2.
