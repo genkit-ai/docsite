@@ -105,6 +105,7 @@ const JS_SIDEBAR = [
       { label: "DeepSeek", slug: "docs/plugins/deepseek" },
       { label: "OpenAI-Compatible", slug: "docs/plugins/compat-oai" },
       { label: "Ollama", slug: "docs/plugins/ollama" },
+      { label: "MCP", slug: "docs/plugins/mcp" },
       { label: "Express", slug: "docs/plugins/express" },
       { label: "LanceDB", slug: "docs/plugins/lancedb" },
       { label: "Astra DB", slug: "docs/plugins/astra-db" },
