@@ -17,7 +17,7 @@ npm install @genkit-ai/compat-oai
 
 ## Configuration
 
-To use this plugin, import `deepSeek` and specify it when you initialize Genkit. You must provide an API key from DeepSeek.
+To use this plugin, import `deepSeek` and specify it when you initialize Genkit.
 
 ```ts
 import { genkit } from 'genkit';
