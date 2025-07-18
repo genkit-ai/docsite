@@ -367,7 +367,7 @@ async function downloadVideo(video: MediaPart, path: string) {
 }
 ```
 
-Veo 3 uses the exact same API, just make sure you only use supported params (see below).
+Veo 3 uses the exact same API, just make sure you only use supported config options (see below).
 
 To use the Veo 3 model, reference `veo-3.0-generate-preview`:
 
