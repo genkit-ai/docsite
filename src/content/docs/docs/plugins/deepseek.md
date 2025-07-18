@@ -6,7 +6,7 @@ description: Learn how to configure and use Genkit DeepSeek plugin to access Dee
 The `@genkit-ai/compat-oai` package includes a pre-configured plugin for [DeepSeek](https://www.deepseek.com/) models.
 
 :::note
-The DeepSeek plugin is built on top of the `openAICompatible` plugin. It is pre-configured for DeepSeek's API endpoints, so you don't need to provide a `baseURL`. Because it's built on the general-purpose compatible plugin, it will default to using the `OPENAI_API_KEY` environment variable if a key is not provided during initialization.
+The DeepSeek plugin is built on top of the `openAICompatible` plugin. It is pre-configured for DeepSeek's API endpoints, so you don't need to provide a `baseURL`.
 :::
 
 ## Installation
