@@ -412,7 +412,7 @@ The Veo models support various configuration options.
 
 #### Veo model parameters
 
-These are the parameters that can be used in `config`.
+Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
 
 - `negativePrompt`: Text string that describes anything you want to discourage the model from generating
 - `aspectRatio`: Changes the aspect ratio of the generated video.
