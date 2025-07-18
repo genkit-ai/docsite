@@ -410,7 +410,7 @@ let { operation } = await ai.generate({
 
 The Veo models support various configuration options.
 
-#### Veo model parameters
+#### Veo Model Parameters
 
 Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
 
