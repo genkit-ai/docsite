@@ -81,7 +81,7 @@ export const myLocalModel = modelRef({
 // Use the model in a flow
 export const localLlamaFlow = ai.defineFlow(
   {
-00    name: 'localLlamaFlow',
+    name: 'localLlamaFlow',
     inputSchema: z.string(),
     outputSchema: z.string(),
   },
