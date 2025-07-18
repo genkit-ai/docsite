@@ -1,10 +1,10 @@
 ---
 title: Writing Genkit plugins
-description: Learn the fundamentals of creating Genkit plugins in Go to extend its capabilities with new models, retrievers, indexers, and more.
+description: Learn the fundamentals of creating Genkit plugins in Go to extend its capabilities with new models, retrievers, and more.
 ---
 
 Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
-configurable modules that can provide models, retrievers, indexers, trace
+configurable modules that can provide models, retrievers, trace
 stores, and more. You've already seen plugins in action just by using Genkit:
 
 ```go

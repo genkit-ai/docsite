@@ -1,5 +1,6 @@
 ---
 title: pgvector retriever template
+description: This document provides a template for using PostgreSQL and pgvector as a retriever implementation in Genkit, with examples for configuration and usage in flows.
 ---
 
 You can use PostgreSQL and `pgvector` as your retriever implementation. Use the

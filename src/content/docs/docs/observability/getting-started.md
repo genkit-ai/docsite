@@ -1,5 +1,6 @@
 ---
 title: Get started with Genkit Monitoring
+description: This quickstart guide explains how to set up Genkit Monitoring for your deployed Genkit features to collect and view real-time telemetry data, including metrics, traces, and production trace exports for evaluations.
 ---
 
 This quickstart guide describes how to set up Genkit Monitoring for

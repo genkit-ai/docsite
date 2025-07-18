@@ -1,5 +1,6 @@
 ---
 title: Astra DB plugin
+description: This document describes the Astra DB plugin for Genkit, providing a retriever and indexer for Astra DB, including installation, prerequisites, configuration, and usage.
 ---
 
 This plugin provides a [Astra DB](https://docs.datastax.com/en/astra-db-serverless/index.html) retriever and indexer for Genkit.

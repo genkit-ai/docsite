@@ -1,5 +1,6 @@
 ---
 title: Building multi-agent systems
+description: Learn how to build multi-agent systems in Genkit by delegating tasks to specialized agents, addressing challenges of complex agentic workflows.
 ---
 
 :::caution[Beta]

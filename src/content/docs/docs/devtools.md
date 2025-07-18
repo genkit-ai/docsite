@@ -1,5 +1,6 @@
 ---
 title: Genkit Developer Tools
+description: Explore Genkit's developer tools, including the Node.js CLI for command-line operations and the local web-based Developer UI for interactive testing and development.
 ---
 
 Genkit provides two key developer tools:

@@ -1,5 +1,6 @@
 ---
 title: Telemetry Collection
+description: This document details the metrics, trace attributes, and logs collected by the Firebase telemetry plugin for Genkit, along with information on latency, quotas, and cost.
 ---
 
 The Firebase telemetry plugin exports a combination of metrics, traces, and

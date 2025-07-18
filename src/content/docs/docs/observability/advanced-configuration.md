@@ -1,5 +1,6 @@
 ---
 title: Advanced Configuration
+description: This guide covers advanced configuration options for Genkit's Firebase telemetry plugin, including fine-tuning telemetry collection, export settings, and disabling specific data types.
 ---
 
 This guide focuses on advanced configuration options for deployed features using

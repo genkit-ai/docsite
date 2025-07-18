@@ -1,5 +1,6 @@
 ---
 title: Deploy flows to any Node.js platform
+description: Learn how to deploy Genkit flows to any Node.js platform that can serve an Express.js application, including project setup, configuration, and client-side access.
 ---
 
 Genkit has built-in integrations that help you deploy your flows to
@@ -169,3 +170,81 @@ for your deployment platform.
 
 After deploying, you can use the provided service URL to invoke your flow as
 an HTTPS endpoint.
+
+## Call your flows from the client
+
+In your client-side code (e.g., a web application, mobile app, or another service), you can call your deployed flows using the Genkit client library. This library provides functions for both non-streaming and streaming flow calls.
+
+First, install the Genkit library:
+
+```bash
+npm install genkit
+```
+
+Then, you can use `runFlow` for non-streaming calls and `streamFlow` for streaming calls.
+
+### Non-streaming Flow Calls
+
+For a non-streaming response, use the `runFlow` function. This is suitable for flows that return a single, complete output.
+
+```typescript
+import { runFlow } from 'genkit/beta/client';
+
+async function callHelloFlow() {
+  try {
+    const result = await runFlow({
+      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      input: { name: 'Genkit User' },
+    });
+    console.log('Non-streaming result:', result.greeting);
+  } catch (error) {
+    console.error('Error calling helloFlow:', error);
+  }
+}
+
+callHelloFlow();
+```
+
+### Streaming Flow Calls
+
+For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function.
+
+```typescript
+import { streamFlow } from 'genkit/beta/client';
+
+async function streamHelloFlow() {
+  try {
+    const result = streamFlow({
+      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      input: { name: 'Streaming User' },
+    });
+
+    // Process the stream chunks as they arrive
+    for await (const chunk of result.stream) {
+      console.log('Stream chunk:', chunk);
+    }
+
+    // Get the final complete response
+    const finalOutput = await result.output;
+    console.log('Final streaming output:', finalOutput.greeting);
+  } catch (error) {
+    console.error('Error streaming helloFlow:', error);
+  }
+}
+
+streamHelloFlow();
+```
+
+### Authentication (Optional)
+
+If your deployed flow requires authentication, you can pass headers with your requests:
+
+```typescript
+const result = await runFlow({
+  url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+  headers: {
+    Authorization: 'Bearer your-token-here', // Replace with your actual token
+  },
+  input: { name: 'Authenticated User' },
+});
+```

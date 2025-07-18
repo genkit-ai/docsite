@@ -1,5 +1,6 @@
 ---
 title: Firebase plugin
+description: This document describes the Firebase plugin for Genkit, providing integrations with Firebase services like Firestore for vector search and telemetry export to Google Cloud Operations.
 ---
 
 The Firebase plugin provides integrations with Firebase services, so you can

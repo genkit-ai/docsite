@@ -1,5 +1,6 @@
 ---
 title: Genkit Monitoring - Troubleshooting
+description: This guide provides solutions to common issues encountered when using Genkit Monitoring, including problems with traces, metrics, and telemetry export.
 ---
 
 The following sections detail solutions to common issues that developers run

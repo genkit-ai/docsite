@@ -1,5 +1,6 @@
 ---
 title: Chroma plugin
+description: This document describes the Chroma plugin for Genkit, which provides indexer and retriever implementations for the Chroma vector database in client/server mode.
 ---
 
 The Chroma plugin provides indexer and retriever implementations that use the

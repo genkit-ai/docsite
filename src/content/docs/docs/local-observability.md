@@ -1,5 +1,6 @@
 ---
 title: Observe local metrics
+description: Learn about Genkit's local observability features, including tracing, metrics collection, and logging, powered by OpenTelemetry and integrated with the Genkit Developer UI.
 ---
 
 Genkit provides a robust set of built-in observability features, including
