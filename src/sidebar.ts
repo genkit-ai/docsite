@@ -99,8 +99,12 @@ const JS_SIDEBAR = [
     items: [
       { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
-      { label: "Ollama", slug: "docs/plugins/ollama" },
       { label: "Firebase", slug: "docs/plugins/firebase" },
+      { label: "OpenAI", slug: "docs/plugins/openai" },
+      { label: "xAI", slug: "docs/plugins/xai" },
+      { label: "DeepSeek", slug: "docs/plugins/deepseek" },
+      { label: "OpenAI-Compatible", slug: "docs/plugins/compat-oai" },
+      { label: "Ollama", slug: "docs/plugins/ollama" },
       { label: "MCP", slug: "docs/plugins/mcp" },
       { label: "Express", slug: "docs/plugins/express" },
       { label: "LanceDB", slug: "docs/plugins/lancedb" },
