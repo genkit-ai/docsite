@@ -288,7 +288,7 @@ const PYTHON_SIDEBAR = [
     items: [
       {
         label: "API Reference",
-        link: "https://python.api.genkit.dev/reference/api/",
+        link: "https://python.api.genkit.dev",
         attrs: {
           "data-external": true,
           target: "_blank",
