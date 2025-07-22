@@ -46,7 +46,7 @@ const ai = genkit({
 (async () => {
   // Provide MCP tools to the model of your choice.
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'),
+    model: googleAI.model('gemini-2.5-flash'),
     prompt: `Analyze all files in ${process.cwd()}.`,
     tools: await mcpHost.getActiveTools(ai),
     resources: await mcpHost.getActiveResources(ai),
@@ -227,7 +227,7 @@ const ai = genkit({
   const fsTools = await myFsClient.getActiveTools(ai);
 
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'), // Replace with your model
+    model: googleAI.model('gemini-2.5-flash'), // Replace with your model
     prompt: 'List files in ' + process.cwd(),
     tools: fsTools,
   });
