@@ -27,22 +27,21 @@ import express from 'express';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
 });
 
 const simpleFlow = ai.defineFlow(
   {
     name: 'simpleFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ input: z.string() }),
+    outputSchema: z.object({ output: z.string() }),
   },
-  async (input, { sendChunk }) => {
+  async ({ input }, { sendChunk }) => {
     const { text } = await ai.generate({
-      model: ai.model('gemini-1.5-flash'),
       prompt: input,
       onChunk: (c) => sendChunk(c.text),
     });
-    return text;
+    return { output: text };
   },
 );
 
@@ -66,14 +65,14 @@ import { runFlow, streamFlow } from 'genkit/beta/client';
 // Example: Running a flow
 const result = await runFlow({
   url: `http://localhost:8080/simpleFlow`,
-  input: 'say hello',
+  input: { input: 'say hello' },
 });
-console.log(result); // hello
+console.log(result); // { output: "hello" }
 
 // Example: Streaming a flow
 const streamResult = streamFlow({
   url: `http://localhost:8080/simpleFlow`,
-  input: 'say hello',
+  input: { input: 'say hello' },
 });
 for await (const chunk of streamResult.stream) {
   console.log(chunk);
@@ -137,10 +136,10 @@ const result = await runFlow({
   headers: {
     Authorization: 'open sesame',
   },
-  input: 'say hello',
+  input: { input: 'say hello' },
 });
 
-console.log(result); // hello
+console.log(result); // { output: "hello" }
 ```
 
 ### Using `withContextProvider`
@@ -157,7 +156,7 @@ import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
 });
 
 // Define a custom context type
@@ -185,15 +184,15 @@ const customContextProvider: ContextProvider<CustomAuthContext> = async (req: Re
 export const protectedFlow = ai.defineFlow(
   {
     name: 'protectedFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ input: z.string() }),
+    outputSchema: z.object({ output: z.string() }),
   },
-  async (input, { context }) => {
+  async ({ input }, { context }) => {
     // Access context.auth populated by the CustomContextProvider
     if (!context.auth || context.auth.role !== 'admin') {
       throw new Error('Unauthorized access: Admin role required.');
     }
-    return `Hello, ${context.auth.user}! Your role is ${context.auth.role}. You said: ${input}`;
+    return { output: `Hello, ${context.auth.user}! Your role is ${context.auth.role}. You said: ${input}` };
   }
 );
 
@@ -213,7 +212,7 @@ const result = await runFlow({
   headers: {
     'X-Custom-Auth': 'my-secret-token', // Replace with your actual custom token
   },
-  input: 'sensitive data',
+  input: { input: 'sensitive data' },
 });
 
 console.log(result);
@@ -237,17 +236,17 @@ import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
 });
 
 export const securedFlow = ai.defineFlow(
   {
     name: 'securedFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ sensitiveData: z.string() }),
+    outputSchema: z.object({ output: z.string() }),
   },
-  async (input, { context }) => {
-    return 'this is protected by API Key check';
+  async ({ sensitiveData }, { context }) => {
+    return { output: 'this is protected by API Key check' };
   }
 );
 
@@ -267,7 +266,7 @@ const result = await runFlow({
   headers: {
     Authorization: `${process.env.MY_API_KEY}`, // Replace with your actual API key
   },
-  input: 'sensitive data',
+  input: { sensitiveData: 'sensitive data' },
 });
 
 console.log(result);
@@ -279,23 +278,23 @@ You can also use `startFlowServer` to quickly expose multiple flows and actions:
 
 ```typescript
 import { startFlowServer } from '@genkit-ai/express';
-import { genkit } from 'genkit';
+import { genkit, z } from 'genkit';
 import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash'),
 });
 
 export const menuSuggestionFlow = ai.defineFlow(
   {
     name: 'menuSuggestionFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menu: z.string() }),
   },
-  async (restaurantTheme) => {
+  async ({ theme }) => {
     // ... your flow logic here
-    return `Suggested menu for ${restaurantTheme}`;
+    return { menu: `Suggested menu for ${theme}` };
   }
 );
 
