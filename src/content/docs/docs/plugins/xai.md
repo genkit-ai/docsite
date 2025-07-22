@@ -57,15 +57,15 @@ const ai = genkit({
 export const grokFlow = ai.defineFlow(
   {
     name: 'grokFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ fact: z.string() }),
   },
-  async (subject) => {
+  async ({ subject }) => {
     const llmResponse = await ai.generate({
       model: xAI.model('grok-3-mini'),
       prompt: `tell me a fun fact about ${subject}`,
     });
-    return llmResponse.text();
+    return { fact: llmResponse.text };
   },
 );
 ```

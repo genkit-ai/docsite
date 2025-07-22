@@ -25,7 +25,7 @@ To use the Astra DB plugin, specify it when you call `configureGenkit()`:
 
 ```typescript
 import { genkit } from "genkit";
-import { textEmbedding004 } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 import { astraDB } from "genkitx-astra-db";
 
 const ai = genkit({
@@ -38,7 +38,7 @@ const ai = genkit({
           keyspace: "default_keyspace",
         },
         collectionName: "your_collection_name",
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],
@@ -56,7 +56,7 @@ If you are using the default namespace, you do not need to pass it as config.
 The Astra DB plugin accepts the following configuration options:
 
 - `collectionName`: (required) The name of the collection in your Astra DB database
-- `embedder`: (required) The embedding model to use, like Google's `textEmbedding004`. Ensure that you have set up your collection with the correct number of dimensions for the embedder that you are using
+- `embedder`: (required) The embedding model to use, like Google's `googleAI.embedder('gemini-embedding-001')`. Ensure that you have set up your collection with the correct number of dimensions for the embedder that you are using
 - `clientParams`: (optional) Astra DB connection configuration with the following properties:
   - `applicationToken`: Your Astra DB application token
   - `apiEndpoint`: Your Astra DB API endpoint

@@ -61,15 +61,15 @@ const ai = genkit({
 export const jokeFlow = ai.defineFlow(
   {
     name: 'jokeFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ joke: z.string() }),
   },
-  async (subject) => {
+  async ({ subject }) => {
     const llmResponse = await ai.generate({
       prompt: `tell me a joke about ${subject}`,
       model: openAI.model('gpt-4o'),
     });
-    return llmResponse.text();
+    return { joke: llmResponse.text };
   },
 );
 ```
@@ -129,16 +129,16 @@ const ai = genkit({
 export const embedFlow = ai.defineFlow(
   {
     name: 'embedFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ text: z.string() }),
+    outputSchema: z.object({ embedding: z.string() }),
   },
-  async (text) => {
+  async ({ text }) => {
     const embedding = await ai.embed({
       embedder: openAI.embedder('text-embedding-ada-002'),
       content: text,
     });
 
-    return JSON.stringify(embedding);
+    return { embedding: JSON.stringify(embedding) };
   },
 );
 ```

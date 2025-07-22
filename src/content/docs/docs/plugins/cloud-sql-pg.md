@@ -45,7 +45,7 @@ Then, specify the plugin when you initialize Genkit:
 ```ts
 import { genkit } from 'genkit';
 import { postgres } from 'genkitx-cloud-sql-pg';
-import { textEmbedding004 } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
   plugins: [
@@ -53,7 +53,7 @@ const ai = genkit({
       {
         tableName: 'my-documents',
         engine: engine,
-        embedder: textEmbedding004,
+        embedder: vertexAI.embedder('gemini-embedding-001'),
         // Use additional fields to connect to a custom vector store table
         // schemaName: 'public',
         // contentColumn: 'custom_content',

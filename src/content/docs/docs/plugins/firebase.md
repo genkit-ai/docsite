@@ -196,7 +196,7 @@ Firestore in the following way:
 
 ```js
 import { genkit } from 'genkit';
-import { vertexAI, textEmbedding004 } from "@genkit-ai/vertexai";
+import { vertexAI } from "@genkit-ai/vertexai";
 
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
@@ -212,7 +212,7 @@ const indexConfig = {
   collection: "menuInfo",
   contentField: "text",
   vectorField: "embedding",
-  embedder: textEmbedding004,
+  embedder: vertexAI.embedder('gemini-embedding-001'),
 };
 
 const ai = genkit({

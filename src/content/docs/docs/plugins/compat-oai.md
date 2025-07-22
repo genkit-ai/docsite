@@ -82,15 +82,15 @@ export const myLocalModel = modelRef({
 export const localLlamaFlow = ai.defineFlow(
   {
     name: 'localLlamaFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ joke: z.string() }),
   },
-  async (subject) => {
+  async ({ subject }) => {
     const llmResponse = await ai.generate({
       model: myLocalModel,
       prompt: `Tell me a joke about ${subject}.`,
     });
-    return llmResponse.text();
+    return { joke: llmResponse.text };
   }
 );
 ```

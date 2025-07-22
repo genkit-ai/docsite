@@ -56,10 +56,10 @@ const ai = genkit({
 export const deepseekFlow = ai.defineFlow(
   {
     name: 'deepseekFlow',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ information: z.string() }),
   },
-  async (subject) => {
+  async ({ subject }) => {
     // Reference a model
     const deepseekChat = deepSeek.model('deepseek-chat');
 
@@ -69,7 +69,7 @@ export const deepseekFlow = ai.defineFlow(
       prompt: `Tell me something about ${subject}.`,
     });
 
-    return llmResponse.text();
+    return { information: llmResponse.text };
   },
 );
 ```
