@@ -150,14 +150,14 @@ import { z, genkit } from 'genkit';
 
 const ai = genkit({
   plugins: [
-    // vertexAI provides the textEmbedding004 embedder
+    // vertexAI provides the gemini-embedding-001 embedder
     vertexAI(),
 
     // the local vector store requires an embedder to translate from text to vector
     devLocalVectorstore([
       {
         indexName: 'menuQA',
-        embedder: vertexAI.embedder('text-embedding-005'),
+        embedder: vertexAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],

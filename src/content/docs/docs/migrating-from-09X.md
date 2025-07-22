@@ -172,16 +172,16 @@ export const generatePoem = onFlow(
   ai,
   {
     name: 'jokeTeller',
-    inputSchema: z.string().nullable(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ type: z.string().nullable() }),
+    outputSchema: z.object({ joke: z.string() }),
     streamSchema: z.string(),
   },
-  async (type, streamingCallback) => {
+  async ({ type }, streamingCallback) => {
     const { stream, response } = await ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       streamingCallback(chunk.text);
     }
-    return (await response).text;
+    return { joke: (await response).text };
   },
 );
 ```

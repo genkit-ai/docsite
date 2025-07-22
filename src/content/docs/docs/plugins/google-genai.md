@@ -52,7 +52,7 @@ const model = googleAI.model('gemini-2.5-flash');
 const modelPro = googleAI.model('gemini-2.5-flash-lite');
 
 // Referencing embedders
-const embedder = googleAI.embedder('text-embedding-004');
+const embedder = googleAI.embedder('gemini-embedding-001');
 ```
 
 You can use these references to specify which model `generate()` uses:
@@ -66,7 +66,7 @@ const ai = genkit({
 const llmResponse = await ai.generate('Tell me a joke.');
 ```
 
-or use embedders (ex. `text-embedding-004`) with `embed` or retrievers:
+or use embedders (ex. `gemini-embedding-001`) with `embed` or retrievers:
 
 ```ts
 const ai = genkit({
@@ -74,7 +74,7 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: googleAI.embedder('text-embedding-004'),
+  embedder: googleAI.embedder('gemini-embedding-001'),
   content: input,
 });
 ```

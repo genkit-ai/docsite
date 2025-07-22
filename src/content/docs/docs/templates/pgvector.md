@@ -9,7 +9,7 @@ schema.
 
 ```ts
 import { genkit, z, Document } from 'genkit';
-import { googleAI, textEmbedding004 } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/googleai';
 import { toSql } from 'pgvector';
 import postgres from 'postgres';
 
@@ -32,7 +32,7 @@ const sqlRetriever = ai.defineRetriever(
   async (input, options) => {
     const embedding = (
       await ai.embed({
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         content: input,
       })
     )[0].embedding;
@@ -59,13 +59,13 @@ And here's how to use the retriever in a flow:
 export const askQuestionsOnGoT = ai.defineFlow(
   {
     name: 'askQuestionsOnGoT',
-    inputSchema: z.string(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ question: z.string() }),
+    outputSchema: z.object({ answer: z.string() }),
   },
-  async (inputQuestion) => {
+  async ({ question }) => {
     const docs = await ai.retrieve({
       retriever: sqlRetriever,
-      query: inputQuestion,
+      query: question,
       options: {
         show: 'Game of Thrones',
       },
@@ -74,7 +74,13 @@ export const askQuestionsOnGoT = ai.defineFlow(
 
     // Continue with using retrieved docs
     // in RAG prompts.
-    //...
+    // For example:
+    const { text } = await ai.generate({
+      prompt: `Answer this question using the provided context: ${question}`,
+      docs,
+    });
+    
+    return { answer: text };
   },
 );
 ```

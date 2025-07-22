@@ -118,7 +118,7 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: vertexAI.embedder('text-embedding-004'),
+  embedder: vertexAI.embedder('gemini-embedding-001'),
   content: 'How many widgets do you have in stock?',
 });
 ```
@@ -130,7 +130,7 @@ const ai = genkit({
   plugins: [
     chroma([
       {
-        embedder: vertexAI.embedder('text-embedding-004'),
+        embedder: vertexAI.embedder('gemini-embedding-001'),
         collectionName: 'my-collection',
       },
     ]),
@@ -375,10 +375,10 @@ Important: Pricing for Vector Search consists of both a charge for every gigabyt
 
 To use Vertex AI Vector Search:
 
-1. Choose an embedding model. This model is responsible for creating vector embeddings from text or media. Advanced users might use an embedding model optimized for their particular data sets, but for most users, Vertex AI's `text-embedding-004` model is a good choice for English text, the `text-multilingual-embedding-002` model is good for multilingual text, and the `multimodalEmbedding001` model is good for mixed text, images, and video.
+1. Choose an embedding model. This model is responsible for creating vector embeddings from text or media. Advanced users might use an embedding model optimized for their particular data sets, but for most users, Vertex AI's `gemini-embedding-001` model is a good choice for English text, the `text-multilingual-embedding-002` model is good for multilingual text, and the `multimodalEmbedding001` model is good for mixed text, images, and video.
 2. In the [Vector Search](https://console.cloud.google.com/vertex-ai/matching-engine/indexes) section of the Google Cloud console, create a new index. The most important settings are:
 
-   - **Dimensions:** Specify the dimensionality of the vectors produced by your chosen embedding model. The `text-embedding-004` and `text-multilingual-embedding-002` models produce vectors of 768 dimensions. The `multimodalEmbedding001` model can produce vectors of 128, 256, 512, or 1408 dimensions for text and image, and will produce vectors of 1408 dimensions for video.
+   - **Dimensions:** Specify the dimensionality of the vectors produced by your chosen embedding model. The `gemini-embedding-001` and `text-multilingual-embedding-002` models produce vectors of 768 dimensions. The `multimodalEmbedding001` model can produce vectors of 128, 256, 512, or 1408 dimensions for text and image, and will produce vectors of 1408 dimensions for video.
    - **Update method:** Select streaming updates.
 
    After you create the index, deploy it to a standard (public) endpoint.
@@ -448,7 +448,7 @@ To use Vertex AI Vector Search:
              publicDomainName: VECTOR_SEARCH_PUBLIC_DOMAIN_NAME,
              documentRetriever: firestoreDocumentRetriever,
              documentIndexer: firestoreDocumentIndexer,
-             embedder: vertexAI.embedder('text-embedding-004'),
+             embedder: vertexAI.embedder('gemini-embedding-001'),
            },
          ],
        }),

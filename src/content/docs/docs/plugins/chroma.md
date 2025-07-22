@@ -19,13 +19,14 @@ To use this plugin, specify it when you initialize Genkit:
 ```ts
 import { genkit } from 'genkit';
 import { chroma } from 'genkitx-chromadb';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [
     chroma([
       {
         collectionName: 'bob_collection',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],
