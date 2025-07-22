@@ -107,25 +107,19 @@ your own.
 Genkit provides indexer and retriever support through its plugin system. The
 following plugins are officially supported:
 
-- [Cloud Firestore vector store](/docs/plugins/firebase)
-- [Vertex AI Vector Search](/docs/plugins/vertex-ai)
+- [Astra DB](/docs/plugins/astra-db) - DataStax Astra DB vector database
 - [Chroma DB](/docs/plugins/chroma) vector database
+- [Cloud Firestore vector store](/docs/plugins/firebase)
+- [Cloud SQL for PostgreSQL](/docs/plugins/cloud-sql-pg) with pgvector extension
+- [LanceDB](/docs/plugins/lancedb) open-source vector database
+- [Neo4j](/docs/plugins/neo4j) graph database with vector search
 - [Pinecone](/docs/plugins/pinecone) cloud vector database
+- [Vertex AI Vector Search](/docs/plugins/vertex-ai)
 
 In addition, Genkit supports the following vector stores through predefined code
 templates, which you can customize for your database configuration and schema:
 
 - PostgreSQL with [`pgvector`](/docs/templates/pgvector)
-
-Embedding model support is provided through the following plugins:
-
-| Plugin                    | Models               |
-| ------------------------- | -------------------- |
-| [Google Generative AI][1] | Gecko text embedding |
-| [Google Vertex AI][2]     | Gecko text embedding |
-
-[1]: /docs/plugins/google-genai
-[2]: /docs/plugins/vertex-ai
 
 ## Defining a RAG Flow
 
@@ -145,19 +139,19 @@ npm install --save-dev @types/pdf-parse
 
 ```ts
 import { devLocalIndexerRef, devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
-import { vertexAI } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/googleai';
 import { z, genkit } from 'genkit';
 
 const ai = genkit({
   plugins: [
-    // vertexAI provides the gemini-embedding-001 embedder
-    vertexAI(),
+    // googleAI provides the gemini-embedding-001 embedder
+    googleAI(),
 
     // the local vector store requires an embedder to translate from text to vector
     devLocalVectorstore([
       {
         indexName: 'menuQA',
-        embedder: vertexAI.embedder('gemini-embedding-001'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],
@@ -280,7 +274,7 @@ which you should not use in production.
 
 ```ts
 import { devLocalRetrieverRef } from '@genkit-ai/dev-local-vectorstore';
-import { vertexAI } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/googleai';
 
 // Define the retriever reference
 export const menuRetriever = devLocalRetrieverRef('menuQA');
@@ -301,7 +295,7 @@ export const menuQAFlow = ai.defineFlow(
 
     // generate a response
     const { text } = await ai.generate({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `
 You are acting as a helpful AI assistant that can answer 
 questions about the food available on the menu at Genkit Grub Pub.
