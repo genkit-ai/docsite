@@ -1,5 +1,6 @@
 ---
 title: Defining AI workflows
+description: Learn how to define and manage AI workflows in Genkit using flows, which provide type safety, integration with the developer UI, and simplified deployment.
 ---
 
 The core of your app's AI features are generative model requests, but it's rare
@@ -53,7 +54,7 @@ export const menuSuggestionFlow = ai.defineFlow(
       model: googleAI.model('gemini-2.5-flash'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
-    return { text };
+    return { menuItem: text };
   },
 );
 ```

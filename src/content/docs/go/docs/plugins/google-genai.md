@@ -164,14 +164,7 @@ if err != nil {
 }
 ```
 
-You can also pass an Embedder to an indexer's `Index()` method and a retriever's
-`Retrieve()` method:
-
-```go
-if err := ai.Index(ctx, myIndexer, ai.WithDocs(docsToIndex...)); err != nil {
-      return err
-}
-```
+You can retrieve docs by passing in an input to a Retriever's `Retrieve()` method:
 
 ```go
 resp, err := ai.Retrieve(ctx, myRetriever, ai.WithDocs(userInput))

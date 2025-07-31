@@ -1,5 +1,6 @@
 ---
 title: Error Types
+description: Learn about Genkit's specialized error types, GenkitError and UserFacingError, and how they are used to differentiate between internal and user-facing issues.
 ---
 
 Genkit knows about two specialized types: `GenkitError` and `UserFacingError`.

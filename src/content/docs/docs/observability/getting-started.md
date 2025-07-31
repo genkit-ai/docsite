@@ -1,5 +1,6 @@
 ---
 title: Get started with Genkit Monitoring
+description: This quickstart guide explains how to set up Genkit Monitoring for your deployed Genkit features to collect and view real-time telemetry data, including metrics, traces, and production trace exports for evaluations.
 ---
 
 This quickstart guide describes how to set up Genkit Monitoring for
@@ -46,6 +47,28 @@ Install the `@genkit-ai/firebase` plugin in your project:
 ```bash
 npm install @genkit-ai/firebase
 ```
+
+### Environment-based configuration
+
+If you intend to use the default configuration for Firebase Genkit
+Monitoring, you can enable telemetry by setting the
+`ENABLE_FIREBASE_MONITORING` environment variable in your deployment
+environment.
+
+```bash
+export ENABLE_FIREBASE_MONITORING=true
+```
+
+:::note
+This will use default configuration values. To
+override configuration options, use "Programmatic configuration".
+:::
+
+### Programmatic configuration
+
+You can also enable Firebase Genkit Monitoring in code. This is useful
+if you want to tweak any configuration settings like the metric export
+interval or to set up your local environment to export telemetry data.
 
 Import `enableFirebaseTelemetry` into your Genkit configuration file (the
 file where `genkit(...)` is initalized), and call it:

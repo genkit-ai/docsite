@@ -1,5 +1,6 @@
 ---
 title: Neo4j plugin
+description: This document describes the Neo4j plugin for Genkit, which provides indexer and retriever implementations that use the Neo4j graph database for vector search capabilities.
 ---
 
 The Neo4j plugin provides indexer and retriever implementations that use the
@@ -18,14 +19,14 @@ To use this plugin, specify it when you initialize Genkit:
 ```ts
 import { genkit } from 'genkit';
 import { neo4j } from 'genkitx-neo4j';
-import { textEmbedding004 } from 'genkitx-googleai';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [
     neo4j([
       {
         indexId: 'bob-facts',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],
@@ -53,7 +54,7 @@ NEO4J_DATABASE=neo4j  # Optional: specify database name
 neo4j([
   {
     indexId: 'bob-facts',
-    embedder: textEmbedding004,
+    embedder: googleAI.embedder('gemini-embedding-001'),
     clientParams: {
       url: 'bolt://localhost:7687',  // Neo4j's binary protocol
       username: 'neo4j',

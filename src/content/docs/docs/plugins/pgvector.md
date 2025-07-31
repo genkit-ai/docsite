@@ -9,7 +9,7 @@ schema.
 
 ```ts
 import { genkit, z, Document } from 'genkit';
-import { googleAI, textEmbedding004 } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/googleai';
 import { toSql } from 'pgvector';
 import postgres from 'postgres';
 
@@ -32,7 +32,7 @@ const sqlRetriever = ai.defineRetriever(
   async (input, options) => {
     const embedding = (
       await ai.embed({
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         content: input,
       })
     )[0].embedding;

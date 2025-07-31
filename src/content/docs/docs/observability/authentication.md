@@ -1,5 +1,6 @@
 ---
 title: Authentication and authorization
+description: Learn how to authenticate and authorize the Firebase telemetry plugin for Genkit, covering API enablement, user authentication, and deployment to Google Cloud or other environments.
 ---
 
 The Firebase telemetry plugin requires a Google Cloud or Firebase project ID

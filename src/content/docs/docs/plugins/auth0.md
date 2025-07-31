@@ -1,5 +1,6 @@
 ---
 title: Auth0 AI plugin
+description: This document describes the Auth0 AI plugin for Genkit, which provides features for building secure AI-powered applications using Auth0, Okta FGA, and Genkit.
 ---
 
 The Auth0 AI plugin (`@auth0/ai-genkit`) is an SDK for building secure AI-powered applications using [Auth0](https://www.auth0.ai/), [Okta FGA](https://docs.fga.dev/) and Genkit.

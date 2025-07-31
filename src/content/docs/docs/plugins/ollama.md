@@ -1,5 +1,6 @@
 ---
 title: Ollama plugin
+description: This document describes the Ollama plugin for Genkit, which provides interfaces to local LLMs supported by Ollama, including installation, configuration, and usage for models and embedders.
 ---
 
 The Ollama plugin provides interfaces to any of the local LLMs supported by

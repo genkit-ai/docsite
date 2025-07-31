@@ -1,6 +1,7 @@
 ---
 title: Migrate from 0.9 to 1.0
 slug: docs/migrating-from-0.9
+description: This guide outlines the significant changes and steps to migrate your Genkit applications from version 0.9 to 1.0, covering API channel changes, package updates, and flow modifications.
 ---
 
 Genkit 1.0 introduces many feature enhancements that improve overall
@@ -171,16 +172,16 @@ export const generatePoem = onFlow(
   ai,
   {
     name: 'jokeTeller',
-    inputSchema: z.string().nullable(),
-    outputSchema: z.string(),
+    inputSchema: z.object({ type: z.string().nullable() }),
+    outputSchema: z.object({ joke: z.string() }),
     streamSchema: z.string(),
   },
-  async (type, streamingCallback) => {
+  async ({ type }, streamingCallback) => {
     const { stream, response } = await ai.generateStream(`Tell me a longish ${type ?? 'dad'} joke.`);
     for await (const chunk of stream) {
       streamingCallback(chunk.text);
     }
-    return (await response).text;
+    return { joke: (await response).text };
   },
 );
 ```

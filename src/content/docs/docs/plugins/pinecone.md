@@ -1,5 +1,6 @@
 ---
 title: Pinecone plugin
+description: This document describes the Pinecone plugin for Genkit, which provides indexer and retriever implementations for the Pinecone cloud vector database.
 ---
 
 The Pinecone plugin provides indexer and retriever implementations that use the
@@ -18,13 +19,14 @@ To use this plugin, specify it when you initialize Genkit:
 ```ts
 import { genkit } from 'genkit';
 import { pinecone } from 'genkitx-pinecone';
+import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [
     pinecone([
       {
         indexId: 'bob-facts',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],

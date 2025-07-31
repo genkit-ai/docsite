@@ -1,5 +1,6 @@
 ---
 title: LanceDB plugin
+description: This document describes the LanceDB plugin for Genkit, which provides indexer and retriever implementations for LanceDB, an open-source vector database for AI applications.
 ---
 
 The LanceDB plugin provides indexer and retriever implementations that use [LanceDB](https://lancedb.com/), an open-source vector database for AI applications.
@@ -21,7 +22,7 @@ import { googleAI } from '@genkit-ai/googleai';
 
 const ai = genkit({
   plugins: [
-    // Google AI provides the text-embedding-004 embedder
+    // Google AI provides the gemini-embedding-001 embedder
     googleAI(),
 
     // LanceDB requires an embedder to translate from text to vector
@@ -29,7 +30,7 @@ const ai = genkit({
       {
         dbUri: '.db', // optional lancedb uri, default to .db
         tableName: 'table', // optional table name, default to table
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],
@@ -118,7 +119,7 @@ const ai = genkit({
       {
         dbUri: '.db',
         tableName: 'table',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],

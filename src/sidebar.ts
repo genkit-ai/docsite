@@ -66,6 +66,7 @@ const JS_SIDEBAR = [
         slug: "docs/deploy-node",
       },
       { label: "Authorization and integrity", slug: "docs/auth" },
+      { label: "Accessing flows from the client", slug: "docs/client" },
     ],
   },
   {
@@ -98,15 +99,23 @@ const JS_SIDEBAR = [
     items: [
       { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
-      { label: "Ollama", slug: "docs/plugins/ollama" },
       { label: "Firebase", slug: "docs/plugins/firebase" },
+      { label: "OpenAI", slug: "docs/plugins/openai" },
+      { label: "xAI", slug: "docs/plugins/xai" },
+      { label: "DeepSeek", slug: "docs/plugins/deepseek" },
+      { label: "OpenAI-Compatible", slug: "docs/plugins/compat-oai" },
+      { label: "Ollama", slug: "docs/plugins/ollama" },
+      { label: "MCP", slug: "docs/plugins/mcp" },
+      { label: "Express", slug: "docs/plugins/express" },
       { label: "LanceDB", slug: "docs/plugins/lancedb" },
       { label: "Astra DB", slug: "docs/plugins/astra-db" },
       { label: "Auth0 AI", slug: "docs/plugins/auth0" },
       { label: "ChromaDB", slug: "docs/plugins/chroma" },
       { label: "Neo4j", slug: "docs/plugins/neo4j" },
       { label: "pgvector", slug: "docs/plugins/pgvector" },
+      { label: "Cloud SQL for PostgreSQL", slug: "docs/plugins/cloud-sql-pg" },
       { label: "Pinecone", slug: "docs/plugins/pinecone" },
+      { label: "MCP Toolbox", slug: "docs/plugins/toolbox" },
     ],
   },
   {
@@ -214,6 +223,8 @@ const GO_SIDEBAR = [
       { label: "Ollama", slug: "go/docs/plugins/ollama" },
       { label: "OpenAI-Compatible APIs", slug: "go/docs/plugins/openai" },
       { label: "pgvector", slug: "go/docs/plugins/pgvector" },
+      { label: "AlloyDB for PostgreSQL", slug: "go/docs/plugins/alloydb" },
+      { label: "Cloud SQl for PostgreSQL", slug: "go/docs/plugins/cloud-sql-pg" },
       { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
       {
         label: "Partner & 3P Plugins",
@@ -277,7 +288,7 @@ const PYTHON_SIDEBAR = [
     items: [
       {
         label: "API Reference",
-        link: "https://python.api.genkit.dev/reference/api/",
+        link: "https://python.api.genkit.dev",
         attrs: {
           "data-external": true,
           target: "_blank",
