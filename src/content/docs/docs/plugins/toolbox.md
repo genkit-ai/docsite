@@ -55,7 +55,7 @@ toolboxTools = await client.loadToolset('toolsetName');
 const getGenkitTool = (toolboxTool) => ai.defineTool({
    name: toolboxTool.getName(),
    description: toolboxTool.getDescription(),
-   inputSchema: toolboxTool.getParams(),
+   inputSchema: toolboxTool.getParamSchema(),
 },
 toolboxTool,
 );
