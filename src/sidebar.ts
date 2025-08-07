@@ -301,12 +301,26 @@ const PYTHON_SIDEBAR = [
   },
 ];
 
+const UNIFIED_SIDEBAR = [
+  { label: "Generating content", slug: "unified-docs/generating-content" },
+  { label: "Creating flows", slug: "unified-docs/creating-flows" },
+  { label: "Tool calling", slug: "unified-docs/tool-calling" },
+  { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
+  { label: "Managing prompts with Dotprompt", slug: "unified-docs/dotprompt" },
+  { label: "Evaluation", slug: "unified-docs/evaluation" },
+];
+
 export const sidebar = [
   { label: "Introduction", slug: "" },
   {
+    label: "Unified Docs (Preview)",
+    items: UNIFIED_SIDEBAR,
+    collapsed: false,
+  },
+  {
     label: "Genkit JS",
     items: JS_SIDEBAR,
-    collapsed: false,
+    collapsed: true,
   },
   {
     label: "Genkit Go",
