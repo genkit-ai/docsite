@@ -1,0 +1,467 @@
+---
+title: Writing Genkit Plugins
+description: Learn how to extend Genkit's capabilities by writing custom plugins across JavaScript, Go, and Python, covering plugin creation, models, retrievers, and publishing.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Genkit's capabilities are designed to be extended by plugins. Genkit plugins are configurable modules that can provide models, retrievers, indexers, trace stores, and more. You've already seen plugins in action just by using Genkit - every AI provider, vector database, and framework integration is implemented as a plugin.
+
+## Plugin Architecture
+
+Plugins in Genkit follow a consistent architecture across all languages, providing a way to:
+
+- **Register new actions**: Models, embedders, retrievers, indexers, and tools
+- **Configure services**: API keys, endpoints, and service-specific settings
+- **Extend functionality**: Add new capabilities to the Genkit ecosystem
+- **Maintain consistency**: Follow established patterns for reliability and discoverability
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    In JavaScript, plugins are created using the `genkitPlugin` helper:
+
+    ```ts
+    import { genkit } from 'genkit';
+    import { vertexAI } from '@genkit-ai/vertexai';
+
+    const ai = genkit({
+      plugins: [vertexAI({ projectId: 'my-project' })],
+    });
+    ```
+
+    The Vertex AI plugin takes configuration and registers models, embedders, and more with the Genkit registry, which powers the local UI and serves as a lookup service for named actions at runtime.
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    In Go, plugins implement the `genkit.Plugin` interface:
+
+    ```go
+    import (
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/googlegenai"
+    )
+
+    g, err := genkit.Init(ctx,
+        genkit.WithPlugins(
+            &googlegenai.GoogleAI{APIKey: "..."},
+            &googlegenai.VertexAI{
+                ProjectID: "my-project", 
+                Location: "us-central1",
+            },
+        ),
+    )
+    ```
+
+    Plugins register resources with unique identifiers to prevent naming conflicts with other plugins.
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    In Python, plugins are classes that extend the base plugin functionality:
+
+    ```python
+    from genkit.ai import Genkit
+    from genkit.plugins.vertexai import VertexAI
+
+    ai = Genkit(
+        plugins=[
+            VertexAI(project_id="my-project", location="us-central1"),
+        ],
+    )
+    ```
+
+    Python plugins follow similar patterns to JavaScript and Go, providing consistent APIs across languages.
+  </TabItem>
+</Tabs>
+
+## Creating a Plugin
+
+### Project Setup
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Create a new NPM package for your plugin:
+
+    ```bash
+    mkdir genkitx-my-plugin
+    cd genkitx-my-plugin
+    npm init -y
+    npm install genkit
+    npm install --save-dev typescript
+    npx tsc --init
+    ```
+
+    Define and export your plugin using the `genkitPlugin` helper:
+
+    ```ts
+    import { Genkit, z } from 'genkit';
+    import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
+
+    interface MyPluginOptions {
+      apiKey?: string;
+      // Add any plugin configuration here
+    }
+
+    export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
+      return genkitPlugin(
+        'myPlugin',
+        // Initializer function (required)
+        async (ai: Genkit) => {
+          const apiKey = options?.apiKey || process.env.MY_PLUGIN_API_KEY;
+          if (!apiKey) {
+            throw new Error('API key required');
+          }
+
+          // Register actions that are always available
+          ai.defineModel({ 
+            name: 'myPlugin/my-model', 
+            // ... model definition
+          });
+          
+          ai.defineEmbedder({ 
+            name: 'myPlugin/my-embedder',
+            // ... embedder definition
+          });
+        },
+        // Dynamic Action Resolver (optional)
+        async (ai: Genkit, actionType, actionName) => {
+          // Define actions on-demand
+          if (actionType === 'model' && actionName === 'dynamic-model') {
+            ai.defineModel({ 
+              name: `myPlugin/${actionName}`, 
+              // ... dynamic model definition
+            });
+          }
+        },
+        // List Actions function (optional)
+        async () => {
+          // Return metadata for all potential actions
+          const availableModels = await fetchAvailableModels();
+          return availableModels.map(model => ({
+            type: 'model',
+            name: `myPlugin/${model.id}`,
+            // ... other metadata
+          }));
+        }
+      );
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Create a Go package that implements the `genkit.Plugin` interface:
+
+    ```go
+    package myplugin
+
+    import (
+        "context"
+        "os"
+        "github.com/firebase/genkit/go/genkit"
+    )
+
+    const ProviderID = "myplugin"
+
+    // Plugin configuration struct
+    type MyPlugin struct {
+        APIKey string
+        // Other configuration options
+    }
+
+    // Name returns the provider ID
+    func (p *MyPlugin) Name() string {
+        return ProviderID
+    }
+
+    // Init initializes the plugin
+    func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
+        // Set default values and validate configuration
+        if p.APIKey == "" {
+            p.APIKey = os.Getenv("MY_PLUGIN_API_KEY")
+        }
+        if p.APIKey == "" {
+            return fmt.Errorf("API key required")
+        }
+
+        // Register models, embedders, etc.
+        err := g.DefineModel(ProviderID, "my-model", &ModelConfig{
+            // ... model configuration
+        }, func(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
+            // ... model implementation
+        })
+        if err != nil {
+            return fmt.Errorf("failed to define model: %w", err)
+        }
+
+        return nil
+    }
+    ```
+
+    Usage:
+
+    ```go
+    g, err := genkit.Init(ctx,
+        genkit.WithPlugins(
+            &myplugin.MyPlugin{
+                APIKey: "your-api-key",
+            },
+        ),
+    )
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Create a Python package with a plugin class:
+
+    ```python
+    import os
+    from typing import Optional, Dict, Any
+    from genkit.ai import Genkit
+    from genkit.plugins.base import Plugin
+
+    class MyPlugin(Plugin):
+        def __init__(self, api_key: Optional[str] = None, **kwargs):
+            self.api_key = api_key or os.getenv("MY_PLUGIN_API_KEY")
+            if not self.api_key:
+                raise ValueError("API key required")
+            
+            super().__init__(provider_id="myplugin", **kwargs)
+
+        def initialize(self, ai: Genkit) -> None:
+            """Initialize the plugin and register actions"""
+            
+            # Register a model
+            ai.define_model(
+                name=f"{self.provider_id}/my-model",
+                config_schema={
+                    "temperature": {"type": "number", "default": 0.7},
+                    "max_tokens": {"type": "integer", "default": 1000},
+                },
+                generate_fn=self._generate_text,
+            )
+            
+            # Register an embedder
+            ai.define_embedder(
+                name=f"{self.provider_id}/my-embedder",
+                embed_fn=self._embed_text,
+            )
+
+        async def _generate_text(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate text using the model"""
+            # Implementation here
+            pass
+
+        async def _embed_text(self, text: str) -> List[float]:
+            """Generate embeddings for text"""
+            # Implementation here
+            pass
+    ```
+
+    Usage:
+
+    ```python
+    from genkit.ai import Genkit
+    from my_plugin import MyPlugin
+
+    ai = Genkit(
+        plugins=[
+            MyPlugin(api_key="your-api-key"),
+        ],
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+## Plugin Configuration Best Practices
+
+### Secure Configuration
+
+For any plugin options that require secret values (API keys, tokens), provide both configuration options and environment variable defaults:
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    interface MyPluginOptions {
+      apiKey?: string;
+      endpoint?: string;
+      timeout?: number;
+    }
+
+    export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
+      return genkitPlugin('myPlugin', async (ai: Genkit) => {
+        // Prioritize explicit options, fall back to environment variables
+        const apiKey = options?.apiKey || process.env.MY_PLUGIN_API_KEY;
+        const endpoint = options?.endpoint || process.env.MY_PLUGIN_ENDPOINT || 'https://api.default.com';
+        
+        if (!apiKey) {
+          throw new GenkitError({
+            source: 'my-plugin',
+            status: 'INVALID_ARGUMENT',
+            message: 'Must supply either `options.apiKey` or set `MY_PLUGIN_API_KEY` environment variable.',
+          });
+        }
+
+        // Use configuration to set up the plugin
+        const client = new MyAPIClient({ apiKey, endpoint });
+        
+        // Register actions using the configured client
+        ai.defineModel(/* ... */);
+      });
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    type MyPlugin struct {
+        APIKey   string
+        Endpoint string
+        Timeout  time.Duration
+    }
+
+    func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
+        // Set defaults from environment variables
+        if p.APIKey == "" {
+            p.APIKey = os.Getenv("MY_PLUGIN_API_KEY")
+        }
+        if p.Endpoint == "" {
+            p.Endpoint = os.Getenv("MY_PLUGIN_ENDPOINT")
+            if p.Endpoint == "" {
+                p.Endpoint = "https://api.default.com"
+            }
+        }
+        if p.Timeout == 0 {
+            p.Timeout = 30 * time.Second
+        }
+
+        if p.APIKey == "" {
+            return fmt.Errorf("API key required: set APIKey field or MY_PLUGIN_API_KEY environment variable")
+        }
+
+        // Create client with configuration
+        client := NewMyAPIClient(p.APIKey, p.Endpoint, p.Timeout)
+        
+        // Register actions
+        return g.DefineModel(/* ... */)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    class MyPlugin(Plugin):
+        def __init__(
+            self, 
+            api_key: Optional[str] = None,
+            endpoint: Optional[str] = None,
+            timeout: int = 30,
+            **kwargs
+        ):
+            # Prioritize explicit options, fall back to environment variables
+            self.api_key = api_key or os.getenv("MY_PLUGIN_API_KEY")
+            self.endpoint = endpoint or os.getenv("MY_PLUGIN_ENDPOINT", "https://api.default.com")
+            self.timeout = timeout
+            
+            if not self.api_key:
+                raise ValueError(
+                    "API key required: provide api_key parameter or set MY_PLUGIN_API_KEY environment variable"
+                )
+            
+            super().__init__(provider_id="myplugin", **kwargs)
+            
+            # Create client with configuration
+            self.client = MyAPIClient(
+                api_key=self.api_key,
+                endpoint=self.endpoint,
+                timeout=self.timeout
+            )
+    ```
+  </TabItem>
+</Tabs>
+
+## Plugin Types
+
+Genkit supports several types of plugins, each serving different purposes:
+
+### Model Plugins
+Provide generative AI models that can receive prompts and generate text, media, or data.
+
+### Embedder Plugins
+Provide text embedding models that convert text into vector representations.
+
+### Retriever Plugins
+Provide document retrieval capabilities for RAG (Retrieval-Augmented Generation) systems.
+
+### Indexer Plugins
+Provide document indexing capabilities for storing and organizing documents.
+
+### Tool Plugins
+Provide function calling capabilities that models can use to interact with external systems.
+
+### Telemetry Plugins
+Configure observability and monitoring for Genkit applications.
+
+## Publishing Plugins
+
+### Package Naming and Keywords
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Use the `genkitx-{name}` naming convention and include relevant keywords in your `package.json`:
+
+    ```json
+    {
+      "name": "genkitx-my-plugin",
+      "keywords": [
+        "genkit-plugin",
+        "genkit-model",
+        "genkit-embedder",
+        "genkit-retriever"
+      ],
+      "description": "My custom Genkit plugin",
+      "main": "dist/index.js",
+      "types": "dist/index.d.ts"
+    }
+    ```
+
+    Available keywords:
+    - `genkit-plugin`: Always include this
+    - `genkit-model`: If your plugin defines models
+    - `genkit-embedder`: If your plugin defines embedders
+    - `genkit-retriever`: If your plugin defines retrievers
+    - `genkit-indexer`: If your plugin defines indexers
+    - `genkit-telemetry`: If your plugin provides telemetry
+    - `genkit-deploy`: If your plugin includes deployment helpers
+    - `genkit-flow`: If your plugin enhances flows
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Use descriptive package names that include "genkit" for discoverability:
+
+    ```
+    github.com/yourorg/genkit-plugins/servicename
+    github.com/yourorg/your-repo/genkit/servicename
+    ```
+
+    Include a comprehensive README.md with:
+    - Installation instructions
+    - Configuration options
+    - Usage examples
+    - API documentation
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Use the `genkit-{name}` naming convention and include relevant classifiers in your `setup.py` or `pyproject.toml`:
+
+    ```toml
+    [project]
+    name = "genkit-my-plugin"
+    description = "My custom Genkit plugin"
+    keywords = ["genkit", "plugin", "ai", "model"]
+    classifiers = [
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    ]
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+- Learn about [writing model plugins](/unified-docs/plugin-authoring/models) to add new AI models
+- Explore [writing retriever plugins](/unified-docs/plugin-authoring/retrievers) for custom data sources
+- See [writing embedder plugins](/unified-docs/plugin-authoring/embedders) for custom embedding models
+- Check out [telemetry plugins](/unified-docs/plugin-authoring/telemetry) for monitoring and observability

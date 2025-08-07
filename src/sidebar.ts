@@ -302,12 +302,71 @@ const PYTHON_SIDEBAR = [
 ];
 
 const UNIFIED_SIDEBAR = [
-  { label: "Generating content", slug: "unified-docs/generating-content" },
-  { label: "Creating flows", slug: "unified-docs/creating-flows" },
-  { label: "Tool calling", slug: "unified-docs/tool-calling" },
-  { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
-  { label: "Managing prompts with Dotprompt", slug: "unified-docs/dotprompt" },
-  { label: "Evaluation", slug: "unified-docs/evaluation" },
+  { label: "Get started", slug: "unified-docs/get-started" },
+  { label: "Developer tools", slug: "unified-docs/developer-tools" },
+  { label: "MCP Server", slug: "unified-docs/mcp-server" },
+  {
+    label: "Building AI workflows",
+    items: [
+      { label: "Generating content", slug: "unified-docs/generating-content" },
+      { label: "Passing information through context", slug: "unified-docs/context" },
+      { label: "Creating flows", slug: "unified-docs/creating-flows" },
+      { label: "Managing prompts with Dotprompt", slug: "unified-docs/dotprompt" },
+      { label: "Creating persistent chat sessions", slug: "unified-docs/chat-sessions" },
+      { label: "Tool calling", slug: "unified-docs/tool-calling" },
+      { label: "Pause generation using interrupts", slug: "unified-docs/interrupts" },
+      { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
+      { label: "Building multi-agent systems", slug: "unified-docs/multi-agent-systems" },
+      { label: "Evaluation", slug: "unified-docs/evaluation" },
+      { label: "Observability and monitoring", slug: "unified-docs/observability-monitoring" },
+      { label: "Error handling", slug: "unified-docs/error-handling" },
+    ],
+  },
+  {
+    label: "AI Providers",
+    items: [
+      { label: "Google AI", slug: "unified-docs/plugins/google-ai" },
+      { label: "Vertex AI", slug: "unified-docs/plugins/vertex-ai" },
+      { label: "OpenAI", slug: "unified-docs/plugins/openai" },
+      { label: "Anthropic (Claude)", slug: "unified-docs/plugins/anthropic" },
+      { label: "xAI (Grok)", slug: "unified-docs/plugins/xai" },
+      { label: "DeepSeek", slug: "unified-docs/plugins/deepseek" },
+      { label: "Ollama", slug: "unified-docs/plugins/ollama" },
+      { label: "Model Context Protocol (MCP)", slug: "unified-docs/plugins/mcp" },
+    ],
+  },
+  {
+    label: "Vector Databases",
+    items: [
+      { label: "Pinecone", slug: "unified-docs/vector-databases/pinecone" },
+      { label: "ChromaDB", slug: "unified-docs/vector-databases/chromadb" },
+      { label: "pgvector", slug: "unified-docs/vector-databases/pgvector" },
+      { label: "LanceDB", slug: "unified-docs/vector-databases/lancedb" },
+      { label: "Astra DB", slug: "unified-docs/vector-databases/astra-db" },
+      { label: "Neo4j", slug: "unified-docs/vector-databases/neo4j" },
+      { label: "Cloud SQL PostgreSQL", slug: "unified-docs/vector-databases/cloud-sql-postgresql" },
+    ],
+  },
+  {
+    label: "Web Framework Integrations",
+    items: [
+      { label: "Express.js", slug: "unified-docs/frameworks/express" },
+      { label: "Next.js", slug: "unified-docs/frameworks/nextjs" },
+    ],
+  },
+  {
+    label: "Writing Plugins",
+    items: [
+      { label: "Overview", slug: "unified-docs/plugin-authoring/overview" },
+      { label: "Model Plugins", slug: "unified-docs/plugin-authoring/models" },
+    ],
+  },
+  {
+    label: "Advanced Topics",
+    items: [
+      { label: "Deployment Guide", slug: "unified-docs/deployment" },
+    ],
+  },
 ];
 
 export const sidebar = [

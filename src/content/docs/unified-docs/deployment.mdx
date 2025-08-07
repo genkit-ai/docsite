@@ -1,0 +1,1384 @@
+---
+title: Deployment Guide
+description: Learn how to deploy Genkit applications to production across JavaScript, Go, and Python, including cloud platforms, containerization, environment configuration, and best practices.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This comprehensive guide covers deploying Genkit applications to production environments across all supported languages and platforms, including cloud services, containerization, and deployment best practices.
+
+## Overview
+
+Genkit applications can be deployed to various platforms depending on your language choice and requirements:
+
+### Platform Options by Language
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    **Recommended Platforms:**
+    - **Vercel** - Optimal for Next.js applications
+    - **Google Cloud Run** - Serverless containers with auto-scaling
+    - **Firebase Functions** - Serverless functions with Firebase integration
+    - **AWS Lambda** - Serverless functions with AWS ecosystem
+    - **Railway** - Simple deployment with Git integration
+    - **Render** - Easy deployment with automatic builds
+    - **DigitalOcean App Platform** - Managed platform with databases
+    - **Heroku** - Traditional PaaS with add-ons
+    - **Self-hosted** - Docker containers on any infrastructure
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    **Recommended Platforms:**
+    - **Google Cloud Run** - Serverless containers (recommended)
+    - **AWS ECS/Fargate** - Managed container service
+    - **Azure Container Instances** - Serverless containers
+    - **Kubernetes** - Self-managed or managed (GKE, EKS, AKS)
+    - **Railway** - Simple deployment with Git integration
+    - **Render** - Docker-based deployment
+    - **DigitalOcean App Platform** - Managed platform
+    - **Self-hosted** - Binary deployment or Docker containers
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    **Recommended Platforms:**
+    - **Google Cloud Run** - Serverless containers (recommended)
+    - **AWS Lambda** - Serverless functions (with FastAPI adapter)
+    - **Azure Functions** - Serverless functions
+    - **Railway** - Simple deployment with Git integration
+    - **Render** - Docker-based deployment
+    - **DigitalOcean App Platform** - Managed platform
+    - **Heroku** - Traditional PaaS
+    - **Self-hosted** - Docker containers or direct deployment
+  </TabItem>
+</Tabs>
+
+## Environment Configuration
+
+### Environment Variables
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Create environment configuration for different deployment stages:
+
+    ```bash
+    # .env.local (development)
+    GEMINI_API_KEY=your_development_key
+    OPENAI_API_KEY=your_development_key
+    JWT_SECRET=your_jwt_secret
+    NODE_ENV=development
+    DATABASE_URL=your_dev_database_url
+
+    # .env.production (production)
+    GEMINI_API_KEY=your_production_key
+    OPENAI_API_KEY=your_production_key
+    JWT_SECRET=your_strong_production_secret
+    NODE_ENV=production
+    DATABASE_URL=your_production_database_url
+    ```
+
+    ### Next.js Configuration
+
+    ```js
+    // next.config.js
+    /** @type {import('next').NextConfig} */
+    const nextConfig = {
+      env: {
+        CUSTOM_KEY: process.env.CUSTOM_KEY,
+      },
+      experimental: {
+        serverComponentsExternalPackages: ['genkit'],
+      },
+    };
+
+    module.exports = nextConfig;
+    ```
+
+    ### Express Configuration
+
+    ```ts
+    // src/config/environment.ts
+    export const config = {
+      port: process.env.PORT || 3000,
+      nodeEnv: process.env.NODE_ENV || 'development',
+      geminiApiKey: process.env.GEMINI_API_KEY,
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      jwtSecret: process.env.JWT_SECRET,
+      databaseUrl: process.env.DATABASE_URL,
+      corsOrigins: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'],
+    };
+
+    // Validate required environment variables
+    const requiredEnvVars = ['GEMINI_API_KEY', 'JWT_SECRET'];
+    for (const envVar of requiredEnvVars) {
+      if (!process.env[envVar]) {
+        throw new Error(`Missing required environment variable: ${envVar}`);
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Manage environment configuration with proper validation:
+
+    ```go
+    // config/config.go
+    package config
+
+    import (
+        "fmt"
+        "os"
+        "strconv"
+        "strings"
+    )
+
+    type Config struct {
+        Port         string
+        Environment  string
+        GeminiAPIKey string
+        OpenAIAPIKey string
+        JWTSecret    string
+        DatabaseURL  string
+        CORSOrigins  []string
+    }
+
+    func Load() (*Config, error) {
+        config := &Config{
+            Port:         getEnv("PORT", "8080"),
+            Environment:  getEnv("GO_ENV", "development"),
+            GeminiAPIKey: os.Getenv("GEMINI_API_KEY"),
+            OpenAIAPIKey: os.Getenv("OPENAI_API_KEY"),
+            JWTSecret:    os.Getenv("JWT_SECRET"),
+            DatabaseURL:  os.Getenv("DATABASE_URL"),
+            CORSOrigins:  strings.Split(getEnv("CORS_ORIGINS", "http://localhost:3000"), ","),
+        }
+
+        // Validate required environment variables
+        if config.GeminiAPIKey == "" {
+            return nil, fmt.Errorf("GEMINI_API_KEY is required")
+        }
+        if config.JWTSecret == "" {
+            return nil, fmt.Errorf("JWT_SECRET is required")
+        }
+
+        return config, nil
+    }
+
+    func getEnv(key, defaultValue string) string {
+        if value := os.Getenv(key); value != "" {
+            return value
+        }
+        return defaultValue
+    }
+    ```
+
+    ### Usage in main.go
+
+    ```go
+    // main.go
+    package main
+
+    import (
+        "log"
+        "your-app/config"
+        "your-app/server"
+    )
+
+    func main() {
+        cfg, err := config.Load()
+        if err != nil {
+            log.Fatalf("Failed to load configuration: %v", err)
+        }
+
+        srv := server.New(cfg)
+        log.Printf("Server starting on port %s", cfg.Port)
+        log.Fatal(srv.Start())
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Use Pydantic for environment configuration:
+
+    ```python
+    # config/settings.py
+    from pydantic import BaseSettings, validator
+    from typing import List, Optional
+    import os
+
+    class Settings(BaseSettings):
+        # Server configuration
+        port: int = 8080
+        host: str = "0.0.0.0"
+        environment: str = "development"
+        
+        # API Keys
+        gemini_api_key: str
+        openai_api_key: Optional[str] = None
+        jwt_secret: str
+        
+        # Database
+        database_url: Optional[str] = None
+        
+        # CORS
+        cors_origins: List[str] = ["http://localhost:3000"]
+        
+        @validator('cors_origins', pre=True)
+        def parse_cors_origins(cls, v):
+            if isinstance(v, str):
+                return v.split(',')
+            return v
+        
+        @validator('jwt_secret')
+        def validate_jwt_secret(cls, v):
+            if len(v) < 32:
+                raise ValueError('JWT_SECRET must be at least 32 characters long')
+            return v
+
+        class Config:
+            env_file = ".env"
+            case_sensitive = False
+
+    # Create global settings instance
+    settings = Settings()
+    ```
+
+    ### Usage in FastAPI
+
+    ```python
+    # main.py
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from config.settings import settings
+    import uvicorn
+
+    app = FastAPI(
+        title="Genkit API",
+        version="1.0.0",
+        debug=settings.environment == "development"
+    )
+
+    # CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    if __name__ == "__main__":
+        uvicorn.run(
+            "main:app",
+            host=settings.host,
+            port=settings.port,
+            reload=settings.environment == "development"
+        )
+    ```
+  </TabItem>
+</Tabs>
+
+## Containerization with Docker
+
+### Dockerfile Examples
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ### Next.js Application
+
+    ```dockerfile
+    # Dockerfile
+    FROM node:18-alpine AS base
+
+    # Install dependencies only when needed
+    FROM base AS deps
+    RUN apk add --no-cache libc6-compat
+    WORKDIR /app
+
+    # Install dependencies based on the preferred package manager
+    COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* ./
+    RUN \
+      if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+      elif [ -f package-lock.json ]; then npm ci; \
+      elif [ -f pnpm-lock.yaml ]; then yarn global add pnpm && pnpm i --frozen-lockfile; \
+      else echo "Lockfile not found." && exit 1; \
+      fi
+
+    # Rebuild the source code only when needed
+    FROM base AS builder
+    WORKDIR /app
+    COPY --from=deps /app/node_modules ./node_modules
+    COPY . .
+
+    # Build the application
+    RUN yarn build
+
+    # Production image, copy all the files and run next
+    FROM base AS runner
+    WORKDIR /app
+
+    ENV NODE_ENV production
+
+    RUN addgroup --system --gid 1001 nodejs
+    RUN adduser --system --uid 1001 nextjs
+
+    COPY --from=builder /app/public ./public
+
+    # Set the correct permission for prerender cache
+    RUN mkdir .next
+    RUN chown nextjs:nodejs .next
+
+    # Automatically leverage output traces to reduce image size
+    COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+    COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+    USER nextjs
+
+    EXPOSE 3000
+
+    ENV PORT 3000
+    ENV HOSTNAME "0.0.0.0"
+
+    CMD ["node", "server.js"]
+    ```
+
+    ### Express Application
+
+    ```dockerfile
+    # Dockerfile
+    FROM node:18-alpine AS builder
+
+    WORKDIR /app
+
+    # Copy package files
+    COPY package*.json ./
+    COPY tsconfig.json ./
+
+    # Install dependencies
+    RUN npm ci --only=production
+
+    # Copy source code
+    COPY src/ ./src/
+
+    # Build the application
+    RUN npm run build
+
+    # Production stage
+    FROM node:18-alpine AS production
+
+    WORKDIR /app
+
+    # Create non-root user
+    RUN addgroup -g 1001 -S nodejs
+    RUN adduser -S genkit -u 1001
+
+    # Copy built application
+    COPY --from=builder /app/dist ./dist
+    COPY --from=builder /app/node_modules ./node_modules
+    COPY --from=builder /app/package*.json ./
+
+    # Change ownership
+    RUN chown -R genkit:nodejs /app
+    USER genkit
+
+    EXPOSE 3000
+
+    CMD ["node", "dist/index.js"]
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ### Multi-stage Go Build
+
+    ```dockerfile
+    # Dockerfile
+    FROM golang:1.21-alpine AS builder
+
+    # Install git and ca-certificates
+    RUN apk update && apk add --no-cache git ca-certificates tzdata && update-ca-certificates
+
+    # Create appuser
+    ENV USER=appuser
+    ENV UID=10001
+    RUN adduser \
+        --disabled-password \
+        --gecos "" \
+        --home "/nonexistent" \
+        --shell "/sbin/nologin" \
+        --no-create-home \
+        --uid "${UID}" \
+        "${USER}"
+
+    WORKDIR /build
+
+    # Copy go mod files
+    COPY go.mod go.sum ./
+
+    # Download dependencies
+    RUN go mod download
+    RUN go mod verify
+
+    # Copy source code
+    COPY . .
+
+    # Build the binary
+    RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -ldflags='-w -s -extldflags "-static"' \
+        -a -installsuffix cgo \
+        -o app .
+
+    # Final stage
+    FROM scratch
+
+    # Import from builder
+    COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+    COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+    COPY --from=builder /etc/passwd /etc/passwd
+    COPY --from=builder /etc/group /etc/group
+
+    # Copy the binary
+    COPY --from=builder /build/app /app
+
+    # Use an unprivileged user
+    USER appuser:appuser
+
+    EXPOSE 8080
+
+    ENTRYPOINT ["/app"]
+    ```
+
+    ### Alternative with Alpine Base
+
+    ```dockerfile
+    # Dockerfile.alpine
+    FROM golang:1.21-alpine AS builder
+
+    WORKDIR /app
+
+    # Install dependencies
+    RUN apk add --no-cache git
+
+    # Copy go mod files
+    COPY go.mod go.sum ./
+    RUN go mod download
+
+    # Copy source and build
+    COPY . .
+    RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+
+    # Final stage
+    FROM alpine:latest
+
+    # Install ca-certificates
+    RUN apk --no-cache add ca-certificates
+
+    WORKDIR /root/
+
+    # Copy the binary
+    COPY --from=builder /app/main .
+
+    EXPOSE 8080
+
+    CMD ["./main"]
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ### FastAPI Application
+
+    ```dockerfile
+    # Dockerfile
+    FROM python:3.11-slim AS builder
+
+    # Set environment variables
+    ENV PYTHONDONTWRITEBYTECODE=1
+    ENV PYTHONUNBUFFERED=1
+
+    # Install system dependencies
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Create and activate virtual environment
+    RUN python -m venv /opt/venv
+    ENV PATH="/opt/venv/bin:$PATH"
+
+    # Copy requirements and install Python dependencies
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir --upgrade pip \
+        && pip install --no-cache-dir -r requirements.txt
+
+    # Production stage
+    FROM python:3.11-slim AS production
+
+    # Set environment variables
+    ENV PYTHONDONTWRITEBYTECODE=1
+    ENV PYTHONUNBUFFERED=1
+    ENV PATH="/opt/venv/bin:$PATH"
+
+    # Create non-root user
+    RUN groupadd -r genkit && useradd -r -g genkit genkit
+
+    # Copy virtual environment from builder stage
+    COPY --from=builder /opt/venv /opt/venv
+
+    # Set work directory
+    WORKDIR /app
+
+    # Copy application code
+    COPY . .
+
+    # Change ownership
+    RUN chown -R genkit:genkit /app
+    USER genkit
+
+    EXPOSE 8080
+
+    CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+    ```
+
+    ### Flask Application
+
+    ```dockerfile
+    # Dockerfile
+    FROM python:3.11-slim
+
+    # Set environment variables
+    ENV PYTHONDONTWRITEBYTECODE=1
+    ENV PYTHONUNBUFFERED=1
+    ENV FLASK_APP=app.py
+    ENV FLASK_ENV=production
+
+    # Set work directory
+    WORKDIR /app
+
+    # Install system dependencies
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends gcc \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Python dependencies
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir --upgrade pip \
+        && pip install --no-cache-dir -r requirements.txt
+
+    # Copy application code
+    COPY . .
+
+    # Create non-root user
+    RUN adduser --disabled-password --gecos '' genkit
+    RUN chown -R genkit:genkit /app
+    USER genkit
+
+    EXPOSE 8080
+
+    CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "app:app"]
+    ```
+  </TabItem>
+</Tabs>
+
+### Docker Compose for Development
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"  # or 8080:8080 for Go/Python
+    environment:
+      - NODE_ENV=development
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=postgresql://user:password@db:5432/genkit_dev
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+      - /app/node_modules  # for Node.js
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=genkit_dev
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
+```
+
+## Cloud Platform Deployment
+
+### Google Cloud Run
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ### Deploy with Cloud Build
+
+    ```yaml
+    # cloudbuild.yaml
+    steps:
+      # Build the container image
+      - name: 'gcr.io/cloud-builders/docker'
+        args: ['build', '-t', 'gcr.io/$PROJECT_ID/genkit-app:$COMMIT_SHA', '.']
+      
+      # Push the container image to Container Registry
+      - name: 'gcr.io/cloud-builders/docker'
+        args: ['push', 'gcr.io/$PROJECT_ID/genkit-app:$COMMIT_SHA']
+      
+      # Deploy container image to Cloud Run
+      - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+        entrypoint: gcloud
+        args:
+          - 'run'
+          - 'deploy'
+          - 'genkit-app'
+          - '--image'
+          - 'gcr.io/$PROJECT_ID/genkit-app:$COMMIT_SHA'
+          - '--region'
+          - 'us-central1'
+          - '--platform'
+          - 'managed'
+          - '--allow-unauthenticated'
+
+    images:
+      - 'gcr.io/$PROJECT_ID/genkit-app:$COMMIT_SHA'
+    ```
+
+    ### Deploy with CLI
+
+    ```bash
+    # Build and deploy
+    gcloud builds submit --tag gcr.io/PROJECT_ID/genkit-app
+
+    # Deploy to Cloud Run
+    gcloud run deploy genkit-app \
+      --image gcr.io/PROJECT_ID/genkit-app \
+      --platform managed \
+      --region us-central1 \
+      --allow-unauthenticated \
+      --set-env-vars GEMINI_API_KEY=your_key,NODE_ENV=production
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ### Deploy with CLI
+
+    ```bash
+    # Build and deploy
+    gcloud builds submit --tag gcr.io/PROJECT_ID/genkit-go-app
+
+    # Deploy to Cloud Run
+    gcloud run deploy genkit-go-app \
+      --image gcr.io/PROJECT_ID/genkit-go-app \
+      --platform managed \
+      --region us-central1 \
+      --allow-unauthenticated \
+      --port 8080 \
+      --set-env-vars GEMINI_API_KEY=your_key,GO_ENV=production
+    ```
+
+    ### Cloud Run Service Configuration
+
+    ```yaml
+    # service.yaml
+    apiVersion: serving.knative.dev/v1
+    kind: Service
+    metadata:
+      name: genkit-go-app
+      annotations:
+        run.googleapis.com/ingress: all
+    spec:
+      template:
+        metadata:
+          annotations:
+            autoscaling.knative.dev/maxScale: "100"
+            run.googleapis.com/cpu-throttling: "false"
+        spec:
+          containerConcurrency: 80
+          containers:
+          - image: gcr.io/PROJECT_ID/genkit-go-app
+            ports:
+            - containerPort: 8080
+            env:
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: genkit-secrets
+                  key: gemini-api-key
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ### Deploy with CLI
+
+    ```bash
+    # Build and deploy
+    gcloud builds submit --tag gcr.io/PROJECT_ID/genkit-python-app
+
+    # Deploy to Cloud Run
+    gcloud run deploy genkit-python-app \
+      --image gcr.io/PROJECT_ID/genkit-python-app \
+      --platform managed \
+      --region us-central1 \
+      --allow-unauthenticated \
+      --port 8080 \
+      --set-env-vars GEMINI_API_KEY=your_key,ENVIRONMENT=production
+    ```
+
+    ### Requirements for Cloud Run
+
+    ```txt
+    # requirements.txt
+    fastapi==0.104.1
+    uvicorn[standard]==0.24.0
+    genkit-plugin-google-genai==0.1.0
+    pydantic==2.5.0
+    python-multipart==0.0.6
+    ```
+  </TabItem>
+</Tabs>
+
+### Vercel (JavaScript/Next.js)
+
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy
+vercel
+
+# Set environment variables
+vercel env add GEMINI_API_KEY
+vercel env add JWT_SECRET
+
+# Deploy to production
+vercel --prod
+```
+
+### Vercel Configuration
+
+```json
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "env": {
+    "GEMINI_API_KEY": "@gemini-api-key",
+    "JWT_SECRET": "@jwt-secret"
+  },
+  "functions": {
+    "app/api/**/*.ts": {
+      "maxDuration": 30
+    }
+  }
+}
+```
+
+### AWS Lambda
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ### Serverless Framework
+
+    ```yaml
+    # serverless.yml
+    service: genkit-app
+
+    provider:
+      name: aws
+      runtime: nodejs18.x
+      region: us-east-1
+      environment:
+        GEMINI_API_KEY: ${env:GEMINI_API_KEY}
+        JWT_SECRET: ${env:JWT_SECRET}
+
+    functions:
+      api:
+        handler: dist/lambda.handler
+        events:
+          - http:
+              path: /{proxy+}
+              method: ANY
+              cors: true
+
+    plugins:
+      - serverless-offline
+    ```
+
+    ### Lambda Handler
+
+    ```ts
+    // src/lambda.ts
+    import { createServer, proxy } from 'aws-serverless-express';
+    import { Context, APIGatewayProxyEvent } from 'aws-lambda';
+    import app from './app';
+
+    const server = createServer(app);
+
+    export const handler = (event: APIGatewayProxyEvent, context: Context) => {
+      return proxy(server, event, context, 'PROMISE').promise;
+    };
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ### AWS SAM Template
+
+    ```yaml
+    # template.yaml
+    AWSTemplateFormatVersion: '2010-09-09'
+    Transform: AWS::Serverless-2016-10-31
+
+    Globals:
+      Function:
+        Timeout: 30
+        Environment:
+          Variables:
+            GEMINI_API_KEY: !Ref GeminiApiKey
+
+    Parameters:
+      GeminiApiKey:
+        Type: String
+        NoEcho: true
+
+    Resources:
+      GenkitApi:
+        Type: AWS::Serverless::Function
+        Properties:
+          CodeUri: src/
+          Handler: lambda_handler.handler
+          Runtime: python3.11
+          Events:
+            Api:
+              Type: Api
+              Properties:
+                Path: /{proxy+}
+                Method: ANY
+    ```
+
+    ### Lambda Handler
+
+    ```python
+    # lambda_handler.py
+    from mangum import Mangum
+    from main import app
+
+    handler = Mangum(app)
+    ```
+  </TabItem>
+</Tabs>
+
+## Production Best Practices
+
+### Security
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Security middleware for Express
+    import helmet from 'helmet';
+    import rateLimit from 'express-rate-limit';
+    import cors from 'cors';
+
+    const app = express();
+
+    // Security headers
+    app.use(helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "https:"],
+        },
+      },
+    }));
+
+    // Rate limiting
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100, // limit each IP to 100 requests per windowMs
+      message: 'Too many requests from this IP',
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    app.use('/api/', limiter);
+
+    // CORS configuration
+    app.use(cors({
+      origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+      credentials: true,
+      optionsSuccessStatus: 200,
+    }));
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Security middleware for Gin
+    import (
+        "github.com/gin-contrib/cors"
+        "github.com/gin-contrib/secure"
+        "golang.org/x/time/rate"
+    )
+
+    func setupSecurity(r *gin.Engine) {
+        // Security headers
+        r.Use(secure.New(secure.Config{
+            SSLRedirect:          true,
+            STSSeconds:           31536000,
+            STSIncludeSubdomains: true,
+            FrameDeny:            true,
+            ContentTypeNosniff:   true,
+            BrowserXssFilter:     true,
+        }))
+
+        // CORS
+        r.Use(cors.New(cors.Config{
+            AllowOrigins:     []string{"https://yourdomain.com"},
+            AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
+            AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+            ExposeHeaders:    []string{"Content-Length"},
+            AllowCredentials: true,
+            MaxAge:           12 * time.Hour,
+        }))
+
+        // Rate limiting
+        limiter := rate.NewLimiter(rate.Every(time.Minute), 60)
+        r.Use(func(c *gin.Context) {
+            if !limiter.Allow() {
+                c.JSON(429, gin.H{"error": "Rate limit exceeded"})
+                c.Abort()
+                return
+            }
+            c.Next()
+        })
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Security middleware for FastAPI
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+
+    app = FastAPI()
+
+    # Rate limiting
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # Trusted hosts
+    app.add_middleware(
+        TrustedHostMiddleware, 
+        allowed_hosts=["yourdomain.com", "*.yourdomain.com"]
+    )
+
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://yourdomain.com"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/api/endpoint")
+    @limiter.limit("60/minute")
+    async def protected_endpoint(request: Request):
+        return {"message": "Protected endpoint"}
+    ```
+  </TabItem>
+</Tabs>
+
+### Monitoring and Logging
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Structured logging with Winston
+    import winston from 'winston';
+
+    const logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+      ),
+      defaultMeta: { service: 'genkit-app' },
+      transports: [
+        new winston.transports.File({ filename: 'error.log', level: 'error' }),
+        new winston.transports.File({ filename: 'combined.log' }),
+      ],
+    });
+
+    if (process.env.NODE_ENV !== 'production') {
+      logger.add(new winston.transports.Console({
+        format: winston.format.simple()
+      }));
+    }
+
+    // Request logging middleware
+    app.use((req, res, next) => {
+      const start = Date.now();
+      res.on('finish', () => {
+        const duration = Date.now() - start;
+        logger.info('HTTP Request', {
+          method: req.method,
+          url: req.url,
+          status: res.statusCode,
+          duration,
+          userAgent: req.get('User-Agent'),
+        });
+      });
+      next();
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Structured logging with logrus
+    import (
+        "github.com/sirupsen/logrus"
+        "github.com/gin-gonic/gin"
+        "time"
+    )
+
+    func setupLogging() *logrus.Logger {
+        logger := logrus.New()
+        
+        if os.Getenv("GO_ENV") == "production" {
+            logger.SetFormatter(&logrus.JSONFormatter{})
+            logger.SetLevel(logrus.InfoLevel)
+        } else {
+            logger.SetFormatter(&logrus.TextFormatter{})
+            logger.SetLevel(logrus.DebugLevel)
+        }
+        
+        return logger
+    }
+
+    // Request logging middleware
+    func LoggingMiddleware(logger *logrus.Logger) gin.HandlerFunc {
+        return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+            logger.WithFields(logrus.Fields{
+                "method":     param.Method,
+                "path":       param.Path,
+                "status":     param.StatusCode,
+                "duration":   param.Latency,
+                "client_ip":  param.ClientIP,
+                "user_agent": param.Request.UserAgent(),
+            }).Info("HTTP Request")
+            return ""
+        })
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Structured logging with structlog
+    import structlog
+    import logging
+    from fastapi import Request
+    import time
+
+    # Configure structured logging
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer()
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    logger = structlog.get_logger()
+
+    # Request logging middleware
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        start_time = time.time()
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        
+        logger.info(
+            "HTTP Request",
+            method=request.method,
+            url=str(request.url),
+            status_code=response.status_code,
+            process_time=process_time,
+            client_ip=request.client.host,
+            user_agent=request.headers.get("user-agent"),
+        )
+        
+        return response
+    ```
+  </TabItem>
+</Tabs>
+
+### Health Checks
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Health check endpoint
+    app.get('/health', async (req, res) => {
+      const healthCheck = {
+        uptime: process.uptime(),
+        message: 'OK',
+        timestamp: Date.now(),
+        checks: {
+          database: 'OK',
+          redis: 'OK',
+          external_api: 'OK',
+        },
+      };
+
+      try {
+        // Check database connection
+        await db.ping();
+        
+        // Check external API
+        const apiResponse = await fetch('https://api.example.com/health');
+        if (!apiResponse.ok) {
+          healthCheck.checks.external_api = 'FAIL';
+        }
+        
+        res.status(200).json(healthCheck);
+      } catch (error) {
+        healthCheck.message = 'ERROR';
+        healthCheck.checks.database = 'FAIL';
+        res.status(503).json(healthCheck);
+      }
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Health check handler
+    func healthCheck(c *gin.Context) {
+        healthStatus := gin.H{
+            "status":    "OK",
+            "timestamp": time.Now().Unix(),
+            "uptime":    time.Since(startTime).Seconds(),
+            "checks": gin.H{
+                "database":     "OK",
+                "external_api": "OK",
+            },
+        }
+
+        // Check database connection
+        if err := db.Ping(); err != nil {
+            healthStatus["checks"].(gin.H)["database"] = "FAIL"
+            healthStatus["status"] = "ERROR"
+            c.JSON(503, healthStatus)
+            return
+        }
+
+        // Check external API
+        resp, err := http.Get("https://api.example.com/health")
+        if err != nil || resp.StatusCode != 200 {
+            healthStatus["checks"].(gin.H)["external_api"] = "FAIL"
+        }
+
+        c.JSON(200, healthStatus)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Health check endpoint
+    import time
+    import httpx
+    from datetime import datetime
+
+    start_time = time.time()
+
+    @app.get("/health")
+    async def health_check():
+        health_status = {
+            "status": "OK",
+            "timestamp": datetime.utcnow().isoformat(),
+            "uptime": time.time() - start_time,
+            "checks": {
+                "database": "OK",
+                "external_api": "OK",
+            },
+        }
+
+        try:
+            # Check database connection
+            await database.execute("SELECT 1")
+            
+            # Check external API
+            async with httpx.AsyncClient() as client:
+                response = await client.get("https://api.example.com/health")
+                if response.status_code != 200:
+                    health_status["checks"]["external_api"] = "FAIL"
+            
+            return health_status
+        except Exception as e:
+            health_status["status"] = "ERROR"
+            health_status["checks"]["database"] = "FAIL"
+            raise HTTPException(status_code=503, detail=health_status)
+    ```
+  </TabItem>
+</Tabs>
+
+## Performance Optimization
+
+### Caching Strategies
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Redis caching
+    import Redis from 'ioredis';
+
+    const redis = new Redis(process.env.REDIS_URL);
+
+    // Cache middleware
+    const cache = (duration: number) => {
+      return async (req: Request, res: Response, next: NextFunction) => {
+        const key = `cache:${req.originalUrl}`;
+        
+        try {
+          const cached = await redis.get(key);
+          if (cached) {
+            return res.json(JSON.parse(cached));
+          }
+          
+          // Override res.json to cache the response
+          const originalJson = res.json;
+          res.json = function(data) {
+            redis.setex(key, duration, JSON.stringify(data));
+            return originalJson.call(this, data);
+          };
+          
+          next();
+        } catch (error) {
+          next();
+        }
+      };
+    };
+
+    // Usage
+    app.get('/api/expensive-operation', cache(300), async (req, res) => {
+      const result = await performExpensiveOperation();
+      res.json(result);
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Redis caching with go-redis
+    import (
+        "github.com/go-redis/redis/v8"
+        "encoding/json"
+        "time"
+    )
+
+    func cacheMiddleware(rdb *redis.Client, duration time.Duration) gin.HandlerFunc {
+        return func(c *gin.Context) {
+            key := "cache:" + c.Request.URL.Path
+            
+            // Try to get from cache
+            cached, err := rdb.Get(c, key).Result()
+            if err == nil {
+                var data interface{}
+                if json.Unmarshal([]byte(cached), &data) == nil {
+                    c.JSON(200, data)
+                    c.Abort()
+                    return
+                }
+            }
+            
+            // Continue to handler
+            c.Next()
+            
+            // Cache the response if successful
+            if c.Writer.Status() == 200 {
+                if data, exists := c.Get("response"); exists {
+                    if jsonData, err := json.Marshal(data); err == nil {
+                        rdb.Set(c, key, jsonData, duration)
+                    }
+                }
+            }
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Redis caching with aioredis
+    import aioredis
+    import json
+    from functools import wraps
+
+    redis = aioredis.from_url("redis://localhost")
+
+    def cache(duration: int):
+        def decorator(func):
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                # Generate cache key
+                key = f"cache:{func.__name__}:{hash(str(args) + str(kwargs))}"
+                
+                # Try to get from cache
+                cached = await redis.get(key)
+                if cached:
+                    return json.loads(cached)
+                
+                # Execute function
+                result = await func(*args, **kwargs)
+                
+                # Cache result
+                await redis.setex(key, duration, json.dumps(result))
+                
+                return result
+            return wrapper
+        return decorator
+
+    @app.get("/api/expensive-operation")
+    @cache(300)  # Cache for 5 minutes
+    async def expensive_operation():
+        # Perform expensive operation
+        result = await perform_expensive_operation()
+        return result
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+- Learn about [observability and monitoring](/unified-docs/observability-monitoring) to track your deployed applications
+- Explore [error handling](/unified-docs/error-handling) for robust production applications
+- See [creating flows](/unified-docs/creating-flows) to build scalable AI workflows
+- Check out [framework integrations](/unified-docs/frameworks/express) for specific deployment patterns

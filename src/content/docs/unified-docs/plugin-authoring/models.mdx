@@ -1,0 +1,1120 @@
+---
+title: Writing Model Plugins
+description: Learn how to create Genkit model plugins across JavaScript, Go, and Python to integrate new generative AI models with comprehensive examples and best practices.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Model plugins add generative AI models to the Genkit registry. A model represents any generative model capable of receiving a prompt as input and generating text, media, or data as output. This guide covers creating model plugins across all supported languages.
+
+## Model Plugin Architecture
+
+A model plugin consists of three main components:
+
+1. **Metadata**: Declares the model's capabilities (multiturn, media, tools, etc.)
+2. **Configuration Schema**: Defines model-specific parameters and options
+3. **Generation Function**: Transforms requests/responses between Genkit and the model API
+
+## Basic Model Plugin
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    import { Genkit, z } from 'genkit';
+    import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
+    import { GenerationCommonConfigSchema } from 'genkit/model';
+
+    // Define model configuration schema
+    const MyModelConfigSchema = GenerationCommonConfigSchema.extend({
+      customParam: z.string().optional(),
+      temperature: z.number().min(0).max(2).default(0.7),
+      maxTokens: z.number().positive().default(1000),
+    });
+
+    type MyModelConfig = z.infer<typeof MyModelConfigSchema>;
+
+    interface MyPluginOptions {
+      apiKey?: string;
+      baseURL?: string;
+    }
+
+    export function myModelPlugin(options?: MyPluginOptions): GenkitPlugin {
+      return genkitPlugin('myModel', async (ai: Genkit) => {
+        const apiKey = options?.apiKey || process.env.MY_MODEL_API_KEY;
+        const baseURL = options?.baseURL || 'https://api.mymodel.com';
+
+        if (!apiKey) {
+          throw new Error('API key required');
+        }
+
+        // Create API client
+        const client = new MyModelAPIClient({ apiKey, baseURL });
+
+        // Define the model
+        ai.defineModel({
+          name: 'myModel/text-generator',
+          label: 'My Custom Text Generator',
+          versions: ['v1', 'latest'],
+          supports: {
+            multiturn: true,
+            media: false,
+            tools: true,
+            systemRole: true,
+            output: ['text', 'json'],
+          },
+          configSchema: MyModelConfigSchema,
+        }, async (request) => {
+          // Transform Genkit request to API format
+          const apiRequest = await transformRequest(request, client);
+          
+          // Call the model API
+          const apiResponse = await client.generate(apiRequest);
+          
+          // Transform API response to Genkit format
+          return transformResponse(apiResponse);
+        });
+      });
+    }
+
+    // Request transformation
+    async function transformRequest(request: any, client: any) {
+      const config = request.config as MyModelConfig;
+      
+      return {
+        messages: request.messages.map((msg: any) => ({
+          role: msg.role,
+          content: msg.content.map((part: any) => part.text).join(''),
+        })),
+        temperature: config.temperature,
+        max_tokens: config.maxTokens,
+        custom_param: config.customParam,
+      };
+    }
+
+    // Response transformation
+    function transformResponse(apiResponse: any) {
+      return {
+        candidates: [{
+          message: {
+            role: 'model',
+            content: [{ text: apiResponse.text }],
+          },
+          finishReason: apiResponse.finish_reason || 'stop',
+        }],
+        usage: {
+          inputTokens: apiResponse.usage?.prompt_tokens || 0,
+          outputTokens: apiResponse.usage?.completion_tokens || 0,
+          totalTokens: apiResponse.usage?.total_tokens || 0,
+        },
+      };
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    package mymodelplugin
+
+    import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "os"
+
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+    )
+
+    const ProviderID = "myModel"
+
+    // MyModelConfig defines configuration options
+    type MyModelConfig struct {
+        ai.GenerationCommonConfig
+        CustomParam string  `json:"customParam,omitempty"`
+        Temperature float64 `json:"temperature,omitempty"`
+        MaxTokens   int     `json:"maxTokens,omitempty"`
+    }
+
+    // MyModelPlugin implements the genkit.Plugin interface
+    type MyModelPlugin struct {
+        APIKey  string
+        BaseURL string
+    }
+
+    func (p *MyModelPlugin) Name() string {
+        return ProviderID
+    }
+
+    func (p *MyModelPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
+        // Set defaults from environment
+        if p.APIKey == "" {
+            p.APIKey = os.Getenv("MY_MODEL_API_KEY")
+        }
+        if p.BaseURL == "" {
+            p.BaseURL = "https://api.mymodel.com"
+        }
+
+        if p.APIKey == "" {
+            return fmt.Errorf("API key required")
+        }
+
+        // Create API client
+        client := NewMyModelAPIClient(p.APIKey, p.BaseURL)
+
+        // Define the model
+        err := g.DefineModel(ProviderID, "text-generator",
+            &ai.ModelInfo{
+                Label: "My Custom Text Generator",
+                Supports: &ai.ModelSupports{
+                    Multiturn:  true,
+                    Media:      false,
+                    Tools:      true,
+                    SystemRole: true,
+                },
+                Versions: []string{"v1", "latest"},
+            },
+            func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+                // Parse configuration
+                var config MyModelConfig
+                if req.Config != nil {
+                    if typedConfig, ok := req.Config.(*MyModelConfig); ok {
+                        config = *typedConfig
+                    }
+                }
+
+                // Set defaults
+                if config.Temperature == 0 {
+                    config.Temperature = 0.7
+                }
+                if config.MaxTokens == 0 {
+                    config.MaxTokens = 1000
+                }
+
+                // Transform request
+                apiRequest, err := transformRequest(req, config)
+                if err != nil {
+                    return nil, fmt.Errorf("failed to transform request: %w", err)
+                }
+
+                // Call API
+                apiResponse, err := client.Generate(ctx, apiRequest)
+                if err != nil {
+                    return nil, fmt.Errorf("API call failed: %w", err)
+                }
+
+                // Transform response
+                return transformResponse(apiResponse)
+            },
+        )
+
+        return err
+    }
+
+    // API client interface
+    type MyModelAPIClient struct {
+        APIKey  string
+        BaseURL string
+    }
+
+    func NewMyModelAPIClient(apiKey, baseURL string) *MyModelAPIClient {
+        return &MyModelAPIClient{
+            APIKey:  apiKey,
+            BaseURL: baseURL,
+        }
+    }
+
+    func (c *MyModelAPIClient) Generate(ctx context.Context, req *APIRequest) (*APIResponse, error) {
+        // Implementation of API call
+        // This would make actual HTTP requests to your model API
+        return &APIResponse{
+            Text:         "Generated response",
+            FinishReason: "stop",
+            Usage: &Usage{
+                PromptTokens:     10,
+                CompletionTokens: 20,
+                TotalTokens:      30,
+            },
+        }, nil
+    }
+
+    // API request/response types
+    type APIRequest struct {
+        Messages    []Message `json:"messages"`
+        Temperature float64   `json:"temperature"`
+        MaxTokens   int       `json:"max_tokens"`
+        CustomParam string    `json:"custom_param,omitempty"`
+    }
+
+    type APIResponse struct {
+        Text         string `json:"text"`
+        FinishReason string `json:"finish_reason"`
+        Usage        *Usage `json:"usage,omitempty"`
+    }
+
+    type Message struct {
+        Role    string `json:"role"`
+        Content string `json:"content"`
+    }
+
+    type Usage struct {
+        PromptTokens     int `json:"prompt_tokens"`
+        CompletionTokens int `json:"completion_tokens"`
+        TotalTokens      int `json:"total_tokens"`
+    }
+
+    // Transform Genkit request to API format
+    func transformRequest(req *ai.ModelRequest, config MyModelConfig) (*APIRequest, error) {
+        var messages []Message
+        
+        for _, msg := range req.Messages {
+            content := ""
+            for _, part := range msg.Content {
+                if part.Text != "" {
+                    content += part.Text
+                }
+            }
+            
+            messages = append(messages, Message{
+                Role:    string(msg.Role),
+                Content: content,
+            })
+        }
+
+        return &APIRequest{
+            Messages:    messages,
+            Temperature: config.Temperature,
+            MaxTokens:   config.MaxTokens,
+            CustomParam: config.CustomParam,
+        }, nil
+    }
+
+    // Transform API response to Genkit format
+    func transformResponse(apiResp *APIResponse) (*ai.ModelResponse, error) {
+        finishReason := ai.FinishReasonStop
+        if apiResp.FinishReason == "length" {
+            finishReason = ai.FinishReasonLength
+        }
+
+        response := &ai.ModelResponse{
+            Candidates: []*ai.Candidate{
+                {
+                    Message: &ai.Message{
+                        Content: []*ai.Part{ai.NewTextPart(apiResp.Text)},
+                        Role:    ai.RoleModel,
+                    },
+                    FinishReason: finishReason,
+                },
+            },
+        }
+
+        if apiResp.Usage != nil {
+            response.Usage = &ai.Usage{
+                InputTokens:  apiResp.Usage.PromptTokens,
+                OutputTokens: apiResp.Usage.CompletionTokens,
+                TotalTokens:  apiResp.Usage.TotalTokens,
+            }
+        }
+
+        return response, nil
+    }
+
+    // Helper functions for users
+    func Model(g *genkit.Genkit, name string) *ai.Model {
+        return genkit.LookupModel(g, ProviderID, name)
+    }
+
+    func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
+        return ai.NewModelRef(fmt.Sprintf("%s/%s", ProviderID, name), config)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    import os
+    import asyncio
+    from typing import Dict, Any, List, Optional, AsyncGenerator
+    from dataclasses import dataclass
+    from genkit.ai import Genkit
+    from genkit.plugins.base import Plugin
+
+    @dataclass
+    class MyModelConfig:
+        """Configuration for MyModel"""
+        custom_param: Optional[str] = None
+        temperature: float = 0.7
+        max_tokens: int = 1000
+        top_p: float = 1.0
+        frequency_penalty: float = 0.0
+
+    class MyModelPlugin(Plugin):
+        def __init__(
+            self, 
+            api_key: Optional[str] = None,
+            base_url: Optional[str] = None,
+            **kwargs
+        ):
+            self.api_key = api_key or os.getenv("MY_MODEL_API_KEY")
+            self.base_url = base_url or "https://api.mymodel.com"
+            
+            if not self.api_key:
+                raise ValueError("API key required")
+            
+            super().__init__(provider_id="myModel", **kwargs)
+            
+            # Create API client
+            self.client = MyModelAPIClient(self.api_key, self.base_url)
+
+        def initialize(self, ai: Genkit) -> None:
+            """Initialize the plugin and register models"""
+            
+            ai.define_model(
+                name=f"{self.provider_id}/text-generator",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "custom_param": {"type": "string"},
+                        "temperature": {"type": "number", "minimum": 0, "maximum": 2, "default": 0.7},
+                        "max_tokens": {"type": "integer", "minimum": 1, "default": 1000},
+                        "top_p": {"type": "number", "minimum": 0, "maximum": 1, "default": 1.0},
+                        "frequency_penalty": {"type": "number", "minimum": -2, "maximum": 2, "default": 0.0},
+                    },
+                },
+                supports={
+                    "multiturn": True,
+                    "media": False,
+                    "tools": True,
+                    "system_role": True,
+                    "output": ["text", "json"],
+                },
+                generate_fn=self._generate_text,
+                stream_fn=self._stream_text,
+            )
+
+        async def _generate_text(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate text using the model"""
+            
+            # Parse configuration
+            config = MyModelConfig(**request.get("config", {}))
+            
+            # Transform request
+            api_request = self._transform_request(request, config)
+            
+            # Call API
+            api_response = await self.client.generate(api_request)
+            
+            # Transform response
+            return self._transform_response(api_response)
+
+        async def _stream_text(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+            """Stream text generation"""
+            
+            config = MyModelConfig(**request.get("config", {}))
+            api_request = self._transform_request(request, config)
+            
+            async for chunk in self.client.stream_generate(api_request):
+                yield self._transform_stream_chunk(chunk)
+
+        def _transform_request(self, request: Dict[str, Any], config: MyModelConfig) -> Dict[str, Any]:
+            """Transform Genkit request to API format"""
+            
+            messages = []
+            for msg in request.get("messages", []):
+                content = ""
+                for part in msg.get("content", []):
+                    if "text" in part:
+                        content += part["text"]
+                
+                messages.append({
+                    "role": msg["role"],
+                    "content": content,
+                })
+            
+            return {
+                "messages": messages,
+                "temperature": config.temperature,
+                "max_tokens": config.max_tokens,
+                "top_p": config.top_p,
+                "frequency_penalty": config.frequency_penalty,
+                "custom_param": config.custom_param,
+            }
+
+        def _transform_response(self, api_response: Dict[str, Any]) -> Dict[str, Any]:
+            """Transform API response to Genkit format"""
+            
+            return {
+                "candidates": [{
+                    "message": {
+                        "role": "model",
+                        "content": [{"text": api_response["text"]}],
+                    },
+                    "finish_reason": api_response.get("finish_reason", "stop"),
+                }],
+                "usage": {
+                    "input_tokens": api_response.get("usage", {}).get("prompt_tokens", 0),
+                    "output_tokens": api_response.get("usage", {}).get("completion_tokens", 0),
+                    "total_tokens": api_response.get("usage", {}).get("total_tokens", 0),
+                },
+            }
+
+        def _transform_stream_chunk(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
+            """Transform streaming chunk to Genkit format"""
+            
+            return {
+                "candidates": [{
+                    "message": {
+                        "role": "model",
+                        "content": [{"text": chunk.get("delta", "")}],
+                    },
+                    "finish_reason": chunk.get("finish_reason"),
+                }],
+            }
+
+    class MyModelAPIClient:
+        """API client for MyModel service"""
+        
+        def __init__(self, api_key: str, base_url: str):
+            self.api_key = api_key
+            self.base_url = base_url
+
+        async def generate(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate text (non-streaming)"""
+            # Implementation would make actual HTTP request
+            # This is a mock response
+            return {
+                "text": "Generated response text",
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
+            }
+
+        async def stream_generate(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+            """Generate text (streaming)"""
+            # Implementation would make actual streaming HTTP request
+            # This is a mock streaming response
+            words = ["Generated", " response", " text"]
+            for word in words:
+                yield {
+                    "delta": word,
+                    "finish_reason": None,
+                }
+            
+            yield {
+                "delta": "",
+                "finish_reason": "stop",
+            }
+
+    # Helper functions for users
+    def create_model_reference(name: str, config: Optional[MyModelConfig] = None) -> str:
+        """Create a model reference for use in generate calls"""
+        return f"myModel/{name}"
+    ```
+  </TabItem>
+</Tabs>
+
+## Advanced Model Features
+
+### Supporting Tool Calling
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // In your model definition
+    ai.defineModel({
+      name: 'myModel/tool-capable',
+      supports: {
+        tools: true, // Enable tool calling support
+        // ... other capabilities
+      },
+      configSchema: MyModelConfigSchema,
+    }, async (request) => {
+      const config = request.config as MyModelConfig;
+      
+      // Check if tools are provided
+      const tools = request.tools || [];
+      
+      const apiRequest = {
+        messages: transformMessages(request.messages),
+        tools: tools.map(tool => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema,
+          },
+        })),
+        tool_choice: request.toolChoice || 'auto',
+        temperature: config.temperature,
+      };
+
+      const apiResponse = await client.generate(apiRequest);
+      
+      return {
+        candidates: [{
+          message: {
+            role: 'model',
+            content: apiResponse.content ? [{ text: apiResponse.content }] : [],
+            toolCalls: apiResponse.tool_calls?.map(call => ({
+              id: call.id,
+              name: call.function.name,
+              args: JSON.parse(call.function.arguments),
+            })) || [],
+          },
+          finishReason: apiResponse.finish_reason || 'stop',
+        }],
+        usage: apiResponse.usage,
+      };
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // In your model generation function
+    func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+        // Handle tools if provided
+        var apiTools []APITool
+        for _, tool := range req.Tools {
+            apiTools = append(apiTools, APITool{
+                Type: "function",
+                Function: APIFunction{
+                    Name:        tool.Name,
+                    Description: tool.Description,
+                    Parameters:  tool.InputSchema,
+                },
+            })
+        }
+
+        apiRequest := &APIRequest{
+            Messages:    transformMessages(req.Messages),
+            Tools:       apiTools,
+            ToolChoice:  req.ToolChoice,
+            Temperature: config.Temperature,
+        }
+
+        apiResponse, err := client.Generate(ctx, apiRequest)
+        if err != nil {
+            return nil, err
+        }
+
+        // Transform tool calls
+        var toolCalls []*ai.ToolCall
+        for _, call := range apiResponse.ToolCalls {
+            var args map[string]interface{}
+            if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+                return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+            }
+            
+            toolCalls = append(toolCalls, &ai.ToolCall{
+                ID:   call.ID,
+                Name: call.Function.Name,
+                Args: args,
+            })
+        }
+
+        return &ai.ModelResponse{
+            Candidates: []*ai.Candidate{
+                {
+                    Message: &ai.Message{
+                        Content:   transformContent(apiResponse.Content),
+                        Role:      ai.RoleModel,
+                        ToolCalls: toolCalls,
+                    },
+                    FinishReason: transformFinishReason(apiResponse.FinishReason),
+                },
+            },
+            Usage: transformUsage(apiResponse.Usage),
+        }, nil
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    async def _generate_text(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate text with tool calling support"""
+        
+        config = MyModelConfig(**request.get("config", {}))
+        
+        # Handle tools
+        tools = []
+        for tool in request.get("tools", []):
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                },
+            })
+        
+        api_request = {
+            "messages": self._transform_messages(request.get("messages", [])),
+            "tools": tools,
+            "tool_choice": request.get("tool_choice", "auto"),
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
+        
+        api_response = await self.client.generate(api_request)
+        
+        # Transform tool calls
+        tool_calls = []
+        for call in api_response.get("tool_calls", []):
+            tool_calls.append({
+                "id": call["id"],
+                "name": call["function"]["name"],
+                "args": json.loads(call["function"]["arguments"]),
+            })
+        
+        return {
+            "candidates": [{
+                "message": {
+                    "role": "model",
+                    "content": [{"text": api_response.get("content", "")}] if api_response.get("content") else [],
+                    "tool_calls": tool_calls,
+                },
+                "finish_reason": api_response.get("finish_reason", "stop"),
+            }],
+            "usage": api_response.get("usage", {}),
+        }
+    ```
+  </TabItem>
+</Tabs>
+
+### Supporting Media Input
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    ai.defineModel({
+      name: 'myModel/vision-model',
+      supports: {
+        media: true, // Enable media support
+        // ... other capabilities
+      },
+      configSchema: MyModelConfigSchema,
+    }, async (request) => {
+      const messages = request.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content.map(part => {
+          if (part.text) {
+            return { type: 'text', text: part.text };
+          } else if (part.media) {
+            return {
+              type: 'image_url',
+              image_url: {
+                url: part.media.url,
+                detail: 'auto',
+              },
+            };
+          }
+          return null;
+        }).filter(Boolean),
+      }));
+
+      const apiResponse = await client.generate({
+        messages,
+        temperature: request.config.temperature,
+      });
+
+      return transformResponse(apiResponse);
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // In your request transformation function
+    func transformMessages(messages []*ai.Message) []APIMessage {
+        var apiMessages []APIMessage
+        
+        for _, msg := range messages {
+            var content []APIContent
+            
+            for _, part := range msg.Content {
+                if part.Text != "" {
+                    content = append(content, APIContent{
+                        Type: "text",
+                        Text: part.Text,
+                    })
+                } else if part.Media != nil {
+                    content = append(content, APIContent{
+                        Type: "image_url",
+                        ImageURL: &APIImageURL{
+                            URL:    part.Media.URL,
+                            Detail: "auto",
+                        },
+                    })
+                }
+            }
+            
+            apiMessages = append(apiMessages, APIMessage{
+                Role:    string(msg.Role),
+                Content: content,
+            })
+        }
+        
+        return apiMessages
+    }
+
+    type APIContent struct {
+        Type     string        `json:"type"`
+        Text     string        `json:"text,omitempty"`
+        ImageURL *APIImageURL  `json:"image_url,omitempty"`
+    }
+
+    type APIImageURL struct {
+        URL    string `json:"url"`
+        Detail string `json:"detail"`
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    def _transform_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Transform messages with media support"""
+        
+        api_messages = []
+        for msg in messages:
+            content = []
+            
+            for part in msg.get("content", []):
+                if "text" in part:
+                    content.append({
+                        "type": "text",
+                        "text": part["text"],
+                    })
+                elif "media" in part:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": part["media"]["url"],
+                            "detail": "auto",
+                        },
+                    })
+            
+            api_messages.append({
+                "role": msg["role"],
+                "content": content,
+            })
+        
+        return api_messages
+    ```
+  </TabItem>
+</Tabs>
+
+## Best Practices
+
+### Error Handling
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    import { GenkitError } from 'genkit';
+
+    // In your generation function
+    try {
+      const apiResponse = await client.generate(apiRequest);
+      return transformResponse(apiResponse);
+    } catch (error) {
+      if (error.status === 429) {
+        throw new GenkitError({
+          source: 'myModel',
+          status: 'RESOURCE_EXHAUSTED',
+          message: 'Rate limit exceeded',
+        });
+      } else if (error.status === 401) {
+        throw new GenkitError({
+          source: 'myModel',
+          status: 'UNAUTHENTICATED',
+          message: 'Invalid API key',
+        });
+      } else {
+        throw new GenkitError({
+          source: 'myModel',
+          status: 'INTERNAL',
+          message: `Model API error: ${error.message}`,
+        });
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    import "google.golang.org/grpc/codes"
+
+    // In your generation function
+    apiResponse, err := client.Generate(ctx, apiRequest)
+    if err != nil {
+        // Handle specific error types
+        if isRateLimitError(err) {
+            return nil, fmt.Errorf("rate limit exceeded: %w", err)
+        } else if isAuthError(err) {
+            return nil, fmt.Errorf("authentication failed: %w", err)
+        } else {
+            return nil, fmt.Errorf("model API error: %w", err)
+        }
+    }
+
+    func isRateLimitError(err error) bool {
+        // Check if error indicates rate limiting
+        return strings.Contains(err.Error(), "rate limit") || 
+               strings.Contains(err.Error(), "429")
+    }
+
+    func isAuthError(err error) bool {
+        // Check if error indicates authentication failure
+        return strings.Contains(err.Error(), "unauthorized") || 
+               strings.Contains(err.Error(), "401")
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    import httpx
+    from genkit.exceptions import GenkitError
+
+    async def _generate_text(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            api_response = await self.client.generate(api_request)
+            return self._transform_response(api_response)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                raise GenkitError(
+                    source="myModel",
+                    status="RESOURCE_EXHAUSTED",
+                    message="Rate limit exceeded"
+                )
+            elif e.response.status_code == 401:
+                raise GenkitError(
+                    source="myModel",
+                    status="UNAUTHENTICATED", 
+                    message="Invalid API key"
+                )
+            else:
+                raise GenkitError(
+                    source="myModel",
+                    status="INTERNAL",
+                    message=f"Model API error: {e.response.text}"
+                )
+        except Exception as e:
+            raise GenkitError(
+                source="myModel",
+                status="INTERNAL",
+                message=f"Unexpected error: {str(e)}"
+            )
+    ```
+  </TabItem>
+</Tabs>
+
+### Configuration Validation
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    const MyModelConfigSchema = GenerationCommonConfigSchema.extend({
+      temperature: z.number().min(0).max(2).default(0.7),
+      maxTokens: z.number().positive().max(4096).default(1000),
+      topP: z.number().min(0).max(1).default(1.0),
+      customParam: z.string().optional(),
+    });
+
+    // In your generation function
+    const config = MyModelConfigSchema.parse(request.config || {});
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    func validateConfig(config *MyModelConfig) error {
+        if config.Temperature < 0 || config.Temperature > 2 {
+            return fmt.Errorf("temperature must be between 0 and 2")
+        }
+        if config.MaxTokens <= 0 || config.MaxTokens > 4096 {
+            return fmt.Errorf("maxTokens must be between 1 and 4096")
+        }
+        return nil
+    }
+
+    // In your generation function
+    if err := validateConfig(&config); err != nil {
+        return nil, fmt.Errorf("invalid configuration: %w", err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    from pydantic import BaseModel, Field, validator
+
+    class MyModelConfig(BaseModel):
+        temperature: float = Field(default=0.7, ge=0, le=2)
+        max_tokens: int = Field(default=1000, gt=0, le=4096)
+        top_p: float = Field(default=1.0, ge=0, le=1)
+        
+        @validator('temperature')
+        def validate_temperature(cls, v):
+            if not 0 <= v <= 2:
+                raise ValueError('temperature must be between 0 and 2')
+            return v
+    ```
+  </TabItem>
+</Tabs>
+
+## Testing Your Model Plugin
+
+### Unit Testing
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    import { describe, it, expect, beforeEach } from 'vitest';
+    import { genkit } from 'genkit';
+    import { myModelPlugin } from './my-model-plugin';
+
+    describe('MyModel Plugin', () => {
+      let ai: any;
+
+      beforeEach(async () => {
+        ai = genkit({
+          plugins: [myModelPlugin({ apiKey: 'test-key' })],
+        });
+      });
+
+      it('should generate text', async () => {
+        const response = await ai.generate({
+          model: 'myModel/text-generator',
+          prompt: 'Hello, world!',
+          config: { temperature: 0.5 },
+        });
+
+        expect(response.text).toBeDefined();
+        expect(response.text.length).toBeGreaterThan(0);
+      });
+
+      it('should handle tool calls', async () => {
+        const response = await ai.generate({
+          model: 'myModel/tool-capable',
+          prompt: 'What is the weather like?',
+          tools: [{
+            name: 'get_weather',
+            description: 'Get current weather',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                location: { type: 'string' },
+              },
+            },
+          }],
+        });
+
+        expect(response.toolCalls).toBeDefined();
+      });
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    package mymodelplugin_test
+
+    import (
+        "context"
+        "testing"
+        
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/stretchr/testify/assert"
+        "github.com/stretchr/testify/require"
+    )
+
+    func TestMyModelPlugin(t *testing.T) {
+        ctx := context.Background()
+        
+        // Initialize Genkit with the plugin
+        g, err := genkit.Init(ctx,
+            genkit.WithPlugins(
+                &MyModelPlugin{
+                    APIKey: "test-key",
+                },
+            ),
+        )
+        require.NoError(t, err)
+
+        t.Run("should generate text", func(t *testing.T) {
+            model := genkit.LookupModel(g, "myModel", "text-generator")
+            require.NotNil(t, model)
+
+            req := &ai.ModelRequest{
+                Messages: []*ai.Message{
+                    {
+                        Content: []*ai.Part{ai.NewTextPart("Hello, world!")},
+                        Role:    ai.RoleUser,
+                    },
+                },
+                Config: &MyModelConfig{
+                    Temperature: 0.5,
+                },
+            }
+
+            resp, err := model.Generate(ctx, req, nil)
+            require.NoError(t, err)
+            assert.NotEmpty(t, resp.Candidates)
+            assert.NotEmpty(t, resp.Candidates[0].Message.Content)
+        })
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    import pytest
+    import asyncio
+    from genkit.ai import Genkit
+    from my_model_plugin import MyModelPlugin
+
+    @pytest.fixture
+    async def ai():
+        """Create a Genkit instance with the plugin for testing"""
+        return Genkit(
+            plugins=[
+                MyModelPlugin(api_key="test-key"),
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_text(ai):
+        """Test basic text generation"""
+        response = await ai.generate(
+            model="myModel/text-generator",
+            prompt="Hello, world!",
+            config={"temperature": 0.5},
+        )
+        
+        assert response["text"]
+        assert len(response["text"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_tool_calling(ai):
+        """Test tool calling functionality"""
+        response = await ai.generate(
+            model="myModel/tool-capable",
+            prompt="What is the weather like?",
+            tools=[{
+                "name": "get_weather",
+                "description": "Get current weather",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                    },
+                },
+            }],
+        )
+        
+        assert "tool_calls" in response
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+- Learn about [writing embedder plugins](/unified-docs/plugin-authoring/embedders) for text embedding models
+- Explore [writing retriever plugins](/unified-docs/plugin-authoring/retrievers) for custom data sources
+- See [telemetry plugins](/unified-docs/plugin-authoring/telemetry) for monitoring and observability
+- Check out the [plugin authoring overview](/unified-docs/plugin-authoring/overview) for general plugin concepts

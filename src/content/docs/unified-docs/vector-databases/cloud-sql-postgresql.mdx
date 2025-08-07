@@ -1,0 +1,913 @@
+---
+title: Cloud SQL for PostgreSQL Vector Database
+description: Learn how to use Google Cloud SQL for PostgreSQL with pgvector extension and Genkit across JavaScript, Go, and Python for managed vector storage and semantic search.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Google Cloud SQL for PostgreSQL with the pgvector extension provides a fully managed PostgreSQL database with vector search capabilities. It combines the reliability and scalability of Google Cloud with the power of PostgreSQL and pgvector, making it ideal for production AI applications that need managed vector storage with enterprise-grade features.
+
+## Installation and Setup
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Install the Cloud SQL PostgreSQL plugin:
+
+    ```bash
+    npm install genkitx-cloud-sql-pg
+    ```
+
+    Configure the plugin when initializing Genkit:
+
+    ```ts
+    import { genkit } from 'genkit';
+    import { postgres, PostgresEngine } from 'genkitx-cloud-sql-pg';
+    import { vertexAI } from '@genkit-ai/vertexai';
+
+    // Create PostgresEngine instance
+    const engine = await PostgresEngine.fromInstance(
+      'my-project',
+      'us-central1',
+      'my-instance',
+      'my-database'
+    );
+
+    // Initialize vector store table
+    await engine.initVectorstoreTable('documents', 768, {
+      schemaName: 'public',
+      contentColumn: 'content',
+      embeddingColumn: 'embedding',
+      idColumn: 'id',
+      metadataColumns: [
+        { name: 'title', dataType: 'TEXT' },
+        { name: 'category', dataType: 'TEXT' },
+        { name: 'source', dataType: 'TEXT' },
+      ],
+      metadataJsonColumn: 'metadata',
+      storeMetadata: true,
+      overwriteExisting: false,
+    });
+
+    const ai = genkit({
+      plugins: [
+        vertexAI(),
+        postgres([
+          {
+            tableName: 'documents',
+            engine: engine,
+            embedder: vertexAI.embedder('gemini-embedding-001'),
+            schemaName: 'public',
+            contentColumn: 'content',
+            embeddingColumn: 'embedding',
+            idColumn: 'id',
+            metadataColumns: ['title', 'category', 'source'],
+            metadataJsonColumn: 'metadata',
+          },
+        ]),
+      ],
+    });
+    ```
+
+    ### Prerequisites
+
+    1. **Google Cloud Project**: Set up a Google Cloud project
+    2. **Cloud SQL Instance**: Create a PostgreSQL instance with pgvector extension
+    3. **Authentication**: Configure Google Cloud authentication
+    4. **Network Access**: Configure VPC or authorized networks
+
+    ### Cloud SQL Instance Setup
+
+    ```bash
+    # Create Cloud SQL PostgreSQL instance
+    gcloud sql instances create my-instance \
+      --database-version=POSTGRES_15 \
+      --tier=db-standard-2 \
+      --region=us-central1 \
+      --storage-type=SSD \
+      --storage-size=100GB \
+      --database-flags=shared_preload_libraries=vector
+
+    # Create database
+    gcloud sql databases create my-database --instance=my-instance
+
+    # Enable pgvector extension
+    gcloud sql connect my-instance --user=postgres --database=my-database
+    # Then run: CREATE EXTENSION IF NOT EXISTS vector;
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    For Go applications, you can use Cloud SQL through the Google Cloud SQL Go connector:
+
+    ```bash
+    go get cloud.google.com/go/cloudsqlconn
+    go get github.com/lib/pq
+    go get github.com/pgvector/pgvector-go
+    ```
+
+    ```go
+    package main
+
+    import (
+        "context"
+        "database/sql"
+        "net"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/cloudsql"
+        "github.com/firebase/genkit/go/plugins/vertexai"
+        "cloud.google.com/go/cloudsqlconn"
+    )
+
+    func main() {
+        ctx := context.Background()
+        
+        // Create Cloud SQL connector
+        d, err := cloudsqlconn.NewDialer(ctx)
+        if err != nil {
+            log.Fatal(err)
+        }
+        defer d.Close()
+
+        // Configure database connection
+        dsn := "user=postgres dbname=my-database sslmode=disable"
+        config, err := pq.ParseURL(dsn)
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Connect to Cloud SQL
+        db, err := sql.Open("postgres", config)
+        if err != nil {
+            log.Fatal(err)
+        }
+        defer db.Close()
+
+        // Initialize Genkit
+        g, err := genkit.Init(ctx,
+            genkit.WithPlugins(
+                &vertexai.VertexAI{},
+                &cloudsql.CloudSQL{
+                    Database: db,
+                    Tables: []cloudsql.TableConfig{
+                        {
+                            Name:     "documents",
+                            Embedder: "vertexai/gemini-embedding-001",
+                            Schema: cloudsql.TableSchema{
+                                ContentColumn:   "content",
+                                EmbeddingColumn: "embedding",
+                                IDColumn:        "id",
+                                MetadataColumns: []string{"title", "category", "source"},
+                            },
+                        },
+                    },
+                },
+            ),
+        )
+        if err != nil {
+            log.Fatal(err)
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    For Python applications, install the Cloud SQL connector:
+
+    ```bash
+    pip install cloud-sql-python-connector psycopg2-binary pgvector
+    ```
+
+    ```python
+    import os
+    from google.cloud.sql.connector import Connector
+    import psycopg2
+    from pgvector.psycopg2 import register_vector
+    from genkit.ai import Genkit
+    from genkit.plugins.cloudsql import CloudSQL
+    from genkit.plugins.vertexai import VertexAI
+
+    # Initialize Cloud SQL connector
+    def create_connection():
+        connector = Connector()
+        
+        def getconn():
+            conn = connector.connect(
+                "my-project:us-central1:my-instance",
+                "pg8000",
+                user="postgres",
+                password=os.getenv("DB_PASSWORD"),
+                db="my-database"
+            )
+            register_vector(conn)
+            return conn
+        
+        return getconn
+
+    # Initialize Genkit
+    ai = Genkit(
+        plugins=[
+            VertexAI(),
+            CloudSQL(
+                connection_factory=create_connection(),
+                tables=[
+                    {
+                        "name": "documents",
+                        "embedder": "vertexai/gemini-embedding-001",
+                        "schema": {
+                            "content_column": "content",
+                            "embedding_column": "embedding",
+                            "id_column": "id",
+                            "metadata_columns": ["title", "category", "source"],
+                        },
+                    }
+                ],
+            ),
+        ],
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+## Basic Usage
+
+### Document Indexing
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Index documents with custom metadata handling:
+
+    ```ts
+    import { postgresIndexerRef } from 'genkitx-cloud-sql-pg';
+    import { Document } from 'genkit';
+
+    // Create indexer reference
+    const documentsIndexer = postgresIndexerRef({
+      tableName: 'documents',
+      idColumn: 'id',
+      metadataColumns: ['title', 'category', 'source'],
+    });
+
+    // Prepare documents for indexing
+    const documents: Document[] = [
+      {
+        content: 'Cloud SQL for PostgreSQL provides managed database services with vector capabilities.',
+        metadata: {
+          id: 'doc-1',
+          title: 'Cloud SQL Overview',
+          category: 'database',
+          source: 'documentation',
+          tags: ['cloud', 'sql', 'postgresql'],
+        },
+      },
+      {
+        content: 'Managed databases reduce operational overhead and provide automatic scaling.',
+        metadata: {
+          id: 'doc-2',
+          title: 'Managed Database Benefits',
+          category: 'technology',
+          source: 'blog',
+          tags: ['managed', 'scaling', 'operations'],
+        },
+      },
+    ];
+
+    // Index documents
+    await ai.index({
+      indexer: documentsIndexer,
+      documents,
+      options: {
+        batchSize: 100, // Process documents in batches
+      },
+    });
+
+    // Batch indexing for large datasets
+    const batchSize = 50;
+    for (let i = 0; i < largeDocumentSet.length; i += batchSize) {
+      const batch = largeDocumentSet.slice(i, i + batchSize);
+      await ai.index({
+        indexer: documentsIndexer,
+        documents: batch,
+        options: { batchSize },
+      });
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Index documents with custom metadata handling:
+
+    ```go
+    import (
+        "context"
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+    )
+
+    func indexDocuments(ctx context.Context) error {
+        documents := []ai.Document{
+            {
+                Content: "Cloud SQL for PostgreSQL provides managed database services with vector capabilities.",
+                Metadata: map[string]interface{}{
+                    "id":       "doc-1",
+                    "title":    "Cloud SQL Overview",
+                    "category": "database",
+                    "source":   "documentation",
+                    "tags":     []string{"cloud", "sql", "postgresql"},
+                },
+            },
+            {
+                Content: "Managed databases reduce operational overhead and provide automatic scaling.",
+                Metadata: map[string]interface{}{
+                    "id":       "doc-2",
+                    "title":    "Managed Database Benefits",
+                    "category": "technology",
+                    "source":   "blog",
+                    "tags":     []string{"managed", "scaling", "operations"},
+                },
+            },
+        }
+
+        // Index documents
+        err := genkit.Index(ctx, g,
+            ai.WithIndexer("cloudsql/documents"),
+            ai.WithDocuments(documents),
+            ai.WithOptions(map[string]interface{}{
+                "batchSize": 100,
+            }),
+        )
+        if err != nil {
+            return fmt.Errorf("failed to index documents: %w", err)
+        }
+
+        return nil
+    }
+
+    // Batch indexing function
+    func batchIndexDocuments(ctx context.Context, documents []ai.Document, batchSize int) error {
+        for i := 0; i < len(documents); i += batchSize {
+            end := i + batchSize
+            if end > len(documents) {
+                end = len(documents)
+            }
+            
+            batch := documents[i:end]
+            err := genkit.Index(ctx, g,
+                ai.WithIndexer("cloudsql/documents"),
+                ai.WithDocuments(batch),
+                ai.WithOptions(map[string]interface{}{
+                    "batchSize": batchSize,
+                }),
+            )
+            if err != nil {
+                return fmt.Errorf("failed to index batch: %w", err)
+            }
+        }
+        return nil
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Index documents with custom metadata handling:
+
+    ```python
+    from typing import List, Dict, Any
+
+    # Prepare documents for indexing
+    documents = [
+        {
+            "content": "Cloud SQL for PostgreSQL provides managed database services with vector capabilities.",
+            "metadata": {
+                "id": "doc-1",
+                "title": "Cloud SQL Overview",
+                "category": "database",
+                "source": "documentation",
+                "tags": ["cloud", "sql", "postgresql"],
+            },
+        },
+        {
+            "content": "Managed databases reduce operational overhead and provide automatic scaling.",
+            "metadata": {
+                "id": "doc-2",
+                "title": "Managed Database Benefits",
+                "category": "technology",
+                "source": "blog",
+                "tags": ["managed", "scaling", "operations"],
+            },
+        },
+    ]
+
+    # Index documents
+    async def index_documents(docs: List[Dict[str, Any]], table_name: str = "documents"):
+        try:
+            indexer = f"cloudsql/{table_name}"
+            
+            await ai.index(
+                indexer=indexer,
+                documents=docs,
+                options={"batch_size": 100}
+            )
+            
+            return {"indexed": len(docs), "success": True}
+        except Exception as error:
+            print(f"Indexing failed: {error}")
+            return {"indexed": 0, "success": False}
+
+    # Batch indexing for large datasets
+    async def batch_index_documents(
+        docs: List[Dict[str, Any]], 
+        table_name: str = "documents",
+        batch_size: int = 50
+    ):
+        total_indexed = 0
+        
+        for i in range(0, len(docs), batch_size):
+            batch = docs[i:i + batch_size]
+            
+            try:
+                await ai.index(
+                    indexer=f"cloudsql/{table_name}",
+                    documents=batch,
+                    options={"batch_size": batch_size}
+                )
+                total_indexed += len(batch)
+            except Exception as error:
+                print(f"Batch indexing failed: {error}")
+                break
+        
+        return {"indexed": total_indexed, "success": total_indexed == len(docs)}
+    ```
+  </TabItem>
+</Tabs>
+
+### Document Retrieval
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Retrieve documents with advanced filtering and distance strategies:
+
+    ```ts
+    import { postgresRetrieverRef, DistanceStrategy } from 'genkitx-cloud-sql-pg';
+
+    // Create retriever reference with distance strategy
+    const documentsRetriever = postgresRetrieverRef({
+      tableName: 'documents',
+      idColumn: 'id',
+      metadataColumns: ['title', 'category', 'source'],
+      distanceStrategy: DistanceStrategy.COSINE_DISTANCE,
+    });
+
+    // Basic retrieval
+    const query = "What are managed database benefits?";
+    const docs = await ai.retrieve({
+      retriever: documentsRetriever,
+      query,
+      options: {
+        k: 5, // Number of documents to retrieve (max 1000)
+      },
+    });
+
+    console.log('Retrieved documents:', docs);
+
+    // Advanced retrieval with SQL filtering
+    const filteredDocs = await ai.retrieve({
+      retriever: documentsRetriever,
+      query: "cloud database services",
+      options: {
+        k: 3,
+        filter: "category = 'database' AND source = 'documentation'",
+      },
+    });
+
+    // Complex filtering with multiple conditions
+    const complexDocs = await ai.retrieve({
+      retriever: documentsRetriever,
+      query: "database scaling solutions",
+      options: {
+        k: 10,
+        filter: "category IN ('database', 'technology') AND source != 'deprecated'",
+      },
+    });
+
+    // Different distance strategies
+    const euclideanRetriever = postgresRetrieverRef({
+      tableName: 'documents',
+      distanceStrategy: DistanceStrategy.EUCLIDEAN_DISTANCE,
+    });
+
+    const dotProductRetriever = postgresRetrieverRef({
+      tableName: 'documents',
+      distanceStrategy: DistanceStrategy.DOT_PRODUCT,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Retrieve documents with advanced filtering and distance strategies:
+
+    ```go
+    // Basic retrieval
+    func retrieveDocuments(ctx context.Context, query string) ([]ai.Document, error) {
+        docs, err := genkit.Retrieve(ctx, g,
+            ai.WithRetriever("cloudsql/documents"),
+            ai.WithQuery(query),
+            ai.WithOptions(map[string]interface{}{
+                "k": 5,
+            }),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("retrieval failed: %w", err)
+        }
+
+        return docs, nil
+    }
+
+    // Advanced retrieval with SQL filtering
+    func advancedRetrieve(ctx context.Context, query string, limit int, filter string) ([]ai.Document, error) {
+        docs, err := genkit.Retrieve(ctx, g,
+            ai.WithRetriever("cloudsql/documents"),
+            ai.WithQuery(query),
+            ai.WithOptions(map[string]interface{}{
+                "k":      limit,
+                "filter": filter,
+            }),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("advanced retrieval failed: %w", err)
+        }
+
+        return docs, nil
+    }
+
+    // Complex filtering examples
+    func searchDatabaseDocuments(ctx context.Context, query string) ([]ai.Document, error) {
+        filter := "category = 'database' AND source = 'documentation'"
+        return advancedRetrieve(ctx, query, 3, filter)
+    }
+
+    func searchMultiCategoryDocuments(ctx context.Context, query string) ([]ai.Document, error) {
+        filter := "category IN ('database', 'technology') AND source != 'deprecated'"
+        return advancedRetrieve(ctx, query, 10, filter)
+    }
+
+    // Usage example
+    func performSearches(ctx context.Context) error {
+        // Basic search
+        docs, err := retrieveDocuments(ctx, "What are managed database benefits?")
+        if err != nil {
+            return err
+        }
+
+        // Filtered search
+        dbDocs, err := searchDatabaseDocuments(ctx, "cloud database services")
+        if err != nil {
+            return err
+        }
+
+        // Complex search
+        multiDocs, err := searchMultiCategoryDocuments(ctx, "database scaling solutions")
+        if err != nil {
+            return err
+        }
+
+        fmt.Printf("Found %d basic, %d database, %d multi-category documents\n", 
+            len(docs), len(dbDocs), len(multiDocs))
+        return nil
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Retrieve documents with advanced filtering and distance strategies:
+
+    ```python
+    from typing import List, Dict, Any, Optional
+
+    # Basic retrieval
+    async def retrieve_documents(query: str, table_name: str = "documents", k: int = 5) -> List[Dict[str, Any]]:
+        try:
+            retriever = f"cloudsql/{table_name}"
+            docs = await ai.retrieve(
+                retriever=retriever,
+                query=query,
+                options={"k": k}
+            )
+            return docs
+        except Exception as error:
+            print(f"Retrieval failed: {error}")
+            return []
+
+    # Advanced retrieval with SQL filtering
+    async def advanced_retrieve(
+        query: str,
+        table_name: str = "documents",
+        k: int = 5,
+        filter_clause: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        try:
+            retriever = f"cloudsql/{table_name}"
+            
+            options = {"k": k}
+            if filter_clause:
+                options["filter"] = filter_clause
+            
+            docs = await ai.retrieve(
+                retriever=retriever,
+                query=query,
+                options=options
+            )
+            
+            return docs
+        except Exception as error:
+            print(f"Advanced retrieval failed: {error}")
+            return []
+
+    # Specific search functions
+    async def search_database_documents(query: str) -> List[Dict[str, Any]]:
+        filter_clause = "category = 'database' AND source = 'documentation'"
+        return await advanced_retrieve(query, k=3, filter_clause=filter_clause)
+
+    async def search_multi_category_documents(query: str) -> List[Dict[str, Any]]:
+        filter_clause = "category IN ('database', 'technology') AND source != 'deprecated'"
+        return await advanced_retrieve(query, k=10, filter_clause=filter_clause)
+
+    # Comprehensive search example
+    async def perform_comprehensive_search():
+        # Basic search
+        basic_docs = await retrieve_documents("What are managed database benefits?", k=5)
+        
+        # Database-specific search
+        db_docs = await search_database_documents("cloud database services")
+        
+        # Multi-category search
+        multi_docs = await search_multi_category_documents("database scaling solutions")
+        
+        return {
+            "basic_search": basic_docs,
+            "database_search": db_docs,
+            "multi_category_search": multi_docs,
+            "total_results": len(basic_docs) + len(db_docs) + len(multi_docs)
+        }
+    ```
+  </TabItem>
+</Tabs>
+
+## Advanced Features
+
+### Custom Table Configuration
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Configure custom table schemas for specific use cases:
+
+    ```ts
+    // Advanced table configuration
+    await engine.initVectorstoreTable('custom_documents', 1536, {
+      schemaName: 'ai_data',
+      contentColumn: 'document_text',
+      embeddingColumn: 'text_embedding',
+      idColumn: 'document_id',
+      metadataColumns: [
+        { name: 'title', dataType: 'TEXT' },
+        { name: 'author', dataType: 'TEXT' },
+        { name: 'created_date', dataType: 'TIMESTAMP' },
+        { name: 'version', dataType: 'INTEGER' },
+        { name: 'tags', dataType: 'TEXT[]' },
+        { name: 'score', dataType: 'REAL' },
+      ],
+      metadataJsonColumn: 'additional_metadata',
+      storeMetadata: true,
+      overwriteExisting: false,
+    });
+
+    // Configure retriever for custom table
+    const customRetriever = postgresRetrieverRef({
+      tableName: 'custom_documents',
+      schemaName: 'ai_data',
+      contentColumn: 'document_text',
+      embeddingColumn: 'text_embedding',
+      idColumn: 'document_id',
+      metadataColumns: ['title', 'author', 'created_date', 'version', 'tags', 'score'],
+      metadataJsonColumn: 'additional_metadata',
+      distanceStrategy: DistanceStrategy.COSINE_DISTANCE,
+    });
+
+    // Advanced filtering with custom columns
+    const advancedSearch = await ai.retrieve({
+      retriever: customRetriever,
+      query: "latest documentation updates",
+      options: {
+        k: 5,
+        filter: `
+          created_date >= '2024-01-01' 
+          AND version >= 2 
+          AND score > 0.8 
+          AND 'technical' = ANY(tags)
+        `,
+      },
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Configure custom table schemas for specific use cases:
+
+    ```go
+    // Custom table configuration
+    type CustomTableConfig struct {
+        SchemaName          string
+        ContentColumn       string
+        EmbeddingColumn     string
+        IDColumn           string
+        MetadataColumns    []string
+        MetadataJSONColumn string
+        DistanceStrategy   string
+    }
+
+    func setupCustomTable(ctx context.Context, db *sql.DB) error {
+        // Create custom table with advanced schema
+        createTableSQL := `
+        CREATE TABLE IF NOT EXISTS ai_data.custom_documents (
+            document_id TEXT PRIMARY KEY,
+            document_text TEXT NOT NULL,
+            text_embedding vector(1536),
+            title TEXT,
+            author TEXT,
+            created_date TIMESTAMP,
+            version INTEGER,
+            tags TEXT[],
+            score REAL,
+            additional_metadata JSONB
+        );
+        
+        CREATE INDEX IF NOT EXISTS custom_documents_embedding_idx 
+        ON ai_data.custom_documents 
+        USING ivfflat (text_embedding vector_cosine_ops) 
+        WITH (lists = 100);
+        `
+        
+        _, err := db.ExecContext(ctx, createTableSQL)
+        return err
+    }
+
+    // Advanced retrieval with custom filtering
+    func advancedCustomRetrieve(ctx context.Context, query string) ([]ai.Document, error) {
+        filter := `
+            created_date >= '2024-01-01' 
+            AND version >= 2 
+            AND score > 0.8 
+            AND 'technical' = ANY(tags)
+        `
+        
+        docs, err := genkit.Retrieve(ctx, g,
+            ai.WithRetriever("cloudsql/custom_documents"),
+            ai.WithQuery(query),
+            ai.WithOptions(map[string]interface{}{
+                "k":      5,
+                "filter": filter,
+                "schema": "ai_data",
+            }),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("custom retrieval failed: %w", err)
+        }
+
+        return docs, nil
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Configure custom table schemas for specific use cases:
+
+    ```python
+    # Custom table configuration
+    async def setup_custom_table(connection):
+        """Set up a custom table with advanced schema"""
+        cursor = connection.cursor()
+        
+        try:
+            # Create custom schema and table
+            cursor.execute("""
+                CREATE SCHEMA IF NOT EXISTS ai_data;
+                
+                CREATE TABLE IF NOT EXISTS ai_data.custom_documents (
+                    document_id TEXT PRIMARY KEY,
+                    document_text TEXT NOT NULL,
+                    text_embedding vector(1536),
+                    title TEXT,
+                    author TEXT,
+                    created_date TIMESTAMP,
+                    version INTEGER,
+                    tags TEXT[],
+                    score REAL,
+                    additional_metadata JSONB
+                );
+                
+                CREATE INDEX IF NOT EXISTS custom_documents_embedding_idx 
+                ON ai_data.custom_documents 
+                USING ivfflat (text_embedding vector_cosine_ops) 
+                WITH (lists = 100);
+            """)
+            
+            connection.commit()
+            return {"success": True}
+        except Exception as error:
+            connection.rollback()
+            print(f"Custom table setup failed: {error}")
+            return {"success": False, "error": str(error)}
+        finally:
+            cursor.close()
+
+    # Advanced retrieval with custom filtering
+    async def advanced_custom_retrieve(query: str) -> List[Dict[str, Any]]:
+        filter_clause = """
+            created_date >= '2024-01-01' 
+            AND version >= 2 
+            AND score > 0.8 
+            AND 'technical' = ANY(tags)
+        """
+        
+        try:
+            retriever = "cloudsql/custom_documents"
+            docs = await ai.retrieve(
+                retriever=retriever,
+                query=query,
+                options={
+                    "k": 5,
+                    "filter": filter_clause,
+                    "schema": "ai_data"
+                }
+            )
+            return docs
+        except Exception as error:
+            print(f"Custom retrieval failed: {error}")
+            return []
+
+    # Complex metadata search
+    async def search_by_metadata_criteria(
+        query: str,
+        min_score: float = 0.8,
+        min_version: int = 2,
+        required_tags: List[str] = None,
+        date_range: tuple = None
+    ) -> List[Dict[str, Any]]:
+        """Search with complex metadata criteria"""
+        
+        filter_parts = [f"score >= {min_score}", f"version >= {min_version}"]
+        
+        if required_tags:
+            tag_conditions = " OR ".join([f"'{tag}' = ANY(tags)" for tag in required_tags])
+            filter_parts.append(f"({tag_conditions})")
+        
+        if date_range:
+            start_date, end_date = date_range
+            filter_parts.append(f"created_date BETWEEN '{start_date}' AND '{end_date}'")
+        
+        filter_clause = " AND ".join(filter_parts)
+        
+        return await advanced_retrieve(
+            query=query,
+            table_name="custom_documents",
+            k=10,
+            filter_clause=filter_clause
+        )
+    ```
+  </TabItem>
+</Tabs>
+
+## Best Practices
+
+### Database Configuration
+
+1. **Instance Sizing**: Choose appropriate machine types for your workload
+2. **Storage Configuration**: Use SSD storage for better performance
+3. **Connection Pooling**: Configure connection pooling for high-traffic applications
+4. **Backup Strategy**: Set up automated backups and point-in-time recovery
+
+### Vector Optimization
+
+1. **Index Configuration**: Optimize pgvector index parameters for your data
+2. **Embedding Dimensions**: Match vector dimensions to your embedding model
+3. **Distance Strategy**: Choose the right distance function for your use case
+4. **Batch Operations**: Use appropriate batch sizes for indexing
+
+### Performance Optimization
+
+1. **Query Optimization**: Use efficient SQL filters to reduce search space
+2. **Index Management**: Monitor and maintain vector indexes
+3. **Connection Management**: Use connection pooling and proper connection lifecycle
+4. **Monitoring**: Set up Cloud Monitoring for database metrics
+
+### Production Deployment
+
+1. **High Availability**: Configure regional persistent disks and failover replicas
+2. **Security**: Use private IP, SSL connections, and IAM authentication
+3. **Scaling**: Configure read replicas for read-heavy workloads
+4. **Maintenance**: Schedule maintenance windows and updates
+
+### Cost Optimization
+
+1. **Right-sizing**: Monitor resource usage and adjust instance sizes
+2. **Storage Management**: Use appropriate storage types and sizes
+3. **Connection Efficiency**: Minimize connection overhead
+4. **Query Efficiency**: Optimize queries to reduce compute costs
+
+## Next Steps
+
+- Learn about [RAG implementation](/unified-docs/rag) to build complete retrieval-augmented generation systems
+- Explore [creating flows](/unified-docs/creating-flows) to build structured AI workflows with managed vector search
+- See [deployment guides](/unified-docs/deployment) for production deployment strategies
+- Check out other vector database options for different use cases
