@@ -297,9 +297,8 @@ const UNIFIED_SIDEBAR = [
       { label: "Pause generation using interrupts", slug: "unified-docs/interrupts" },
       { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
       { label: "Building multi-agent systems", slug: "unified-docs/multi-agent-systems" },
-      { label: "Evaluation", slug: "unified-docs/evaluation" },
-      { label: "Observability and monitoring", slug: "unified-docs/observability-monitoring" },
       { label: "Error handling", slug: "unified-docs/error-handling" },
+      { label: "Evaluation", slug: "unified-docs/evaluation" },
     ],
   },
   {
@@ -353,12 +352,13 @@ const UNIFIED_SIDEBAR = [
     ],
   },
   {
-    label: "Advanced Topics",
-    collapsed: true,
+    label: "Observability and Monitoring",
     items: [
-      { label: "Observability and monitoring", slug: "unified-docs/observability-monitoring" },
-      { label: "Error handling", slug: "unified-docs/error-handling" },
-      { label: "Multi-agent systems", slug: "unified-docs/multi-agent-systems" },
+      { label: "Overview", slug: "unified-docs/observability/overview" },
+      { label: "Complete Guide", slug: "unified-docs/observability-monitoring" },
+      { label: "Authentication & Setup", slug: "unified-docs/observability/authentication" },
+      { label: "Advanced Configuration", slug: "unified-docs/observability/advanced-configuration" },
+      { label: "Troubleshooting", slug: "unified-docs/observability/troubleshooting" },
     ],
   },
 ];
