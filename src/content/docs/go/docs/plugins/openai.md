@@ -39,15 +39,16 @@ g, err := genkit.Init(context.Background(), genkit.WithPlugins(&openai.OpenAI{
 ### Supported Models
 
 #### Latest Models
+- **gpt-5** - Latest GPT-5 with multimodal support
+- **gpt-5-mini** - Faster, cost-effective GPT-5 variant
+- **gpt-5-nano** - Ultra-efficient GPT-5 variant
+
+#### Production Models
 - **gpt-4.1** - Latest GPT-4.1 with multimodal support
 - **gpt-4.1-mini** - Faster, cost-effective GPT-4.1 variant
 - **gpt-4.1-nano** - Ultra-efficient GPT-4.1 variant
-- **gpt-4.5-preview** - Preview of GPT-4.5 with advanced capabilities
-
-#### Production Models
 - **gpt-4o** - Advanced GPT-4 with vision and tool support
 - **gpt-4o-mini** - Fast and cost-effective GPT-4o variant
-- **gpt-4-turbo** - High-performance GPT-4 with large context window
 
 #### Reasoning Models
 - **o3-mini** - Latest compact reasoning model
@@ -57,6 +58,7 @@ g, err := genkit.Init(context.Background(), genkit.WithPlugins(&openai.OpenAI{
 
 #### Legacy Models
 - **gpt-4** - Original GPT-4 model
+- **gpt-4-turbo** - High-performance GPT-4 with large context window
 - **gpt-3.5-turbo** - Fast and efficient language model
 
 ### Embedding Models
