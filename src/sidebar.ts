@@ -337,7 +337,6 @@ const UNIFIED_SIDEBAR = [
   },
   {
     label: "Deployment",
-    collapsed: true,
     items: [
       { label: "Overview", slug: "unified-docs/deployment" },
       { label: "Firebase", slug: "unified-docs/deployment/firebase" },
