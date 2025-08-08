@@ -13,16 +13,6 @@ const JS_SIDEBAR = [
         label: "Summarize YouTube videos",
         slug: "docs/tutorials/tutorial-summarize-youtube-videos",
       },
-      {
-        label: "Agentic barista Angular app",
-        link: "https://developers.google.com/solutions/learn/agentic-barista",
-        attrs: {
-          "data-external": true,
-          target: "_blank",
-          class: "external-icon",
-          rel: "noopener",
-        },
-      },
     ],
   },
   {
@@ -138,7 +128,6 @@ const JS_SIDEBAR = [
   {
     label: "Writing plugins",
     items: [
-      // NOTE: Deployment links were incorrectly placed here before, removed them.
       { label: "Overview", slug: "docs/plugin-authoring" },
       {
         label: "Writing an Evaluator Plugin",
@@ -146,16 +135,6 @@ const JS_SIDEBAR = [
       },
     ],
   },
-  // {
-  //   label: "Migration Guides",
-  //   items: [
-  //     // Added 0.9->1.0 link to main Genkit section previously
-  //     {
-  //       label: "Migrate from 0.5 to 0.9",
-  //       slug: "docs/migrating-from-0.5",
-  //     },
-  //   ],
-  // },
   {
     label: "Community",
     items: [{ label: "Connect with us", slug: "docs/feedback" }],
@@ -171,7 +150,6 @@ const JS_SIDEBAR = [
           target: "_blank",
           class: "external-icon",
           rel: "noopener",
-          // style: "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
         },
       },
       { label: "API stability channels", slug: "docs/api-stability" },
@@ -251,6 +229,7 @@ const GO_SIDEBAR = [
     ],
   },
 ];
+
 const PYTHON_SIDEBAR = [
   { label: "Get started", slug: "python/docs/get-started" },
   { label: "Deploy with Cloud Run", slug: "python/docs/cloud-run" },
@@ -314,6 +293,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Managing prompts with Dotprompt", slug: "unified-docs/dotprompt" },
       { label: "Creating persistent chat sessions", slug: "unified-docs/chat-sessions" },
       { label: "Tool calling", slug: "unified-docs/tool-calling" },
+      { label: "Model Context Protocol (MCP)", slug: "unified-docs/model-context-protocol" },
       { label: "Pause generation using interrupts", slug: "unified-docs/interrupts" },
       { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
       { label: "Building multi-agent systems", slug: "unified-docs/multi-agent-systems" },
@@ -332,12 +312,12 @@ const UNIFIED_SIDEBAR = [
       { label: "xAI (Grok)", slug: "unified-docs/plugins/xai" },
       { label: "DeepSeek", slug: "unified-docs/plugins/deepseek" },
       { label: "Ollama", slug: "unified-docs/plugins/ollama" },
-      { label: "Model Context Protocol (MCP)", slug: "unified-docs/plugins/mcp" },
     ],
   },
   {
     label: "Vector Databases",
     items: [
+      { label: "Dev Local Vector Store", slug: "unified-docs/vector-databases/dev-local-vectorstore" },
       { label: "Pinecone", slug: "unified-docs/vector-databases/pinecone" },
       { label: "ChromaDB", slug: "unified-docs/vector-databases/chromadb" },
       { label: "pgvector", slug: "unified-docs/vector-databases/pgvector" },
@@ -345,6 +325,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Astra DB", slug: "unified-docs/vector-databases/astra-db" },
       { label: "Neo4j", slug: "unified-docs/vector-databases/neo4j" },
       { label: "Cloud SQL PostgreSQL", slug: "unified-docs/vector-databases/cloud-sql-postgresql" },
+      { label: "Cloud Firestore", slug: "unified-docs/vector-databases/cloud-firestore" },
     ],
   },
   {
@@ -352,6 +333,17 @@ const UNIFIED_SIDEBAR = [
     items: [
       { label: "Express.js", slug: "unified-docs/frameworks/express" },
       { label: "Next.js", slug: "unified-docs/frameworks/nextjs" },
+    ],
+  },
+  {
+    label: "Deployment",
+    collapsed: true,
+    items: [
+      { label: "Overview", slug: "unified-docs/deployment" },
+      { label: "Firebase", slug: "unified-docs/deployment/firebase" },
+      { label: "Cloud Run", slug: "unified-docs/deployment/cloud-run" },
+      { label: "Any Platform", slug: "unified-docs/deployment/any-platform" },
+      { label: "Authorization & Security", slug: "unified-docs/deployment/authorization" },
     ],
   },
   {
@@ -363,8 +355,11 @@ const UNIFIED_SIDEBAR = [
   },
   {
     label: "Advanced Topics",
+    collapsed: true,
     items: [
-      { label: "Deployment Guide", slug: "unified-docs/deployment" },
+      { label: "Observability and monitoring", slug: "unified-docs/observability-monitoring" },
+      { label: "Error handling", slug: "unified-docs/error-handling" },
+      { label: "Multi-agent systems", slug: "unified-docs/multi-agent-systems" },
     ],
   },
 ];

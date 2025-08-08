@@ -1,0 +1,980 @@
+---
+title: Cloud Firestore Vector Search
+description: Learn how to use Google Cloud Firestore as a vector database for RAG applications across JavaScript, Go, and Python with Genkit.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Cloud Firestore provides native vector search capabilities, making it an excellent choice for RAG (Retrieval-Augmented Generation) applications. Firestore's vector search feature allows you to store and query high-dimensional vector embeddings alongside your document data, providing fast and scalable similarity search.
+
+## Key Features
+
+- **Native vector search**: Built-in support for high-dimensional vector operations
+- **Scalable**: Automatically scales with your application needs
+- **Real-time**: Supports real-time updates and queries
+- **Integrated**: Part of the Firebase/Google Cloud ecosystem
+- **Multi-modal**: Store vectors alongside structured document data
+
+## Installation and Setup
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Install the Firebase plugin:
+
+    ```bash
+    npm install @genkit-ai/firebase firebase-admin
+    ```
+
+    Initialize Firebase Admin SDK:
+
+    ```ts
+    import { initializeApp } from 'firebase-admin/app';
+    import { getFirestore } from 'firebase-admin/firestore';
+
+    const app = initializeApp({
+      projectId: 'your-firebase-project-id',
+    });
+
+    const firestore = getFirestore(app);
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Install the Firebase plugin:
+
+    ```bash
+    go get github.com/firebase/genkit/go/plugins/firebase
+    ```
+
+    Import and configure:
+
+    ```go
+    import (
+        "github.com/firebase/genkit/go/plugins/firebase"
+        firebasev4 "firebase.google.com/go/v4"
+    )
+
+    // Initialize Firebase
+    firebasePlugin := &firebase.Firebase{
+        ProjectId: "your-firebase-project-id",
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Install the Firebase plugin:
+
+    ```bash
+    pip install genkit-plugin-firebase google-cloud-firestore
+    ```
+
+    Initialize Firestore client:
+
+    ```python
+    from google.cloud import firestore
+    from genkit.plugins.firebase.firestore import FirestoreVectorStore
+
+    # Initialize Firestore client
+    firestore_client = firestore.Client(project="your-firebase-project-id")
+    ```
+  </TabItem>
+</Tabs>
+
+## Prerequisites
+
+### Firebase Project Setup
+
+1. **Create a Firebase project** at [Firebase Console](https://console.firebase.google.com/)
+2. **Enable Firestore** in your project:
+   - Go to Firestore Database in the Firebase console
+   - Click "Create database"
+   - Choose your security rules and location
+3. **Upgrade to Blaze plan** (required for vector search features)
+
+### Authentication
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Set up authentication using one of these methods:
+
+    **Option 1: Service Account Key**
+    ```bash
+    export GOOGLE_APPLICATION_CREDENTIALS="path/to/serviceAccountKey.json"
+    ```
+
+    **Option 2: Service Account Credentials (Environment Variable)**
+    ```bash
+    export GCLOUD_SERVICE_ACCOUNT_CREDS='{"type":"service_account",...}'
+    ```
+
+    **Option 3: Application Default Credentials**
+    ```bash
+    gcloud auth application-default login
+    ```
+
+    If using `GCLOUD_SERVICE_ACCOUNT_CREDS`, configure Firestore explicitly:
+
+    ```ts
+    import { initializeApp } from 'firebase-admin/app';
+    import { getFirestore } from 'firebase-admin/firestore';
+
+    const app = initializeApp();
+    let firestore = getFirestore(app);
+
+    if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
+      const serviceAccountCreds = JSON.parse(process.env.GCLOUD_SERVICE_ACCOUNT_CREDS);
+      const authOptions = { credentials: serviceAccountCreds };
+      firestore.settings(authOptions);
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    **Local Development:**
+    ```bash
+    firebase login
+    firebase use your-project-id
+    ```
+
+    **Production:**
+    ```bash
+    export GOOGLE_APPLICATION_CREDENTIALS="path/to/serviceAccountKey.json"
+    ```
+
+    **Custom Firebase App:**
+    ```go
+    import "google.golang.org/api/option"
+
+    app, err := firebasev4.NewApp(ctx, &firebasev4.Config{
+        ProjectID: "your-project-id",
+    }, option.WithCredentialsFile("path/to/serviceAccountKey.json"))
+
+    firebasePlugin := &firebase.Firebase{
+        App: app,
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    **Local Development:**
+    ```bash
+    gcloud auth application-default login
+    gcloud config set project your-project-id
+    ```
+
+    **Production:**
+    ```bash
+    export GOOGLE_APPLICATION_CREDENTIALS="path/to/serviceAccountKey.json"
+    ```
+
+    **Custom Configuration:**
+    ```python
+    from google.cloud import firestore
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_file(
+        "path/to/serviceAccountKey.json"
+    )
+    firestore_client = firestore.Client(
+        project="your-project-id",
+        credentials=credentials
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+## Basic Usage
+
+### Defining a Firestore Retriever
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    import { genkit } from 'genkit';
+    import { googleAI } from '@genkit-ai/googleai';
+    import { defineFirestoreRetriever } from '@genkit-ai/firebase';
+    import { initializeApp } from 'firebase-admin/app';
+    import { getFirestore } from 'firebase-admin/firestore';
+
+    const ai = genkit({
+      plugins: [googleAI()],
+    });
+
+    const app = initializeApp();
+    const firestore = getFirestore(app);
+
+    const retriever = defineFirestoreRetriever(ai, {
+      name: 'documentRetriever',
+      firestore,
+      collection: 'documents',
+      contentField: 'text',
+      vectorField: 'embedding',
+      embedder: googleAI.embedder('text-embedding-004'),
+      distanceMeasure: 'COSINE', // Options: 'COSINE', 'EUCLIDEAN', 'DOT_PRODUCT'
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    import (
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/firebase"
+        "github.com/firebase/genkit/go/plugins/googlegenai"
+    )
+
+    func main() {
+        ctx := context.Background()
+
+        // Initialize plugins
+        firebasePlugin := &firebase.Firebase{
+            ProjectId: "your-firebase-project-id",
+        }
+        
+        googleAIPlugin := &googlegenai.GoogleAI{
+            APIKey: "your-api-key",
+        }
+
+        g, err := genkit.Init(ctx, genkit.WithPlugins(firebasePlugin, googleAIPlugin))
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Define retriever
+        retriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+            Name:         "documentRetriever",
+            Collection:   "documents",
+            VectorField:  "embedding",
+            EmbedderName: "googleai/text-embedding-004",
+            TopK:         10,
+        })
+        if err != nil {
+            log.Fatal(err)
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    from genkit.ai import Genkit
+    from genkit.plugins.firebase.firestore import FirestoreVectorStore
+    from genkit.plugins.google_genai import GoogleGenAI
+    from google.cloud import firestore
+
+    # Initialize Firestore client
+    firestore_client = firestore.Client()
+
+    ai = Genkit(
+        plugins=[
+            GoogleGenAI(),
+            FirestoreVectorStore(
+                name='documentRetriever',
+                collection='documents',
+                vector_field='embedding',
+                content_field='text',
+                embedder='googleai/text-embedding-004',
+                firestore_client=firestore_client,
+            ),
+        ]
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+### Retrieving Documents
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Basic retrieval
+    const docs = await ai.retrieve({
+      retriever,
+      query: 'What is machine learning?',
+      options: {
+        limit: 5,
+      },
+    });
+
+    // Retrieval with filters
+    const filteredDocs = await ai.retrieve({
+      retriever,
+      query: 'artificial intelligence concepts',
+      options: {
+        limit: 10,
+        where: { 
+          category: 'technology',
+          status: 'published' 
+        },
+        collection: 'alternativeCollection', // Override default collection
+      },
+    });
+
+    console.log('Retrieved documents:', docs);
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Basic retrieval
+    results, err := ai.Retrieve(ctx, retriever, ai.WithDocs("What is machine learning?"))
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Use retrieved documents in generation
+    var contextDocs []string
+    for _, doc := range results.Documents {
+        contextDocs = append(contextDocs, doc.Content[0].Text)
+    }
+
+    context := strings.Join(contextDocs, "\n\n")
+    resp, err := genkit.Generate(ctx, g,
+        ai.WithModel(googleAIPlugin.Model(g, "gemini-1.5-flash")),
+        ai.WithPrompt(fmt.Sprintf("Context: %s\n\nQuestion: %s", 
+            context, "What is machine learning?")),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("Answer: %s\n", resp.Text())
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    from genkit.ai import Document
+
+    async def retrieve_documents():
+        # Create query document
+        query_doc = Document.from_text("What is machine learning?")
+        
+        # Retrieve documents
+        results = await ai.retrieve(
+            query=query_doc,
+            retriever='documentRetriever',
+        )
+        
+        return results
+
+    # Use in RAG workflow
+    async def rag_query(question: str):
+        query_doc = Document.from_text(question)
+        
+        # Retrieve relevant documents
+        retrieved_docs = await ai.retrieve(
+            query=query_doc,
+            retriever='documentRetriever',
+        )
+        
+        # Prepare context
+        context = "\n\n".join([doc.content[0].text for doc in retrieved_docs])
+        
+        # Generate answer
+        response = await ai.generate(
+            model="googleai/gemini-1.5-flash",
+            prompt=f"Context: {context}\n\nQuestion: {question}\n\nAnswer:",
+        )
+        
+        return response.text
+
+    # Example usage
+    # import asyncio
+    # answer = asyncio.run(rag_query("What is machine learning?"))
+    # print(answer)
+    ```
+  </TabItem>
+</Tabs>
+
+## Data Indexing
+
+### Document Structure
+
+Your Firestore documents should follow this structure:
+
+```json
+{
+  "text": "Your document content here...",
+  "embedding": [0.1, -0.2, 0.3, ...],
+  "metadata": {
+    "title": "Document Title",
+    "category": "Technology",
+    "author": "Author Name",
+    "timestamp": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Populating the Index
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    import { chunk } from 'llm-chunk';
+    import { FieldValue } from 'firebase-admin/firestore';
+    import pdf from 'pdf-parse';
+    import { readFile } from 'fs/promises';
+
+    const indexConfig = {
+      collection: 'documents',
+      contentField: 'text',
+      vectorField: 'embedding',
+      embedder: googleAI.embedder('text-embedding-004'),
+    };
+
+    export async function indexDocuments(filePath: string) {
+      // Extract text from PDF
+      const pdfFile = await readFile(filePath);
+      const data = await pdf(pdfFile);
+      const pdfText = data.text;
+
+      // Chunk the text
+      const chunks = await chunk(pdfText);
+
+      // Index each chunk
+      for (const text of chunks) {
+        const embedding = (await ai.embed({
+          embedder: indexConfig.embedder,
+          content: text,
+        }))[0].embedding;
+
+        await firestore.collection(indexConfig.collection).add({
+          [indexConfig.vectorField]: FieldValue.vector(embedding),
+          [indexConfig.contentField]: text,
+          metadata: {
+            source: filePath,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    }
+
+    // Batch indexing for better performance
+    export async function batchIndexDocuments(documents: string[]) {
+      const batch = firestore.batch();
+      
+      for (const text of documents) {
+        const embedding = (await ai.embed({
+          embedder: indexConfig.embedder,
+          content: text,
+        }))[0].embedding;
+
+        const docRef = firestore.collection(indexConfig.collection).doc();
+        batch.set(docRef, {
+          [indexConfig.vectorField]: FieldValue.vector(embedding),
+          [indexConfig.contentField]: text,
+          metadata: {
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      await batch.commit();
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    import (
+        "context"
+        "fmt"
+        "log"
+        "time"
+        "github.com/firebase/genkit/go/ai"
+        firebasev4 "firebase.google.com/go/v4"
+    )
+
+    func indexDocuments(ctx context.Context, g *genkit.Genkit, documents []string) error {
+        // Get Firestore client
+        app, err := firebasev4.NewApp(ctx, &firebasev4.Config{
+            ProjectID: "your-project-id",
+        })
+        if err != nil {
+            return err
+        }
+
+        client, err := app.Firestore(ctx)
+        if err != nil {
+            return err
+        }
+        defer client.Close()
+
+        // Get embedder
+        embedder := googleAIPlugin.Embedder(g, "text-embedding-004")
+
+        for i, text := range documents {
+            // Generate embedding
+            embeddingResp, err := ai.Embed(ctx, embedder, ai.WithDocs(text))
+            if err != nil {
+                return fmt.Errorf("failed to generate embedding: %w", err)
+            }
+
+            // Store in Firestore
+            docData := map[string]interface{}{
+                "text":      text,
+                "embedding": embeddingResp.Embeddings[0].Embedding,
+                "metadata": map[string]interface{}{
+                    "index":     i,
+                    "timestamp": time.Now().Format(time.RFC3339),
+                },
+            }
+
+            _, err = client.Collection("documents").Doc(fmt.Sprintf("doc-%d", i)).Set(ctx, docData)
+            if err != nil {
+                return fmt.Errorf("failed to store document: %w", err)
+            }
+        }
+
+        return nil
+    }
+
+    // Batch indexing
+    func batchIndexDocuments(ctx context.Context, g *genkit.Genkit, documents []string) error {
+        app, err := firebasev4.NewApp(ctx, &firebasev4.Config{
+            ProjectID: "your-project-id",
+        })
+        if err != nil {
+            return err
+        }
+
+        client, err := app.Firestore(ctx)
+        if err != nil {
+            return err
+        }
+        defer client.Close()
+
+        batch := client.Batch()
+        embedder := googleAIPlugin.Embedder(g, "text-embedding-004")
+
+        for i, text := range documents {
+            embeddingResp, err := ai.Embed(ctx, embedder, ai.WithDocs(text))
+            if err != nil {
+                return err
+            }
+
+            docRef := client.Collection("documents").Doc(fmt.Sprintf("doc-%d", i))
+            batch.Set(docRef, map[string]interface{}{
+                "text":      text,
+                "embedding": embeddingResp.Embeddings[0].Embedding,
+                "metadata": map[string]interface{}{
+                    "index":     i,
+                    "timestamp": time.Now().Format(time.RFC3339),
+                },
+            })
+        }
+
+        _, err = batch.Commit(ctx)
+        return err
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    from genkit.ai import Document
+    from genkit.types import TextPart
+    from google.cloud import firestore
+    import asyncio
+
+    async def index_documents(ai: Genkit, documents: list[str], collection_name: str):
+        """Index documents in Firestore with embeddings."""
+        
+        # Prepare documents for embedding
+        genkit_documents = [Document(content=[TextPart(text=doc)]) for doc in documents]
+        
+        # Generate embeddings
+        embed_response = await ai.embed(
+            embedder='googleai/text-embedding-004',
+            content=genkit_documents
+        )
+        embeddings = [emb.embedding for emb in embed_response.embeddings]
+
+        # Get Firestore client
+        firestore_client = firestore.Client()
+
+        # Index each document
+        for i, document_text in enumerate(documents):
+            doc_id = f'doc-{i + 1}'
+            embedding = embeddings[i]
+
+            doc_ref = firestore_client.collection(collection_name).document(doc_id)
+            doc_ref.set({
+                'text': document_text,
+                'embedding': embedding,
+                'metadata': {
+                    'index': i,
+                    'timestamp': firestore.SERVER_TIMESTAMP,
+                },
+            })
+            print(f"Indexed document {doc_id}")
+
+    # Batch indexing for better performance
+    async def batch_index_documents(ai: Genkit, documents: list[str], collection_name: str):
+        """Batch index documents for better performance."""
+        
+        genkit_documents = [Document(content=[TextPart(text=doc)]) for doc in documents]
+        embed_response = await ai.embed(
+            embedder='googleai/text-embedding-004',
+            content=genkit_documents
+        )
+        embeddings = [emb.embedding for emb in embed_response.embeddings]
+
+        firestore_client = firestore.Client()
+        batch = firestore_client.batch()
+
+        for i, document_text in enumerate(documents):
+            doc_ref = firestore_client.collection(collection_name).document(f'doc-{i + 1}')
+            batch.set(doc_ref, {
+                'text': document_text,
+                'embedding': embeddings[i],
+                'metadata': {
+                    'index': i,
+                    'timestamp': firestore.SERVER_TIMESTAMP,
+                },
+            })
+
+        # Commit batch
+        batch.commit()
+        print(f"Batch indexed {len(documents)} documents")
+
+    # Example usage
+    # documents = [
+    #     "Machine learning is a subset of artificial intelligence...",
+    #     "Deep learning uses neural networks with multiple layers...",
+    #     "Natural language processing enables computers to understand text...",
+    # ]
+    # asyncio.run(index_documents(ai, documents, 'documents'))
+    ```
+  </TabItem>
+</Tabs>
+
+## Creating Vector Indexes
+
+Firestore requires vector indexes for efficient similarity search. Create the index using the `gcloud` CLI:
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```bash
+    # For text-embedding-004 (768 dimensions)
+    gcloud alpha firestore indexes composite create \
+      --project=your-firebase-project-id \
+      --collection-group=documents \
+      --query-scope=COLLECTION \
+      --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=embedding
+
+    # For other embedding models, adjust the dimension:
+    # text-embedding-3-small: 1536 dimensions
+    # text-embedding-3-large: 3072 dimensions
+    ```
+
+    You can also let Firestore suggest the command by making a query first:
+
+    ```ts
+    try {
+      const docs = await ai.retrieve({
+        retriever,
+        query: 'test query',
+      });
+    } catch (error) {
+      // Firestore will throw an error with the exact command needed
+      console.error('Index required:', error.message);
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```bash
+    # Create vector index for your collection
+    gcloud alpha firestore indexes composite create \
+      --project=your-firebase-project-id \
+      --collection-group=documents \
+      --query-scope=COLLECTION \
+      --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=embedding
+    ```
+
+    Check index creation status:
+
+    ```bash
+    gcloud firestore indexes composite list --project=your-firebase-project-id
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```bash
+    # Create the vector index
+    gcloud firestore indexes composite create \
+      --project=your-firebase-project-id \
+      --collection-group=documents \
+      --query-scope=COLLECTION \
+      --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=embedding
+    ```
+
+    Common embedding dimensions:
+    - **text-embedding-004**: 768 dimensions
+    - **text-embedding-3-small**: 1536 dimensions  
+    - **text-embedding-3-large**: 3072 dimensions
+
+    You can also trigger index creation by making a query:
+
+    ```python
+    try:
+        query_doc = Document.from_text("test query")
+        results = await ai.retrieve(
+            query=query_doc,
+            retriever='documentRetriever',
+        )
+    except Exception as error:
+        # Error message will contain the exact gcloud command needed
+        print(f"Index required: {error}")
+    ```
+  </TabItem>
+</Tabs>
+
+## Advanced Configuration
+
+### Retrieval Options
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    const retriever = defineFirestoreRetriever(ai, {
+      name: 'advancedRetriever',
+      firestore,
+      collection: 'documents',
+      contentField: 'text',
+      vectorField: 'embedding',
+      embedder: googleAI.embedder('text-embedding-004'),
+      distanceMeasure: 'COSINE', // 'COSINE', 'EUCLIDEAN', 'DOT_PRODUCT'
+    });
+
+    // Advanced retrieval with options
+    const docs = await ai.retrieve({
+      retriever,
+      query: 'machine learning algorithms',
+      options: {
+        limit: 10,                    // Maximum number of results
+        where: {                      // Filter conditions
+          category: 'technology',
+          status: 'published',
+          'metadata.author': 'John Doe'
+        },
+        collection: 'tech_docs',      // Override default collection
+      },
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Advanced retriever configuration
+    retriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+        Name:         "advancedRetriever",
+        Collection:   "documents",
+        VectorField:  "embedding",
+        EmbedderName: "googleai/text-embedding-004",
+        TopK:         10,
+        // Additional configuration options
+    })
+
+    // Use with filtering (implementation depends on Firebase Go SDK capabilities)
+    results, err := ai.Retrieve(ctx, retriever, ai.WithDocs("machine learning"))
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Process results
+    for _, doc := range results.Documents {
+        fmt.Printf("Document: %s\n", doc.Content[0].Text)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Advanced configuration
+    ai = Genkit(
+        plugins=[
+            GoogleGenAI(),
+            FirestoreVectorStore(
+                name='advancedRetriever',
+                collection='documents',
+                vector_field='embedding',
+                content_field='text',
+                embedder='googleai/text-embedding-004',
+                firestore_client=firestore_client,
+                # Additional configuration options can be added here
+            ),
+        ]
+    )
+
+    # Advanced retrieval with custom logic
+    async def advanced_retrieve(query: str, filters: dict = None):
+        query_doc = Document.from_text(query)
+        
+        # Basic retrieval
+        results = await ai.retrieve(
+            query=query_doc,
+            retriever='advancedRetriever',
+        )
+        
+        # Apply additional filtering if needed
+        if filters:
+            # Custom filtering logic here
+            pass
+            
+        return results
+    ```
+  </TabItem>
+</Tabs>
+
+### Multiple Collections
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    ```ts
+    // Define multiple retrievers for different collections
+    const techRetriever = defineFirestoreRetriever(ai, {
+      name: 'techDocuments',
+      firestore,
+      collection: 'tech_docs',
+      contentField: 'content',
+      vectorField: 'embedding',
+      embedder: googleAI.embedder('text-embedding-004'),
+    });
+
+    const generalRetriever = defineFirestoreRetriever(ai, {
+      name: 'generalDocuments',
+      firestore,
+      collection: 'general_docs',
+      contentField: 'text',
+      vectorField: 'embedding',
+      embedder: googleAI.embedder('text-embedding-004'),
+    });
+
+    // Use different retrievers based on query type
+    async function smartRetrieve(query: string, domain: string) {
+      const retriever = domain === 'tech' ? techRetriever : generalRetriever;
+      
+      return await ai.retrieve({
+        retriever,
+        query,
+        options: { limit: 5 },
+      });
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    ```go
+    // Define multiple retrievers
+    techRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+        Name:         "techDocuments",
+        Collection:   "tech_docs",
+        VectorField:  "embedding",
+        EmbedderName: "googleai/text-embedding-004",
+        TopK:         5,
+    })
+
+    generalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+        Name:         "generalDocuments", 
+        Collection:   "general_docs",
+        VectorField:  "embedding",
+        EmbedderName: "googleai/text-embedding-004",
+        TopK:         10,
+    })
+
+    // Smart retrieval function
+    func smartRetrieve(ctx context.Context, query, domain string) (*ai.RetrieveResponse, error) {
+        var retriever ai.Retriever
+        
+        switch domain {
+        case "tech":
+            retriever = techRetriever
+        default:
+            retriever = generalRetriever
+        }
+        
+        return ai.Retrieve(ctx, retriever, ai.WithDocs(query))
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    ```python
+    # Define multiple retrievers
+    ai = Genkit(
+        plugins=[
+            GoogleGenAI(),
+            FirestoreVectorStore(
+                name='techDocuments',
+                collection='tech_docs',
+                vector_field='embedding',
+                content_field='content',
+                embedder='googleai/text-embedding-004',
+                firestore_client=firestore_client,
+            ),
+            FirestoreVectorStore(
+                name='generalDocuments',
+                collection='general_docs',
+                vector_field='embedding',
+                content_field='text',
+                embedder='googleai/text-embedding-004',
+                firestore_client=firestore_client,
+            ),
+        ]
+    )
+
+    async def smart_retrieve(query: str, domain: str = 'general'):
+        """Retrieve from different collections based on domain."""
+        retriever_name = 'techDocuments' if domain == 'tech' else 'generalDocuments'
+        
+        query_doc = Document.from_text(query)
+        return await ai.retrieve(
+            query=query_doc,
+            retriever=retriever_name,
+        )
+    ```
+  </TabItem>
+</Tabs>
+
+## Best Practices
+
+### Performance Optimization
+
+1. **Batch Operations**: Use batch writes when indexing multiple documents
+2. **Appropriate Chunking**: Split large documents into optimal chunk sizes (500-1000 tokens)
+3. **Index Management**: Create indexes before querying to avoid errors
+4. **Caching**: Implement caching for frequently accessed documents
+
+### Security
+
+1. **Firestore Rules**: Configure proper security rules for your collections:
+   ```javascript
+   // Example Firestore security rules
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /documents/{document} {
+         allow read, write: if request.auth != null;
+       }
+     }
+   }
+   ```
+
+2. **API Key Management**: Never expose API keys in client-side code
+3. **Authentication**: Implement proper user authentication for sensitive data
+
+### Cost Management
+
+1. **Document Size**: Keep documents reasonably sized to minimize read costs
+2. **Query Optimization**: Design efficient queries to reduce operation costs
+3. **Storage Management**: Regularly clean up unused documents and embeddings
+4. **Index Strategy**: Only create necessary indexes to minimize storage costs
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Index Not Found Error**:
+   ```bash
+   # Create the required index
+   gcloud alpha firestore indexes composite create \
+     --project=your-project-id \
+     --collection-group=your-collection \
+     --query-scope=COLLECTION \
+     --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=embedding
+   ```
+
+2. **Authentication Errors**:
+   - Ensure `GOOGLE_APPLICATION_CREDENTIALS` is set correctly
+   - Verify Firebase project permissions
+   - Check that the service account has Firestore access
+
+3. **Dimension Mismatch**:
+   - Ensure
