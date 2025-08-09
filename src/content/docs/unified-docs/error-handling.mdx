@@ -1,0 +1,646 @@
+---
+title: Error handling
+description: Learn about error handling in Genkit, including specialized error types, best practices, and debugging techniques across JavaScript, Go, and Python.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Proper error handling is crucial for building robust AI applications. Genkit provides different error handling mechanisms and best practices across languages to help you build reliable and secure applications.
+
+## Availability and Approach
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    JavaScript provides specialized error types and comprehensive error handling:
+    - `GenkitError` for internal framework errors
+    - `UserFacingError` for application-level errors
+    - Automatic error sanitization in web hosting plugins
+    - Built-in error tracing and debugging
+    - Security-focused error handling
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Go uses standard Go error handling patterns:
+    - Standard `error` interface for all errors
+    - Custom error types for specific scenarios
+    - Error wrapping and unwrapping
+    - Context-aware error handling
+    - Structured error information
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Python uses standard exception handling:
+    - Built-in exception types
+    - Custom exception classes
+    - Try-catch error handling
+    - Exception chaining and context
+    - Framework-specific error handling
+  </TabItem>
+</Tabs>
+
+## Error types and classification
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Genkit knows about two specialized types: `GenkitError` and `UserFacingError`. The separation between these two error types helps you better understand where your error is coming from.
+
+    ### GenkitError
+
+    `GenkitError` is intended for use by Genkit itself or Genkit plugins. These represent internal framework errors:
+
+    ```typescript
+    import { GenkitError } from 'genkit';
+
+    // Example of a GenkitError (typically thrown by the framework)
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: 'Model configuration is invalid',
+      details: { modelName: 'invalid-model' }
+    });
+    ```
+
+    ### UserFacingError
+
+    `UserFacingError` is intended for [`ContextProviders`](/docs/deploy-node) and your application code. These represent application-level errors that can be safely shown to users:
+
+    ```typescript
+    import { UserFacingError } from 'genkit';
+
+    const myFlow = ai.defineFlow({
+      name: 'userFlow',
+      inputSchema: z.object({ userId: z.string() }),
+      outputSchema: z.string(),
+    }, async (input) => {
+      const user = await getUserById(input.userId);
+      
+      if (!user) {
+        throw new UserFacingError({
+          status: 'NOT_FOUND',
+          message: 'User not found',
+        });
+      }
+      
+      return `Hello, ${user.name}!`;
+    });
+    ```
+
+    ### Error sanitization
+
+    Genkit plugins for web hosting (e.g. [`@genkit-ai/express`](https://js.api.genkit.dev/modules/_genkit-ai_express.html) or [`@genkit-ai/next`](https://js.api.genkit.dev/modules/_genkit-ai_next.html)) SHOULD capture all other Error types and instead report them as an internal error in the response. This adds a layer of security to your application by ensuring that internal details of your application do not leak to attackers.
+
+    ```typescript
+    // Internal errors are automatically sanitized
+    const myFlow = ai.defineFlow({
+      name: 'secureFlow',
+      inputSchema: z.string(),
+      outputSchema: z.string(),
+    }, async (input) => {
+      try {
+        const result = await someInternalOperation(input);
+        return result;
+      } catch (error) {
+        // This will be caught by the web hosting plugin
+        // and converted to a generic "Internal Error" response
+        throw new Error('Database connection failed: ' + sensitiveInfo);
+      }
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Go uses the standard error interface for all error handling. You can create custom error types for specific scenarios:
+
+    ```go
+    import (
+        "errors"
+        "fmt"
+    )
+
+    // Custom error types
+    type ValidationError struct {
+        Field   string
+        Message string
+    }
+
+    func (e *ValidationError) Error() string {
+        return fmt.Sprintf("validation error in field %s: %s", e.Field, e.Message)
+    }
+
+    type NotFoundError struct {
+        Resource string
+        ID       string
+    }
+
+    func (e *NotFoundError) Error() string {
+        return fmt.Sprintf("%s with ID %s not found", e.Resource, e.ID)
+    }
+
+    // Usage in flows
+    func myFlow(ctx context.Context, input FlowInput) (string, error) {
+        if input.UserID == "" {
+            return "", &ValidationError{
+                Field:   "userID",
+                Message: "userID is required",
+            }
+        }
+        
+        user, err := getUserByID(ctx, input.UserID)
+        if err != nil {
+            return "", fmt.Errorf("failed to get user: %w", err)
+        }
+        
+        if user == nil {
+            return "", &NotFoundError{
+                Resource: "User",
+                ID:       input.UserID,
+            }
+        }
+        
+        return fmt.Sprintf("Hello, %s!", user.Name), nil
+    }
+    ```
+
+    ### Error wrapping
+
+    Use error wrapping to preserve error context:
+
+    ```go
+    func processData(ctx context.Context, data string) error {
+        if err := validateData(data); err != nil {
+            return fmt.Errorf("data validation failed: %w", err)
+        }
+        
+        if err := saveData(ctx, data); err != nil {
+            return fmt.Errorf("failed to save data: %w", err)
+        }
+        
+        return nil
+    }
+
+    // Check for specific error types
+    func handleError(err error) {
+        var validationErr *ValidationError
+        if errors.As(err, &validationErr) {
+            log.Printf("Validation error: %s", validationErr.Message)
+            return
+        }
+        
+        var notFoundErr *NotFoundError
+        if errors.As(err, &notFoundErr) {
+            log.Printf("Resource not found: %s", notFoundErr.Resource)
+            return
+        }
+        
+        log.Printf("Unknown error: %v", err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Python uses standard exception handling with custom exception classes:
+
+    ```python
+    from genkit.types import GenkitError
+
+    # Custom exception classes
+    class ValidationError(Exception):
+        def __init__(self, field: str, message: str):
+            self.field = field
+            self.message = message
+            super().__init__(f"Validation error in field {field}: {message}")
+
+    class NotFoundError(Exception):
+        def __init__(self, resource: str, resource_id: str):
+            self.resource = resource
+            self.resource_id = resource_id
+            super().__init__(f"{resource} with ID {resource_id} not found")
+
+    # Usage in flows
+    @ai.flow()
+    async def my_flow(input_data: dict, ctx):
+        if not input_data.get('user_id'):
+            raise ValidationError('user_id', 'user_id is required')
+        
+        try:
+            user = await get_user_by_id(input_data['user_id'])
+        except Exception as e:
+            raise GenkitError(
+                status='INTERNAL',
+                message='Failed to retrieve user'
+            ) from e
+        
+        if not user:
+            raise NotFoundError('User', input_data['user_id'])
+        
+        return f"Hello, {user['name']}!"
+
+    # Error handling
+    try:
+        result = await my_flow({'user_id': '123'}, ctx)
+    except ValidationError as e:
+        print(f"Validation error: {e.message}")
+    except NotFoundError as e:
+        print(f"Resource not found: {e.resource}")
+    except GenkitError as e:
+        print(f"Genkit error: {e.message}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    ```
+  </TabItem>
+</Tabs>
+
+## Error handling in flows
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Implement comprehensive error handling in your flows:
+
+    ```typescript
+    const robustFlow = ai.defineFlow({
+      name: 'robustFlow',
+      inputSchema: z.object({
+        text: z.string(),
+        options: z.object({
+          maxRetries: z.number().default(3),
+        }).optional(),
+      }),
+      outputSchema: z.string(),
+    }, async (input, { logger }) => {
+      const maxRetries = input.options?.maxRetries ?? 3;
+      let lastError: Error | null = null;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          logger.info(`Attempt ${attempt} of ${maxRetries}`);
+          
+          const result = await ai.generate({
+            prompt: `Process this text: ${input.text}`,
+          });
+          
+          if (!result.text) {
+            throw new UserFacingError({
+              status: 'FAILED_PRECONDITION',
+              message: 'Generated content is empty',
+            });
+          }
+          
+          return result.text;
+        } catch (error) {
+          lastError = error as Error;
+          logger.warn(`Attempt ${attempt} failed:`, { error: error.message });
+          
+          // Don't retry for user-facing errors
+          if (error instanceof UserFacingError) {
+            throw error;
+          }
+          
+          // Wait before retrying (exponential backoff)
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+          }
+        }
+      }
+      
+      // All retries failed
+      throw new UserFacingError({
+        status: 'DEADLINE_EXCEEDED',
+        message: 'Operation failed after multiple attempts',
+        details: { attempts: maxRetries, lastError: lastError?.message },
+      });
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Implement robust error handling with retries and proper error classification:
+
+    ```go
+    func robustFlow(ctx context.Context, input FlowInput) (string, error) {
+        maxRetries := 3
+        if input.Options != nil && input.Options.MaxRetries > 0 {
+            maxRetries = input.Options.MaxRetries
+        }
+        
+        var lastErr error
+        
+        for attempt := 1; attempt <= maxRetries; attempt++ {
+            log.Printf("Attempt %d of %d", attempt, maxRetries)
+            
+            resp, err := genkit.Generate(ctx, g,
+                ai.WithPrompt("Process this text: " + input.Text),
+            )
+            
+            if err != nil {
+                lastErr = err
+                log.Printf("Attempt %d failed: %v", attempt, err)
+                
+                // Check if it's a permanent error (don't retry)
+                var validationErr *ValidationError
+                if errors.As(err, &validationErr) {
+                    return "", err // Don't retry validation errors
+                }
+                
+                // Wait before retrying (exponential backoff)
+                if attempt < maxRetries {
+                    backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+                    select {
+                    case <-time.After(backoff):
+                        continue
+                    case <-ctx.Done():
+                        return "", ctx.Err()
+                    }
+                }
+                continue
+            }
+            
+            if resp.Text() == "" {
+                return "", &ValidationError{
+                    Field:   "output",
+                    Message: "generated content is empty",
+                }
+            }
+            
+            return resp.Text(), nil
+        }
+        
+        return "", fmt.Errorf("operation failed after %d attempts, last error: %w", maxRetries, lastErr)
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Implement comprehensive error handling with retries:
+
+    ```python
+    import asyncio
+    from typing import Optional
+
+    @ai.flow()
+    async def robust_flow(input_data: dict, ctx):
+        text = input_data.get('text', '')
+        max_retries = input_data.get('options', {}).get('max_retries', 3)
+        
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Attempt {attempt} of {max_retries}")
+                
+                result = await ai.generate(
+                    prompt=f"Process this text: {text}",
+                )
+                
+                if not result.text:
+                    raise ValidationError('output', 'generated content is empty')
+                
+                return result.text
+                
+            except ValidationError:
+                # Don't retry validation errors
+                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Attempt {attempt} failed: {e}")
+                
+                # Wait before retrying (exponential backoff)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    await asyncio.sleep(backoff)
+        
+        # All retries failed
+        raise GenkitError(
+            status='DEADLINE_EXCEEDED',
+            message=f'Operation failed after {max_retries} attempts',
+            details={'last_error': str(last_error)}
+        )
+    ```
+  </TabItem>
+</Tabs>
+
+## Error handling in tools
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    Tools should handle errors gracefully and provide meaningful feedback:
+
+    ```typescript
+    const databaseTool = ai.defineTool({
+      name: 'databaseQuery',
+      description: 'Query the database for information',
+      inputSchema: z.object({
+        query: z.string(),
+        table: z.string(),
+      }),
+      outputSchema: z.array(z.record(z.any())),
+    }, async (input, { logger }) => {
+      try {
+        // Validate input
+        if (!input.query.trim()) {
+          throw new UserFacingError({
+            status: 'INVALID_ARGUMENT',
+            message: 'Query cannot be empty',
+          });
+        }
+        
+        // Execute query
+        const results = await database.query(input.query, input.table);
+        
+        logger.info('Database query executed successfully', {
+          table: input.table,
+          resultCount: results.length,
+        });
+        
+        return results;
+      } catch (error) {
+        if (error instanceof UserFacingError) {
+          throw error;
+        }
+        
+        // Log internal errors but don't expose details
+        logger.error('Database query failed', { 
+          error: error.message,
+          table: input.table 
+        });
+        
+        throw new UserFacingError({
+          status: 'INTERNAL',
+          message: 'Database query failed',
+        });
+      }
+    });
+    ```
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    Implement proper error handling in tools:
+
+    ```go
+    func databaseQueryTool(ctx context.Context, input DatabaseQueryInput) ([]map[string]interface{}, error) {
+        // Validate input
+        if strings.TrimSpace(input.Query) == "" {
+            return nil, &ValidationError{
+                Field:   "query",
+                Message: "query cannot be empty",
+            }
+        }
+        
+        // Execute query
+        results, err := database.Query(ctx, input.Query, input.Table)
+        if err != nil {
+            log.Printf("Database query failed: %v", err)
+            
+            // Check for specific database errors
+            if isDatabaseConnectionError(err) {
+                return nil, fmt.Errorf("database connection failed: %w", err)
+            }
+            
+            if isDatabaseTimeoutError(err) {
+                return nil, fmt.Errorf("database query timeout: %w", err)
+            }
+            
+            // Generic database error
+            return nil, fmt.Errorf("database query failed: %w", err)
+        }
+        
+        log.Printf("Database query executed successfully, returned %d results", len(results))
+        return results, nil
+    }
+
+    // Helper functions to classify database errors
+    func isDatabaseConnectionError(err error) bool {
+        // Implementation depends on your database driver
+        return strings.Contains(err.Error(), "connection")
+    }
+
+    func isDatabaseTimeoutError(err error) bool {
+        // Implementation depends on your database driver
+        return strings.Contains(err.Error(), "timeout")
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    Implement comprehensive error handling in tools:
+
+    ```python
+    @ai.tool()
+    def database_query_tool(input_data: dict, ctx) -> list:
+        """Query the database for information"""
+        
+        query = input_data.get('query', '').strip()
+        table = input_data.get('table', '')
+        
+        # Validate input
+        if not query:
+            raise ValidationError('query', 'query cannot be empty')
+        
+        if not table:
+            raise ValidationError('table', 'table name is required')
+        
+        try:
+            # Execute query
+            results = database.query(query, table)
+            
+            logger.info(f"Database query executed successfully, returned {len(results)} results")
+            return results
+            
+        except DatabaseConnectionError as e:
+            logger.error(f"Database connection failed: {e}")
+            raise GenkitError(
+                status='UNAVAILABLE',
+                message='Database connection failed'
+            )
+        except DatabaseTimeoutError as e:
+            logger.error(f"Database query timeout: {e}")
+            raise GenkitError(
+                status='DEADLINE_EXCEEDED',
+                message='Database query timeout'
+            )
+        except Exception as e:
+            logger.error(f"Database query failed: {e}")
+            raise GenkitError(
+                status='INTERNAL',
+                message='Database query failed'
+            )
+    ```
+  </TabItem>
+</Tabs>
+
+## Best practices
+
+### Error classification
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    - Use `UserFacingError` for errors that can be safely shown to users
+    - Use `GenkitError` for internal framework errors
+    - Let other errors be automatically sanitized by web hosting plugins
+    - Provide meaningful error messages and status codes
+    - Include relevant context in error details
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    - Create custom error types for different error categories
+    - Use error wrapping to preserve error context
+    - Implement error classification functions
+    - Provide structured error information
+    - Use appropriate logging levels for different error types
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    - Create custom exception classes for different error types
+    - Use exception chaining to preserve error context
+    - Implement proper exception handling hierarchies
+    - Provide meaningful error messages
+    - Use structured logging for error information
+  </TabItem>
+</Tabs>
+
+### Security considerations
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    - Never expose internal system details in user-facing errors
+    - Use error sanitization in production environments
+    - Log detailed error information for debugging
+    - Implement rate limiting for error-prone operations
+    - Validate all inputs to prevent injection attacks
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    - Sanitize error messages before returning to clients
+    - Use structured logging to separate internal and external error details
+    - Implement proper input validation
+    - Use context timeouts to prevent resource exhaustion
+    - Implement circuit breakers for external dependencies
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    - Sanitize exception messages in production
+    - Use different exception types for internal vs external errors
+    - Implement proper input validation and sanitization
+    - Use async timeouts for long-running operations
+    - Implement retry logic with exponential backoff
+  </TabItem>
+</Tabs>
+
+### Debugging and monitoring
+
+<Tabs syncKey="language">
+  <TabItem label="JavaScript" icon="seti:javascript">
+    - Use the Developer UI to inspect error traces
+    - Implement comprehensive logging with error context
+    - Set up error monitoring and alerting
+    - Use error tracking services for production
+    - Include correlation IDs for distributed tracing
+  </TabItem>
+  <TabItem label="Go" icon="seti:go">
+    - Use structured logging for better error analysis
+    - Implement error metrics and monitoring
+    - Use distributed tracing for complex workflows
+    - Set up alerting for error rate thresholds
+    - Include request IDs for error correlation
+  </TabItem>
+  <TabItem label="Python" icon="seti:python">
+    - Use structured logging for error analysis
+    - Implement error tracking and monitoring
+    - Use APM tools for error insights
+    - Set up alerting for error patterns
+    - Include trace IDs for error correlation
+  </TabItem>
+</Tabs>
+
+## Next steps
+
+- Learn about [observability and monitoring](/unified-docs/observability-monitoring) for tracking and debugging errors
+- Explore [developer tools](/unified-docs/developer-tools) for debugging error scenarios
+- See [creating flows](/unified-docs/creating-flows) for implementing robust error handling in workflows
+- Check out [tool calling](/unified-docs/tool-calling) for error handling in tool implementations
