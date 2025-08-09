@@ -1,27 +1,3 @@
----
-import Default from '@astrojs/starlight/components/Head.astro';
-
-const { title } = Astro.locals.starlightRoute.entry.data;
-const id = Astro.locals.starlightRoute.entry["id"];
-const { head } = Astro.locals.starlightRoute;
-
-let finalTitle = title;
-if (id.startsWith('go/')) {
-    finalTitle = title + ' - Go - Genkit';
-}
-if (id.startsWith('python/')) {
-    finalTitle = title + ' - Python - Genkit' ;
-}
-if (id.startsWith('docs/')) {
-    finalTitle = title + ' - JS - Genkit';
-}
----
-<title>{finalTitle}</title>
-{head.filter(({ tag }) => tag !== 'title').map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
-
-<!-- Load unified page manager -->
-<script is:inline>
-// Inline the unified page manager to ensure it loads immediately
 /**
  * Unified Page Manager for Genkit Documentation
  * 
@@ -64,7 +40,7 @@ class UnifiedPageManager {
       this.isRestoring = true;
       // Use opacity instead of visibility for smoother transition
       document.documentElement.style.opacity = '0';
-      document.documentElement.style.transition = 'opacity 0.08s ease-out';
+      document.documentElement.style.transition = 'opacity 0.15s ease-in-out';
       sessionStorage.removeItem(scrollKey);
     }
     
@@ -118,15 +94,17 @@ class UnifiedPageManager {
       // Restore scroll immediately
       window.scrollTo(0, position);
       
-      // Show content quickly after scroll
+      // Wait for layout to settle, then show content
       requestAnimationFrame(() => {
-        document.documentElement.style.opacity = '1';
-        this.isRestoring = false;
-        
-        // Clean up transition after it completes
-        setTimeout(() => {
-          document.documentElement.style.transition = '';
-        }, 100);
+        requestAnimationFrame(() => {
+          document.documentElement.style.opacity = '1';
+          this.isRestoring = false;
+          
+          // Clean up transition after it completes
+          setTimeout(() => {
+            document.documentElement.style.transition = '';
+          }, 150);
+        });
       });
     };
 
@@ -143,7 +121,7 @@ class UnifiedPageManager {
         document.documentElement.style.transition = '';
         this.isRestoring = false;
       }
-    }, 200);
+    }, 500);
   }
 
   setupEventListeners() {
@@ -237,44 +215,3 @@ window.languagePreferenceEnhancer = {
   getCurrentLanguage: () => unifiedPageManager.getCurrentLanguage(),
   setLanguage: (lang) => unifiedPageManager.setLanguagePublic(lang)
 };
-</script>
-
-<!-- Critical CSS to prevent FOUC and scroll flash -->
-<style is:inline>
-/* Hide ALL language content by default */
-.lang-content {
-  display: none !important;
-  visibility: hidden !important;
-}
-
-/* Show ONLY the content for the current language */
-html[data-genkit-lang="js"] .lang-content[data-lang="js"] {
-  display: block !important;
-  visibility: visible !important;
-}
-
-html[data-genkit-lang="go"] .lang-content[data-lang="go"] {
-  display: block !important;
-  visibility: visible !important;
-}
-
-html[data-genkit-lang="python"] .lang-content[data-lang="python"] {
-  display: block !important;
-  visibility: visible !important;
-}
-
-/* Language selector pills styling */
-.lang-pill {
-  background: var(--sl-color-bg, #fff);
-  color: var(--sl-color-text, #000);
-  border: 1px solid var(--sl-color-gray-4, #ccc);
-}
-
-html[data-genkit-lang="js"] .lang-pill[data-lang="js"],
-html[data-genkit-lang="go"] .lang-pill[data-lang="go"],
-html[data-genkit-lang="python"] .lang-pill[data-lang="python"] {
-  background: var(--sl-color-accent, #0066cc) !important;
-  color: var(--sl-color-white, #fff) !important;
-  border-color: var(--sl-color-accent, #0066cc) !important;
-}
-</style>
