@@ -14,28 +14,9 @@
  * limitations under the License.
  */
 
-import { readdir, readFile, writeFile } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
-import { parse } from 'yaml';
-
-export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
-const LANGUAGE_CONTENT_REGEX = /<LanguageContent\s+lang="([^"]+)"[^>]*>([\s\S]*?)<\/LanguageContent>/g;
-const IMPORT_REGEX = /^import\s+.*$/gm;
-const COMPONENT_REGEX = /<[A-Z][a-zA-Z]*\s*(?:[^>]*)?\/?>(?:[\s\S]*?<\/[A-Z][a-zA-Z]*>)?/g;
-const ASTRO_DIRECTIVE_REGEX = /:::[\s\S]*?:::/g;
-const LINK_BUTTON_REGEX = /<LinkButton[\s\S]*?<\/LinkButton>/g;
-
-interface ProcessedDoc {
-  title: string;
-  description?: string;
-  content: {
-    js: string;
-    go: string;
-    python: string;
-    common: string; // Content outside of LanguageContent blocks
-  };
-  path: string;
-}
+import { getAllProcessedDocuments, type ProcessedDocument } from './utils/content-processor.js';
 
 interface LanguageSet {
   label: string;
@@ -133,96 +114,7 @@ const LANGUAGE_SETS: LanguageSet[] = [
   },
 ];
 
-export function extractFrontmatterAndBody(source: string) {
-  const match = source.match(FRONTMATTER_AND_BODY_REGEX);
-  if (match) {
-    const [, frontmatter, body] = match;
-    return { frontmatter: parse(frontmatter), body };
-  }
-  return { frontmatter: {}, body: source };
-}
-
-function extractLanguageContent(content: string): ProcessedDoc['content'] {
-  const result = {
-    js: '',
-    go: '',
-    python: '',
-    common: ''
-  };
-
-  // Extract all LanguageContent blocks
-  const languageBlocks: Array<{ lang: string; content: string; start: number; end: number }> = [];
-  let match;
-  
-  while ((match = LANGUAGE_CONTENT_REGEX.exec(content)) !== null) {
-    languageBlocks.push({
-      lang: match[1],
-      content: match[2].trim(),
-      start: match.index,
-      end: match.index + match[0].length
-    });
-  }
-
-  // Extract common content (everything outside LanguageContent blocks)
-  let commonContent = content;
-  for (let i = languageBlocks.length - 1; i >= 0; i--) {
-    const block = languageBlocks[i];
-    commonContent = commonContent.slice(0, block.start) + commonContent.slice(block.end);
-  }
-
-  // Clean up common content
-  result.common = commonContent
-    .replace(IMPORT_REGEX, '') // Remove import statements
-    .replace(COMPONENT_REGEX, '') // Remove React/Astro components
-    .replace(ASTRO_DIRECTIVE_REGEX, '') // Remove Astro directives like :::caution
-    .replace(LINK_BUTTON_REGEX, '') // Remove LinkButton components
-    .replace(/\n\s*\n\s*\n/g, '\n\n') // Normalize multiple newlines
-    .trim();
-
-  // Process language-specific content
-  for (const block of languageBlocks) {
-    const lang = block.lang.toLowerCase();
-    if (lang === 'js' || lang === 'javascript') {
-      result.js += block.content + '\n\n';
-    } else if (lang === 'go') {
-      result.go += block.content + '\n\n';
-    } else if (lang === 'python') {
-      result.python += block.content + '\n\n';
-    }
-  }
-
-  // Trim trailing whitespace
-  result.js = result.js.trim();
-  result.go = result.go.trim();
-  result.python = result.python.trim();
-
-  return result;
-}
-
-async function processUnifiedDoc(filePath: string): Promise<ProcessedDoc | null> {
-  try {
-    const content = await readFile(filePath, 'utf-8');
-    const { frontmatter, body } = extractFrontmatterAndBody(content);
-    
-    if (!frontmatter.title) {
-      return null; // Skip files without titles
-    }
-
-    const processedContent = extractLanguageContent(body);
-    
-    return {
-      title: frontmatter.title,
-      description: frontmatter.description,
-      content: processedContent,
-      path: filePath
-    };
-  } catch (error) {
-    console.warn(`Failed to process ${filePath}:`, error);
-    return null;
-  }
-}
-
-function generateLanguageSpecificContent(docs: ProcessedDoc[], language: 'js' | 'go' | 'python'): string {
+function generateLanguageSpecificContent(docs: ProcessedDocument[], language: 'js' | 'go' | 'python'): string {
   const languageNames = {
     js: 'JavaScript',
     go: 'Go',
@@ -232,36 +124,20 @@ function generateLanguageSpecificContent(docs: ProcessedDoc[], language: 'js' | 
   let content = `# Genkit Documentation - ${languageNames[language]}\n\n`;
   content += `> Open-source GenAI toolkit for ${languageNames[language]}.\n\n`;
 
-  for (const doc of docs) {
-    const langContent = doc.content[language];
-    const commonContent = doc.content.common;
-    
-    // Only include docs that have content for this language or common content
-    if (langContent || commonContent) {
-      content += `## ${doc.title}\n\n`;
-      
-      if (doc.description) {
-        content += `${doc.description}\n\n`;
-      }
-      
-      // Add common content first
-      if (commonContent) {
-        content += `${commonContent}\n\n`;
-      }
-      
-      // Add language-specific content
-      if (langContent) {
-        content += `${langContent}\n\n`;
-      }
-      
-      content += '---\n\n';
+  // Get all unique paths from all language sets
+  const allPaths = [...new Set(LANGUAGE_SETS.flatMap(set => set.paths))];
+  
+  for (const docPath of allPaths) {
+    const doc = docs.find(d => d.slug === docPath);
+    if (doc && doc.content[language]) {
+      content += `${doc.content[language]}\n\n---\n\n`;
     }
   }
 
   return content;
 }
 
-function generateLanguageSpecificSet(docs: ProcessedDoc[], set: LanguageSet, language: 'js' | 'go' | 'python'): string {
+function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet, language: 'js' | 'go' | 'python'): string {
   const languageNames = {
     js: 'JavaScript',
     go: 'Go',
@@ -271,41 +147,17 @@ function generateLanguageSpecificSet(docs: ProcessedDoc[], set: LanguageSet, lan
   let content = `# ${set.label} - ${languageNames[language]}\n\n`;
   content += `${set.description}\n\n`;
 
-  // Filter docs that are in this set
-  const setDocs = docs.filter(doc => 
-    set.paths.some(setPath => doc.path.includes(setPath.replace('unified-docs/', '')))
-  );
-
-  for (const doc of setDocs) {
-    const langContent = doc.content[language];
-    const commonContent = doc.content.common;
-    
-    // Only include docs that have content for this language or common content
-    if (langContent || commonContent) {
-      content += `## ${doc.title}\n\n`;
-      
-      if (doc.description) {
-        content += `${doc.description}\n\n`;
-      }
-      
-      // Add common content first
-      if (commonContent) {
-        content += `${commonContent}\n\n`;
-      }
-      
-      // Add language-specific content
-      if (langContent) {
-        content += `${langContent}\n\n`;
-      }
-      
-      content += '---\n\n';
+  for (const docPath of set.paths) {
+    const doc = docs.find(d => d.slug === docPath);
+    if (doc && doc.content[language]) {
+      content += `${doc.content[language]}\n\n---\n\n`;
     }
   }
 
   return content;
 }
 
-async function generateMainLlmsTxt(): Promise<string> {
+function generateMainLlmsTxt(): string {
   const content = `# Genkit
 
 > Open-source GenAI toolkit for JS, Go, and Python.
@@ -355,31 +207,22 @@ async function generateMainLlmsTxt(): Promise<string> {
   return content;
 }
 
-export async function processUnifiedDocs(): Promise<void> {
-  console.log('Processing unified documentation for language-specific llms.txt generation...');
+export async function generateLlmsDirectly(): Promise<void> {
+  console.log('Generating llms.txt files directly from source files...');
   
-  const unifiedDocsDir = 'src/content/docs/unified-docs';
   const outputDir = 'public';
+  const llmsTxtDir = path.join(outputDir, '_llms-txt');
   
-  // Find all MDX files in unified-docs
-  const allFiles = await readdir(unifiedDocsDir, { recursive: true });
-  const mdxFiles = allFiles
-    .filter(f => f.endsWith('.mdx'))
-    .map(f => path.join(unifiedDocsDir, f));
+  // Ensure output directories exist
+  await mkdir(llmsTxtDir, { recursive: true });
   
   // Process all documents
-  const processedDocs: ProcessedDoc[] = [];
-  for (const file of mdxFiles) {
-    const doc = await processUnifiedDoc(file);
-    if (doc) {
-      processedDocs.push(doc);
-    }
-  }
-  
-  console.log(`Processed ${processedDocs.length} unified documentation files`);
+  console.log('Processing all documentation files...');
+  const docs = await getAllProcessedDocuments();
+  console.log(`Processed ${docs.length} documents`);
   
   // Generate main llms.txt
-  const mainContent = await generateMainLlmsTxt();
+  const mainContent = generateMainLlmsTxt();
   await writeFile(path.join(outputDir, 'llms.txt'), mainContent);
   console.log('Generated main llms.txt');
   
@@ -387,33 +230,36 @@ export async function processUnifiedDocs(): Promise<void> {
   const languages: Array<'js' | 'go' | 'python'> = ['js', 'go', 'python'];
   
   for (const lang of languages) {
-    const content = generateLanguageSpecificContent(processedDocs, lang);
+    console.log(`Generating complete documentation for ${lang}...`);
+    const content = generateLanguageSpecificContent(docs, lang);
     await writeFile(path.join(outputDir, `llms-${lang}.txt`), content);
     console.log(`Generated llms-${lang}.txt`);
   }
   
   // Generate language-specific thematic sets
   for (const lang of languages) {
+    console.log(`Generating thematic sets for ${lang}...`);
     for (const set of LANGUAGE_SETS) {
-      const content = generateLanguageSpecificSet(processedDocs, set, lang);
+      const content = generateLanguageSpecificSet(docs, set, lang);
       const filename = `${set.label.toLowerCase().replace(/\s+/g, '-')}-${lang}.txt`;
-      await writeFile(path.join(outputDir, '_llms-txt', filename), content);
+      await writeFile(path.join(llmsTxtDir, filename), content);
     }
     console.log(`Generated thematic sets for ${lang}`);
   }
   
-  // Generate developer tools (language-agnostic)
+  // Generate developer tools (language-agnostic, use js as base)
   const devToolsSet = LANGUAGE_SETS.find(s => s.label === 'Developer Tools');
-  
   if (devToolsSet) {
-    const content = generateLanguageSpecificSet(processedDocs, devToolsSet, 'js'); // Use js as base but will include common content
-    await writeFile(path.join(outputDir, '_llms-txt', 'developer-tools.txt'), content);
+    console.log('Generating developer tools documentation...');
+    const content = generateLanguageSpecificSet(docs, devToolsSet, 'js');
+    await writeFile(path.join(llmsTxtDir, 'developer-tools.txt'), content);
+    console.log('Generated developer-tools.txt');
   }
   
-  console.log('Unified documentation processing complete!');
+  console.log('LLMs.txt generation from source files complete!');
 }
 
 // Run if called directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  processUnifiedDocs().catch(console.error);
+  generateLlmsDirectly().catch(console.error);
 }
