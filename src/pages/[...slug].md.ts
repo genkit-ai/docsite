@@ -3,6 +3,77 @@ import type { APIContext } from 'astro';
 import fs from 'node:fs/promises';
 // 'path' module is not needed when using entry.filePath directly
 
+// Language filtering utility function
+function filterContentByLanguage(content: string, targetLang: string = 'js'): string {
+  // Normalize language parameter
+  const normalizedLang = normalizeLanguage(targetLang);
+  
+  // Remove the language controls div (contains LanguageSelector and CopyMarkdownButton)
+  content = content.replace(/<div[^>]*language-controls[^>]*>[\s\S]*?<\/div>/g, '');
+  content = content.replace(/<div[^>]*style="[^"]*display:\s*flex[^"]*justify-content:\s*space-between[^"]*">[\s\S]*?<\/div>/g, '');
+  
+  // Remove LanguageSelector components
+  content = content.replace(/<LanguageSelector[^>]*\/>/g, '');
+  content = content.replace(/<LanguageSelector[^>]*>[\s\S]*?<\/LanguageSelector>/g, '');
+  
+  // Remove CopyMarkdownButton components
+  content = content.replace(/<CopyMarkdownButton[^>]*\/>/g, '');
+  content = content.replace(/<CopyMarkdownButton[^>]*>[\s\S]*?<\/CopyMarkdownButton>/g, '');
+  
+  // Process LanguageContent blocks
+  // First, find all LanguageContent blocks
+  const languageContentRegex = /<LanguageContent\s+lang=["']([^"']+)["'][^>]*>([\s\S]*?)<\/LanguageContent>/g;
+  
+  let filteredContent = content;
+  let match;
+  const replacements: { original: string; replacement: string }[] = [];
+  
+  // Reset regex lastIndex to ensure we find all matches
+  languageContentRegex.lastIndex = 0;
+  
+  // Collect all LanguageContent blocks
+  while ((match = languageContentRegex.exec(content)) !== null) {
+    const [fullMatch, lang, innerContent] = match;
+    const normalizedBlockLang = normalizeLanguage(lang);
+    
+    if (normalizedBlockLang === normalizedLang) {
+      // Keep content for matching language, but remove the wrapper
+      replacements.push({
+        original: fullMatch,
+        replacement: innerContent.trim()
+      });
+    } else {
+      // Remove content for non-matching languages
+      replacements.push({
+        original: fullMatch,
+        replacement: ''
+      });
+    }
+  }
+  
+  // Apply replacements
+  for (const { original, replacement } of replacements) {
+    filteredContent = filteredContent.replace(original, replacement);
+  }
+  
+  // Clean up extra whitespace
+  filteredContent = filteredContent.replace(/\n{3,}/g, '\n\n');
+  
+  return filteredContent.trim();
+}
+
+function normalizeLanguage(lang: string): string {
+  const langMap: Record<string, string> = {
+    'js': 'js',
+    'javascript': 'js',
+    'go': 'go',
+    'golang': 'go',
+    'python': 'python',
+    'py': 'python'
+  };
+  return langMap[lang.toLowerCase()] || 'js';
+}
+
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
   // Use flatMap to handle entries potentially generating multiple paths
@@ -41,7 +112,11 @@ export async function getStaticPaths() {
             const primaryContent = `# ${title}\n\n${llmContent}`;
             entryPaths.push({
               params: { slug: slug },
-              props: { processedContent: primaryContent },
+              props: { 
+                processedContent: primaryContent,
+                rawContent: primaryContent,
+                title: title
+              },
             });
 
             // 1b. Generate .full.md path (Processed full content + title)
@@ -64,7 +139,11 @@ export async function getStaticPaths() {
 
             entryPaths.push({
               params: { slug: slug + '.full' }, // Append .full to slug
-              props: { processedContent: fullProcessedContent },
+              props: { 
+                processedContent: fullProcessedContent,
+                rawContent: fullProcessedContent,
+                title: title
+              },
             });
           } else {
             // --- Case 2: <LLMs> tag NOT found ---
@@ -95,10 +174,32 @@ export async function getStaticPaths() {
             // 2c. Prepend H1 title
             standardProcessedContent = `# ${title}\n\n${standardProcessedContent}`;
 
-            // Add the single path for standard processing
+            // Add paths for each language
+            const languages = ['js', 'go', 'python'];
+            
+            // Default path (JavaScript)
             entryPaths.push({
               params: { slug: slug },
-              props: { processedContent: standardProcessedContent },
+              props: { 
+                processedContent: standardProcessedContent,
+                rawContent: standardProcessedContent,
+                title: title,
+                language: 'js'
+              },
+            });
+            
+            // Language-specific paths
+            languages.forEach(lang => {
+              const filteredContent = filterContentByLanguage(standardProcessedContent, lang);
+              entryPaths.push({
+                params: { slug: `${slug}.${lang}` },
+                props: { 
+                  processedContent: filteredContent,
+                  rawContent: filteredContent,
+                  title: title,
+                  language: lang
+                },
+              });
             });
           }
           // --- End Content Processing ---
@@ -116,8 +217,8 @@ export async function getStaticPaths() {
   return paths.filter((p) => p.props.processedContent);
 }
 
-// The GET function remains the same, using the processedContent from props
-export async function GET({ props }: APIContext<{ processedContent: string }>) {
+// GET function returns the pre-processed content
+export async function GET({ props }: APIContext<{ processedContent: string; rawContent?: string; title?: string; language?: string }>) {
   return new Response(props.processedContent, {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
