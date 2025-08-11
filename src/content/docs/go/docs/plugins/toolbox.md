@@ -33,8 +33,7 @@ go get github.com/googleapis/mcp-toolbox-sdk-go
 
 ### Loading Toolbox Tools
 
-Once you’re Toolbox server is configured and up and running, you can load tools
-from your server using ADK:
+Once you’re Toolbox server is configured and up and running, you can load tools from your server:
 
 ```go
 package main
