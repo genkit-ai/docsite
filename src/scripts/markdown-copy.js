@@ -39,7 +39,9 @@ class MarkdownCopyManager {
       
       // Get the current page URL and construct the language-specific .md endpoint
       const currentPath = window.location.pathname;
-      const mdUrl = `${currentPath}.${currentLang}.md`;
+      // Remove trailing slash if present, then add language extension
+      const basePath = currentPath.replace(/\/$/, '');
+      const mdUrl = `${basePath}.${currentLang}.md`;
       
       // Fetch the language-filtered markdown
       const response = await fetch(mdUrl);
