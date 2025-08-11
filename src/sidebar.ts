@@ -1,5 +1,6 @@
 const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
+  { label: "Changelog", link: "/releases" },
   { label: "Developer tools", slug: "docs/devtools" },
   { label: "Genkit MCP Server", slug: "genkit-mcp" },
   {
