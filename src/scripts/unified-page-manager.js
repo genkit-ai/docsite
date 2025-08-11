@@ -75,6 +75,13 @@ class UnifiedPageManager {
     if (urlLang) {
       localStorage.setItem(this.storageKeys.language, normalizedLang);
     }
+    
+    // If we have a stored language preference but no URL parameter, update the URL
+    if (!urlLang && storedLang && normalizedLang !== 'js') {
+      const url = new URL(window.location);
+      url.searchParams.set('lang', normalizedLang);
+      window.history.replaceState({}, '', url);
+    }
   }
 
   normalizeLanguage(lang) {
