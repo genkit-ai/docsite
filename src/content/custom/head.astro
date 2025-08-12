@@ -133,10 +133,11 @@ class UnifiedPageManager {
   constructor() {
     this.storageKeys = {
       scroll: 'genkit-scroll-',
-      language: 'genkit-preferred-language'
+      globalPreference: 'genkit-global-language-preference',
+      currentLanguage: 'genkit-current-language'
     };
-    this.languages = ['JavaScript', 'Go', 'Python'];
-    this.defaultLanguage = 'JavaScript';
+    this.languages = ['js', 'go', 'python'];
+    this.defaultLanguage = 'js';
     this.isInitialized = false;
     this.isRestoring = false;
     
@@ -179,29 +180,105 @@ class UnifiedPageManager {
   }
 
   setupLanguage() {
-    // Get language from URL or storage
+    // Get supported languages for this page from LanguageSelector component
+    const supportedLanguages = this.getPageSupportedLanguages();
+    
+    // Get language preferences
     const params = new URLSearchParams(window.location.search);
     const urlLang = params.get('lang');
-    const storedLang = localStorage.getItem(this.storageKeys.language);
-    const currentLang = urlLang || storedLang || 'js';
+    const globalPreference = localStorage.getItem(this.storageKeys.globalPreference);
+    const currentLanguage = localStorage.getItem(this.storageKeys.currentLanguage);
     
-    // Normalize language value
-    const normalizedLang = this.normalizeLanguage(currentLang);
+    // Determine the best language for this page
+    const selectedLang = this.selectLanguageForPage(
+      supportedLanguages, 
+      urlLang, 
+      globalPreference, 
+      currentLanguage
+    );
+    
+    // Check if we need to redirect due to unsupported language
+    const normalizedUrlLang = urlLang ? this.normalizeLanguage(urlLang) : null;
+    const needsRedirect = normalizedUrlLang && !supportedLanguages.includes(normalizedUrlLang);
+    
+    // Always ensure URL reflects the selected language
+    const currentUrl = new URL(window.location);
+    const currentUrlLang = currentUrl.searchParams.get('lang');
+    const shouldUpdateUrl = needsRedirect || 
+                           (selectedLang !== 'js' && currentUrlLang !== selectedLang) ||
+                           (selectedLang === 'js' && currentUrlLang !== null);
+    
+    if (shouldUpdateUrl) {
+      if (selectedLang === 'js') {
+        currentUrl.searchParams.delete('lang');
+      } else {
+        currentUrl.searchParams.set('lang', selectedLang);
+      }
+      window.history.replaceState({}, '', currentUrl);
+    }
+    
+    // Set current page language (may be different from global preference)
+    localStorage.setItem(this.storageKeys.currentLanguage, selectedLang);
+    
+    // Update global preference if user explicitly chose this language
+    if (urlLang && !needsRedirect) {
+      localStorage.setItem(this.storageKeys.globalPreference, selectedLang);
+    }
+    
+    // Handle redirect notice
+    if (needsRedirect) {
+      this.showRedirectNotice(normalizedUrlLang, selectedLang);
+    } else {
+      this.hideRedirectNotice();
+    }
     
     // Set HTML attribute immediately
-    document.documentElement.setAttribute('data-genkit-lang', normalizedLang);
+    document.documentElement.setAttribute('data-genkit-lang', selectedLang);
+  }
+
+  getPageSupportedLanguages() {
+    // Try to detect supported languages from the page
+    // Look for LanguageSelector component with supportedLanguages data
+    const languageSelector = document.querySelector('.language-selector');
+    if (languageSelector) {
+      const pills = languageSelector.querySelectorAll('.lang-pill[data-lang]');
+      if (pills.length > 0) {
+        return Array.from(pills).map(pill => pill.dataset.lang);
+      }
+    }
     
-    // Store preference if it came from URL
+    // Fallback: assume all languages are supported
+    return this.languages;
+  }
+
+  selectLanguageForPage(supportedLanguages, urlLang, globalPreference, currentLanguage) {
+    // Priority order:
+    // 1. URL language (if supported)
+    // 2. Global preference (if supported) 
+    // 3. Current language (if supported)
+    // 4. Default fallback
+    
     if (urlLang) {
-      localStorage.setItem(this.storageKeys.language, normalizedLang);
+      const normalized = this.normalizeLanguage(urlLang);
+      if (supportedLanguages.includes(normalized)) {
+        return normalized;
+      }
     }
     
-    // If we have a stored language preference but no URL parameter, update the URL
-    if (!urlLang && storedLang && normalizedLang !== 'js') {
-      const url = new URL(window.location);
-      url.searchParams.set('lang', normalizedLang);
-      window.history.replaceState({}, '', url);
+    if (globalPreference && supportedLanguages.includes(globalPreference)) {
+      return globalPreference;
     }
+    
+    if (currentLanguage && supportedLanguages.includes(currentLanguage)) {
+      return currentLanguage;
+    }
+    
+    // Fallback logic
+    if (supportedLanguages.includes('js')) {
+      return 'js';
+    }
+    
+    return supportedLanguages[0] || 'js';
   }
 
   normalizeLanguage(lang) {
@@ -279,7 +356,7 @@ class UnifiedPageManager {
     }
   }
 
-  setLanguage(lang) {
+  setLanguage(lang, isUserChoice = true) {
     const normalizedLang = this.normalizeLanguage(lang);
     
     // Update URL
@@ -292,8 +369,13 @@ class UnifiedPageManager {
     
     window.history.replaceState({}, '', url);
     
-    // Store preference
-    localStorage.setItem(this.storageKeys.language, normalizedLang);
+    // Store current page language
+    localStorage.setItem(this.storageKeys.currentLanguage, normalizedLang);
+    
+    // Only update global preference if user explicitly chose this
+    if (isUserChoice) {
+      localStorage.setItem(this.storageKeys.globalPreference, normalizedLang);
+    }
     
     // Update HTML attribute
     document.documentElement.setAttribute('data-genkit-lang', normalizedLang);
@@ -310,6 +392,22 @@ class UnifiedPageManager {
       const isActive = pill.dataset.lang === currentLang;
       pill.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
+    
+    // Check if current language is supported and show/hide redirect notice accordingly
+    this.updateRedirectNotice(currentLang);
+  }
+
+  updateRedirectNotice(currentLang) {
+    const supportedLanguages = this.getPageSupportedLanguages();
+    const isLanguageSupported = supportedLanguages.includes(currentLang);
+    
+    if (!isLanguageSupported) {
+      // Find the best supported language to show instead
+      const fallbackLang = supportedLanguages.includes('js') ? 'js' : supportedLanguages[0];
+      this.showRedirectNotice(currentLang, fallbackLang);
+    } else {
+      this.hideRedirectNotice();
+    }
   }
 
   // Public method to get current language
@@ -320,6 +418,70 @@ class UnifiedPageManager {
   // Public method to manually set language
   setLanguagePublic(language) {
     this.setLanguage(language);
+  }
+
+  // Show language-specific notice
+  showLanguageNotice(language, fallbackLanguage = 'JavaScript') {
+    // Hide all notices first
+    this.hideAllLanguageNotices();
+    
+    // Try to show the specific notice for this language
+    const specificNotice = document.getElementById(`language-redirect-notice-${language}`);
+    if (specificNotice) {
+      specificNotice.style.display = 'block';
+      return;
+    }
+    
+    // If no specific notice exists, generate the default notice dynamically
+    const defaultNotice = document.getElementById('language-redirect-notice-default');
+    if (defaultNotice) {
+      // Language labels mapping
+      const languageLabels = {
+        js: 'JavaScript',
+        go: 'Go', 
+        python: 'Python'
+      };
+      
+      const selectedLanguageLabel = languageLabels[language] || language;
+      const fallbackLanguageLabel = languageLabels[fallbackLanguage] || fallbackLanguage;
+      
+      // Generate the complete aside HTML structure
+      const asideHTML = `
+        <div class="starlight-aside starlight-aside--caution">
+          <p class="starlight-aside__title" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon">
+              <path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 16v-2h2v2h-2zm0-4V8h2v4h-2z"/>
+            </svg>
+            ${selectedLanguageLabel} unavailable
+          </p>
+          <section class="starlight-aside__content">
+            <p>The features described in this document are unavailable for ${selectedLanguageLabel}. Showing the documentation for ${fallbackLanguageLabel} instead.</p>
+          </section>
+        </div>
+      `;
+      
+      // Replace the content and show the notice
+      defaultNotice.innerHTML = asideHTML;
+      defaultNotice.style.display = 'block';
+    }
+  }
+
+  // Hide all language notices
+  hideAllLanguageNotices() {
+    const allNotices = document.querySelectorAll('[id^="language-redirect-notice-"]');
+    allNotices.forEach(notice => {
+      notice.style.display = 'none';
+    });
+  }
+
+  // Show redirect notice when user is redirected from unsupported language
+  showRedirectNotice(originalLang, redirectedLang) {
+    this.showLanguageNotice(originalLang, redirectedLang);
+  }
+
+  // Hide redirect notice
+  hideRedirectNotice() {
+    this.hideAllLanguageNotices();
   }
 }
 
@@ -358,18 +520,19 @@ html.scroll-restoring .right-sidebar {
   visibility: hidden !important;
 }
 
-/* Show ONLY the content for the current language */
-html[data-genkit-lang="js"] .lang-content[data-lang="js"] {
+/* Show content for the current language (single or multi-language blocks) */
+/* Using ~= selector to match space-separated values in data-lang attribute */
+html[data-genkit-lang="js"] .lang-content[data-lang~="js"] {
   display: block !important;
   visibility: visible !important;
 }
 
-html[data-genkit-lang="go"] .lang-content[data-lang="go"] {
+html[data-genkit-lang="go"] .lang-content[data-lang~="go"] {
   display: block !important;
   visibility: visible !important;
 }
 
-html[data-genkit-lang="python"] .lang-content[data-lang="python"] {
+html[data-genkit-lang="python"] .lang-content[data-lang~="python"] {
   display: block !important;
   visibility: visible !important;
 }

@@ -198,6 +198,63 @@ class UnifiedPageManager {
       const isActive = pill.dataset.lang === currentLang;
       pill.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
+    
+    // Handle language redirect notices
+    this.updateLanguageRedirectNotices(currentLang);
+  }
+
+  updateLanguageRedirectNotices(currentLang) {
+    const notices = document.querySelectorAll('#language-redirect-notice');
+    
+    notices.forEach(notice => {
+      const customMessage = notice.dataset.customMessage;
+      const customMessages = notice.dataset.customMessages ? JSON.parse(notice.dataset.customMessages) : {};
+      
+      // Get the supported languages from the nearest language selector
+      const languageSelector = notice.closest('article')?.querySelector('.language-selector') || 
+                              document.querySelector('.language-selector');
+      
+      let supportedLanguages = ['js', 'go']; // default
+      if (languageSelector) {
+        // Get supported languages from the actual buttons in the selector
+        const langButtons = languageSelector.querySelectorAll('.lang-pill[data-lang]');
+        if (langButtons.length > 0) {
+          supportedLanguages = Array.from(langButtons).map(button => button.dataset.lang);
+        }
+      }
+      
+      // Check if current language is supported
+      const isLanguageSupported = supportedLanguages.includes(currentLang);
+      
+      if (!isLanguageSupported) {
+        // Show the notice with appropriate message
+        let message = customMessage || `This content is not available for ${this.getLanguageDisplayName(currentLang)}.`;
+        
+        // Use custom message for specific language if available
+        if (customMessages[currentLang]) {
+          message = customMessages[currentLang];
+        }
+        
+        const messageContent = notice.querySelector('#redirect-message-content');
+        if (messageContent) {
+          messageContent.innerHTML = message;
+        }
+        
+        notice.style.display = 'block';
+      } else {
+        // Hide the notice
+        notice.style.display = 'none';
+      }
+    });
+  }
+
+  getLanguageDisplayName(lang) {
+    const displayNames = {
+      'js': 'JavaScript',
+      'go': 'Go',
+      'python': 'Python'
+    };
+    return displayNames[lang] || lang;
   }
 
   // Public method to get current language
