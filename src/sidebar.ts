@@ -304,6 +304,7 @@ const UNIFIED_SIDEBAR = [
   {
     label: "AI Providers",
     items: [
+      { label: "Overview", slug: "unified-docs/plugins/overview" },
       { label: "Google AI", slug: "unified-docs/plugins/google-ai" },
       { label: "Vertex AI", slug: "unified-docs/plugins/vertex-ai" },
       { label: "OpenAI", slug: "unified-docs/plugins/openai" },
