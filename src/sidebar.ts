@@ -285,6 +285,13 @@ const UNIFIED_SIDEBAR = [
   { label: "Developer tools", slug: "unified-docs/developer-tools" },
   { label: "MCP Server", slug: "unified-docs/mcp-server" },
   {
+    label: "Tutorials",
+    items: [
+      { label: "Chat with a PDF", slug: "unified-docs/tutorials/chat-with-pdf" },
+      { label: "Summarize YouTube videos", slug: "unified-docs/tutorials/summarize-youtube-videos" },
+    ],
+  },
+  {
     label: "Building AI workflows",
     items: [
       { label: "Generating content", slug: "unified-docs/generating-content" },
@@ -299,6 +306,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Building multi-agent systems", slug: "unified-docs/multi-agent-systems" },
       { label: "Error handling", slug: "unified-docs/error-handling" },
       { label: "Evaluation", slug: "unified-docs/evaluation" },
+      { label: "Local observability and metrics", slug: "unified-docs/local-observability" },
     ],
   },
   {
@@ -308,6 +316,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Google AI", slug: "unified-docs/plugins/google-ai" },
       { label: "Vertex AI", slug: "unified-docs/plugins/vertex-ai" },
       { label: "OpenAI", slug: "unified-docs/plugins/openai" },
+      { label: "OpenAI-Compatible APIs", slug: "unified-docs/plugins/openai-compatible" },
       { label: "Anthropic (Claude)", slug: "unified-docs/plugins/anthropic" },
       { label: "xAI (Grok)", slug: "unified-docs/plugins/xai" },
       { label: "DeepSeek", slug: "unified-docs/plugins/deepseek" },
@@ -324,6 +333,7 @@ const UNIFIED_SIDEBAR = [
       { label: "LanceDB", slug: "unified-docs/vector-databases/lancedb" },
       { label: "Astra DB", slug: "unified-docs/vector-databases/astra-db" },
       { label: "Neo4j", slug: "unified-docs/vector-databases/neo4j" },
+      { label: "AlloyDB for PostgreSQL", slug: "unified-docs/vector-databases/alloydb" },
       { label: "Cloud SQL PostgreSQL", slug: "unified-docs/vector-databases/cloud-sql-postgresql" },
       { label: "Cloud Firestore", slug: "unified-docs/vector-databases/cloud-firestore" },
     ],
@@ -333,6 +343,7 @@ const UNIFIED_SIDEBAR = [
     items: [
       { label: "Express.js", slug: "unified-docs/frameworks/express" },
       { label: "Next.js", slug: "unified-docs/frameworks/nextjs" },
+      { label: "Angular", slug: "unified-docs/frameworks/angular" },
     ],
   },
   {
@@ -343,6 +354,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Cloud Run", slug: "unified-docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "unified-docs/deployment/any-platform" },
       { label: "Authorization & Security", slug: "unified-docs/deployment/authorization" },
+      { label: "Client Access Patterns", slug: "unified-docs/client-access" },
     ],
   },
   {
@@ -360,6 +372,18 @@ const UNIFIED_SIDEBAR = [
       { label: "Authentication & Setup", slug: "unified-docs/observability/authentication" },
       { label: "Advanced Configuration", slug: "unified-docs/observability/advanced-configuration" },
       { label: "Troubleshooting", slug: "unified-docs/observability/troubleshooting" },
+    ],
+  },
+  {
+    label: "Templates",
+    items: [
+      { label: "pgvector Retriever", slug: "unified-docs/templates/pgvector-retriever" },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { label: "API References", slug: "unified-docs/api-references" },
     ],
   },
 ];
