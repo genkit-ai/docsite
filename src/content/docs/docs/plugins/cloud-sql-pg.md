@@ -7,7 +7,7 @@ The Cloud SQL for PostgreSQL plugin provides indexer and retriever implementatio
 
 ## Installation
 
-```posix-terminal
+```bash
 npm i --save genkitx-cloud-sql-pg
 ```
 
