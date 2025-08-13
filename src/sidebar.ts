@@ -282,7 +282,7 @@ const PYTHON_SIDEBAR = [
 
 const UNIFIED_SIDEBAR = [
   { label: "Get started", slug: "unified-docs/get-started" },
-  { label: "Developer tools", slug: "unified-docs/developer-tools" },
+  { label: "Developer tools", slug: "unified-docs/devtools" },
   { label: "MCP Server", slug: "unified-docs/mcp-server" },
   {
     label: "Tutorials",
@@ -294,16 +294,16 @@ const UNIFIED_SIDEBAR = [
   {
     label: "Building AI workflows",
     items: [
-      { label: "Generating content", slug: "unified-docs/generating-content" },
+      { label: "Generating content", slug: "unified-docs/models" },
       { label: "Passing information through context", slug: "unified-docs/context" },
-      { label: "Creating flows", slug: "unified-docs/creating-flows" },
+      { label: "Creating flows", slug: "unified-docs/flows" },
       { label: "Managing prompts with Dotprompt", slug: "unified-docs/dotprompt" },
-      { label: "Creating persistent chat sessions", slug: "unified-docs/chat-sessions" },
+      { label: "Creating persistent chat sessions", slug: "unified-docs/chat" },
       { label: "Tool calling", slug: "unified-docs/tool-calling" },
       { label: "Model Context Protocol (MCP)", slug: "unified-docs/model-context-protocol" },
       { label: "Pause generation using interrupts", slug: "unified-docs/interrupts" },
       { label: "Retrieval-augmented generation (RAG)", slug: "unified-docs/rag" },
-      { label: "Building multi-agent systems", slug: "unified-docs/multi-agent-systems" },
+      { label: "Building multi-agent systems", slug: "unified-docs/multi-agent" },
       { label: "Error handling", slug: "unified-docs/error-handling" },
       { label: "Evaluation", slug: "unified-docs/evaluation" },
       { label: "Local observability and metrics", slug: "unified-docs/local-observability" },
@@ -354,7 +354,7 @@ const UNIFIED_SIDEBAR = [
       { label: "Cloud Run", slug: "unified-docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "unified-docs/deployment/any-platform" },
       { label: "Authorization & Security", slug: "unified-docs/deployment/authorization" },
-      { label: "Client Access Patterns", slug: "unified-docs/client-access" },
+      { label: "Client Access Patterns", slug: "unified-docs/client" },
     ],
   },
   {

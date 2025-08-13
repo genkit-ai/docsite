@@ -17,6 +17,7 @@
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { getAllProcessedDocuments, type ProcessedDocument } from './utils/content-processor.js';
+import { sidebar } from './sidebar.js';
 
 interface LanguageSet {
   label: string;
@@ -24,95 +25,127 @@ interface LanguageSet {
   paths: string[];
 }
 
-const LANGUAGE_SETS: LanguageSet[] = [
-  {
-    label: "Building AI Workflows",
-    description: "Guidance on how to generate content and interact with LLM and image models using Genkit.",
-    paths: [
-      "unified-docs/get-started",
-      "unified-docs/generating-content",
-      "unified-docs/context",
-      "unified-docs/creating-flows",
-      "unified-docs/dotprompt",
-      "unified-docs/chat-sessions",
-      "unified-docs/tool-calling",
-      "unified-docs/model-context-protocol",
-      "unified-docs/interrupts",
-      "unified-docs/rag",
-      "unified-docs/multi-agent-systems",
-      "unified-docs/error-handling",
-      "unified-docs/evaluation",
-    ],
-  },
-  {
-    label: "Deploying AI Workflows",
-    description: "Guidance on how to deploy Genkit code to various environments including Firebase and Cloud Run or use within a Next.js app.",
-    paths: [
-      "unified-docs/deployment",
-      "unified-docs/deployment/firebase",
-      "unified-docs/deployment/cloud-run",
-      "unified-docs/deployment/any-platform",
-      "unified-docs/deployment/authorization",
-      "unified-docs/frameworks/express",
-      "unified-docs/frameworks/nextjs",
-    ],
-  },
-  {
-    label: "Observing AI Workflows",
-    description: "Guidance about Genkit's various observability features and how to use them.",
-    paths: [
-      "unified-docs/observability/overview",
-      "unified-docs/observability-monitoring",
-      "unified-docs/observability/authentication",
-      "unified-docs/observability/advanced-configuration",
-      "unified-docs/observability/troubleshooting",
-    ],
-  },
-  {
-    label: "Writing Plugins",
-    description: "Guidance about how to author plugins for Genkit.",
-    paths: [
-      "unified-docs/plugin-authoring/overview",
-      "unified-docs/plugin-authoring/models",
-    ],
-  },
-  {
-    label: "AI Providers",
-    description: "Provider-specific documentation for AI model providers and integrations.",
-    paths: [
-      "unified-docs/plugins/google-ai",
-      "unified-docs/plugins/vertex-ai",
-      "unified-docs/plugins/openai",
-      "unified-docs/plugins/anthropic",
-      "unified-docs/plugins/xai",
-      "unified-docs/plugins/deepseek",
-      "unified-docs/plugins/ollama",
-    ],
-  },
-  {
-    label: "Vector Databases",
-    description: "Documentation for vector database integrations and retrieval systems.",
-    paths: [
-      "unified-docs/vector-databases/dev-local-vectorstore",
-      "unified-docs/vector-databases/pinecone",
-      "unified-docs/vector-databases/chromadb",
-      "unified-docs/vector-databases/pgvector",
-      "unified-docs/vector-databases/lancedb",
-      "unified-docs/vector-databases/astra-db",
-      "unified-docs/vector-databases/neo4j",
-      "unified-docs/vector-databases/cloud-sql-postgresql",
-      "unified-docs/vector-databases/cloud-firestore",
-    ],
-  },
-  {
-    label: "Developer Tools",
-    description: "Documentation for development tools, MCP server, and local development.",
-    paths: [
-      "unified-docs/developer-tools",
-      "unified-docs/mcp-server",
-    ],
-  },
-];
+interface SidebarItem {
+  label: string;
+  slug?: string;
+  items?: SidebarItem[];
+}
+
+// Extract paths from sidebar structure
+function extractPathsFromSidebar(items: SidebarItem[]): string[] {
+  const paths: string[] = [];
+  
+  for (const item of items) {
+    if (item.slug) {
+      paths.push(item.slug);
+    }
+    if (item.items) {
+      paths.push(...extractPathsFromSidebar(item.items));
+    }
+  }
+  
+  return paths;
+}
+
+// Get the unified sidebar from the imported sidebar structure
+function getUnifiedSidebar(): SidebarItem[] {
+  const unifiedSection = sidebar.find(section => section.label === "Unified Docs (Preview)");
+  return unifiedSection?.items || [];
+}
+
+// Create language sets based on sidebar structure
+function createLanguageSetsFromSidebar(): LanguageSet[] {
+  const unifiedSidebar = getUnifiedSidebar();
+  const languageSets: LanguageSet[] = [];
+
+  // Find specific sections in the sidebar and map them to language sets
+  const sectionMappings = [
+    {
+      sidebarLabel: "Building AI workflows",
+      setLabel: "Building AI Workflows",
+      description: "Guidance on how to generate content and interact with LLM and image models using Genkit.",
+      includeToplevel: ["unified-docs/get-started"] // Include top-level items
+    },
+    {
+      sidebarLabel: "Deployment",
+      setLabel: "Deploying AI Workflows",
+      description: "Guidance on how to deploy Genkit code to various environments including Firebase and Cloud Run or use within a Next.js app.",
+      additionalSections: ["Web Framework Integrations"] // Include related sections
+    },
+    {
+      sidebarLabel: "Observability and Monitoring",
+      setLabel: "Observing AI Workflows",
+      description: "Guidance about Genkit's various observability features and how to use them."
+    },
+    {
+      sidebarLabel: "Writing Plugins",
+      setLabel: "Writing Plugins",
+      description: "Guidance about how to author plugins for Genkit."
+    },
+    {
+      sidebarLabel: "AI Providers",
+      setLabel: "AI Providers",
+      description: "Provider-specific documentation for AI model providers and integrations."
+    },
+    {
+      sidebarLabel: "Vector Databases",
+      setLabel: "Vector Databases",
+      description: "Documentation for vector database integrations and retrieval systems."
+    }
+  ];
+
+  for (const mapping of sectionMappings) {
+    const paths: string[] = [];
+    
+    // Add top-level items if specified
+    if (mapping.includeToplevel) {
+      paths.push(...mapping.includeToplevel);
+    }
+    
+    // Find the main section
+    const section = unifiedSidebar.find(item => item.label === mapping.sidebarLabel);
+    if (section?.items) {
+      paths.push(...extractPathsFromSidebar(section.items));
+    }
+    
+    // Add additional sections if specified
+    if (mapping.additionalSections) {
+      for (const additionalLabel of mapping.additionalSections) {
+        const additionalSection = unifiedSidebar.find(item => item.label === additionalLabel);
+        if (additionalSection?.items) {
+          paths.push(...extractPathsFromSidebar(additionalSection.items));
+        }
+      }
+    }
+    
+    if (paths.length > 0) {
+      languageSets.push({
+        label: mapping.setLabel,
+        description: mapping.description,
+        paths
+      });
+    }
+  }
+
+  // Add Developer Tools as a special case (top-level items)
+  const devToolsPaths = unifiedSidebar
+    .filter(item => ["Developer tools", "MCP Server"].includes(item.label))
+    .map(item => item.slug)
+    .filter((slug): slug is string => !!slug);
+    
+  if (devToolsPaths.length > 0) {
+    languageSets.push({
+      label: "Developer Tools",
+      description: "Documentation for development tools, MCP server, and local development.",
+      paths: devToolsPaths
+    });
+  }
+
+  return languageSets;
+}
+
+// Generate language sets from sidebar
+const LANGUAGE_SETS = createLanguageSetsFromSidebar();
 
 function generateLanguageSpecificContent(docs: ProcessedDocument[], language: 'js' | 'go' | 'python'): string {
   const languageNames = {
@@ -157,6 +190,31 @@ function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet
   return content;
 }
 
+function generateFullDocumentation(docs: ProcessedDocument[]): string {
+  let content = `# Genkit - Complete Documentation\n\n`;
+  content += `> Open-source GenAI toolkit for JS, Go, and Python.\n`;
+  content += `> This is the complete unfiltered documentation (primarily for internal use).\n\n`;
+
+  // Get all unique paths from all language sets and sort them
+  const allPaths = [...new Set(LANGUAGE_SETS.flatMap(set => set.paths))].sort();
+  
+  for (const docPath of allPaths) {
+    const doc = docs.find(d => d.slug === docPath);
+    if (doc) {
+      // Include all language content for each document
+      const languages: Array<'js' | 'go' | 'python'> = ['js', 'go', 'python'];
+      for (const lang of languages) {
+        if (doc.content[lang]) {
+          content += `## ${docPath} (${lang.toUpperCase()})\n\n`;
+          content += `${doc.content[lang]}\n\n---\n\n`;
+        }
+      }
+    }
+  }
+
+  return content;
+}
+
 function generateMainLlmsTxt(): string {
   const content = `# Genkit
 
@@ -195,7 +253,7 @@ function generateMainLlmsTxt(): string {
 - [Vector Databases - Python](https://genkit.dev/_llms-txt/vector-databases-python.txt): Documentation for vector database integrations in Python.
 
 ### Developer Tools
-- [Developer Tools](https://genkit.dev/_llms-txt/developer-tools.txt): Documentation for development tools, MCP server, and local development.
+- [Developer Tools](https://genkit.dev/_llms-txt/devtools.txt): Documentation for development tools, MCP server, and local development.
 
 ## Notes
 
@@ -226,6 +284,12 @@ export async function generateLlmsDirectly(): Promise<void> {
   await writeFile(path.join(outputDir, 'llms.txt'), mainContent);
   console.log('Generated main llms.txt');
   
+  // Generate complete unfiltered documentation (llms-full.txt)
+  console.log('Generating complete unfiltered documentation...');
+  const fullContent = generateFullDocumentation(docs);
+  await writeFile(path.join(outputDir, 'llms-full.txt'), fullContent);
+  console.log('Generated llms-full.txt');
+  
   // Generate language-specific complete documentation
   const languages: Array<'js' | 'go' | 'python'> = ['js', 'go', 'python'];
   
@@ -252,8 +316,8 @@ export async function generateLlmsDirectly(): Promise<void> {
   if (devToolsSet) {
     console.log('Generating developer tools documentation...');
     const content = generateLanguageSpecificSet(docs, devToolsSet, 'js');
-    await writeFile(path.join(llmsTxtDir, 'developer-tools.txt'), content);
-    console.log('Generated developer-tools.txt');
+    await writeFile(path.join(llmsTxtDir, 'devtools.txt'), content);
+    console.log('Generated devtools.txt');
   }
   
   console.log('LLMs.txt generation from source files complete!');
