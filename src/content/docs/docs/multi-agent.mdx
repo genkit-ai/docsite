@@ -1,0 +1,705 @@
+---
+title: Building multi-agent systems
+description: Learn how to build multi-agent systems in Genkit by delegating tasks to specialized agents, addressing challenges of complex agentic workflows across different languages.
+---
+
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+:::caution[Beta]
+This feature of Genkit is in **Beta,** which means it is not yet part of Genkit's stable API. APIs of beta features may change in minor version releases.
+:::
+
+A powerful application of large language models are LLM-powered agents. An agent
+is a system that can carry out complex tasks by planning how to break tasks into
+smaller ones, and (with the help of [tool calling](/docs/tool-calling)) execute tasks
+that interact with external resources such as databases or even physical
+devices.
+
+Multi-agent systems take this concept further by using specialized agents that can delegate tasks to each other, creating more sophisticated and maintainable AI workflows.
+
+## Availability and Approach
+
+<LanguageContent lang="js">
+JavaScript provides built-in multi-agent system support through Genkit's prompt-as-tool architecture. You can define specialized agents as prompts and use them as tools in other agents, creating hierarchical delegation patterns.
+
+    Features include:
+    - Prompt-based agent definitions
+    - Automatic tool delegation between agents
+    - Specialized agent contexts and capabilities
+    - Integration with chat sessions and flows
+    - Built-in orchestration patterns
+</LanguageContent>
+
+<LanguageContent lang="go">
+Go doesn't have built-in multi-agent system APIs. You need to implement agent coordination manually by:
+    - Creating separate functions or flows for each agent
+    - Implementing your own delegation logic
+    - Managing agent state and context manually
+    - Building coordination patterns using flows and tools
+</LanguageContent>
+
+<LanguageContent lang="python">
+Python doesn't have built-in multi-agent system APIs. You need to implement agent coordination manually by:
+    - Creating separate functions or flows for each agent
+    - Implementing your own delegation logic
+    - Managing agent state and context manually
+    - Building coordination patterns using flows and tools
+</LanguageContent>
+
+## Why use multi-agent systems?
+
+As you build more complex AI applications, you start to run into some problems with single-agent architectures:
+
+- **Tool overload**: The more tools you add, the more you stretch the model's ability to consistently and correctly employ the right tool for the job.
+- **Context switching**: Some tasks might best be served through a more focused back and forth between the user and the agent, rather than by a single tool call.
+- **Specialized behavior**: Some tasks might benefit from a specialized prompt. For example, if your agent is responding to an unhappy customer, you might want its tone to be more business-like, whereas the agent that greets the customer initially can have a more friendly and lighthearted tone.
+
+Multi-agent systems address these issues by creating specialized agents that can delegate tasks to each other.
+
+## Single agent example
+
+Let's start with a simple customer service agent to understand the progression to multi-agent systems:
+
+<LanguageContent lang="js">
+Here are some excerpts from a very simple customer service agent built using a single prompt and several tools:
+
+    ```typescript
+    const menuLookupTool = ai.defineTool(
+      {
+        name: 'menuLookupTool',
+        description: 'use this tool to look up the menu for a given date',
+        inputSchema: z.object({
+          date: z.string().describe('the date to look up the menu for'),
+        }),
+        outputSchema: z.string().describe('the menu for a given date'),
+      },
+      async (input) => {
+        // Retrieve the menu from a database, website, etc.
+        // ...
+      },
+    );
+
+    const reservationTool = ai.defineTool(
+      {
+        name: 'reservationTool',
+        description: 'use this tool to try to book a reservation',
+        inputSchema: z.object({
+          partySize: z.coerce.number().describe('the number of guests'),
+          date: z.string().describe('the date to book for'),
+        }),
+        outputSchema: z
+          .string()
+          .describe(
+            "true if the reservation was successfully booked and false if there's" +
+              ' no table available for the requested time',
+          ),
+      },
+      async (input) => {
+        // Access your database to try to make the reservation.
+        // ...
+      },
+    );
+
+    const chat = ai.chat({
+      model: googleAI.model('gemini-2.5-flash'),
+      system:
+        "You are an AI customer service agent for Pavel's Cafe. Use the tools " +
+        'available to you to help the customer. If you cannot help the ' +
+        'customer with the available tools, politely explain so.',
+      tools: [menuLookupTool, reservationTool],
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+In Go, you would implement a single agent using flows and tools:
+
+    ```go
+    func menuLookupTool(ctx context.Context, input MenuLookupInput) (string, error) {
+        // Retrieve the menu from a database, website, etc.
+        return getMenuForDate(input.Date)
+    }
+
+    func reservationTool(ctx context.Context, input ReservationInput) (string, error) {
+        // Access your database to try to make the reservation
+        success, err := makeReservation(input.PartySize, input.Date)
+        if err != nil {
+            return "", err
+        }
+        if success {
+            return "true", nil
+        }
+        return "false", nil
+    }
+
+    func customerServiceAgent(ctx context.Context, userInput string) (string, error) {
+        // Build a prompt that includes available tools and user input
+        prompt := fmt.Sprintf(`You are an AI customer service agent for Pavel's Cafe.
+        Available tools: menuLookup, makeReservation
+        User: %s
+        
+        How can I help you today?`, userInput)
+
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(prompt),
+            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithTools(menuLookupTool, reservationTool),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return resp.Text(), nil
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+In Python, you would implement a single agent using flows and tools:
+
+    ```python
+    @ai.tool()
+    def menu_lookup_tool(date: str, ctx) -> str:
+        """Use this tool to look up the menu for a given date"""
+        # Retrieve the menu from a database, website, etc.
+        return get_menu_for_date(date)
+
+    @ai.tool()
+    def reservation_tool(party_size: int, date: str, ctx) -> str:
+        """Use this tool to try to book a reservation"""
+        # Access your database to try to make the reservation
+        success = make_reservation(party_size, date)
+        return "true" if success else "false"
+
+    @ai.flow()
+    async def customer_service_agent(user_input: str, ctx):
+        """AI customer service agent for Pavel's Cafe"""
+        
+        response = await ai.generate(
+            prompt=f"""You are an AI customer service agent for Pavel's Cafe.
+            Use the tools available to you to help the customer.
+            
+            User: {user_input}""",
+            tools=['menu_lookup_tool', 'reservation_tool'],
+            model=google_genai_name('gemini-2.5-flash'),
+        )
+        
+        return response.text
+    ```
+</LanguageContent>
+
+## Multi-agent architecture
+
+<LanguageContent lang="js">
+One approach you can use to deal with the issues that arise when building
+    complex agents is to create many specialized agents and use a general purpose
+    agent to delegate tasks to them. Genkit supports this architecture by allowing
+    you to specify prompts as tools. Each prompt represents a single specialized
+    agent, with its own set of tools available to it, and those agents are in turn
+    available as tools to your single orchestration agent, which is the primary
+    interface with the user.
+
+    Here's what an expanded version of the previous example might look like as a
+    multi-agent system:
+
+    ```typescript
+    // Define a prompt that represents a specialist agent
+    const reservationAgent = ai.definePrompt({
+      name: 'reservationAgent',
+      description: 'Reservation Agent can help manage guest reservations',
+      tools: [reservationTool, reservationCancelationTool, reservationListTool],
+      system: 'Help guests make and manage reservations',
+    });
+
+    // Or load agents from .prompt files
+    const menuInfoAgent = ai.prompt('menuInfoAgent');
+    const complaintAgent = ai.prompt('complaintAgent');
+
+    // The triage agent is the agent that users interact with initially
+    const triageAgent = ai.definePrompt({
+      name: 'triageAgent',
+      description: 'Triage Agent',
+      tools: [reservationAgent, menuInfoAgent, complaintAgent],
+      system: `You are an AI customer service agent for Pavel's Cafe.
+      Greet the user and ask them how you can help. If appropriate, transfer to an
+      agent that can better handle the request. If you cannot help the customer with
+      the available tools, politely explain so.`,
+    });
+
+    // Start a chat session, initially with the triage agent
+    const chat = ai.chat(triageAgent);
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+In Go, you can implement multi-agent patterns by creating separate flows for each agent and implementing delegation logic:
+
+    ```go
+    // Define specialized agent functions
+    func reservationAgent(ctx context.Context, userInput string) (string, error) {
+        prompt := fmt.Sprintf(`You are a reservation specialist for Pavel's Cafe.
+        Help guests make and manage reservations.
+        
+        User: %s`, userInput)
+
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(prompt),
+            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithTools(reservationTool, reservationCancelationTool, reservationListTool),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return resp.Text(), nil
+    }
+
+    func menuInfoAgent(ctx context.Context, userInput string) (string, error) {
+        prompt := fmt.Sprintf(`You are a menu information specialist for Pavel's Cafe.
+        Help guests with menu questions and dietary information.
+        
+        User: %s`, userInput)
+
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(prompt),
+            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithTools(menuLookupTool, allergyInfoTool),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return resp.Text(), nil
+    }
+
+    func complaintAgent(ctx context.Context, userInput string) (string, error) {
+        prompt := fmt.Sprintf(`You are a customer service specialist for Pavel's Cafe.
+        Handle customer complaints with empathy and professionalism.
+        
+        User: %s`, userInput)
+
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(prompt),
+            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithTools(refundTool, managerContactTool),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return resp.Text(), nil
+    }
+
+    // Triage agent that delegates to specialists
+    func triageAgent(ctx context.Context, userInput string) (string, error) {
+        // First, determine which agent should handle this request
+        classificationPrompt := fmt.Sprintf(`Classify this customer request:
+        User: %s
+        
+        Categories:
+        - reservation: booking, canceling, or modifying reservations
+        - menu: questions about food, ingredients, or menu items
+        - complaint: issues, problems, or complaints
+        - general: greeting or general questions
+        
+        Respond with just the category name.`, userInput)
+
+        classResp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(classificationPrompt),
+            ai.WithModelName("googleai/gemini-2.5-flash"),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        category := strings.ToLower(strings.TrimSpace(classResp.Text()))
+
+        // Delegate to the appropriate specialist agent
+        switch category {
+        case "reservation":
+            return reservationAgent(ctx, userInput)
+        case "menu":
+            return menuInfoAgent(ctx, userInput)
+        case "complaint":
+            return complaintAgent(ctx, userInput)
+        default:
+            // Handle general queries directly
+            return generalGreeting(ctx, userInput)
+        }
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+In Python, you can implement multi-agent patterns by creating separate flows for each agent:
+
+    ```python
+    @ai.flow()
+    async def reservation_agent(user_input: str, ctx):
+        """Reservation specialist for Pavel's Cafe"""
+        response = await ai.generate(
+            prompt=f"""You are a reservation specialist for Pavel's Cafe.
+            Help guests make and manage reservations.
+            
+            User: {user_input}""",
+            tools=['reservation_tool', 'reservation_cancelation_tool', 'reservation_list_tool'],
+            model=google_genai_name('gemini-2.5-flash'),
+        )
+        return response.text
+
+    @ai.flow()
+    async def menu_info_agent(user_input: str, ctx):
+        """Menu information specialist for Pavel's Cafe"""
+        response = await ai.generate(
+            prompt=f"""You are a menu information specialist for Pavel's Cafe.
+            Help guests with menu questions and dietary information.
+            
+            User: {user_input}""",
+            tools=['menu_lookup_tool', 'allergy_info_tool'],
+            model=google_genai_name('gemini-2.5-flash'),
+        )
+        return response.text
+
+    @ai.flow()
+    async def complaint_agent(user_input: str, ctx):
+        """Customer service specialist for Pavel's Cafe"""
+        response = await ai.generate(
+            prompt=f"""You are a customer service specialist for Pavel's Cafe.
+            Handle customer complaints with empathy and professionalism.
+            
+            User: {user_input}""",
+            tools=['refund_tool', 'manager_contact_tool'],
+            model=google_genai_name('gemini-2.5-flash'),
+        )
+        return response.text
+
+    @ai.flow()
+    async def triage_agent(user_input: str, ctx):
+        """Triage agent that delegates to specialists"""
+        
+        # First, classify the request
+        classification_response = await ai.generate(
+            prompt=f"""Classify this customer request:
+            User: {user_input}
+            
+            Categories:
+            - reservation: booking, canceling, or modifying reservations
+            - menu: questions about food, ingredients, or menu items
+            - complaint: issues, problems, or complaints
+            - general: greeting or general questions
+            
+            Respond with just the category name.""",
+            model=google_genai_name('gemini-2.5-flash'),
+        )
+        
+        category = classification_response.text.strip().lower()
+        
+        # Delegate to the appropriate specialist agent
+        if category == "reservation":
+            return await reservation_agent(user_input, ctx)
+        elif category == "menu":
+            return await menu_info_agent(user_input, ctx)
+        elif category == "complaint":
+            return await complaint_agent(user_input, ctx)
+        else:
+            # Handle general queries directly
+            return await general_greeting(user_input, ctx)
+    ```
+</LanguageContent>
+
+## Agent coordination patterns
+
+<LanguageContent lang="js">
+### Hierarchical delegation
+
+    The most common pattern is hierarchical delegation, where a triage agent routes requests to specialized agents:
+
+    ```typescript
+    const triageAgent = ai.definePrompt({
+      name: 'triageAgent',
+      description: 'Routes customer requests to appropriate specialists',
+      tools: [reservationAgent, menuAgent, supportAgent],
+      system: `You are a customer service triage agent. 
+      Analyze the customer's request and delegate to the most appropriate specialist.
+      Always explain to the customer which specialist you're connecting them with.`,
+    });
+    ```
+
+    ### Collaborative agents
+
+    Agents can also work together on complex tasks:
+
+    ```typescript
+    const researchAgent = ai.definePrompt({
+      name: 'researchAgent',
+      description: 'Researches information for complex queries',
+      tools: [webSearchTool, databaseQueryTool],
+      system: 'Research and gather information to answer complex questions.',
+    });
+
+    const analysisAgent = ai.definePrompt({
+      name: 'analysisAgent',
+      description: 'Analyzes research data and provides insights',
+      tools: [researchAgent, calculatorTool],
+      system: 'Analyze research data and provide clear, actionable insights.',
+    });
+    ```
+
+    ### Sequential workflows
+
+    You can create agents that work in sequence:
+
+    ```typescript
+    const orderProcessingFlow = ai.defineFlow({
+      name: 'orderProcessingFlow',
+      inputSchema: z.object({ order: z.string() }),
+      outputSchema: z.string(),
+    }, async (input) => {
+      // Step 1: Validate order
+      const validation = await validationAgent({ order: input.order });
+      
+      if (!validation.isValid) {
+        return validation.errorMessage;
+      }
+
+      // Step 2: Process payment
+      const payment = await paymentAgent({ 
+        order: input.order,
+        validatedData: validation.data 
+      });
+
+      // Step 3: Fulfill order
+      const fulfillment = await fulfillmentAgent({
+        order: input.order,
+        paymentConfirmation: payment.confirmation
+      });
+
+      return fulfillment.trackingNumber;
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Hierarchical delegation
+
+    Implement delegation through function routing:
+
+    ```go
+    type AgentRouter struct {
+        agents map[string]func(context.Context, string) (string, error)
+    }
+
+    func NewAgentRouter() *AgentRouter {
+        return &AgentRouter{
+            agents: map[string]func(context.Context, string) (string, error){
+                "reservation": reservationAgent,
+                "menu":        menuInfoAgent,
+                "complaint":   complaintAgent,
+            },
+        }
+    }
+
+    func (r *AgentRouter) Route(ctx context.Context, category, userInput string) (string, error) {
+        agent, exists := r.agents[category]
+        if !exists {
+            return "I'm sorry, I don't have a specialist for that type of request.", nil
+        }
+        
+        return agent(ctx, userInput)
+    }
+    ```
+
+    ### Sequential workflows
+
+    Use flows to coordinate multiple agents:
+
+    ```go
+    func orderProcessingFlow(ctx context.Context, order OrderInput) (string, error) {
+        // Step 1: Validate order
+        validation, err := validationAgent(ctx, order.Details)
+        if err != nil {
+            return "", err
+        }
+        
+        if !validation.IsValid {
+            return validation.ErrorMessage, nil
+        }
+
+        // Step 2: Process payment
+        payment, err := paymentAgent(ctx, PaymentInput{
+            Order:         order.Details,
+            ValidatedData: validation.Data,
+        })
+        if err != nil {
+            return "", err
+        }
+
+        // Step 3: Fulfill order
+        fulfillment, err := fulfillmentAgent(ctx, FulfillmentInput{
+            Order:               order.Details,
+            PaymentConfirmation: payment.Confirmation,
+        })
+        if err != nil {
+            return "", err
+        }
+
+        return fulfillment.TrackingNumber, nil
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Hierarchical delegation
+
+    Implement delegation through flow routing:
+
+    ```python
+    class AgentRouter:
+        def __init__(self):
+            self.agents = {
+                "reservation": reservation_agent,
+                "menu": menu_info_agent,
+                "complaint": complaint_agent,
+            }
+
+        async def route(self, category: str, user_input: str, ctx):
+            agent = self.agents.get(category)
+            if not agent:
+                return "I'm sorry, I don't have a specialist for that type of request."
+            
+            return await agent(user_input, ctx)
+
+    router = AgentRouter()
+
+    @ai.flow()
+    async def triage_with_routing(user_input: str, ctx):
+        # Classify the request
+        classification = await classify_request(user_input, ctx)
+        
+        # Route to appropriate agent
+        return await router.route(classification, user_input, ctx)
+    ```
+
+    ### Sequential workflows
+
+    Use flows to coordinate multiple agents:
+
+    ```python
+    @ai.flow()
+    async def order_processing_flow(order_details: str, ctx):
+        # Step 1: Validate order
+        validation = await validation_agent(order_details, ctx)
+        
+        if not validation.get('is_valid'):
+            return validation.get('error_message')
+
+        # Step 2: Process payment
+        payment = await payment_agent({
+            'order': order_details,
+            'validated_data': validation.get('data')
+        }, ctx)
+
+        # Step 3: Fulfill order
+        fulfillment = await fulfillment_agent({
+            'order': order_details,
+            'payment_confirmation': payment.get('confirmation')
+        }, ctx)
+
+        return fulfillment.get('tracking_number')
+    ```
+</LanguageContent>
+
+## Best practices
+
+### Agent design principles
+
+<LanguageContent lang="js">
+- **Single responsibility**: Each agent should have a clear, focused purpose
+    - **Clear interfaces**: Define clear input/output schemas for agent communication
+    - **Graceful delegation**: Always explain to users when transferring between agents
+    - **Error handling**: Implement fallback strategies when specialist agents fail
+    - **Context preservation**: Maintain conversation context across agent transfers
+</LanguageContent>
+
+<LanguageContent lang="go">
+- **Modular design**: Keep agent functions focused and composable
+    - **Error propagation**: Handle errors gracefully and provide meaningful feedback
+    - **State management**: Carefully manage state between agent calls
+    - **Resource efficiency**: Avoid unnecessary agent calls through smart routing
+    - **Testing**: Test individual agents and coordination logic separately
+</LanguageContent>
+
+<LanguageContent lang="python">
+- **Flow composition**: Use flows to create reusable agent patterns
+    - **Type safety**: Use proper type hints for agent inputs and outputs
+    - **Async patterns**: Leverage async/await for efficient agent coordination
+    - **Error handling**: Implement comprehensive error handling and recovery
+    - **Monitoring**: Add logging and metrics to track agent performance
+</LanguageContent>
+
+### Performance considerations
+
+<LanguageContent lang="js">
+- **Minimize agent hops**: Avoid unnecessary delegation chains
+    - **Cache agent responses**: Cache responses for repeated queries
+    - **Parallel execution**: Use Promise.all() for independent agent calls
+    - **Context size**: Keep agent contexts focused to reduce token usage
+    - **Tool selection**: Provide only relevant tools to each agent
+</LanguageContent>
+
+<LanguageContent lang="go">
+- **Concurrent execution**: Use goroutines for parallel agent processing
+    - **Connection pooling**: Reuse connections for agent communications
+    - **Memory management**: Be mindful of memory usage in long-running agent systems
+    - **Timeout handling**: Implement timeouts for agent calls
+    - **Resource limits**: Set appropriate limits on agent execution
+</LanguageContent>
+
+<LanguageContent lang="python">
+- **Async coordination**: Use asyncio for efficient agent orchestration
+    - **Resource pooling**: Pool expensive resources across agents
+    - **Memory optimization**: Monitor memory usage in complex agent workflows
+    - **Caching strategies**: Implement intelligent caching for agent responses
+    - **Load balancing**: Distribute agent workloads appropriately
+</LanguageContent>
+
+### Security and safety
+
+<LanguageContent lang="js">
+- **Agent isolation**: Ensure agents can only access their designated tools
+    - **Input validation**: Validate all inputs before passing between agents
+    - **Permission boundaries**: Define clear permission boundaries for each agent
+    - **Audit trails**: Log agent interactions for debugging and compliance
+    - **Rate limiting**: Implement rate limiting to prevent agent abuse
+</LanguageContent>
+
+<LanguageContent lang="go">
+- **Access control**: Implement proper access controls for agent functions
+    - **Input sanitization**: Sanitize all inputs to prevent injection attacks
+    - **Resource limits**: Set limits on agent resource consumption
+    - **Logging**: Implement comprehensive logging for agent activities
+    - **Validation**: Validate agent outputs before using them
+</LanguageContent>
+
+<LanguageContent lang="python">
+- **Flow security**: Secure flow execution and data passing
+    - **Input validation**: Validate all agent inputs and outputs
+    - **Access patterns**: Control access to sensitive operations
+    - **Monitoring**: Monitor agent behavior for anomalies
+    - **Sandboxing**: Consider sandboxing for untrusted agent code
+</LanguageContent>
+
+## Next steps
+
+- Learn about [tool calling](/docs/tool-calling) to understand how agents interact with external systems
+- Explore [chat sessions](/docs/chat) to build conversational multi-agent experiences
+- See [creating flows](/docs/flows) for building complex agent workflows
+- Check out [context](/docs/context) for managing information flow between agents
+- Review [developer tools](/docs/devtools) for testing and debugging multi-agent systems

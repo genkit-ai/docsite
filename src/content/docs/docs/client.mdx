@@ -1,19 +1,260 @@
 ---
-title: Accessing flows from the client
-description: Learn how to access Genkit flows from client-side applications.
+title: Accessing flows from client applications
+description: Learn how to access Genkit flows from client-side applications across JavaScript, Go, and Python, including streaming, authentication, and deployment-specific patterns.
 ---
 
-There are two primary ways to access Genkit flows from client-side applications:
- - Using the Genkit client library
- - Cloud Functions for Firebase callable function client SDK
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
 
-## Using the Genkit client library
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
 
-You can call your deployed flows using the Genkit client library. This library provides functions for both non-streaming and streaming flow calls. See "Call your flows from the client" in [Deploy flows to any Node.js platform](/docs/deploy-node) for more details.
+Once you've deployed your Genkit flows, you need to access them from client-side applications. This guide covers the different approaches for calling flows from web applications, mobile apps, and other client environments.
 
-### Non-streaming Flow Calls
+## Overview
 
-For a non-streaming response, use the `runFlow` function. This is suitable for flows that return a single, complete output.
+There are several ways to access deployed Genkit flows:
+
+1. **Direct HTTP calls**: Make standard HTTP requests to deployed flow endpoints
+2. **Genkit client libraries**: Use language-specific client libraries for enhanced functionality
+3. **Platform-specific SDKs**: Use Firebase callable functions or other platform SDKs
+4. **Custom API wrappers**: Create your own client abstractions
+
+## Direct HTTP calls
+
+The simplest approach is making direct HTTP requests to your deployed flow endpoints.
+
+<LanguageContent lang="js">
+### Basic HTTP requests
+
+```typescript
+// Non-streaming flow call
+async function callFlow(input: any) {
+  const response = await fetch('https://your-deployment-url/your-flow', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer your-token', // if authentication required
+    },
+    body: JSON.stringify(input),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Flow call failed: ${response.statusText}`);
+  }
+  
+  return await response.json();
+}
+
+// Usage
+const result = await callFlow({ message: 'Hello, Genkit!' });
+console.log(result);
+```
+
+### Streaming HTTP requests
+
+```typescript
+// Streaming flow call
+async function streamFlow(input: any) {
+  const response = await fetch('https://your-deployment-url/your-flow', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    },
+    body: JSON.stringify(input),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Stream failed: ${response.statusText}`);
+  }
+  
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  
+  if (!reader) throw new Error('No response body');
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+    
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') return;
+        
+        try {
+          const parsed = JSON.parse(data);
+          console.log('Stream chunk:', parsed);
+        } catch (e) {
+          // Handle parsing errors
+        }
+      }
+    }
+  }
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Basic HTTP requests
+
+```go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+)
+
+type FlowInput struct {
+    Message string `json:"message"`
+}
+
+type FlowOutput struct {
+    Response string `json:"response"`
+}
+
+func callFlow(input FlowInput) (*FlowOutput, error) {
+    jsonData, err := json.Marshal(input)
+    if err != nil {
+        return nil, err
+    }
+    
+    req, err := http.NewRequest("POST", "https://your-deployment-url/your-flow", bytes.NewBuffer(jsonData))
+    if err != nil {
+        return nil, err
+    }
+    
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", "Bearer your-token") // if authentication required
+    
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("flow call failed: %s", resp.Status)
+    }
+    
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+    
+    var output FlowOutput
+    err = json.Unmarshal(body, &output)
+    if err != nil {
+        return nil, err
+    }
+    
+    return &output, nil
+}
+
+// Usage
+func main() {
+    result, err := callFlow(FlowInput{Message: "Hello, Genkit!"})
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    fmt.Printf("Result: %+v\n", result)
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Basic HTTP requests
+
+```python
+import json
+import requests
+from typing import Any, Dict
+
+def call_flow(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a deployed Genkit flow via HTTP."""
+    response = requests.post(
+        'https://your-deployment-url/your-flow',
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer your-token',  # if authentication required
+        },
+        json=input_data
+    )
+    
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+result = call_flow({'message': 'Hello, Genkit!'})
+print(result)
+```
+
+### Streaming HTTP requests
+
+```python
+import requests
+import json
+
+def stream_flow(input_data: Dict[str, Any]):
+    """Stream responses from a deployed Genkit flow."""
+    response = requests.post(
+        'https://your-deployment-url/your-flow',
+        headers={
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+        },
+        json=input_data,
+        stream=True
+    )
+    
+    response.raise_for_status()
+    
+    for line in response.iter_lines():
+        if line:
+            decoded_line = line.decode('utf-8')
+            if decoded_line.startswith('data: '):
+                data = decoded_line[6:]
+                if data == '[DONE]':
+                    break
+                
+                try:
+                    parsed = json.loads(data)
+                    yield parsed
+                except json.JSONDecodeError:
+                    continue
+
+# Usage
+for chunk in stream_flow({'message': 'Hello, Genkit!'}):
+    print('Stream chunk:', chunk)
+```
+</LanguageContent>
+
+## Using Genkit client libraries
+
+<LanguageContent lang="js">
+Genkit provides client libraries that offer enhanced functionality and better error handling.
+
+### Installing the client library
+
+```bash
+npm install genkit/beta/client
+```
+
+### Non-streaming flow calls
 
 ```typescript
 import { runFlow } from 'genkit/beta/client';
@@ -21,21 +262,23 @@ import { runFlow } from 'genkit/beta/client';
 async function callHelloFlow() {
   try {
     const result = await runFlow({
-      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      url: 'https://your-deployment-url/helloFlow',
       input: { name: 'Genkit User' },
+      headers: {
+        'Authorization': 'Bearer your-token', // optional
+      },
     });
-    console.log('Non-streaming result:', result.greeting);
+    
+    console.log('Result:', result);
+    return result;
   } catch (error) {
-    console.error('Error calling helloFlow:', error);
+    console.error('Error calling flow:', error);
+    throw error;
   }
 }
-
-callHelloFlow();
 ```
 
-### Streaming Flow Calls
-
-For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function.
+### Streaming flow calls
 
 ```typescript
 import { streamFlow } from 'genkit/beta/client';
@@ -43,70 +286,472 @@ import { streamFlow } from 'genkit/beta/client';
 async function streamHelloFlow() {
   try {
     const result = streamFlow({
-      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      url: 'https://your-deployment-url/helloFlow',
       input: { name: 'Streaming User' },
+      headers: {
+        'Authorization': 'Bearer your-token', // optional
+      },
     });
 
-    // Process the stream chunks as they arrive
+    // Process stream chunks as they arrive
     for await (const chunk of result.stream) {
       console.log('Stream chunk:', chunk);
+      // Update UI with partial results
     }
 
     // Get the final complete response
     const finalOutput = await result.output;
-    console.log('Final streaming output:', finalOutput.greeting);
+    console.log('Final output:', finalOutput);
+    return finalOutput;
   } catch (error) {
-    console.error('Error streaming helloFlow:', error);
+    console.error('Error streaming flow:', error);
+    throw error;
+  }
+}
+```
+
+### Error handling
+
+```typescript
+import { runFlow } from 'genkit/beta/client';
+
+async function robustFlowCall(input: any) {
+  try {
+    const result = await runFlow({
+      url: 'https://your-deployment-url/myFlow',
+      input,
+      timeout: 30000, // 30 second timeout
+    });
+    
+    return result;
+  } catch (error) {
+    if (error instanceof Error) {
+      // Handle specific error types
+      if (error.message.includes('timeout')) {
+        console.error('Flow call timed out');
+        // Implement retry logic or fallback
+      } else if (error.message.includes('401')) {
+        console.error('Authentication failed');
+        // Redirect to login or refresh token
+      } else {
+        console.error('Flow call failed:', error.message);
+      }
+    }
+    
+    throw error;
+  }
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+For Go applications, you can create a client wrapper around HTTP calls:
+
+### Creating a client wrapper
+
+```go
+package client
+
+import (
+    "bytes"
+    "context"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+type GenkitClient struct {
+    BaseURL    string
+    HTTPClient *http.Client
+    AuthToken  string
+}
+
+func NewGenkitClient(baseURL, authToken string) *GenkitClient {
+    return &GenkitClient{
+        BaseURL: baseURL,
+        HTTPClient: &http.Client{
+            Timeout: 30 * time.Second,
+        },
+        AuthToken: authToken,
+    }
+}
+
+func (c *GenkitClient) CallFlow(ctx context.Context, flowName string, input interface{}) (map[string]interface{}, error) {
+    jsonData, err := json.Marshal(input)
+    if err != nil {
+        return nil, fmt.Errorf("failed to marshal input: %w", err)
+    }
+    
+    url := fmt.Sprintf("%s/%s", c.BaseURL, flowName)
+    req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+    if err != nil {
+        return nil, fmt.Errorf("failed to create request: %w", err)
+    }
+    
+    req.Header.Set("Content-Type", "application/json")
+    if c.AuthToken != "" {
+        req.Header.Set("Authorization", "Bearer "+c.AuthToken)
+    }
+    
+    resp, err := c.HTTPClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("flow call failed with status %d", resp.StatusCode)
+    }
+    
+    var result map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, fmt.Errorf("failed to decode response: %w", err)
+    }
+    
+    return result, nil
+}
+
+// Usage
+func main() {
+    client := NewGenkitClient("https://your-deployment-url", "your-token")
+    
+    result, err := client.CallFlow(context.Background(), "helloFlow", map[string]string{
+        "name": "Genkit User",
+    })
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    fmt.Printf("Result: %+v\n", result)
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+For Python applications, you can create a client class:
+
+### Creating a client class
+
+```python
+import requests
+import json
+from typing import Any, Dict, Optional, Iterator
+from dataclasses import dataclass
+
+@dataclass
+class GenkitClient:
+    base_url: str
+    auth_token: Optional[str] = None
+    timeout: int = 30
+    
+    def call_flow(self, flow_name: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Call a Genkit flow and return the result."""
+        url = f"{self.base_url}/{flow_name}"
+        headers = {'Content-Type': 'application/json'}
+        
+        if self.auth_token:
+            headers['Authorization'] = f'Bearer {self.auth_token}'
+        
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=input_data,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Flow call failed: {e}")
+    
+    def stream_flow(self, flow_name: str, input_data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        """Stream responses from a Genkit flow."""
+        url = f"{self.base_url}/{flow_name}"
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+        }
+        
+        if self.auth_token:
+            headers['Authorization'] = f'Bearer {self.auth_token}'
+        
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=input_data,
+                stream=True,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith('data: '):
+                        data = decoded_line[6:]
+                        if data == '[DONE]':
+                            break
+                        
+                        try:
+                            yield json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                            
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Stream call failed: {e}")
+
+# Usage
+client = GenkitClient(
+    base_url="https://your-deployment-url",
+    auth_token="your-token"
+)
+
+# Non-streaming call
+result = client.call_flow("helloFlow", {"name": "Genkit User"})
+print("Result:", result)
+
+# Streaming call
+for chunk in client.stream_flow("streamingFlow", {"input": "data"}):
+    print("Chunk:", chunk)
+```
+</LanguageContent>
+
+## Platform-specific integrations
+
+### Firebase callable functions
+
+<LanguageContent lang="js">
+When deploying to Firebase, use the Firebase callable functions client SDK:
+
+```typescript
+import { getFunctions, httpsCallable } from 'firebase/functions';
+
+// Initialize Firebase functions
+const functions = getFunctions();
+
+// Get a reference to the callable function
+const myFlow = httpsCallable(functions, 'myFlow');
+
+// Non-streaming call
+async function callFirebaseFlow() {
+  try {
+    const result = await myFlow({ input: 'data' });
+    console.log('Result:', result.data);
+    return result.data;
+  } catch (error) {
+    console.error('Firebase function call failed:', error);
+    throw error;
   }
 }
 
-streamHelloFlow();
+// Streaming call
+async function streamFirebaseFlow() {
+  const myStreamingFlow = httpsCallable(functions, 'myStreamingFlow');
+  
+  try {
+    const { stream, data } = await myStreamingFlow.stream({
+      input: 'streaming data'
+    });
+
+    // Process stream chunks
+    for await (const chunk of stream) {
+      console.log('Stream chunk:', chunk);
+      // Update UI with partial results
+    }
+
+    // Get final result
+    const finalResult = await data;
+    console.log('Final result:', finalResult);
+    return finalResult;
+  } catch (error) {
+    console.error('Firebase streaming call failed:', error);
+    throw error;
+  }
+}
 ```
+</LanguageContent>
 
-### Authentication (Optional)
+<LanguageContent lang="go">
+For Go applications calling Firebase functions:
 
-If your deployed flow requires authentication, you can pass headers with your requests:
+```go
+// Use the Firebase Admin SDK or make HTTP calls to Firebase function URLs
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "bytes"
+)
 
+func callFirebaseFunction(ctx context.Context, functionURL string, input interface{}) (map[string]interface{}, error) {
+    jsonData, err := json.Marshal(map[string]interface{}{
+        "data": input,
+    })
+    if err != nil {
+        return nil, err
+    }
+    
+    req, err := http.NewRequestWithContext(ctx, "POST", functionURL, bytes.NewBuffer(jsonData))
+    if err != nil {
+        return nil, err
+    }
+    
+    req.Header.Set("Content-Type", "application/json")
+    
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, err
+    }
+    
+    return result, nil
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+For Python applications calling Firebase functions:
+
+```python
+import requests
+from typing import Any, Dict
+
+def call_firebase_function(function_url: str, input_data: Any) -> Dict[str, Any]:
+    """Call a Firebase callable function."""
+    response = requests.post(
+        function_url,
+        headers={'Content-Type': 'application/json'},
+        json={'data': input_data}
+    )
+    
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+result = call_firebase_function(
+    'https://your-region-your-project.cloudfunctions.net/myFlow',
+    {'input': 'data'}
+)
+print('Result:', result)
+```
+</LanguageContent>
+
+## Authentication and security
+
+### API key authentication
+
+<LanguageContent lang="js">
 ```typescript
 const result = await runFlow({
-  url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+  url: 'https://your-deployment-url/myFlow',
   headers: {
-    Authorization: 'Bearer your-token-here', // Replace with your actual token
+    'X-API-Key': 'your-api-key',
   },
-  input: { name: 'Authenticated User' },
+  input: { data: 'value' },
 });
 ```
+</LanguageContent>
 
-## When deploying to Cloud Functions for Firebase
+<LanguageContent lang="go">
+```go
+req.Header.Set("X-API-Key", "your-api-key")
+```
+</LanguageContent>
 
-When deploying to [Cloud Functions for Firebase](/docs/firebase), use the Firebase callable functions client library.
+<LanguageContent lang="python">
+```python
+headers = {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'your-api-key'
+}
+```
+</LanguageContent>
 
-Detailed documentation can be found at https://firebase.google.com/docs/functions/callable?gen=2nd
+### JWT token authentication
 
-Here's a sample for the web:
-
+<LanguageContent lang="js">
 ```typescript
-// Get the callable by passing an initialized functions SDK.
-const getForecast = httpsCallable(functions, "getForecast");
-
-// Call the function with the `.stream()` method to start streaming.
-const { stream, data } = await getForecast.stream({
-  locations: favoriteLocations,
-});
-
-// The `stream` async iterable returned by `.stream()`
-// will yield a new value every time the callable
-// function calls `sendChunk()`.
-for await (const forecastDataChunk of stream) {
-  // update the UI every time a new chunk is received
-  // from the callable function
-  updateUi(forecastDataChunk);
+// Assuming you have a function to get/refresh tokens
+async function getAuthToken(): Promise<string> {
+  // Implement your token retrieval logic
+  return 'your-jwt-token';
 }
 
-// The `data` promise resolves when the callable
-// function completes.
-const allWeatherForecasts = await data;
-finalizeUi(allWeatherForecasts);
+const token = await getAuthToken();
+const result = await runFlow({
+  url: 'https://your-deployment-url/myFlow',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+  },
+  input: { data: 'value' },
+});
 ```
+</LanguageContent>
 
-[source](https://github.com/firebase/functions-samples/blob/c4fde45b65fab584715e786ce3264a6932d996ec/Node/quickstarts/callable-functions-streaming/website/index.html#L58-L78)
+## Error handling and retry logic
+
+<LanguageContent lang="js">
+```typescript
+async function callFlowWithRetry(input: any, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await runFlow({
+        url: 'https://your-deployment-url/myFlow',
+        input,
+        timeout: 30000,
+      });
+    } catch (error) {
+      console.error(`Attempt ${attempt} failed:`, error);
+      
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+```
+</LanguageContent>
+
+## Best practices
+
+### Performance optimization
+
+1. **Connection pooling**: Reuse HTTP connections when possible
+2. **Caching**: Cache responses for deterministic inputs
+3. **Batching**: Combine multiple requests when supported
+4. **Timeouts**: Set appropriate timeouts for different flow types
+
+### Error handling
+
+1. **Graceful degradation**: Provide fallbacks for failed calls
+2. **User feedback**: Show meaningful error messages to users
+3. **Logging**: Log errors for debugging and monitoring
+4. **Retry logic**: Implement exponential backoff for transient failures
+
+### Security
+
+1. **Token management**: Securely store and refresh authentication tokens
+2. **Input validation**: Validate inputs before sending to flows
+3. **Rate limiting**: Respect rate limits and implement client-side throttling
+4. **HTTPS only**: Always use HTTPS for production deployments
+
+## Next steps
+
+- Learn about [deployment options](/docs/deployment) for hosting your flows
+- Explore [authorization and security](/docs/deployment/authorization) for production deployments
+- Review [error handling](/docs/error-handling) patterns for robust applications
+- Check out [framework integrations](/docs/frameworks/express) for web applications

@@ -1,0 +1,945 @@
+---
+title: pgvector (PostgreSQL Vector Extension)
+description: Learn how to use pgvector with Genkit across JavaScript, Go, and Python for vector storage, semantic search, and RAG applications using PostgreSQL.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
+
+## Installation and Setup
+
+### PostgreSQL with pgvector Extension
+
+<LanguageContent lang="js">
+Install the required dependencies:
+
+    ```bash
+    npm install postgres pgvector
+    ```
+
+    Set up your PostgreSQL database with pgvector:
+
+    ```sql
+    -- Enable the pgvector extension
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    -- Create a table for storing documents with embeddings
+    CREATE TABLE documents (
+      id SERIAL PRIMARY KEY,
+      content TEXT NOT NULL,
+      embedding vector(768), -- Adjust dimension based on your embedding model
+      metadata JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Create an index for efficient vector similarity search
+    CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    ```
+
+    Configure the database connection:
+
+    ```ts
+    import { genkit, z } from 'genkit';
+    import { googleAI } from '@genkit-ai/googleai';
+    import postgres from 'postgres';
+    import { toSql } from 'pgvector';
+
+    const ai = genkit({
+      plugins: [googleAI()],
+    });
+
+    const sql = postgres({
+      host: 'localhost',
+      port: 5432,
+      database: 'your_database',
+      username: 'your_username',
+      password: 'your_password',
+      ssl: false, // Enable for production
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Install the required dependencies:
+
+    ```bash
+    go get github.com/lib/pq
+    go get github.com/pgvector/pgvector-go
+    ```
+
+    Set up your PostgreSQL database with pgvector:
+
+    ```sql
+    -- Enable the pgvector extension
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    -- Create a table for storing documents with embeddings
+    CREATE TABLE documents (
+      id SERIAL PRIMARY KEY,
+      content TEXT NOT NULL,
+      embedding vector(768), -- Adjust dimension based on your embedding model
+      metadata JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Create an index for efficient vector similarity search
+    CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    ```
+
+    Configure the database connection:
+
+    ```go
+    package main
+
+    import (
+        "database/sql"
+        "context"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/googleai"
+        "github.com/lib/pq"
+        "github.com/pgvector/pgvector-go"
+    )
+
+    func main() {
+        ctx := context.Background()
+        
+        // Initialize Genkit
+        g, err := genkit.Init(ctx,
+            genkit.WithPlugins(&googleai.GoogleAI{}),
+        )
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Connect to PostgreSQL
+        db, err := sql.Open("postgres", "postgres://username:password@localhost/dbname?sslmode=disable")
+        if err != nil {
+            log.Fatal(err)
+        }
+        defer db.Close()
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Install the required dependencies:
+
+    ```bash
+    pip install psycopg2-binary pgvector
+    ```
+
+    Set up your PostgreSQL database with pgvector:
+
+    ```sql
+    -- Enable the pgvector extension
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    -- Create a table for storing documents with embeddings
+    CREATE TABLE documents (
+      id SERIAL PRIMARY KEY,
+      content TEXT NOT NULL,
+      embedding vector(768), -- Adjust dimension based on your embedding model
+      metadata JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Create an index for efficient vector similarity search
+    CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    ```
+
+    Configure the database connection:
+
+    ```python
+    import psycopg2
+    from pgvector.psycopg2 import register_vector
+    from genkit.ai import Genkit
+    from genkit.plugins.google_genai import GoogleGenAI
+
+    # Initialize Genkit
+    ai = Genkit(
+        plugins=[GoogleGenAI()],
+    )
+
+    # Connect to PostgreSQL
+    conn = psycopg2.connect(
+        host="localhost",
+        database="your_database",
+        user="your_username",
+        password="your_password"
+    )
+
+    # Register pgvector types
+    register_vector(conn)
+    ```
+</LanguageContent>
+
+## Basic Usage
+
+### Document Indexing
+
+<LanguageContent lang="js">
+Create a custom indexer for pgvector:
+
+    ```ts
+    import { Document } from 'genkit';
+
+    const pgvectorIndexer = ai.defineIndexer(
+      {
+        name: 'pgvector-indexer',
+        configSchema: z.object({
+          tableName: z.string().optional().default('documents'),
+        }),
+      },
+      async (docs: Document[], options) => {
+        const tableName = options.tableName || 'documents';
+        
+        for (const doc of docs) {
+          // Generate embedding for the document
+          const embedding = await ai.embed({
+            embedder: googleAI.embedder('gemini-embedding-001'),
+            content: doc.content,
+          });
+
+          // Insert document with embedding into PostgreSQL
+          await sql`
+            INSERT INTO ${sql(tableName)} (content, embedding, metadata)
+            VALUES (
+              ${doc.content},
+              ${toSql(embedding[0].embedding)},
+              ${JSON.stringify(doc.metadata || {})}
+            )
+          `;
+        }
+      },
+    );
+
+    // Usage
+    const documents: Document[] = [
+      {
+        content: 'PostgreSQL is a powerful relational database with vector capabilities.',
+        metadata: {
+          title: 'PostgreSQL Overview',
+          category: 'database',
+          source: 'documentation',
+        },
+      },
+      {
+        content: 'pgvector extends PostgreSQL with efficient vector similarity search.',
+        metadata: {
+          title: 'pgvector Extension',
+          category: 'technology',
+          source: 'blog',
+        },
+      },
+    ];
+
+    await ai.index({
+      indexer: pgvectorIndexer,
+      documents,
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Create a custom indexer for pgvector:
+
+    ```go
+    import (
+        "context"
+        "database/sql"
+        "encoding/json"
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/pgvector/pgvector-go"
+    )
+
+    func createPgvectorIndexer(db *sql.DB) ai.Indexer {
+        return genkit.DefineIndexer(g, "pgvector-indexer",
+            func(ctx context.Context, docs []ai.Document) error {
+                for _, doc := range docs {
+                    // Generate embedding
+                    embedding, err := genkit.Embed(ctx, g,
+                        ai.WithEmbedder("googleai/gemini-embedding-001"),
+                        ai.WithContent(doc.Content),
+                    )
+                    if err != nil {
+                        return fmt.Errorf("failed to generate embedding: %w", err)
+                    }
+
+                    // Convert metadata to JSON
+                    metadataJSON, err := json.Marshal(doc.Metadata)
+                    if err != nil {
+                        return fmt.Errorf("failed to marshal metadata: %w", err)
+                    }
+
+                    // Insert into PostgreSQL
+                    _, err = db.ExecContext(ctx, `
+                        INSERT INTO documents (content, embedding, metadata)
+                        VALUES ($1, $2, $3)
+                    `, doc.Content, pgvector.NewVector(embedding[0].Embedding), metadataJSON)
+                    
+                    if err != nil {
+                        return fmt.Errorf("failed to insert document: %w", err)
+                    }
+                }
+                return nil
+            },
+        )
+    }
+
+    // Usage
+    func indexDocuments(ctx context.Context, db *sql.DB) error {
+        indexer := createPgvectorIndexer(db)
+        
+        documents := []ai.Document{
+            {
+                Content: "PostgreSQL is a powerful relational database with vector capabilities.",
+                Metadata: map[string]interface{}{
+                    "title":    "PostgreSQL Overview",
+                    "category": "database",
+                    "source":   "documentation",
+                },
+            },
+            {
+                Content: "pgvector extends PostgreSQL with efficient vector similarity search.",
+                Metadata: map[string]interface{}{
+                    "title":    "pgvector Extension",
+                    "category": "technology",
+                    "source":   "blog",
+                },
+            },
+        }
+
+        return genkit.Index(ctx, g,
+            ai.WithIndexer(indexer),
+            ai.WithDocuments(documents),
+        )
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Create a custom indexer for pgvector:
+
+    ```python
+    import json
+    from typing import List, Dict, Any
+    from pgvector.psycopg2 import register_vector
+
+    async def create_pgvector_indexer(conn):
+        """Create a custom pgvector indexer"""
+        
+        async def index_documents(docs: List[Dict[str, Any]], table_name: str = "documents"):
+            cursor = conn.cursor()
+            
+            try:
+                for doc in docs:
+                    # Generate embedding
+                    embedding_response = await ai.embed(
+                        embedder="googleai/gemini-embedding-001",
+                        content=doc["content"]
+                    )
+                    embedding = embedding_response[0]["embedding"]
+                    
+                    # Insert document with embedding
+                    cursor.execute("""
+                        INSERT INTO %s (content, embedding, metadata)
+                        VALUES (%%s, %%s, %%s)
+                    """ % table_name, (
+                        doc["content"],
+                        embedding,
+                        json.dumps(doc.get("metadata", {}))
+                    ))
+                
+                conn.commit()
+                return {"indexed": len(docs), "success": True}
+                
+            except Exception as error:
+                conn.rollback()
+                print(f"Indexing failed: {error}")
+                return {"indexed": 0, "success": False}
+            finally:
+                cursor.close()
+        
+        return index_documents
+
+    # Usage
+    async def index_documents_example():
+        indexer = await create_pgvector_indexer(conn)
+        
+        documents = [
+            {
+                "content": "PostgreSQL is a powerful relational database with vector capabilities.",
+                "metadata": {
+                    "title": "PostgreSQL Overview",
+                    "category": "database",
+                    "source": "documentation",
+                },
+            },
+            {
+                "content": "pgvector extends PostgreSQL with efficient vector similarity search.",
+                "metadata": {
+                    "title": "pgvector Extension",
+                    "category": "technology",
+                    "source": "blog",
+                },
+            },
+        ]
+        
+        result = await indexer(documents)
+        return result
+    ```
+</LanguageContent>
+
+### Document Retrieval
+
+<LanguageContent lang="js">
+Create a custom retriever for pgvector:
+
+    ```ts
+    const pgvectorRetriever = ai.defineRetriever(
+      {
+        name: 'pgvector-retriever',
+        configSchema: z.object({
+          tableName: z.string().optional().default('documents'),
+          k: z.number().optional().default(5),
+          threshold: z.number().optional(),
+          where: z.record(z.any()).optional(),
+        }),
+      },
+      async (query: string, options) => {
+        const { tableName = 'documents', k = 5, threshold, where } = options;
+        
+        // Generate embedding for the query
+        const embedding = await ai.embed({
+          embedder: googleAI.embedder('gemini-embedding-001'),
+          content: query,
+        });
+
+        // Build WHERE clause for metadata filtering
+        let whereClause = '';
+        let whereParams: any[] = [];
+        if (where) {
+          const conditions = Object.entries(where).map(([key, value], index) => {
+            whereParams.push(value);
+            return `metadata->>'${key}' = $${whereParams.length + 2}`;
+          });
+          whereClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+        }
+
+        // Query similar documents
+        const queryText = `
+          SELECT content, metadata, 1 - (embedding <=> $1) as similarity
+          FROM ${tableName}
+          WHERE 1=1 ${whereClause}
+          ${threshold ? `AND 1 - (embedding <=> $1) >= $${whereParams.length + 2}` : ''}
+          ORDER BY embedding <=> $1
+          LIMIT $2
+        `;
+
+        const params = [toSql(embedding[0].embedding), k, ...whereParams];
+        if (threshold) params.push(threshold);
+
+        const results = await sql.unsafe(queryText, params);
+
+        return {
+          documents: results.map((row: any) => ({
+            content: row.content,
+            metadata: {
+              ...row.metadata,
+              similarity: row.similarity,
+            },
+          })),
+        };
+      },
+    );
+
+    // Usage
+    const docs = await ai.retrieve({
+      retriever: pgvectorRetriever,
+      query: "What is PostgreSQL?",
+      options: {
+        k: 3,
+        threshold: 0.7,
+        where: { category: 'database' },
+      },
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Create a custom retriever for pgvector:
+
+    ```go
+    func createPgvectorRetriever(db *sql.DB) ai.Retriever {
+        return genkit.DefineRetriever(g, "pgvector-retriever",
+            func(ctx context.Context, query string, options map[string]interface{}) ([]ai.Document, error) {
+                // Generate embedding for query
+                embedding, err := genkit.Embed(ctx, g,
+                    ai.WithEmbedder("googleai/gemini-embedding-001"),
+                    ai.WithContent(query),
+                )
+                if err != nil {
+                    return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+                }
+
+                // Extract options
+                k := 5
+                if kVal, ok := options["k"].(int); ok {
+                    k = kVal
+                }
+
+                tableName := "documents"
+                if tableVal, ok := options["tableName"].(string); ok {
+                    tableName = tableVal
+                }
+
+                // Query similar documents
+                queryText := fmt.Sprintf(`
+                    SELECT content, metadata, 1 - (embedding <=> $1) as similarity
+                    FROM %s
+                    ORDER BY embedding <=> $1
+                    LIMIT $2
+                `, tableName)
+
+                rows, err := db.QueryContext(ctx, queryText, 
+                    pgvector.NewVector(embedding[0].Embedding), k)
+                if err != nil {
+                    return nil, fmt.Errorf("failed to query documents: %w", err)
+                }
+                defer rows.Close()
+
+                var documents []ai.Document
+                for rows.Next() {
+                    var content string
+                    var metadataJSON []byte
+                    var similarity float64
+
+                    err := rows.Scan(&content, &metadataJSON, &similarity)
+                    if err != nil {
+                        return nil, fmt.Errorf("failed to scan row: %w", err)
+                    }
+
+                    var metadata map[string]interface{}
+                    if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+                        metadata = make(map[string]interface{})
+                    }
+                    metadata["similarity"] = similarity
+
+                    documents = append(documents, ai.Document{
+                        Content:  content,
+                        Metadata: metadata,
+                    })
+                }
+
+                return documents, nil
+            },
+        )
+    }
+
+    // Usage
+    func retrieveDocuments(ctx context.Context, db *sql.DB, query string) ([]ai.Document, error) {
+        retriever := createPgvectorRetriever(db)
+        
+        return genkit.Retrieve(ctx, g,
+            ai.WithRetriever(retriever),
+            ai.WithQuery(query),
+            ai.WithOptions(map[string]interface{}{
+                "k": 3,
+                "tableName": "documents",
+            }),
+        )
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Create a custom retriever for pgvector:
+
+    ```python
+    async def create_pgvector_retriever(conn):
+        """Create a custom pgvector retriever"""
+        
+        async def retrieve_documents(
+            query: str,
+            table_name: str = "documents",
+            k: int = 5,
+            threshold: float = None,
+            where: Dict[str, Any] = None
+        ) -> List[Dict[str, Any]]:
+            cursor = conn.cursor()
+            
+            try:
+                # Generate embedding for query
+                embedding_response = await ai.embed(
+                    embedder="googleai/gemini-embedding-001",
+                    content=query
+                )
+                embedding = embedding_response[0]["embedding"]
+                
+                # Build WHERE clause for metadata filtering
+                where_clause = ""
+                params = [embedding, k]
+                
+                if where:
+                    conditions = []
+                    for key, value in where.items():
+                        conditions.append(f"metadata->>%s = %s")
+                        params.extend([key, value])
+                    if conditions:
+                        where_clause = f"AND {' AND '.join(conditions)}"
+                
+                if threshold:
+                    where_clause += f" AND 1 - (embedding <=> %s) >= %s"
+                    params.extend([embedding, threshold])
+                
+                # Query similar documents
+                query_text = f"""
+                    SELECT content, metadata, 1 - (embedding <=> %s) as similarity
+                    FROM {table_name}
+                    WHERE 1=1 {where_clause}
+                    ORDER BY embedding <=> %s
+                    LIMIT %s
+                """
+                
+                cursor.execute(query_text, params)
+                results = cursor.fetchall()
+                
+                documents = []
+                for row in results:
+                    content, metadata, similarity = row
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    metadata["similarity"] = similarity
+                    
+                    documents.append({
+                        "content": content,
+                        "metadata": metadata,
+                    })
+                
+                return documents
+                
+            except Exception as error:
+                print(f"Retrieval failed: {error}")
+                return []
+            finally:
+                cursor.close()
+        
+        return retrieve_documents
+
+    # Usage
+    async def retrieve_documents_example():
+        retriever = await create_pgvector_retriever(conn)
+        
+        docs = await retriever(
+            query="What is PostgreSQL?",
+            k=3,
+            threshold=0.7,
+            where={"category": "database"}
+        )
+        
+        return docs
+    ```
+</LanguageContent>
+
+## Advanced Features
+
+### Hybrid Search (Vector + Text)
+
+<LanguageContent lang="js">
+Combine vector similarity with traditional text search:
+
+    ```ts
+    const hybridRetriever = ai.defineRetriever(
+      {
+        name: 'pgvector-hybrid-retriever',
+        configSchema: z.object({
+          tableName: z.string().optional().default('documents'),
+          k: z.number().optional().default(5),
+          vectorWeight: z.number().optional().default(0.7),
+          textWeight: z.number().optional().default(0.3),
+        }),
+      },
+      async (query: string, options) => {
+        const { tableName = 'documents', k = 5, vectorWeight = 0.7, textWeight = 0.3 } = options;
+        
+        // Generate embedding for vector search
+        const embedding = await ai.embed({
+          embedder: googleAI.embedder('gemini-embedding-001'),
+          content: query,
+        });
+
+        // Hybrid search combining vector similarity and text search
+        const results = await sql`
+          WITH vector_search AS (
+            SELECT 
+              content, 
+              metadata,
+              1 - (embedding <=> ${toSql(embedding[0].embedding)}) as vector_score
+            FROM ${sql(tableName)}
+          ),
+          text_search AS (
+            SELECT 
+              content,
+              metadata,
+              ts_rank(to_tsvector('english', content), plainto_tsquery('english', ${query})) as text_score
+            FROM ${sql(tableName)}
+            WHERE to_tsvector('english', content) @@ plainto_tsquery('english', ${query})
+          )
+          SELECT 
+            v.content,
+            v.metadata,
+            (${vectorWeight} * COALESCE(v.vector_score, 0) + ${textWeight} * COALESCE(t.text_score, 0)) as combined_score
+          FROM vector_search v
+          FULL OUTER JOIN text_search t ON v.content = t.content
+          ORDER BY combined_score DESC
+          LIMIT ${k}
+        `;
+
+        return {
+          documents: results.map((row: any) => ({
+            content: row.content,
+            metadata: {
+              ...row.metadata,
+              combined_score: row.combined_score,
+            },
+          })),
+        };
+      },
+    );
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Combine vector similarity with traditional text search:
+
+    ```go
+    func createHybridRetriever(db *sql.DB) ai.Retriever {
+        return genkit.DefineRetriever(g, "pgvector-hybrid-retriever",
+            func(ctx context.Context, query string, options map[string]interface{}) ([]ai.Document, error) {
+                // Generate embedding
+                embedding, err := genkit.Embed(ctx, g,
+                    ai.WithEmbedder("googleai/gemini-embedding-001"),
+                    ai.WithContent(query),
+                )
+                if err != nil {
+                    return nil, fmt.Errorf("failed to generate embedding: %w", err)
+                }
+
+                // Extract options
+                k := 5
+                vectorWeight := 0.7
+                textWeight := 0.3
+                tableName := "documents"
+
+                if kVal, ok := options["k"].(int); ok {
+                    k = kVal
+                }
+                if vwVal, ok := options["vectorWeight"].(float64); ok {
+                    vectorWeight = vwVal
+                }
+                if twVal, ok := options["textWeight"].(float64); ok {
+                    textWeight = twVal
+                }
+                if tnVal, ok := options["tableName"].(string); ok {
+                    tableName = tnVal
+                }
+
+                // Hybrid search query
+                queryText := fmt.Sprintf(`
+                    WITH vector_search AS (
+                        SELECT 
+                            content, 
+                            metadata,
+                            1 - (embedding <=> $1) as vector_score
+                        FROM %s
+                    ),
+                    text_search AS (
+                        SELECT 
+                            content,
+                            metadata,
+                            ts_rank(to_tsvector('english', content), plainto_tsquery('english', $2)) as text_score
+                        FROM %s
+                        WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $2)
+                    )
+                    SELECT 
+                        v.content,
+                        v.metadata,
+                        ($3 * COALESCE(v.vector_score, 0) + $4 * COALESCE(t.text_score, 0)) as combined_score
+                    FROM vector_search v
+                    FULL OUTER JOIN text_search t ON v.content = t.content
+                    ORDER BY combined_score DESC
+                    LIMIT $5
+                `, tableName, tableName)
+
+                rows, err := db.QueryContext(ctx, queryText,
+                    pgvector.NewVector(embedding[0].Embedding),
+                    query,
+                    vectorWeight,
+                    textWeight,
+                    k,
+                )
+                if err != nil {
+                    return nil, fmt.Errorf("hybrid search failed: %w", err)
+                }
+                defer rows.Close()
+
+                var documents []ai.Document
+                for rows.Next() {
+                    var content string
+                    var metadataJSON []byte
+                    var combinedScore float64
+
+                    err := rows.Scan(&content, &metadataJSON, &combinedScore)
+                    if err != nil {
+                        return nil, fmt.Errorf("failed to scan row: %w", err)
+                    }
+
+                    var metadata map[string]interface{}
+                    if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+                        metadata = make(map[string]interface{})
+                    }
+                    metadata["combined_score"] = combinedScore
+
+                    documents = append(documents, ai.Document{
+                        Content:  content,
+                        Metadata: metadata,
+                    })
+                }
+
+                return documents, nil
+            },
+        )
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Combine vector similarity with traditional text search:
+
+    ```python
+    async def create_hybrid_retriever(conn):
+        """Create a hybrid retriever combining vector and text search"""
+        
+        async def hybrid_search(
+            query: str,
+            table_name: str = "documents",
+            k: int = 5,
+            vector_weight: float = 0.7,
+            text_weight: float = 0.3
+        ) -> List[Dict[str, Any]]:
+            cursor = conn.cursor()
+            
+            try:
+                # Generate embedding
+                embedding_response = await ai.embed(
+                    embedder="googleai/gemini-embedding-001",
+                    content=query
+                )
+                embedding = embedding_response[0]["embedding"]
+                
+                # Hybrid search query
+                query_text = f"""
+                    WITH vector_search AS (
+                        SELECT 
+                            content, 
+                            metadata,
+                            1 - (embedding <=> %s) as vector_score
+                        FROM {table_name}
+                    ),
+                    text_search AS (
+                        SELECT 
+                            content,
+                            metadata,
+                            ts_rank(to_tsvector('english', content), plainto_tsquery('english', %s)) as text_score
+                        FROM {table_name}
+                        WHERE to_tsvector('english', content) @@ plainto_tsquery('english', %s)
+                    )
+                    SELECT 
+                        v.content,
+                        v.metadata,
+                        (%s * COALESCE(v.vector_score, 0) + %s * COALESCE(t.text_score, 0)) as combined_score
+                    FROM vector_search v
+                    FULL OUTER JOIN text_search t ON v.content = t.content
+                    ORDER BY combined_score DESC
+                    LIMIT %s
+                """
+                
+                cursor.execute(query_text, [
+                    embedding, query, query, vector_weight, text_weight, k
+                ])
+                results = cursor.fetchall()
+                
+                documents = []
+                for row in results:
+                    content, metadata, combined_score = row
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    metadata["combined_score"] = combined_score
+                    
+                    documents.append({
+                        "content": content,
+                        "metadata": metadata,
+                    })
+                
+                return documents
+                
+            except Exception as error:
+                print(f"Hybrid search failed: {error}")
+                return []
+            finally:
+                cursor.close()
+        
+        return hybrid_search
+    ```
+</LanguageContent>
+
+## Best Practices
+
+### Database Optimization
+
+1. **Choose the right index type**:
+   - `ivfflat`: Good for most use cases, faster builds
+   - `hnsw`: Better recall, slower builds
+
+2. **Optimize index parameters**:
+   ```sql
+   -- For ivfflat
+   CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+   
+   -- For hnsw (PostgreSQL 14+)
+   CREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+   ```
+
+3. **Use appropriate vector dimensions**: Match your embedding model's output dimensions
+
+4. **Consider partitioning**: For large datasets, partition tables by metadata
+
+### Performance Optimization
+
+1. **Batch operations**: Insert/update documents in batches
+2. **Connection pooling**: Use connection pools for production applications
+3. **Vacuum regularly**: Keep statistics updated for optimal query planning
+4. **Monitor query performance**: Use `EXPLAIN ANALYZE` to optimize queries
+
+### Production Deployment
+
+1. **Use managed PostgreSQL**: Consider cloud providers with pgvector support
+2. **Set up replication**: Configure read replicas for scaling reads
+3. **Backup strategies**: Regular backups including vector data
+4. **Monitoring**: Track query performance and index usage
+
+## Next Steps
+
+- Learn about [RAG implementation](/docs/rag) to build complete retrieval-augmented generation systems
+- Explore [creating flows](/docs/flows) to build structured AI workflows with vector search
+- See [deployment guides](/docs/deployment) for production deployment strategies
+- Check out other vector database options for different use cases

@@ -1,7 +1,17 @@
 ---
 title: Evaluation
-description: Learn about Genkit's evaluation capabilities, including inference-based and raw evaluation, dataset creation, and how to use the Developer UI and CLI for testing and analysis.
+description: Learn about Genkit's evaluation capabilities across JavaScript and Go, including inference-based and raw evaluation, dataset creation, and how to use the Developer UI and CLI for testing and analysis.
 ---
+
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+import ThemeImage from '../../../components/ThemeImage.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
 
 Evaluation is a form of testing that helps you validate your LLM's responses and
 ensure they meet your quality bar.
@@ -13,7 +23,7 @@ data including inputs, outputs, and information from intermediate steps to
 evaluate the end-to-end quality of LLM responses as well as understand the
 performance of your system's building blocks.
 
-### Types of evaluation
+## Types of evaluation
 
 Genkit supports two types of evaluation:
 
@@ -41,10 +51,24 @@ This section explains how to perform inference-based evaluation using Genkit.
 
 ### Setup
 
-1.  Use an existing Genkit app or create a new one by following our [Get started](/docs/get-started) guide.
-2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
+1. Use an existing Genkit app or create a new one by following the Getting started guide for your language:
 
-    ```js
+<LanguageContent lang="js">
+Follow the [Get started](/docs/get-started) guide.
+</LanguageContent>
+
+<LanguageContent lang="go">
+Follow the [Get started](/go/docs/get-started-go) guide.
+</LanguageContent>
+
+<LanguageContent lang="python">
+Evaluation features are not yet available for Python. You can use external evaluation tools with Python Genkit applications.
+</LanguageContent>
+
+2. Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
+
+<LanguageContent lang="js">
+```js
     import { genkit, z, Document } from 'genkit';
     import { googleAI } from '@genkit-ai/googleai';
 
@@ -85,8 +109,82 @@ This section explains how to perform inference-based evaluation using Genkit.
       },
     );
     ```
+</LanguageContent>
 
-3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
+<LanguageContent lang="go">
+```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/googlegenai"
+    )
+
+    func main() {
+        ctx := context.Background()
+
+        // Initialize Genkit
+        g, err := genkit.Init(ctx,
+            genkit.WithPlugins(&googlegenai.GoogleAI{}),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+        )
+        if err != nil {
+            log.Fatalf("Genkit initialization error: %v", err)
+        }
+
+        // Dummy retriever that always returns the same facts
+        dummyRetrieverFunc := func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
+            facts := []string{
+                "Dog is man's best friend",
+                "Dogs have evolved and were domesticated from wolves",
+            }
+            // Just return facts as documents.
+            var docs []*ai.Document
+            for _, fact := range facts {
+                docs = append(docs, ai.DocumentFromText(fact, nil))
+            }
+            return &ai.RetrieverResponse{Documents: docs}, nil
+        }
+        factsRetriever := genkit.DefineRetriever(g, "local", "dogFacts", dummyRetrieverFunc)
+
+        m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+        if m == nil {
+            log.Fatal("failed to find model")
+        }
+
+        // A simple question-answering flow
+        genkit.DefineFlow(g, "qaFlow", func(ctx context.Context, query string) (string, error) {
+            factDocs, err := ai.Retrieve(ctx, factsRetriever, ai.WithTextDocs(query))
+            if err != nil {
+                return "", fmt.Errorf("retrieval failed: %w", err)
+            }
+            llmResponse, err := genkit.Generate(ctx, g,
+                ai.WithModelName("googleai/gemini-2.5-flash"),
+                ai.WithPrompt("Answer this question with the given context: %s", query),
+                ai.WithDocs(factDocs.Documents...)
+            )
+            if err != nil {
+                return "", fmt.Errorf("generation failed: %w", err)
+            }
+            return llmResponse.Text(), nil
+        })
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Evaluation features are not yet available for Python. You can use external evaluation tools with Python Genkit applications.
+</LanguageContent>
+
+3. (Optional) Add evaluation metrics to your application to use while evaluating:
+
+<LanguageContent lang="js">
+This guide uses the `MALICIOUSNESS` metric from the `genkitEval` plugin.
 
     ```js
     import { genkitEval, GenkitMetric } from '@genkit-ai/evaluator';
@@ -94,7 +192,8 @@ This section explains how to perform inference-based evaluation using Genkit.
 
     export const ai = genkit({
       plugins: [
-        ...// Add this plugin to your Genkit initialization block
+        googleAI(),
+        // Add this plugin to your Genkit initialization block
         genkitEval({
           judge: googleAI.model('gemini-2.5-flash'),
           metrics: [GenkitMetric.MALICIOUSNESS],
@@ -108,12 +207,64 @@ This section explains how to perform inference-based evaluation using Genkit.
     ```bash
     npm install @genkit-ai/evaluator
     ```
+</LanguageContent>
 
-4.  Start your Genkit application.
+<LanguageContent lang="go">
+This guide uses the `EvaluatorRegex` metric from the `evaluators` package.
+
+    ```go
+    import (
+        "github.com/firebase/genkit/go/plugins/evaluators"
+    )
+
+    func main() {
+        // ...
+
+        metrics := []evaluators.MetricConfig{
+            {
+                MetricType: evaluators.EvaluatorRegex,
+            },
+        }
+
+        // Initialize Genkit
+        g, err := genkit.Init(ctx,
+            genkit.WithPlugins(
+                &googlegenai.GoogleAI{},
+                &evaluators.GenkitEval{Metrics: metrics}, // Add this plugin
+            ),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+        )
+    }
+    ```
+
+    **Note:** Ensure that the `evaluators` package is installed in your go project:
 
     ```bash
+    go get github.com/firebase/genkit/go/plugins/evaluators
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
+
+4. Start your Genkit application:
+
+<LanguageContent lang="js">
+```bash
     genkit start -- <command to start your app>
     ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```bash
+    genkit start -- go run main.go
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 ### Create a dataset
 
@@ -135,14 +286,42 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 
    a. Click the **Add example** button to open the example editor panel.
 
-   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example has to your dataset.
+   b. Only the `input` field is required. Add the input data:
 
-   c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
+<LanguageContent lang="js">
+Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example to your dataset.
 
-   ```
-   {"query": "Can I give milk to my cats?"}
-   {"query": "From which animals did dogs evolve?"}
-   ```
+    Repeat this process to add more examples:
+
+    ```
+    {"query": "Can I give milk to my cats?"}
+    {"query": "From which animals did dogs evolve?"}
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Enter `"Who is man's best friend?"` in the `Input` field, and click **Save** to add the example to your dataset.
+
+    If you have configured the `EvaluatorRegex` metric and would like to try it out, you need to specify a Reference string that contains the pattern to match the output against. For the preceding input, set the `Reference output` text to `"(?i)dog"`, which is a case-insensitive regular-expression pattern to match the word "dog" in the flow output.
+
+    Repeat this process to add more examples:
+
+    ```text
+    "Can I give milk to my cats?"
+    "From which animals did dogs evolve?"
+    ```
+
+    If you are using the regular-expression evaluator, use the corresponding reference strings:
+
+    ```text
+    "(?i)don't know"
+    "(?i)wolf|wolves"
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 By the end of this step, your dataset should have 3 examples in it, with the
 values mentioned above.
@@ -196,25 +375,55 @@ Depending on the type, datasets have schema validation support in the Dev UI:
 
 - Flow datasets support validation of the `input` and `reference` fields of the dataset against a flow in the Genkit application. Schema validation is optional and is only enforced if a schema is specified on the target flow.
 
-- Model datasets have implicit schema, supporting both `string` and `GenerateRequest` input types. String validation provides a convenient way to evaluate simple text prompts, while `GenerateRequest` provides complete control for advanced use cases (e.g. providing model parameters, message history, tools, etc). You can find the full schema for `GenerateRequest` in our [API reference docs](https://js.api.genkit.dev/interfaces/genkit._.GenerateRequest.html).
+- Model datasets have implicit schema, supporting both `string` and `GenerateRequest` input types. String validation provides a convenient way to evaluate simple text prompts, while `GenerateRequest` provides complete control for advanced use cases (e.g. providing model parameters, message history, tools, etc).
 
 Note: Schema validation is a helper tool for editing examples, but it is
 possible to save an example with invalid schema. These examples may fail when
-the running an evaluation.
+running an evaluation.
 
 ## Supported evaluators
 
 ### Genkit evaluators
 
-Genkit includes a small number of native evaluators, inspired by [RAGAS](https://docs.ragas.io/en/stable/), to help you get started:
+Genkit includes built-in evaluators to help you get started:
 
-- Faithfulness -- Measures the factual consistency of the generated answer against the given context
-- Answer Relevancy -- Assesses how pertinent the generated answer is to the given prompt
-- Maliciousness -- Measures whether the generated output intends to deceive, harm, or exploit
+<LanguageContent lang="js">
+Genkit includes a small number of native evaluators, inspired by [RAGAS](https://docs.ragas.io/en/stable/):
+
+    - **Faithfulness** -- Measures the factual consistency of the generated answer against the given context
+    - **Answer Relevancy** -- Assesses how pertinent the generated answer is to the given prompt
+    - **Maliciousness** -- Measures whether the generated output intends to deceive, harm, or exploit
+</LanguageContent>
+
+<LanguageContent lang="go">
+Genkit includes a small number of built-in evaluators, ported from the [JS evaluators plugin](https://js.api.genkit.dev/enums/_genkit-ai_evaluator.GenkitMetric.html):
+
+    - **EvaluatorDeepEqual** -- Checks if the generated output is deep-equal to the reference output provided.
+    - **EvaluatorRegex** -- Checks if the generated output matches the regular expression provided in the reference field.
+    - **EvaluatorJsonata** -- Checks if the generated output matches the [JSONATA](https://jsonata.org/) expression provided in the reference field.
+</LanguageContent>
+
+<LanguageContent lang="python">
+Evaluation features are not yet available for Python.
+</LanguageContent>
 
 ### Evaluator plugins
 
-Genkit supports additional evaluators through plugins, like the Vertex Rapid Evaluators, which you can access via the [VertexAI Plugin](/docs/plugins/vertex-ai#evaluators).
+Genkit supports additional evaluators through plugins:
+
+<LanguageContent lang="js">
+- [Vertex Rapid Evaluators](/docs/plugins/vertex-ai#evaluators) via the VertexAI Plugin
+    - Custom evaluators through the plugin system
+</LanguageContent>
+
+<LanguageContent lang="go">
+- Custom evaluators through the plugin system
+    - Third-party evaluation tools through plugins
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 ## Advanced use
 
@@ -229,8 +438,6 @@ of specific metrics, indicating improvements or regressions.
 When comparing evaluations, one run is designated as the _Baseline_. All other
 evaluations are compared against this baseline to determine whether their
 performance has improved or regressed.
-
-import ThemeImage from '../../../components/ThemeImage.astro';
 
 <ThemeImage
   lightSrc="/src/assets/evals_compare_light.png"
@@ -250,23 +457,23 @@ To use the evaluation comparison feature, the following conditions must be met:
 
 #### Comparing evaluations
 
-1.  Ensure you have at least two evaluation runs performed on the same dataset.
-    For instructions, refer to the
-    [Run evaluation section](#run-evaluation-and-view-results).
+1. Ensure you have at least two evaluation runs performed on the same dataset.
+   For instructions, refer to the
+   [Run evaluation section](#run-evaluation-and-view-results).
 
-2.  In the Developer UI, navigate to the **Datasets** page.
+2. In the Developer UI, navigate to the **Datasets** page.
 
-3.  Select the relevant dataset and open its **Evaluations** tab. You should see
-    all evaluation runs associated with that dataset.
+3. Select the relevant dataset and open its **Evaluations** tab. You should see
+   all evaluation runs associated with that dataset.
 
-4.  Choose one evaluation to serve as the baseline for comparison.
+4. Choose one evaluation to serve as the baseline for comparison.
 
-5.  On the evaluation results page, click the **+ Comparison** button. If this
-    button is disabled, it means no other comparable evaluations are available
-    for this dataset.
+5. On the evaluation results page, click the **+ Comparison** button. If this
+   button is disabled, it means no other comparable evaluations are available
+   for this dataset.
 
-6.  A new column will appear with a dropdown menu. Select another evaluation
-    from this menu to load its results alongside the baseline.
+6. A new column will appear with a dropdown menu. Select another evaluation
+   from this menu to load its results alongside the baseline.
 
 You can now view the outputs side-by-side to visually inspect differences in
 quality. This feature supports comparing up to three evaluations simultaneously.
@@ -282,13 +489,13 @@ the selected metric must be present in all evaluations being compared.
 
 To enable metric highlighting:
 
-1.  After initiating a comparison, a **Choose a metric to compare** menu will
-    become available.
+1. After initiating a comparison, a **Choose a metric to compare** menu will
+   become available.
 
-2.  Select a metric from the dropdown. By default, lower scores (for numeric
-    metrics) and `false` values (for boolean metrics) are considered
-    improvements and highlighted in green. You can reverse this logic by
-    ticking the checkbox in the menu.
+2. Select a metric from the dropdown. By default, lower scores (for numeric
+   metrics) and `false` values (for boolean metrics) are considered
+   improvements and highlighted in green. You can reverse this logic by
+   ticking the checkbox in the menu.
 
 The comparison columns will now be color-coded according to the selected metric
 and configuration, providing an at-a-glance overview of performance changes.
@@ -319,24 +526,56 @@ genkit eval:flow qaFlow --input testInputs.json
 Note: Make sure that you start your genkit app before running these CLI
 commands.
 
+<LanguageContent lang="js">
 ```bash
-genkit start -- <command to start your app>
-```
+    genkit start -- <command to start your app>
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```bash
+    genkit start -- go run main.go
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 Here, `testInputs.json` should be an array of objects containing an `input`
-field and an optional `reference` field, like below:
+field and an optional `reference` field:
 
+<LanguageContent lang="js">
 ```json
-[
-  {
-    "input": { "query": "What is the French word for Cheese?" }
-  },
-  {
-    "input": { "query": "What green vegetable looks like cauliflower?" },
-    "reference": "Broccoli"
-  }
-]
-```
+    [
+      {
+        "input": { "query": "What is the French word for Cheese?" }
+      },
+      {
+        "input": { "query": "What green vegetable looks like cauliflower?" },
+        "reference": "Broccoli"
+      }
+    ]
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```json
+    [
+      {
+        "input": "What is the French word for Cheese?"
+      },
+      {
+        "input": "What green vegetable looks like cauliflower?",
+        "reference": "Broccoli"
+      }
+    ]
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 If your flow requires auth, you may specify it using the `--context` argument:
 
@@ -348,9 +587,21 @@ By default, the `eval:flow` and `eval:run` commands use all available metrics
 for evaluation. To run on a subset of the configured evaluators, use the
 `--evaluators` flag and provide a comma-separated list of evaluators by name:
 
+<LanguageContent lang="js">
 ```bash
-genkit eval:flow qaFlow --input testInputs.json --evaluators=genkitEval/maliciousness,genkitEval/answer_relevancy
-```
+    genkit eval:flow qaFlow --input testInputs.json --evaluators=genkitEval/maliciousness,genkitEval/answer_relevancy
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```bash
+    genkit eval:flow qaFlow --input testInputs.json --evaluators=genkitEval/regex,genkitEval/jsonata
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 You can view the results of your evaluation run in the Dev UI at
 `localhost:4000/evaluate`.
@@ -369,15 +620,39 @@ inference.
 
 Run your flow over your test inputs:
 
+<LanguageContent lang="js">
 ```bash
-genkit flow:batchRun qaFlow testInputs.json --label firstRunSimple
-```
+    genkit flow:batchRun qaFlow testInputs.json --label firstRunSimple
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```bash
+    genkit flow:batchRun qaFlow testInputs.json
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 Extract the evaluation data:
 
+<LanguageContent lang="js">
 ```bash
-genkit eval:extractData qaFlow --label firstRunSimple --output factsEvalDataset.json
-```
+    genkit eval:extractData qaFlow --label firstRunSimple --output factsEvalDataset.json
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```bash
+    genkit eval:extractData qaFlow --maxRows 2 --output factsEvalDataset.json
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 The exported data has a format different from the dataset format presented
 earlier. This is because this data is intended to be used with evaluation
@@ -408,197 +683,234 @@ UI, located at `localhost:4000/evaluate`.
 
 ### Batching evaluations
 
+<LanguageContent lang="js">
 :::note
-This feature is only available in the Node.js SDK.
-:::
+    This feature is only available in the Node.js SDK.
+    :::
 
-You can speed up evaluations by processing the inputs in batches using the CLI and Dev UI. When batching is enabled, the input data is grouped into batches of size `batchSize`. The data points in a batch are all run in parallel to provide significant performance improvements, especially when dealing with large datasets and/or complex evaluators. By default (when the flag is omitted), batching is disabled.
+    You can speed up evaluations by processing the inputs in batches using the CLI and Dev UI. When batching is enabled, the input data is grouped into batches of size `batchSize`. The data points in a batch are all run in parallel to provide significant performance improvements, especially when dealing with large datasets and/or complex evaluators. By default (when the flag is omitted), batching is disabled.
 
-The `batchSize` option has been integrated into the `eval:flow` and `eval:run` CLI commands. When a `batchSize` greater than 1 is provided, the evaluator will process the dataset in chunks of the specified size. This feature only affects the evaluator logic and not inference (when using `eval:flow`). Here are some examples of enabling batching with the CLI:
+    The `batchSize` option has been integrated into the `eval:flow` and `eval:run` CLI commands. When a `batchSize` greater than 1 is provided, the evaluator will process the dataset in chunks of the specified size. This feature only affects the evaluator logic and not inference (when using `eval:flow`). Here are some examples of enabling batching with the CLI:
 
-```bash
-genkit eval:flow myFlow --input yourDataset.json --evaluators=custom/myEval --batchSize 10
-```
+    ```bash
+    genkit eval:flow myFlow --input yourDataset.json --evaluators=custom/myEval --batchSize 10
+    ```
 
-Or, with `eval:run`
+    Or, with `eval:run`
 
-```bash
-genkit eval:run yourDataset.json --evaluators=custom/myEval --batchSize 10
-```
+    ```bash
+    genkit eval:run yourDataset.json --evaluators=custom/myEval --batchSize 10
+    ```
 
-Batching is also available in the Dev UI for Genkit (JS) applications. You can set batch size when running a new evaluation, to enable parallelization.
+    Batching is also available in the Dev UI for Genkit (JS) applications. You can set batch size when running a new evaluation, to enable parallelization.
+</LanguageContent>
+
+<LanguageContent lang="go">
+Batching features are not yet available for Go. Evaluations run sequentially.
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 ### Custom extractors
 
+<LanguageContent lang="js">
 Genkit provides reasonable default logic for extracting the necessary fields
-(`input`, `output` and `context`) while doing an evaluation. However, you may
-find that you need more control over the extraction logic for these fields.
-Genkit supports customs extractors to achieve this. You can provide custom
-extractors to be used in `eval:extractData` and `eval:flow` commands.
+    (`input`, `output` and `context`) while doing an evaluation. However, you may
+    find that you need more control over the extraction logic for these fields.
+    Genkit supports customs extractors to achieve this. You can provide custom
+    extractors to be used in `eval:extractData` and `eval:flow` commands.
 
-First, as a preparatory step, introduce an auxilary step in our `qaFlow`
-example:
+    First, as a preparatory step, introduce an auxiliary step in our `qaFlow`
+    example:
 
-```js
-export const qaFlow = ai.defineFlow(
-  {
-    name: 'qaFlow',
-    inputSchema: z.object({ query: z.string() }),
-    outputSchema: z.object({ answer: z.string() }),
-  },
-  async ({ query }) => {
-    const factDocs = await ai.retrieve({
-      retriever: dummyRetriever,
-      query,
-    });
-    const factDocsModified = await ai.run('factModified', async () => {
-      // Let us use only facts that are considered silly. This is a
-      // hypothetical step for demo purposes, you may perform any
-      // arbitrary task inside a step and reference it in custom
-      // extractors.
-      //
-      // Assume you have a method that checks if a fact is silly
-      return factDocs.filter((d) => isSillyFact(d.text));
-    });
-
-    const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
-      prompt: `Answer this question with the given context ${query}`,
-      docs: factDocsModified,
-    });
-    return { answer: text };
-  },
-);
-```
-
-Next, configure a custom extractor to use the output of the `factModified` step
-when evaluating this flow.
-
-If you don't have one a tools-config file to configure custom extractors, add
-one named `genkit-tools.conf.js` to your project root.
-
-```bash
-cd /path/to/your/genkit/app
-
-touch genkit-tools.conf.js
-```
-
-In the tools config file, add the following code:
-
-```js
-module.exports = {
-  evaluators: [
-    {
-      actionRef: '/flow/qaFlow',
-      extractors: {
-        context: { outputOf: 'factModified' },
+    ```js
+    export const qaFlow = ai.defineFlow(
+      {
+        name: 'qaFlow',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.object({ answer: z.string() }),
       },
-    },
-  ],
-};
-```
+      async ({ query }) => {
+        const factDocs = await ai.retrieve({
+          retriever: dummyRetriever,
+          query,
+        });
+        const factDocsModified = await ai.run('factModified', async () => {
+          // Let us use only facts that are considered silly. This is a
+          // hypothetical step for demo purposes, you may perform any
+          // arbitrary task inside a step and reference it in custom
+          // extractors.
+          //
+          // Assume you have a method that checks if a fact is silly
+          return factDocs.filter((d) => isSillyFact(d.text));
+        });
 
-This config overrides the default extractors of Genkit's tooling, specifically
-changing what is considered as `context` when evaluating this flow.
+        const { text } = await ai.generate({
+          model: googleAI.model('gemini-2.5-flash'),
+          prompt: `Answer this question with the given context ${query}`,
+          docs: factDocsModified,
+        });
+        return { answer: text };
+      },
+    );
+    ```
 
-Running evaluation again reveals that context is now populated as the output of
-the step `factModified`.
+    Next, configure a custom extractor to use the output of the `factModified` step
+    when evaluating this flow.
 
-```bash
-genkit eval:flow qaFlow --input testInputs.json
-```
+    If you don't have one a tools-config file to configure custom extractors, add
+    one named `genkit-tools.conf.js` to your project root.
 
-Evaluation extractors are specified as follows:
+    ```bash
+    cd /path/to/your/genkit/app
 
-- `evaluators` field accepts an array of EvaluatorConfig objects, which are
-  scoped by `flowName`
-- `extractors` is an object that specifies the extractor overrides. The
-  current supported keys in `extractors` are `[input, output, context]`. The
-  acceptable value types are:
-  - `string` - this should be a step name, specified as a string. The output
-    of this step is extracted for this key.
-  - `{ inputOf: string }` or `{ outputOf: string }` - These objects
-    represent specific channels (input or output) of a step. For example, `{
-inputOf: 'foo-step' }` would extract the input of step `foo-step` for
-    this key.
-  - `(trace) => string;` - For further flexibility, you can provide a
-    function that accepts a Genkit trace and returns an `any`-type value,
-    and specify the extraction logic inside this function. Refer to
-    `genkit/genkit-tools/common/src/types/trace.ts` for the exact TraceData
-    schema.
+    touch genkit-tools.conf.js
+    ```
 
-**Note:** The extracted data for all these extractors is the type corresponding
-to the extractor. For example, if you use context: `{ outputOf: 'foo-step' }`,
-and `foo-step` returns an array of objects, the extracted context is also an
-array of objects.
+    In the tools config file, add the following code:
+
+    ```js
+    module.exports = {
+      evaluators: [
+        {
+          actionRef: '/flow/qaFlow',
+          extractors: {
+            context: { outputOf: 'factModified' },
+          },
+        },
+      ],
+    };
+    ```
+
+    This config overrides the default extractors of Genkit's tooling, specifically
+    changing what is considered as `context` when evaluating this flow.
+
+    Running evaluation again reveals that context is now populated as the output of
+    the step `factModified`.
+
+    ```bash
+    genkit eval:flow qaFlow --input testInputs.json
+    ```
+
+    Evaluation extractors are specified as follows:
+
+    - `evaluators` field accepts an array of EvaluatorConfig objects, which are
+      scoped by `flowName`
+    - `extractors` is an object that specifies the extractor overrides. The
+      current supported keys in `extractors` are `[input, output, context]`. The
+      acceptable value types are:
+      - `string` - this should be a step name, specified as a string. The output
+        of this step is extracted for this key.
+      - `{ inputOf: string }` or `{ outputOf: string }` - These objects
+        represent specific channels (input or output) of a step. For example, `{
+    inputOf: 'foo-step' }` would extract the input of step `foo-step` for
+        this key.
+      - `(trace) => string;` - For further flexibility, you can provide a
+        function that accepts a Genkit trace and returns an `any`-type value,
+        and specify the extraction logic inside this function. Refer to
+        `genkit/genkit-tools/common/src/types/trace.ts` for the exact TraceData
+        schema.
+
+    **Note:** The extracted data for all these extractors is the type corresponding
+    to the extractor. For example, if you use context: `{ outputOf: 'foo-step' }`,
+    and `foo-step` returns an array of objects, the extracted context is also an
+    array of objects.
+</LanguageContent>
+
+<LanguageContent lang="go">
+Custom extractors are not yet available for Go. Use the default extraction logic provided by Genkit.
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
 
 ### Synthesizing test data using an LLM
 
+<LanguageContent lang="js">
 Here is an example flow that uses a PDF file to generate potential user
-questions.
+    questions.
 
-```ts
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/googleai';
-import { chunk } from 'llm-chunk'; // npm install llm-chunk
-import path from 'path';
-import { readFile } from 'fs/promises';
-import pdf from 'pdf-parse'; // npm install pdf-parse
+    ```ts
+    import { genkit, z } from 'genkit';
+    import { googleAI } from '@genkit-ai/googleai';
+    import { chunk } from 'llm-chunk'; // npm install llm-chunk
+    import path from 'path';
+    import { readFile } from 'fs/promises';
+    import pdf from 'pdf-parse'; // npm install pdf-parse
 
-const ai = genkit({ plugins: [googleAI()] });
+    const ai = genkit({ plugins: [googleAI()] });
 
-const chunkingConfig = {
-  minLength: 1000, // number of minimum characters into chunk
-  maxLength: 2000, // number of maximum characters into chunk
-  splitter: 'sentence', // paragraph | sentence
-  overlap: 100, // number of overlap chracters
-  delimiters: '', // regex for base split method
-} as any;
+    const chunkingConfig = {
+      minLength: 1000, // number of minimum characters into chunk
+      maxLength: 2000, // number of maximum characters into chunk
+      splitter: 'sentence', // paragraph | sentence
+      overlap: 100, // number of overlap chracters
+      delimiters: '', // regex for base split method
+    } as any;
 
-async function extractText(filePath: string) {
-  const pdfFile = path.resolve(filePath);
-  const dataBuffer = await readFile(pdfFile);
-  const data = await pdf(dataBuffer);
-  return data.text;
-}
-
-export const synthesizeQuestions = ai.defineFlow(
-  {
-    name: 'synthesizeQuestions',
-    inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
-    outputSchema: z.object({
-      questions: z.array(
-        z.object({
-          query: z.string(),
-        }),
-      ),
-    }),
-  },
-  async ({ filePath }) => {
-    filePath = path.resolve(filePath);
-    // `extractText` loads the PDF and extracts its contents as text.
-    const pdfTxt = await ai.run('extract-text', () => extractText(filePath));
-
-    const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
-
-    const questions = [];
-    for (var i = 0; i < chunks.length; i++) {
-      const { text } = await ai.generate({
-        model: googleAI.model('gemini-2.5-flash'),
-        prompt: {
-          text: `Generate one question about the following text: ${chunks[i]}`,
-        },
-      });
-      questions.push({ query: text });
+    async function extractText(filePath: string) {
+      const pdfFile = path.resolve(filePath);
+      const dataBuffer = await readFile(pdfFile);
+      const data = await pdf(dataBuffer);
+      return data.text;
     }
-    return { questions };
-  },
-);
-```
 
-You can then use this command to export the data into a file and use for
-evaluation.
+    export const synthesizeQuestions = ai.defineFlow(
+      {
+        name: 'synthesizeQuestions',
+        inputSchema: z.object({ filePath: z.string().describe('PDF file path') }),
+        outputSchema: z.object({
+          questions: z.array(
+            z.object({
+              query: z.string(),
+            }),
+          ),
+        }),
+      },
+      async ({ filePath }) => {
+        filePath = path.resolve(filePath);
+        // `extractText` loads the PDF and extracts its contents as text.
+        const pdfTxt = await ai.run('extract-text', () => extractText(filePath));
 
-```bash
-genkit flow:run synthesizeQuestions '{"filePath": "my_input.pdf"}' --output synthesizedQuestions.json
-```
+        const chunks = await ai.run('chunk-it', async () => chunk(pdfTxt, chunkingConfig));
+
+        const questions = [];
+        for (var i = 0; i < chunks.length; i++) {
+          const { text } = await ai.generate({
+            model: googleAI.model('gemini-2.5-flash'),
+            prompt: {
+              text: `Generate one question about the following text: ${chunks[i]}`,
+            },
+          });
+          questions.push({ query: text });
+        }
+        return { questions };
+      },
+    );
+    ```
+
+    You can then use this command to export the data into a file and use for
+    evaluation.
+
+    ```bash
+    genkit flow:run synthesizeQuestions '{"filePath": "my_input.pdf"}' --output synthesizedQuestions.json
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Test data synthesis features are not yet available for Go. You can create test datasets manually or use external tools to generate evaluation data.
+</LanguageContent>
+
+<LanguageContent lang="python">
+Not applicable - evaluation features are not yet available for Python.
+</LanguageContent>
+
+## Next steps
+
+- Learn about [creating flows](/docs/flows) to build AI workflows that can be evaluated
+- Explore [retrieval-augmented generation (RAG)](/docs/rag) for building knowledge-based systems that benefit from evaluation
+- See [tool calling](/docs/tool-calling) for creating AI agents that can be tested with evaluation metrics
+- Check out the [developer tools documentation](/docs/devtools) for more information about the Genkit Developer UI

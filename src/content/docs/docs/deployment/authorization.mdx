@@ -1,0 +1,259 @@
+---
+title: Authorization and Security
+description: Learn how to implement robust authorization and security patterns for Genkit flows across different deployment platforms and languages.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+Securing your Genkit flows is crucial for protecting your AI services from unauthorized access and potential abuse. This guide covers comprehensive authorization patterns and security best practices across all supported languages and deployment platforms.
+
+## Key Security Concepts
+
+- **Authentication**: Verifying the identity of users or services
+- **Authorization**: Determining what authenticated users can access
+- **API Key Management**: Secure handling of service credentials
+- **Rate Limiting**: Preventing abuse and controlling usage
+- **Input Validation**: Ensuring data integrity and preventing attacks
+- **Audit Logging**: Tracking access and usage patterns
+
+## Authentication Strategies
+
+### API Key Authentication
+
+<LanguageContent lang="js">
+```ts
+    import { genkit, z } from 'genkit';
+    import { apiKey } from 'genkit/context';
+    import { withContextProvider } from '@genkit-ai/express';
+
+    const ai = genkit({
+      plugins: [googleAI()],
+      model: googleAI.model('gemini-2.5-flash'),
+    });
+
+    // Custom API key validation with user context
+    const customAuthProvider = async (req: any) => {
+      const authHeader = req.headers['x-api-key'];
+      if (!authHeader) {
+        throw new Error('API key required');
+      }
+
+      // Validate API key against database or service
+      const user = await validateApiKey(authHeader);
+      if (!user) {
+        throw new Error('Invalid API key');
+      }
+
+      return {
+        auth: {
+          userId: user.id,
+          email: user.email,
+          plan: user.plan,
+          rateLimit: user.rateLimit,
+        },
+      };
+    };
+
+    async function validateApiKey(apiKey: string) {
+      // Implement your API key validation logic
+      const users = {
+        'sk-test-123': { id: 'user1', email: 'user@example.com', plan: 'pro', rateLimit: 1000 },
+        'sk-prod-456': { id: 'user2', email: 'admin@example.com', plan: 'enterprise', rateLimit: 10000 },
+      };
+      return users[apiKey] || null;
+    }
+
+    const protectedFlow = withContextProvider(
+      ai.defineFlow(
+        {
+          name: 'protectedFlow',
+          inputSchema: z.object({ query: z.string() }),
+          outputSchema: z.object({ response: z.string() }),
+        },
+        async ({ query }, { context }) => {
+          // Access user context
+          const user = context.auth;
+          console.log(`Request from user: ${user.email}, plan: ${user.plan}`);
+          
+          const { text } = await ai.generate(query);
+          return { response: text };
+        }
+      ),
+      customAuthProvider
+    );
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    package main
+
+    import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "net/http"
+    )
+
+    type User struct {
+        ID        string `json:"id"`
+        Email     string `json:"email"`
+        Plan      string `json:"plan"`
+        RateLimit int    `json:"rate_limit"`
+    }
+
+    type AuthContext struct {
+        User *User
+    }
+
+    // API key validation middleware
+    func apiKeyMiddleware(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            apiKey := r.Header.Get("X-API-Key")
+            if apiKey == "" {
+                http.Error(w, "API key required", http.StatusUnauthorized)
+                return
+            }
+
+            user, err := validateAPIKey(apiKey)
+            if err != nil {
+                http.Error(w, "Invalid API key", http.StatusUnauthorized)
+                return
+            }
+
+            // Add user to context
+            ctx := context.WithValue(r.Context(), "auth", &AuthContext{User: user})
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+
+    func validateAPIKey(apiKey string) (*User, error) {
+        users := map[string]*User{
+            "sk-test-123": {
+                ID: "user1", Email: "user@example.com", 
+                Plan: "pro", RateLimit: 1000,
+            },
+            "sk-prod-456": {
+                ID: "user2", Email: "admin@example.com", 
+                Plan: "enterprise", RateLimit: 10000,
+            },
+        }
+
+        if user, exists := users[apiKey]; exists {
+            return user, nil
+        }
+        return nil, fmt.Errorf("invalid API key")
+    }
+
+    // Protected flow handler
+    func protectedFlowHandler(flow genkit.Flow) http.HandlerFunc {
+        return func(w http.ResponseWriter, r *http.Request) {
+            // Get auth context
+            authCtx := r.Context().Value("auth").(*AuthContext)
+            user := authCtx.User
+
+            fmt.Printf("Request from user: %s, plan: %s\n", user.Email, user.Plan)
+
+            // Call the flow
+            genkit.Handler(flow).ServeHTTP(w, r)
+        }
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    import os
+    from typing import Optional
+    from flask import Flask, request
+    from genkit.ai import Genkit
+    from genkit.plugins.flask import genkit_flask_handler
+    from genkit.types import GenkitError
+
+    app = Flask(__name__)
+    ai = Genkit(...)
+
+    class User:
+        def __init__(self, id: str, email: str, plan: str, rate_limit: int):
+            self.id = id
+            self.email = email
+            self.plan = plan
+            self.rate_limit = rate_limit
+
+    def validate_api_key(api_key: str) -> Optional[User]:
+        """Validate API key and return user information"""
+        users = {
+            'sk-test-123': User('user1', 'user@example.com', 'pro', 1000),
+            'sk-prod-456': User('user2', 'admin@example.com', 'enterprise', 10000),
+        }
+        return users.get(api_key)
+
+    async def api_key_context_provider(request):
+        """Context provider for API key authentication"""
+        api_key = request.headers.get('X-API-Key')
+        if not api_key:
+            raise GenkitError(status='UNAUTHENTICATED', message='API key required')
+        
+        user = validate_api_key(api_key)
+        if not user:
+            raise GenkitError(status='UNAUTHENTICATED', message='Invalid API key')
+        
+        return {
+            'auth': {
+                'user_id': user.id,
+                'email': user.email,
+                'plan': user.plan,
+                'rate_limit': user.rate_limit,
+            }
+        }
+
+    @app.post('/protected')
+    @genkit_flask_handler(ai, context_provider=api_key_context_provider)
+    @ai.flow()
+    async def protected_flow(query: str, ctx):
+        # Access user context
+        auth = ctx.context.get('auth')
+        print(f"Request from user: {auth['email']}, plan: {auth['plan']}")
+        
+        response = await ai.generate(
+            on_chunk=ctx.send_chunk,
+            prompt=query,
+        )
+        return {'response': response.text}
+    ```
+</LanguageContent>
+
+## Best Practices
+
+### Security Checklist
+
+1. **Use HTTPS only** in production environments
+2. **Implement proper authentication** for all endpoints
+3. **Validate and sanitize all inputs** before processing
+4. **Use rate limiting** to prevent abuse
+5. **Log security events** for monitoring and auditing
+6. **Keep dependencies updated** to patch security vulnerabilities
+7. **Use environment variables** for sensitive configuration
+8. **Implement proper error handling** without exposing sensitive information
+
+### Production Security
+
+- **API Gateway**: Use an API gateway for centralized security policies
+- **WAF (Web Application Firewall)**: Protect against common web attacks
+- **DDoS Protection**: Implement protection against distributed denial-of-service attacks
+- **Security Headers**: Use security headers like HSTS, CSP, and X-Frame-Options
+- **Regular Security Audits**: Conduct regular security assessments and penetration testing
+
+## Next Steps
+
+- Learn about [Cloud Run deployment](/docs/deployment/cloud-run) for Google Cloud security features
+- Explore [Firebase deployment](/docs/deployment/firebase) for integrated authentication
+- See [any platform deployment](/docs/deployment/any-platform) for custom security implementations
+- Check out [monitoring and observability](/docs/observability-monitoring) for security monitoring

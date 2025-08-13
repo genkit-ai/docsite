@@ -1,0 +1,1113 @@
+---
+title: Advanced Configuration
+description: Learn advanced configuration options for Genkit observability, including sampling, performance tuning, custom metrics, and telemetry optimization across JavaScript, Go, and Python.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+This guide covers advanced configuration options for fine-tuning Genkit's observability features to optimize performance, control costs, and customize telemetry collection.
+
+## Configuration Overview
+
+Genkit's observability system can be configured at multiple levels:
+
+- **Global Settings**: Apply to all telemetry collection
+- **Language-Specific Options**: Platform-specific configurations
+- **Runtime Controls**: Dynamic configuration changes
+- **Environment Variables**: External configuration management
+
+## Default Configuration
+
+Understanding the default settings helps you make informed configuration decisions:
+
+<LanguageContent lang="js">
+```ts
+    // Default Firebase telemetry configuration
+    {
+      autoInstrumentation: true,
+      autoInstrumentationConfig: {
+        '@opentelemetry/instrumentation-dns': { enabled: false },
+      },
+      disableMetrics: false,
+      disableTraces: false,
+      disableLoggingInputAndOutput: false,
+      forceDevExport: false,
+      metricExportIntervalMillis: 300_000, // 5 minutes
+      metricExportTimeoutMillis: 300_000,  // 5 minutes
+      sampler: AlwaysOnSampler(), // 100% sampling
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    // Default configuration is handled by the Google Cloud plugin
+    // Telemetry is automatically configured with sensible defaults
+    type TelemetryConfig struct {
+        ProjectID           string
+        EnableTracing       bool   // true
+        EnableMetrics       bool   // true
+        EnableLogging       bool   // true
+        SamplingRate        float64 // 1.0 (100%)
+        ExportInterval      time.Duration // 5 minutes
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    # Default monitoring configuration
+    default_config = {
+        'enable_tracing': True,
+        'enable_metrics': True,
+        'enable_logging': True,
+        'sampling_rate': 1.0,  # 100% sampling
+        'export_interval': 300,  # 5 minutes
+        'disable_input_output_logging': False,
+    }
+    ```
+</LanguageContent>
+
+## Sampling Configuration
+
+Sampling reduces telemetry volume and costs while maintaining observability:
+
+### Trace Sampling
+
+<LanguageContent lang="js">
+```ts
+    import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
+    import { 
+      TraceIdRatioBasedSampler,
+      ParentBasedSampler,
+      AlwaysOffSampler,
+      AlwaysOnSampler
+    } from '@opentelemetry/sdk-trace-base';
+
+    // Sample 10% of traces
+    enableFirebaseTelemetry({
+      sampler: new TraceIdRatioBasedSampler(0.1),
+    });
+
+    // Parent-based sampling (inherit from parent span)
+    enableFirebaseTelemetry({
+      sampler: new ParentBasedSampler({
+        root: new TraceIdRatioBasedSampler(0.1),
+      }),
+    });
+
+    // Environment-based sampling
+    const samplingRate = process.env.NODE_ENV === 'production' ? 0.1 : 1.0;
+    enableFirebaseTelemetry({
+      sampler: new TraceIdRatioBasedSampler(samplingRate),
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "go.opentelemetry.io/otel/sdk/trace"
+    )
+
+    func configureSampling() {
+        // 10% sampling
+        sampler := trace.TraceIDRatioBased(0.1)
+        
+        // Parent-based sampling
+        parentSampler := trace.ParentBased(
+            trace.TraceIDRatioBased(0.1),
+        )
+        
+        // Environment-based sampling
+        var samplingRate float64 = 1.0
+        if os.Getenv("ENVIRONMENT") == "production" {
+            samplingRate = 0.1
+        }
+        
+        tp := trace.NewTracerProvider(
+            trace.WithSampler(trace.TraceIDRatioBased(samplingRate)),
+        )
+        
+        otel.SetTracerProvider(tp)
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry.sdk.trace.sampling import (
+        TraceIdRatioBasedSampler,
+        ParentBased,
+        ALWAYS_OFF,
+        ALWAYS_ON
+    )
+
+    # 10% sampling
+    sampler = TraceIdRatioBasedSampler(0.1)
+
+    # Parent-based sampling
+    parent_sampler = ParentBased(
+        root=TraceIdRatioBasedSampler(0.1)
+    )
+
+    # Environment-based sampling
+    import os
+    sampling_rate = 0.1 if os.getenv('ENVIRONMENT') == 'production' else 1.0
+    
+    enable_firebase_monitoring(
+        sampling_rate=sampling_rate
+    )
+    ```
+</LanguageContent>
+
+### Custom Sampling Strategies
+
+Implement custom sampling logic based on your application needs:
+
+<LanguageContent lang="js">
+```ts
+    import { Sampler, SamplingResult, SamplingDecision } from '@opentelemetry/sdk-trace-base';
+
+    class CustomSampler implements Sampler {
+      shouldSample(context, traceId, spanName, spanKind, attributes, links) {
+        // Sample all error traces
+        if (attributes['error'] === true) {
+          return { decision: SamplingDecision.RECORD_AND_SAMPLE };
+        }
+        
+        // Sample 50% of flow executions
+        if (spanName.includes('flow:')) {
+          return Math.random() < 0.5 
+            ? { decision: SamplingDecision.RECORD_AND_SAMPLE }
+            : { decision: SamplingDecision.NOT_RECORD };
+        }
+        
+        // Sample 10% of everything else
+        return Math.random() < 0.1
+          ? { decision: SamplingDecision.RECORD_AND_SAMPLE }
+          : { decision: SamplingDecision.NOT_RECORD };
+      }
+      
+      toString() {
+        return 'CustomSampler';
+      }
+    }
+
+    enableFirebaseTelemetry({
+      sampler: new CustomSampler(),
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "go.opentelemetry.io/otel/sdk/trace"
+        "go.opentelemetry.io/otel/trace"
+    )
+
+    type CustomSampler struct{}
+
+    func (s CustomSampler) ShouldSample(p trace.SamplingParameters) trace.SamplingResult {
+        // Sample all error spans
+        if p.Attributes != nil {
+            for _, attr := range p.Attributes {
+                if attr.Key == "error" && attr.Value.AsBool() {
+                    return trace.SamplingResult{
+                        Decision: trace.RecordAndSample,
+                    }
+                }
+            }
+        }
+        
+        // Sample 50% of flow executions
+        if strings.Contains(p.Name, "flow:") {
+            if rand.Float64() < 0.5 {
+                return trace.SamplingResult{Decision: trace.RecordAndSample}
+            }
+            return trace.SamplingResult{Decision: trace.Drop}
+        }
+        
+        // Sample 10% of everything else
+        if rand.Float64() < 0.1 {
+            return trace.SamplingResult{Decision: trace.RecordAndSample}
+        }
+        return trace.SamplingResult{Decision: trace.Drop}
+    }
+
+    func (s CustomSampler) Description() string {
+        return "CustomSampler"
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry.sdk.trace.sampling import Sampler, SamplingResult
+    from opentelemetry.trace import SpanKind
+    import random
+
+    class CustomSampler(Sampler):
+        def should_sample(self, parent_context, trace_id, name, kind, attributes, links, trace_state):
+            # Sample all error traces
+            if attributes and attributes.get('error') == True:
+                return SamplingResult(decision=True)
+            
+            # Sample 50% of flow executions
+            if 'flow:' in name:
+                return SamplingResult(decision=random.random() < 0.5)
+            
+            # Sample 10% of everything else
+            return SamplingResult(decision=random.random() < 0.1)
+        
+        def get_description(self):
+            return "CustomSampler"
+
+    enable_firebase_monitoring(
+        custom_sampler=CustomSampler()
+    )
+    ```
+</LanguageContent>
+
+## Performance Optimization
+
+### Export Intervals and Batching
+
+Optimize telemetry export for your application's performance requirements:
+
+<LanguageContent lang="js">
+```ts
+    enableFirebaseTelemetry({
+      // Reduce export frequency for high-volume applications
+      metricExportIntervalMillis: 600_000, // 10 minutes
+      metricExportTimeoutMillis: 30_000,   // 30 seconds
+      
+      // For development/testing - faster exports
+      // metricExportIntervalMillis: 10_000, // 10 seconds
+      // metricExportTimeoutMillis: 5_000,   // 5 seconds
+    });
+
+    // Custom batch configuration for traces
+    import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+    
+    const batchProcessor = new BatchSpanProcessor(exporter, {
+      maxExportBatchSize: 512,        // Default: 512
+      exportTimeoutMillis: 30_000,    // Default: 30 seconds
+      scheduledDelayMillis: 5_000,    // Default: 5 seconds
+      maxQueueSize: 2048,             // Default: 2048
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "go.opentelemetry.io/otel/sdk/trace"
+        "time"
+    )
+
+    func configurePerformance() {
+        // Configure batch span processor
+        batchProcessor := trace.NewBatchSpanProcessor(
+            exporter,
+            trace.WithBatchTimeout(30*time.Second),
+            trace.WithExportTimeout(10*time.Second),
+            trace.WithMaxExportBatchSize(512),
+            trace.WithMaxQueueSize(2048),
+        )
+        
+        tp := trace.NewTracerProvider(
+            trace.WithSpanProcessor(batchProcessor),
+        )
+        
+        otel.SetTracerProvider(tp)
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    # Configure batch processing
+    batch_processor = BatchSpanProcessor(
+        exporter,
+        max_export_batch_size=512,
+        schedule_delay_millis=5000,
+        export_timeout_millis=30000,
+        max_queue_size=2048,
+    )
+
+    enable_firebase_monitoring(
+        export_interval=600,  # 10 minutes
+        batch_processor=batch_processor
+    )
+    ```
+</LanguageContent>
+
+### Auto-Instrumentation Control
+
+Fine-tune automatic instrumentation to reduce overhead:
+
+<LanguageContent lang="js">
+```ts
+    enableFirebaseTelemetry({
+      autoInstrumentationConfig: {
+        // Disable file system instrumentation
+        '@opentelemetry/instrumentation-fs': { enabled: false },
+        
+        // Disable DNS instrumentation
+        '@opentelemetry/instrumentation-dns': { enabled: false },
+        
+        // Disable network instrumentation
+        '@opentelemetry/instrumentation-net': { enabled: false },
+        
+        // Configure HTTP instrumentation
+        '@opentelemetry/instrumentation-http': {
+          enabled: true,
+          ignoreIncomingRequestHook: (req) => {
+            // Ignore health check requests
+            return req.url?.includes('/health') || false;
+          },
+          ignoreOutgoingRequestHook: (options) => {
+            // Ignore internal requests
+            return options.hostname === 'localhost';
+          },
+        },
+        
+        // Configure Express instrumentation
+        '@opentelemetry/instrumentation-express': {
+          enabled: true,
+          ignoreLayers: [
+            // Ignore middleware layers
+            (layer) => layer.name === 'cors',
+          ],
+        },
+      },
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    // Go auto-instrumentation is typically handled through
+    // manual instrumentation or specific library integrations
+    
+    import (
+        "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+    )
+
+    func configureInstrumentation() {
+        // Configure HTTP client instrumentation
+        client := &http.Client{
+            Transport: otelhttp.NewTransport(
+                http.DefaultTransport,
+                otelhttp.WithFilter(func(req *http.Request) bool {
+                    // Skip health check requests
+                    return !strings.Contains(req.URL.Path, "/health")
+                }),
+            ),
+        }
+        
+        // Configure HTTP server instrumentation
+        handler := otelhttp.NewHandler(
+            myHandler,
+            "my-service",
+            otelhttp.WithFilter(func(req *http.Request) bool {
+                // Skip internal requests
+                return req.Header.Get("X-Internal") == ""
+            }),
+        )
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+
+    # Configure requests instrumentation
+    RequestsInstrumentor().instrument(
+        excluded_urls="localhost,127.0.0.1"
+    )
+
+    # Configure Flask instrumentation
+    FlaskInstrumentor().instrument_app(
+        app,
+        excluded_urls="/health,/metrics"
+    )
+
+    enable_firebase_monitoring(
+        auto_instrumentation_config={
+            'requests': {'enabled': True},
+            'flask': {'enabled': True},
+            'sqlalchemy': {'enabled': False},  # Disable if not needed
+        }
+    )
+    ```
+</LanguageContent>
+
+## Data Privacy and Security
+
+### Input/Output Logging Control
+
+Protect sensitive data by controlling what gets logged:
+
+<LanguageContent lang="js">
+```ts
+    enableFirebaseTelemetry({
+      // Disable all input/output logging
+      disableLoggingInputAndOutput: true,
+    });
+
+    // Or use custom filtering
+    import { logger } from 'genkit/logging';
+
+    const sanitizeData = (data: any) => {
+      if (typeof data === 'object' && data !== null) {
+        const sanitized = { ...data };
+        // Remove sensitive fields
+        delete sanitized.password;
+        delete sanitized.apiKey;
+        delete sanitized.token;
+        return sanitized;
+      }
+      return data;
+    };
+
+    export const secureFlow = ai.defineFlow(
+      { name: 'secureFlow' },
+      async (input) => {
+        logger.info('Flow started', { input: sanitizeData(input) });
+        // Process data...
+        const result = await processData(input);
+        logger.info('Flow completed', { result: sanitizeData(result) });
+        return result;
+      }
+    );
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "context"
+        "log/slog"
+    )
+
+    func sanitizeData(data interface{}) interface{} {
+        // Implement data sanitization logic
+        if m, ok := data.(map[string]interface{}); ok {
+            sanitized := make(map[string]interface{})
+            for k, v := range m {
+                if k != "password" && k != "apiKey" && k != "token" {
+                    sanitized[k] = v
+                } else {
+                    sanitized[k] = "[REDACTED]"
+                }
+            }
+            return sanitized
+        }
+        return data
+    }
+
+    func secureFlow(ctx context.Context, input map[string]interface{}) (string, error) {
+        slog.InfoContext(ctx, "Flow started", "input", sanitizeData(input))
+        
+        result, err := processData(input)
+        if err != nil {
+            return "", err
+        }
+        
+        slog.InfoContext(ctx, "Flow completed", "result", sanitizeData(result))
+        return result, nil
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    import logging
+    from typing import Any, Dict
+
+    def sanitize_data(data: Any) -> Any:
+        """Remove sensitive information from data."""
+        if isinstance(data, dict):
+            sanitized = {}
+            for key, value in data.items():
+                if key.lower() in ['password', 'api_key', 'token', 'secret']:
+                    sanitized[key] = '[REDACTED]'
+                else:
+                    sanitized[key] = value
+            return sanitized
+        return data
+
+    enable_firebase_monitoring(
+        disable_input_output_logging=True  # Global disable
+    )
+
+    @ai.flow()
+    async def secure_flow(input: Dict[str, Any]) -> str:
+        logger.info(f"Flow started with input: {sanitize_data(input)}")
+        
+        result = await process_data(input)
+        logger.info(f"Flow completed: {sanitize_data(result)}")
+        
+        return result
+    ```
+</LanguageContent>
+
+### Attribute Filtering
+
+Filter sensitive attributes from telemetry data:
+
+<LanguageContent lang="js">
+```ts
+    import { SpanProcessor, Span } from '@opentelemetry/sdk-trace-base';
+
+    class AttributeFilterProcessor implements SpanProcessor {
+      private sensitiveKeys = ['password', 'apiKey', 'token', 'secret'];
+
+      onStart(span: Span): void {
+        // Filter attributes on span start
+        const attributes = span.attributes;
+        for (const key of this.sensitiveKeys) {
+          if (key in attributes) {
+            span.setAttributes({ [key]: '[REDACTED]' });
+          }
+        }
+      }
+
+      onEnd(): void {}
+      shutdown(): Promise<void> { return Promise.resolve(); }
+      forceFlush(): Promise<void> { return Promise.resolve(); }
+    }
+
+    // Add to tracer provider
+    const tp = new TracerProvider({
+      spanProcessors: [new AttributeFilterProcessor()],
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "go.opentelemetry.io/otel/sdk/trace"
+        "go.opentelemetry.io/otel/attribute"
+    )
+
+    type AttributeFilterProcessor struct {
+        sensitiveKeys map[string]bool
+    }
+
+    func NewAttributeFilterProcessor() *AttributeFilterProcessor {
+        return &AttributeFilterProcessor{
+            sensitiveKeys: map[string]bool{
+                "password": true,
+                "apiKey":   true,
+                "token":    true,
+                "secret":   true,
+            },
+        }
+    }
+
+    func (p *AttributeFilterProcessor) OnStart(parent context.Context, s trace.ReadWriteSpan) {
+        // Filter sensitive attributes
+        attrs := s.Attributes()
+        for _, attr := range attrs {
+            if p.sensitiveKeys[string(attr.Key)] {
+                s.SetAttributes(attribute.String(string(attr.Key), "[REDACTED]"))
+            }
+        }
+    }
+
+    func (p *AttributeFilterProcessor) OnEnd(s trace.ReadOnlySpan) {}
+    func (p *AttributeFilterProcessor) Shutdown(ctx context.Context) error { return nil }
+    func (p *AttributeFilterProcessor) ForceFlush(ctx context.Context) error { return nil }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry.sdk.trace import SpanProcessor
+    from opentelemetry.trace import Span
+
+    class AttributeFilterProcessor(SpanProcessor):
+        def __init__(self):
+            self.sensitive_keys = {'password', 'api_key', 'token', 'secret'}
+
+        def on_start(self, span: Span, parent_context=None):
+            # Filter sensitive attributes
+            if hasattr(span, '_attributes'):
+                for key in list(span._attributes.keys()):
+                    if key.lower() in self.sensitive_keys:
+                        span._attributes[key] = '[REDACTED]'
+
+        def on_end(self, span: Span):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def force_flush(self, timeout_millis=None):
+            pass
+
+    # Add to trace provider
+    trace_provider.add_span_processor(AttributeFilterProcessor())
+    ```
+</LanguageContent>
+
+## Custom Metrics
+
+Add application-specific metrics to enhance observability:
+
+<LanguageContent lang="js">
+```ts
+    import { metrics } from '@opentelemetry/api';
+
+    // Create custom meters and instruments
+    const meter = metrics.getMeter('genkit-app', '1.0.0');
+
+    // Counters for tracking events
+    const flowExecutions = meter.createCounter('genkit_flow_executions_total', {
+      description: 'Total number of flow executions',
+    });
+
+    const tokenUsage = meter.createCounter('genkit_tokens_consumed_total', {
+      description: 'Total tokens consumed by model calls',
+    });
+
+    // Histograms for measuring distributions
+    const flowDuration = meter.createHistogram('genkit_flow_duration_ms', {
+      description: 'Flow execution duration in milliseconds',
+      boundaries: [10, 50, 100, 500, 1000, 5000, 10000],
+    });
+
+    const modelLatency = meter.createHistogram('genkit_model_latency_ms', {
+      description: 'Model call latency in milliseconds',
+    });
+
+    // Gauges for current values
+    const activeFlows = meter.createUpDownCounter('genkit_active_flows', {
+      description: 'Number of currently active flows',
+    });
+
+    // Use in your flows
+    export const instrumentedFlow = ai.defineFlow(
+      { name: 'instrumentedFlow' },
+      async (input) => {
+        const startTime = Date.now();
+        
+        flowExecutions.add(1, { flow: 'instrumentedFlow', version: '1.0' });
+        activeFlows.add(1);
+        
+        try {
+          const result = await ai.generate({
+            model: 'gemini-1.5-flash',
+            prompt: `Process: ${input}`,
+          });
+          
+          // Track token usage if available
+          if (result.usage) {
+            tokenUsage.add(result.usage.totalTokens, {
+              model: 'gemini-1.5-flash',
+              flow: 'instrumentedFlow',
+            });
+          }
+          
+          const duration = Date.now() - startTime;
+          flowDuration.record(duration, {
+            flow: 'instrumentedFlow',
+            status: 'success',
+          });
+          
+          return result.text;
+        } catch (error) {
+          const duration = Date.now() - startTime;
+          flowDuration.record(duration, {
+            flow: 'instrumentedFlow',
+            status: 'error',
+          });
+          throw error;
+        } finally {
+          activeFlows.add(-1);
+        }
+      }
+    );
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "go.opentelemetry.io/otel/metric"
+        "go.opentelemetry.io/otel/attribute"
+        "time"
+    )
+
+    func setupCustomMetrics() {
+        meter := otel.Meter("genkit-app")
+        
+        // Create instruments
+        flowExecutions, _ := meter.Int64Counter("genkit_flow_executions_total")
+        tokenUsage, _ := meter.Int64Counter("genkit_tokens_consumed_total")
+        flowDuration, _ := meter.Float64Histogram("genkit_flow_duration_ms")
+        activeFlows, _ := meter.Int64UpDownCounter("genkit_active_flows")
+        
+        // Use in flows
+        instrumentedFlow := genkit.DefineFlow(g, "instrumentedFlow",
+            func(ctx context.Context, input string) (string, error) {
+                startTime := time.Now()
+                
+                flowExecutions.Add(ctx, 1, metric.WithAttributes(
+                    attribute.String("flow", "instrumentedFlow"),
+                    attribute.String("version", "1.0"),
+                ))
+                activeFlows.Add(ctx, 1)
+                
+                defer func() {
+                    duration := float64(time.Since(startTime).Milliseconds())
+                    flowDuration.Record(ctx, duration, metric.WithAttributes(
+                        attribute.String("flow", "instrumentedFlow"),
+                    ))
+                    activeFlows.Add(ctx, -1)
+                }()
+                
+                // Process the flow
+                result, err := processData(input)
+                if err != nil {
+                    return "", err
+                }
+                
+                return result, nil
+            })
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    from opentelemetry import metrics
+    import time
+
+    # Create custom meters and instruments
+    meter = metrics.get_meter("genkit-app", "1.0.0")
+
+    flow_executions = meter.create_counter(
+        "genkit_flow_executions_total",
+        description="Total number of flow executions"
+    )
+
+    token_usage = meter.create_counter(
+        "genkit_tokens_consumed_total",
+        description="Total tokens consumed by model calls"
+    )
+
+    flow_duration = meter.create_histogram(
+        "genkit_flow_duration_ms",
+        description="Flow execution duration in milliseconds"
+    )
+
+    active_flows = meter.create_up_down_counter(
+        "genkit_active_flows",
+        description="Number of currently active flows"
+    )
+
+    @ai.flow()
+    async def instrumented_flow(input: str) -> str:
+        start_time = time.time()
+        
+        flow_executions.add(1, {"flow": "instrumented_flow", "version": "1.0"})
+        active_flows.add(1)
+        
+        try:
+            result = await ai.generate(
+                model='gemini-1.5-flash',
+                prompt=f'Process: {input}',
+            )
+            
+            # Track token usage if available
+            if hasattr(result, 'usage') and result.usage:
+                token_usage.add(
+                    result.usage.total_tokens,
+                    {"model": "gemini-1.5-flash", "flow": "instrumented_flow"}
+                )
+            
+            duration = (time.time() - start_time) * 1000  # Convert to ms
+            flow_duration.record(duration, {
+                "flow": "instrumented_flow",
+                "status": "success"
+            })
+            
+            return result.text
+            
+        except Exception as error:
+            duration = (time.time() - start_time) * 1000
+            flow_duration.record(duration, {
+                "flow": "instrumented_flow", 
+                "status": "error"
+            })
+            raise
+        finally:
+            active_flows.add(-1)
+    ```
+</LanguageContent>
+
+## Environment-Specific Configuration
+
+Configure observability differently for each environment:
+
+<LanguageContent lang="js">
+```ts
+    const environment = process.env.NODE_ENV || 'development';
+
+    const getObservabilityConfig = () => {
+      switch (environment) {
+        case 'production':
+          return {
+            sampler: new TraceIdRatioBasedSampler(0.1), // 10% sampling
+            metricExportIntervalMillis: 300_000, // 5 minutes
+            disableLoggingInputAndOutput: true,
+            autoInstrumentationConfig: {
+              '@opentelemetry/instrumentation-fs': { enabled: false },
+              '@opentelemetry/instrumentation-dns': { enabled: false },
+            },
+          };
+        
+        case 'staging':
+          return {
+            sampler: new TraceIdRatioBasedSampler(0.5), // 50% sampling
+            metricExportIntervalMillis: 60_000, // 1 minute
+            disableLoggingInputAndOutput: false,
+          };
+        
+        case 'development':
+        default:
+          return {
+            forceDevExport: true,
+            sampler: new AlwaysOnSampler(), // 100% sampling
+            metricExportIntervalMillis: 10_000, // 10 seconds
+            disableLoggingInputAndOutput: false,
+          };
+      }
+    };
+
+    enableFirebaseTelemetry(getObservabilityConfig());
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    func getObservabilityConfig() TelemetryConfig {
+        env := os.Getenv("ENVIRONMENT")
+        
+        switch env {
+        case "production":
+            return TelemetryConfig{
+                SamplingRate:   0.1,  // 10% sampling
+                ExportInterval: 5 * time.Minute,
+                EnableInputOutputLogging: false,
+            }
+        case "staging":
+            return TelemetryConfig{
+                SamplingRate:   0.5,  // 50% sampling
+                ExportInterval: 1 * time.Minute,
+                EnableInputOutputLogging: true,
+            }
+        default: // development
+            return TelemetryConfig{
+                SamplingRate:   1.0,  // 100% sampling
+                ExportInterval: 10 * time.Second,
+                EnableInputOutputLogging: true,
+                ForceDevExport: true,
+            }
+        }
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    import os
+
+    def get_observability_config():
+        environment = os.getenv('ENVIRONMENT', 'development')
+        
+        if environment == 'production':
+            return {
+                'sampling_rate': 0.1,  # 10% sampling
+                'export_interval': 300,  # 5 minutes
+                'disable_input_output_logging': True,
+            }
+        elif environment == 'staging':
+            return {
+                'sampling_rate': 0.5,  # 50% sampling
+                'export_interval': 60,  # 1 minute
+                'disable_input_output_logging': False,
+            }
+        else:  # development
+            return {
+                'sampling_rate': 1.0,  # 100% sampling
+                'export_interval': 10,  # 10 seconds
+                'disable_input_output_logging': False,
+                'force_dev_export': True,
+            }
+
+    enable_firebase_monitoring(**get_observability_config())
+    ```
+</LanguageContent>
+
+## Resource Management
+
+### Memory and CPU Optimization
+
+Monitor and optimize resource usage:
+
+<LanguageContent lang="js">
+```ts
+    // Monitor memory usage
+    const memoryUsage = meter.createHistogram('genkit_memory_usage_mb', {
+      description: 'Memory usage in megabytes',
+    });
+
+    // Track memory periodically
+    setInterval(() => {
+      const usage = process.memoryUsage();
+      memoryUsage.record(usage.heapUsed / 1024 / 1024, {
+        type: 'heap_used',
+      });
+      memoryUsage.record(usage.rss / 1024 / 1024, {
+        type: 'rss',
+      });
+    }, 30000); // Every 30 seconds
+
+    // Optimize telemetry for memory-constrained environments
+    enableFirebaseTelemetry({
+      autoInstrumentationConfig: {
+        // Disable memory-intensive instrumentations
+        '@opentelemetry/instrumentation-fs': { enabled: false },
+        '@opentelemetry/instrumentation-dns': { enabled: false },
+      },
+      // Reduce batch sizes
+      spanProcessorConfig: {
+        maxExportBatchSize: 256,
+        maxQueueSize: 1024,
+      },
+    });
+    ```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+    import (
+        "runtime"
+        "time"
+    )
+
+    func monitorResources() {
+        meter := otel.Meter("genkit-app")
+        memoryGauge, _ := meter.Float64ObservableGauge("genkit_memory_usage_mb")
+        
+        // Register callback for memory monitoring
+        _, err := meter.RegisterCallback(
+            func(ctx context.Context, o metric.Observer) error {
+                var m runtime.MemStats
+                runtime.ReadMemStats(&m)
+                
+                o.ObserveFloat64(memoryGauge, float64(m.Alloc)/1024/1024,
+                    metric.WithAttributes(attribute.String("type", "alloc")))
+                o.ObserveFloat64(memoryGauge, float64(m.Sys)/1024/1024,
+                    metric.WithAttributes(attribute.String("type", "sys")))
+                
+                return nil
+            },
+            memoryGauge,
+        )
+        if err != nil {
+            log.Printf("Failed to register memory callback: %v", err)
+        }
+    }
+    ```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+    import psutil
+    import threading
+    import time
+
+    def monitor_resources():
+        memory_gauge = meter.create_observable_gauge(
+            "genkit_memory_usage_mb",
+            description="Memory usage in megabytes"
+        )
+        
+        def collect_metrics():
+            while True:
+                process = psutil.Process()
+                memory_info = process.memory_info()
+                
+                memory_gauge.set(memory_info.rss / 1024 / 1024, {"type": "rss"})
+                memory_gauge.set(memory_info.vms / 1024 / 1024, {"type": "vms"})
+                
+                time.sleep(30)  # Every 30 seconds
+        
+        # Start monitoring in background thread
+        monitor_thread = threading.Thread(target=collect_metrics, daemon=True)
+        monitor_thread.start()
+
+    # Optimize for memory-constrained environments
+    enable_firebase_monitoring(
+        batch_size=256,
+        queue_size=1024,
+        export_interval=60,  # Longer intervals
+    )
+    ```
+</LanguageContent>
+
+## Best Practices Summary
+
+### Development Environment
+
+1. **Enable verbose logging**: Use 100% sampling and short export intervals
+2. **Test monitoring setup**: Verify telemetry collection before deploying
+3. **Use the Developer UI**: Take advantage of built-in observability tools
+4. **Monitor resource usage**: Ensure observability doesn't impact development
+
+### Staging Environment
+
+1. **Moderate sampling**: Use 50% sampling to balance cost and visibility
+2. **Test production config**: Validate monitoring configuration
+3. **Performance testing**: Measure observability overhead
+4. **Security testing**: Verify data privacy controls
+
+### Production Environment
+
+1. **Optimize sampling**: Use 10% or lower sampling for high-volume applications
+2. **Protect sensitive data**: Disable input/output logging for sensitive information
+3. **Monitor costs**: Track telemetry expenses and optimize accordingly
+4. **Set up alerting**: Configure alerts for critical metrics and errors
+
+### Security Considerations
+
+1. **Data privacy**: Implement proper data sanitization and filtering
+2. **Access control**: Limit who can view observability data
+3. **Credential security**: Use proper IAM roles and rotate keys regularly
+4. **Network security**: Ensure secure connections to monitoring services
+
+## Next Steps
+
+- Learn about [troubleshooting common issues](/docs/observability/troubleshooting)
+- Explore the main [observability and monitoring guide](/docs/observability-monitoring)
+- Set up [authentication and permissions](/docs/observability/authentication)
+- Check out [deployment guides](/docs/deployment) for production configurations

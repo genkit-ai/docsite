@@ -47,15 +47,15 @@ function extractPathsFromSidebar(items: SidebarItem[]): string[] {
   return paths;
 }
 
-// Get the unified sidebar from the imported sidebar structure
-function getUnifiedSidebar(): SidebarItem[] {
-  const unifiedSection = sidebar.find(section => section.label === "Unified Docs (Preview)");
-  return unifiedSection?.items || [];
+// Get the docs sidebar from the imported sidebar structure
+function getDocsSidebar(): SidebarItem[] {
+  const docsSection = sidebar.find(section => section.label === "Documentation");
+  return docsSection?.items || [];
 }
 
 // Create language sets based on sidebar structure
 function createLanguageSetsFromSidebar(): LanguageSet[] {
-  const unifiedSidebar = getUnifiedSidebar();
+  const docsSidebar = getDocsSidebar();
   const languageSets: LanguageSet[] = [];
 
   // Find specific sections in the sidebar and map them to language sets
@@ -64,7 +64,7 @@ function createLanguageSetsFromSidebar(): LanguageSet[] {
       sidebarLabel: "Building AI workflows",
       setLabel: "Building AI Workflows",
       description: "Guidance on how to generate content and interact with LLM and image models using Genkit.",
-      includeToplevel: ["unified-docs/get-started"] // Include top-level items
+      includeToplevel: ["docs/get-started"] // Include top-level items
     },
     {
       sidebarLabel: "Deployment",
@@ -103,7 +103,7 @@ function createLanguageSetsFromSidebar(): LanguageSet[] {
     }
     
     // Find the main section
-    const section = unifiedSidebar.find(item => item.label === mapping.sidebarLabel);
+    const section = docsSidebar.find(item => item.label === mapping.sidebarLabel);
     if (section?.items) {
       paths.push(...extractPathsFromSidebar(section.items));
     }
@@ -111,7 +111,7 @@ function createLanguageSetsFromSidebar(): LanguageSet[] {
     // Add additional sections if specified
     if (mapping.additionalSections) {
       for (const additionalLabel of mapping.additionalSections) {
-        const additionalSection = unifiedSidebar.find(item => item.label === additionalLabel);
+        const additionalSection = docsSidebar.find(item => item.label === additionalLabel);
         if (additionalSection?.items) {
           paths.push(...extractPathsFromSidebar(additionalSection.items));
         }
@@ -128,7 +128,7 @@ function createLanguageSetsFromSidebar(): LanguageSet[] {
   }
 
   // Add Developer Tools as a special case (top-level items)
-  const devToolsPaths = unifiedSidebar
+  const devToolsPaths = docsSidebar
     .filter(item => ["Developer tools", "MCP Server"].includes(item.label))
     .map(item => item.slug)
     .filter((slug): slug is string => !!slug);

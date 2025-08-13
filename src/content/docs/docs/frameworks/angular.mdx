@@ -1,0 +1,973 @@
+---
+title: Angular Integration
+description: Learn how to integrate Genkit flows into Angular applications with server-side rendering, streaming responses, and client-side interactions across JavaScript, Go, and Python backends.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+This guide shows how to integrate Genkit flows into Angular applications, enabling you to build AI-powered frontend experiences with server-side rendering and real-time streaming capabilities.
+
+## Overview
+
+Angular integration with Genkit allows you to:
+
+- **Server-side flows**: Run Genkit flows on the Angular server
+- **Client-side calls**: Call flows from Angular components using the client library
+- **Streaming responses**: Handle real-time AI generation with Angular signals
+- **SSR support**: Leverage Angular's server-side rendering capabilities
+- **Type safety**: Maintain full TypeScript type safety across your application
+
+## Prerequisites
+
+- Familiarity with [Angular](https://angular.dev/) and [Genkit flows](/docs/flows)
+- Node.js 18+ for the frontend
+- Backend server running Genkit flows (JavaScript, Go, or Python)
+
+## Project setup
+
+### Create Angular project with SSR
+
+Create a new Angular project with server-side rendering:
+
+```bash
+ng new my-genkit-app --ssr --server-routing
+cd my-genkit-app
+```
+
+Or add SSR to an existing project:
+
+```bash
+ng add @angular/ssr --server-routing
+```
+
+### Install dependencies
+
+<LanguageContent lang="js">
+For JavaScript/TypeScript backends, install Genkit dependencies:
+
+```bash
+# Core Genkit libraries
+npm install genkit @genkit-ai/express
+
+# Choose your AI provider
+npm install @genkit-ai/googleai
+# or npm install @genkit-ai/openai
+# or npm install @genkit-ai/anthropic
+
+# Development tools (optional)
+npm install -g genkit-cli
+npm install --save-dev tsx
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+For Go backends, you'll call the Go server from Angular:
+
+```bash
+# Only need the client library for calling Go flows
+npm install genkit
+```
+
+Your Go backend should already have Genkit installed:
+
+```bash
+go get github.com/firebase/genkit/go
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+For Python backends, you'll call the Python server from Angular:
+
+```bash
+# Only need the client library for calling Python flows
+npm install genkit
+```
+
+Your Python backend should already have Genkit installed:
+
+```bash
+pip install genkit
+```
+</LanguageContent>
+
+## Backend setup
+
+<LanguageContent lang="js">
+### JavaScript/TypeScript backend
+
+Create your Genkit flows in `src/genkit/`:
+
+```typescript
+// src/genkit/flows.ts
+import { googleAI } from '@genkit-ai/googleai';
+import { genkit, z } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+export const chatFlow = ai.defineFlow(
+  {
+    name: 'chatFlow',
+    inputSchema: z.object({ 
+      message: z.string(),
+      history: z.array(z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string()
+      })).optional()
+    }),
+    outputSchema: z.object({ response: z.string() }),
+    streamSchema: z.string(),
+  },
+  async ({ message, history = [] }, { sendChunk }) => {
+    const conversation = [
+      ...history.map(h => ({ role: h.role, content: h.content })),
+      { role: 'user' as const, content: message }
+    ];
+
+    const { stream, response } = ai.generateStream({
+      model: googleAI.model('gemini-2.5-flash'),
+      messages: conversation,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk.text);
+    }
+
+    const { text } = await response;
+    return { response: text };
+  }
+);
+
+export const summaryFlow = ai.defineFlow(
+  {
+    name: 'summaryFlow',
+    inputSchema: z.object({ text: z.string() }),
+    outputSchema: z.object({ summary: z.string() }),
+  },
+  async ({ text }) => {
+    const { text: summary } = await ai.generate({
+      model: googleAI.model('gemini-2.5-flash'),
+      prompt: `Summarize the following text in 2-3 sentences: ${text}`,
+    });
+
+    return { summary };
+  }
+);
+```
+
+### Add server routes
+
+Update `src/server.ts` to serve your flows:
+
+```typescript
+import { expressHandler } from '@genkit-ai/express';
+import { chatFlow, summaryFlow } from './genkit/flows';
+import express from 'express';
+
+// Add after your app initialization
+app.use(express.json());
+
+// Add flow routes
+app.post('/api/chat', expressHandler(chatFlow));
+app.post('/api/summary', expressHandler(summaryFlow));
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Go backend
+
+Your Go backend should expose HTTP endpoints for your flows:
+
+```go
+// main.go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "log"
+    "net/http"
+    
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+type ChatRequest struct {
+    Message string `json:"message"`
+    History []struct {
+        Role    string `json:"role"`
+        Content string `json:"content"`
+    } `json:"history,omitempty"`
+}
+
+type ChatResponse struct {
+    Response string `json:"response"`
+}
+
+func main() {
+    ctx := context.Background()
+    
+    g, err := genkit.Init(ctx,
+        genkit.WithPlugins(&googlegenai.GoogleAI{}),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Chat endpoint
+    http.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+
+        var req ChatRequest
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+
+        // Build conversation
+        var messages []ai.Message
+        for _, h := range req.History {
+            messages = append(messages, ai.NewUserMessage(h.Content))
+        }
+        messages = append(messages, ai.NewUserMessage(req.Message))
+
+        resp, err := ai.Generate(ctx, g,
+            ai.WithMessages(messages...),
+            ai.WithModel("googleai/gemini-2.5-flash"),
+        )
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(ChatResponse{Response: resp.Text()})
+    })
+
+    log.Println("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Python backend
+
+Your Python backend should expose HTTP endpoints for your flows:
+
+```python
+# main.py
+from flask import Flask, request, jsonify
+from genkit.ai import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+app = Flask(__name__)
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash'
+)
+
+@app.route('/api/chat', methods=['POST'])
+async def chat():
+    data = request.get_json()
+    message = data.get('message')
+    history = data.get('history', [])
+    
+    # Build conversation
+    messages = []
+    for h in history:
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": message})
+    
+    response = await ai.generate(
+        messages=messages
+    )
+    
+    return jsonify({"response": response.text})
+
+@app.route('/api/summary', methods=['POST'])
+async def summary():
+    data = request.get_json()
+    text = data.get('text')
+    
+    response = await ai.generate(
+        prompt=f"Summarize the following text in 2-3 sentences: {text}"
+    )
+    
+    return jsonify({"summary": response.text})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=8080)
+```
+</LanguageContent>
+
+## Frontend implementation
+
+### Basic chat component
+
+Create a chat component that calls your Genkit flows:
+
+```typescript
+// src/app/chat/chat.component.ts
+import { Component, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { CommonModule } from '@angular/common';
+import { runFlow, streamFlow } from 'genkit/beta/client';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+@Component({
+  selector: 'app-chat',
+  standalone: true,
+  imports: [FormsModule, CommonModule],
+  template: `
+    <div class="chat-container">
+      <div class="messages">
+        @for (message of messages(); track message.timestamp) {
+          <div class="message" [class.user]="message.role === 'user'">
+            <div class="content">{{ message.content }}</div>
+            <div class="timestamp">{{ message.timestamp | date:'short' }}</div>
+          </div>
+        }
+        
+        @if (streamingMessage()) {
+          <div class="message assistant streaming">
+            <div class="content">{{ streamingMessage() }}</div>
+          </div>
+        }
+      </div>
+      
+      <div class="input-area">
+        <input 
+          type="text" 
+          [(ngModel)]="currentMessage"
+          (keyup.enter)="sendMessage()"
+          [disabled]="isLoading()"
+          placeholder="Type your message..."
+        />
+        <button 
+          (click)="sendMessage()" 
+          [disabled]="isLoading() || !currentMessage.trim()"
+        >
+          Send
+        </button>
+        <button 
+          (click)="streamMessage()" 
+          [disabled]="isLoading() || !currentMessage.trim()"
+        >
+          Stream
+        </button>
+      </div>
+    </div>
+  `,
+  styles: [`
+    .chat-container {
+      max-width: 800px;
+      margin: 0 auto;
+      height: 600px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      border: 1px solid #ddd;
+    }
+    
+    .message {
+      margin-bottom: 1rem;
+      padding: 0.5rem;
+      border-radius: 8px;
+    }
+    
+    .message.user {
+      background: #e3f2fd;
+      margin-left: 20%;
+    }
+    
+    .message.assistant {
+      background: #f5f5f5;
+      margin-right: 20%;
+    }
+    
+    .message.streaming {
+      border-left: 3px solid #2196f3;
+    }
+    
+    .input-area {
+      display: flex;
+      gap: 0.5rem;
+      padding: 1rem;
+    }
+    
+    input {
+      flex: 1;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    
+    button {
+      padding: 0.5rem 1rem;
+      background: #2196f3;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+  `]
+})
+export class ChatComponent {
+  messages = signal<ChatMessage[]>([]);
+  currentMessage = '';
+  isLoading = signal(false);
+  streamingMessage = signal('');
+
+  async sendMessage() {
+    if (!this.currentMessage.trim() || this.isLoading()) return;
+
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: this.currentMessage,
+      timestamp: new Date()
+    };
+
+    this.messages.update(msgs => [...msgs, userMessage]);
+    const messageToSend = this.currentMessage;
+    this.currentMessage = '';
+    this.isLoading.set(true);
+
+    try {
+      const result = await runFlow({
+        url: '/api/chat',
+        input: {
+          message: messageToSend,
+          history: this.messages().map(m => ({
+            role: m.role,
+            content: m.content
+          }))
+        }
+      });
+
+      const assistantMessage: ChatMessage = {
+        role: 'assistant',
+        content: result.response,
+        timestamp: new Date()
+      };
+
+      this.messages.update(msgs => [...msgs, assistantMessage]);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      // Handle error appropriately
+    } finally {
+      this.isLoading.set(false);
+    }
+  }
+
+  async streamMessage() {
+    if (!this.currentMessage.trim() || this.isLoading()) return;
+
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: this.currentMessage,
+      timestamp: new Date()
+    };
+
+    this.messages.update(msgs => [...msgs, userMessage]);
+    const messageToSend = this.currentMessage;
+    this.currentMessage = '';
+    this.isLoading.set(true);
+    this.streamingMessage.set('');
+
+    try {
+      const result = streamFlow({
+        url: '/api/chat',
+        input: {
+          message: messageToSend,
+          history: this.messages().map(m => ({
+            role: m.role,
+            content: m.content
+          }))
+        }
+      });
+
+      // Process stream chunks
+      for await (const chunk of result.stream) {
+        this.streamingMessage.update(prev => prev + chunk);
+      }
+
+      // Get final result and add to messages
+      const finalOutput = await result.output;
+      const assistantMessage: ChatMessage = {
+        role: 'assistant',
+        content: finalOutput.response,
+        timestamp: new Date()
+      };
+
+      this.messages.update(msgs => [...msgs, assistantMessage]);
+      this.streamingMessage.set('');
+    } catch (error) {
+      console.error('Error streaming message:', error);
+      this.streamingMessage.set('');
+    } finally {
+      this.isLoading.set(false);
+    }
+  }
+}
+```
+
+### Summary component with resource API
+
+Create a component that uses Angular's resource API for non-streaming calls:
+
+```typescript
+// src/app/summary/summary.component.ts
+import { Component, resource, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { CommonModule } from '@angular/common';
+import { runFlow } from 'genkit/beta/client';
+
+@Component({
+  selector: 'app-summary',
+  standalone: true,
+  imports: [FormsModule, CommonModule],
+  template: `
+    <div class="summary-container">
+      <h3>Text Summarizer</h3>
+      
+      <div class="input-section">
+        <label for="text">Enter text to summarize:</label>
+        <textarea 
+          id="text"
+          [(ngModel)]="inputText"
+          rows="6"
+          placeholder="Paste your text here..."
+        ></textarea>
+        <button 
+          (click)="triggerSummary()"
+          [disabled]="!inputText.trim() || summaryResource.isLoading()"
+        >
+          Generate Summary
+        </button>
+      </div>
+
+      <div class="output-section">
+        @if (summaryResource.isLoading()) {
+          <div class="loading">Generating summary...</div>
+        } @else if (summaryResource.error()) {
+          <div class="error">
+            Error: {{ summaryResource.error() }}
+          </div>
+        } @else if (summaryResource.value()) {
+          <div class="summary">
+            <h4>Summary:</h4>
+            <p>{{ summaryResource.value().summary }}</p>
+          </div>
+        }
+      </div>
+    </div>
+  `,
+  styles: [`
+    .summary-container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    
+    .input-section {
+      margin-bottom: 2rem;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+    }
+    
+    textarea {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      font-family: inherit;
+    }
+    
+    button {
+      padding: 0.75rem 1.5rem;
+      background: #4caf50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .loading {
+      padding: 1rem;
+      background: #e3f2fd;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    .error {
+      padding: 1rem;
+      background: #ffebee;
+      color: #c62828;
+      border-radius: 4px;
+    }
+    
+    .summary {
+      padding: 1rem;
+      background: #f1f8e9;
+      border-radius: 4px;
+    }
+    
+    .summary h4 {
+      margin-top: 0;
+      color: #2e7d32;
+    }
+  `]
+})
+export class SummaryComponent {
+  inputText = '';
+  textToSummarize = signal('');
+
+  summaryResource = resource({
+    request: () => this.textToSummarize(),
+    loader: ({ request }) => {
+      if (!request) return Promise.resolve(null);
+      
+      return runFlow({
+        url: '/api/summary',
+        input: { text: request }
+      });
+    }
+  });
+
+  triggerSummary() {
+    if (this.inputText.trim()) {
+      this.textToSummarize.set(this.inputText.trim());
+    }
+  }
+}
+```
+
+### Main app component
+
+Update your main app component to include the chat and summary components:
+
+```typescript
+// src/app/app.component.ts
+import { Component } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { ChatComponent } from './chat/chat.component';
+import { SummaryComponent } from './summary/summary.component';
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [CommonModule, ChatComponent, SummaryComponent],
+  template: `
+    <div class="app-container">
+      <header>
+        <h1>Genkit Angular Demo</h1>
+        <nav>
+          <button 
+            (click)="activeTab = 'chat'"
+            [class.active]="activeTab === 'chat'"
+          >
+            Chat
+          </button>
+          <button 
+            (click)="activeTab = 'summary'"
+            [class.active]="activeTab === 'summary'"
+          >
+            Summary
+          </button>
+        </nav>
+      </header>
+
+      <main>
+        @switch (activeTab) {
+          @case ('chat') {
+            <app-chat />
+          }
+          @case ('summary') {
+            <app-summary />
+          }
+        }
+      </main>
+    </div>
+  `,
+  styles: [`
+    .app-container {
+      min-height: 100vh;
+      background: #fafafa;
+    }
+    
+    header {
+      background: white;
+      padding: 1rem 2rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    h1 {
+      margin: 0 0 1rem 0;
+      color: #333;
+    }
+    
+    nav {
+      display: flex;
+      gap: 1rem;
+    }
+    
+    nav button {
+      padding: 0.5rem 1rem;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    nav button.active {
+      background: #2196f3;
+      color: white;
+      border-color: #2196f3;
+    }
+    
+    main {
+      padding: 2rem;
+    }
+  `]
+})
+export class AppComponent {
+  activeTab: 'chat' | 'summary' = 'chat';
+}
+```
+
+## Authentication and security
+
+### Adding authentication headers
+
+For protected endpoints, add authentication headers to your flow calls:
+
+```typescript
+// In your service or component
+async callProtectedFlow() {
+  const token = await this.authService.getToken(); // Your auth service
+  
+  const result = await runFlow({
+    url: '/api/protected-flow',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+    input: { data: 'value' }
+  });
+  
+  return result;
+}
+```
+
+### Environment-specific configuration
+
+Create environment-specific configurations:
+
+```typescript
+// src/environments/environment.ts
+export const environment = {
+  production: false,
+  apiUrl: 'http://localhost:4200'
+};
+
+// src/environments/environment.prod.ts
+export const environment = {
+  production: true,
+  apiUrl: 'https://your-production-domain.com'
+};
+```
+
+Use in your components:
+
+```typescript
+import { environment } from '../environments/environment';
+
+// In your component
+const result = await runFlow({
+  url: `${environment.apiUrl}/api/chat`,
+  input: { message: 'Hello' }
+});
+```
+
+## Testing and development
+
+### Local development
+
+<LanguageContent lang="js">
+Set up your environment variables and start the development server:
+
+```bash
+# Set your API keys
+export GEMINI_API_KEY=your_api_key
+
+# Start Angular dev server
+ng serve
+
+# In another terminal, start Genkit dev UI (optional)
+genkit start -- npx tsx --watch src/genkit/flows.ts
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Start your Go backend and Angular frontend:
+
+```bash
+# Terminal 1: Start Go backend
+cd backend
+export GEMINI_API_KEY=your_api_key
+go run main.go
+
+# Terminal 2: Start Angular frontend
+ng serve
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Start your Python backend and Angular frontend:
+
+```bash
+# Terminal 1: Start Python backend
+cd backend
+export GEMINI_API_KEY=your_api_key
+python main.py
+
+# Terminal 2: Start Angular frontend
+ng serve
+```
+</LanguageContent>
+
+### Testing components
+
+Create unit tests for your components:
+
+```typescript
+// src/app/chat/chat.component.spec.ts
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ChatComponent } from './chat.component';
+
+describe('ChatComponent', () => {
+  let component: ChatComponent;
+  let fixture: ComponentFixture<ChatComponent>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatComponent]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ChatComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  it('should create', () => {
+    expect(component).toBeTruthy();
+  });
+
+  it('should add user message when sending', () => {
+    component.currentMessage = 'Test message';
+    component.sendMessage();
+    
+    expect(component.messages().length).toBe(1);
+    expect(component.messages()[0].content).toBe('Test message');
+    expect(component.messages()[0].role).toBe('user');
+  });
+});
+```
+
+## Deployment
+
+### Build for production
+
+Build your Angular application:
+
+```bash
+ng build --configuration=production
+```
+
+### Deploy with your backend
+
+Deploy your Angular app alongside your Genkit backend:
+
+<LanguageContent lang="js">
+- [Firebase Hosting + Cloud Functions](/docs/deployment/firebase)
+- [Cloud Run](/docs/deployment/cloud-run)
+- [Any Node.js platform](/docs/deployment/any-platform)
+</LanguageContent>
+
+<LanguageContent lang="go">
+- [Cloud Run with Go backend](/docs/deployment/cloud-run)
+- [Any platform with Go backend](/docs/deployment/any-platform)
+</LanguageContent>
+
+<LanguageContent lang="python">
+- [Cloud Run with Python backend](/docs/deployment/cloud-run)
+- [Any platform with Python backend](/docs/deployment/any-platform)
+</LanguageContent>
+
+## Best practices
+
+### Performance optimization
+
+1. **Lazy loading**: Use Angular's lazy loading for feature modules
+2. **OnPush change detection**: Use OnPush strategy for better performance
+3. **Resource caching**: Cache flow responses when appropriate
+4. **Connection pooling**: Reuse HTTP connections for flow calls
+
+### Error handling
+
+1. **Global error handler**: Implement a global error handler for flow failures
+2. **Retry logic**: Add retry mechanisms for transient failures
+3. **User feedback**: Provide clear error messages to users
+4. **Fallback content**: Show fallback content when flows fail
+
+### User experience
+
+1. **Loading states**: Show loading indicators during flow execution
+2. **Progressive enhancement**: Ensure basic functionality works without AI
+3. **Streaming feedback**: Use streaming for long-running operations
+4. **Responsive design**: Ensure your app works on all devices
+
+## Next steps
+
+- Explore [Genkit in a deployed Angular app](https://developers.google.com/solutions/learn/agentic-barista) reference implementation
+- Learn about [client access patterns](/docs/client) for advanced integration
+- Review [error handling](/docs/error-handling) strategies
+- Set up [observability](/docs/local-observability) for monitoring

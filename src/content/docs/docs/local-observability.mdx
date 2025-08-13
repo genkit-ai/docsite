@@ -1,0 +1,488 @@
+---
+title: Local observability and metrics
+description: Learn about Genkit's local observability features, including tracing, metrics collection, and logging, powered by OpenTelemetry and integrated with the Genkit Developer UI across JavaScript, Go, and Python.
+---
+
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+Genkit provides a robust set of built-in observability features, including tracing and metrics collection powered by [OpenTelemetry](https://opentelemetry.io/). For local observability during development, the Genkit Developer UI provides detailed trace viewing and debugging capabilities.
+
+## Overview
+
+Genkit's observability system helps you:
+
+- **Debug flows**: Step through your AI workflows with detailed input/output logging
+- **Monitor performance**: Track execution times, token usage, and error rates
+- **Analyze traces**: Understand the flow of data through your application
+- **Export telemetry**: Send data to external observability platforms
+
+## Automatic tracing and metrics
+
+Genkit automatically collects traces and metrics without requiring explicit configuration, allowing you to observe and debug your code's behavior in the Developer UI.
+
+### What gets traced automatically
+
+- **Flow executions**: Complete workflow runs with timing and status
+- **Model generations**: AI model calls with token usage and latency
+- **Tool calls**: Function executions and their results
+- **Retrieval operations**: Vector database queries and document retrieval
+- **Custom spans**: User-defined operations for detailed tracking
+
+### Viewing traces in the Developer UI
+
+<LanguageContent lang="js">
+Start the Developer UI to view traces:
+
+```bash
+genkit start -- npx tsx --watch src/index.ts
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+Start the Developer UI to view traces:
+
+```bash
+genkit start -- go run .
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+Start the Developer UI to view traces:
+
+```bash
+genkit start -- python main.py
+```
+</LanguageContent>
+
+Navigate to the **Traces** tab in the Developer UI to see:
+- Execution timeline with nested spans
+- Input and output data for each operation
+- Performance metrics and error details
+- Token usage and cost information
+
+## Logging
+
+Genkit provides a centralized logging system that integrates with the observability pipeline.
+
+<LanguageContent lang="js">
+### Using the Genkit logger
+
+```typescript
+import { logger } from 'genkit/logging';
+
+// Set the desired log level
+logger.setLogLevel('debug');
+
+// Log messages at different levels
+logger.info('Flow started', { flowName: 'myFlow' });
+logger.debug('Processing input', { input: data });
+logger.warn('Rate limit approaching', { usage: tokenCount });
+logger.error('Generation failed', { error: err.message });
+```
+
+### Custom logging in flows
+
+```typescript
+export const myFlow = ai.defineFlow(
+  {
+    name: 'myFlow',
+    inputSchema: z.string(),
+    outputSchema: z.string(),
+  },
+  async (input) => {
+    logger.info('Flow execution started', { input });
+    
+    try {
+      const result = await ai.generate({
+        prompt: `Process: ${input}`,
+      });
+      
+      logger.info('Generation completed', { 
+        inputLength: input.length,
+        outputLength: result.text.length 
+      });
+      
+      return result.text;
+    } catch (error) {
+      logger.error('Flow execution failed', { error: error.message });
+      throw error;
+    }
+  }
+);
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Using structured logging
+
+```go
+import (
+    "log/slog"
+    "github.com/firebase/genkit/go/genkit"
+)
+
+// Log with structured data
+slog.Info("Flow started", 
+    "flowName", "myFlow",
+    "input", input)
+
+slog.Debug("Processing request", 
+    "requestId", requestID,
+    "timestamp", time.Now())
+
+slog.Warn("Rate limit approaching", 
+    "usage", tokenCount,
+    "limit", maxTokens)
+
+slog.Error("Generation failed", 
+    "error", err.Error(),
+    "retryCount", retries)
+```
+
+### Logging in flows
+
+```go
+myFlow := genkit.DefineFlow(g, "myFlow", func(ctx context.Context, input string) (string, error) {
+    slog.InfoContext(ctx, "Flow execution started", "input", input)
+    
+    resp, err := ai.Generate(ctx, g,
+        ai.WithPrompt(fmt.Sprintf("Process: %s", input)),
+    )
+    if err != nil {
+        slog.ErrorContext(ctx, "Generation failed", "error", err)
+        return "", err
+    }
+    
+    slog.InfoContext(ctx, "Generation completed", 
+        "inputLength", len(input),
+        "outputLength", len(resp.Text()))
+    
+    return resp.Text(), nil
+})
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Using Python logging
+
+```python
+import logging
+from genkit.ai import Genkit
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Log messages at different levels
+logger.info("Flow started", extra={"flow_name": "my_flow"})
+logger.debug("Processing input", extra={"input": data})
+logger.warning("Rate limit approaching", extra={"usage": token_count})
+logger.error("Generation failed", extra={"error": str(err)})
+```
+
+### Logging in flows
+
+```python
+@ai.flow()
+async def my_flow(input_data: str) -> str:
+    logger.info("Flow execution started", extra={"input": input_data})
+    
+    try:
+        result = await ai.generate(
+            prompt=f"Process: {input_data}"
+        )
+        
+        logger.info("Generation completed", extra={
+            "input_length": len(input_data),
+            "output_length": len(result.text)
+        })
+        
+        return result.text
+    except Exception as error:
+        logger.error("Flow execution failed", extra={"error": str(error)})
+        raise
+```
+</LanguageContent>
+
+## Custom instrumentation
+
+Add custom spans to trace specific operations in your application.
+
+<LanguageContent lang="js">
+### Creating custom spans
+
+```typescript
+import { runWithStreamingCallback } from 'genkit';
+
+export const processDocuments = ai.defineFlow(
+  {
+    name: 'processDocuments',
+    inputSchema: z.array(z.string()),
+    outputSchema: z.array(z.string()),
+  },
+  async (documents) => {
+    return await runWithStreamingCallback(
+      {
+        name: 'document-processing',
+        metadata: { documentCount: documents.length }
+      },
+      async () => {
+        const results = [];
+        
+        for (const [index, doc] of documents.entries()) {
+          const result = await runWithStreamingCallback(
+            {
+              name: 'process-single-document',
+              metadata: { documentIndex: index, documentLength: doc.length }
+            },
+            async () => {
+              return await ai.generate({
+                prompt: `Summarize: ${doc}`,
+              });
+            }
+          );
+          
+          results.push(result.text);
+        }
+        
+        return results;
+      }
+    );
+  }
+);
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Creating custom spans
+
+```go
+import (
+    "context"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+)
+
+func processDocuments(ctx context.Context, g *genkit.Genkit, documents []string) ([]string, error) {
+    tracer := otel.Tracer("my-app")
+    
+    ctx, span := tracer.Start(ctx, "document-processing")
+    defer span.End()
+    
+    span.SetAttributes(attribute.Int("document.count", len(documents)))
+    
+    var results []string
+    
+    for i, doc := range documents {
+        ctx, docSpan := tracer.Start(ctx, "process-single-document")
+        docSpan.SetAttributes(
+            attribute.Int("document.index", i),
+            attribute.Int("document.length", len(doc)),
+        )
+        
+        resp, err := ai.Generate(ctx, g,
+            ai.WithPrompt(fmt.Sprintf("Summarize: %s", doc)),
+        )
+        if err != nil {
+            docSpan.RecordError(err)
+            docSpan.End()
+            return nil, err
+        }
+        
+        results = append(results, resp.Text())
+        docSpan.End()
+    }
+    
+    return results, nil
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Creating custom spans
+
+```python
+import asyncio
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+
+@ai.flow()
+async def process_documents(documents: list[str]) -> list[str]:
+    with tracer.start_as_current_span("document-processing") as span:
+        span.set_attribute("document.count", len(documents))
+        
+        results = []
+        
+        for index, doc in enumerate(documents):
+            with tracer.start_as_current_span("process-single-document") as doc_span:
+                doc_span.set_attribute("document.index", index)
+                doc_span.set_attribute("document.length", len(doc))
+                
+                try:
+                    result = await ai.generate(
+                        prompt=f"Summarize: {doc}"
+                    )
+                    results.append(result.text)
+                except Exception as error:
+                    doc_span.record_exception(error)
+                    raise
+        
+        return results
+```
+</LanguageContent>
+
+## Metrics collection
+
+Genkit automatically collects key metrics for monitoring application performance.
+
+### Automatic metrics
+
+- **Flow execution metrics**: Success rate, duration, throughput
+- **Model generation metrics**: Token usage, latency, cost
+- **Tool call metrics**: Execution time, success rate
+- **Error metrics**: Error rates by type and operation
+
+### Custom metrics
+
+<LanguageContent lang="js">
+```typescript
+import { logger } from 'genkit/logging';
+
+// Log custom metrics that will be collected
+logger.info('Custom metric', {
+  metric: 'user_action',
+  value: 1,
+  labels: { action: 'document_upload', user_id: userId }
+});
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+import (
+    "go.opentelemetry.io/otel/metric"
+)
+
+// Create custom metrics
+meter := otel.Meter("my-app")
+counter, _ := meter.Int64Counter("user_actions")
+
+// Record metric values
+counter.Add(ctx, 1, metric.WithAttributes(
+    attribute.String("action", "document_upload"),
+    attribute.String("user_id", userID),
+))
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+from opentelemetry import metrics
+
+# Create custom metrics
+meter = metrics.get_meter(__name__)
+counter = meter.create_counter("user_actions")
+
+# Record metric values
+counter.add(1, {
+    "action": "document_upload",
+    "user_id": user_id
+})
+```
+</LanguageContent>
+
+## Exporting telemetry data
+
+For production environments, export telemetry data to external observability platforms.
+
+<LanguageContent lang="js">
+### Configuring exporters
+
+```typescript
+import { configureGenkit } from 'genkit/core';
+
+configureGenkit({
+  telemetry: {
+    instrumentation: 'googleCloud',
+    logger: 'googleCloud',
+  },
+});
+```
+
+### Custom OpenTelemetry configuration
+
+```typescript
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+
+const sdk = new NodeSDK({
+  instrumentations: [getNodeAutoInstrumentations()],
+  // Add your exporters here
+});
+
+sdk.start();
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Configuring exporters
+
+```go
+import (
+    "github.com/firebase/genkit/go/plugins/googlecloud"
+)
+
+// Initialize with Google Cloud telemetry
+g, err := genkit.Init(ctx,
+    genkit.WithPlugins(&googlecloud.GoogleCloud{}),
+)
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Configuring exporters
+
+```python
+from genkit.plugins.google_cloud import GoogleCloud
+
+# Initialize with Google Cloud telemetry
+ai = Genkit(
+    plugins=[GoogleCloud()],
+    telemetry_config={
+        "enable_tracing": True,
+        "enable_metrics": True,
+    }
+)
+```
+</LanguageContent>
+
+## Best practices
+
+### Development workflow
+
+1. **Use the Developer UI**: Always run with the Developer UI during development
+2. **Check traces regularly**: Review traces to understand performance bottlenecks
+3. **Monitor token usage**: Track costs and optimize prompts based on usage data
+4. **Test error scenarios**: Verify error handling and logging work correctly
+
+### Production monitoring
+
+1. **Export to external systems**: Use dedicated observability platforms for production
+2. **Set up alerts**: Monitor error rates, latency, and cost thresholds
+3. **Correlate logs and traces**: Use correlation IDs to connect related operations
+4. **Regular review**: Analyze trends and optimize based on production data
+
+## Next steps
+
+- Learn about [production observability](/docs/observability-monitoring) for comprehensive monitoring
+- Explore [error handling](/docs/error-handling) to improve application reliability
+- Set up [deployment monitoring](/docs/deployment) for production environments
+- Review [developer tools](/docs/devtools) for additional debugging capabilities
