@@ -2,7 +2,6 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
-import starlightLlmsTxt from "starlight-llms-txt";
 import sitemap from "@astrojs/sitemap";
 import { sidebar } from "./src/sidebar";
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
@@ -82,77 +81,6 @@ export default defineConfig({
       ],
       plugins: [
         starlightLinksValidatorPlugin(),
-        starlightLlmsTxt({
-          projectName: "Genkit",
-          description: "Open-source GenAI toolkit for JS, Go, and Python.",
-          minify: { whitespace: false },
-          customSets: [
-            {
-              label: "Building AI Workflows",
-              description:
-                "Guidance on how to generate content and interact with LLM and image models using Genkit.",
-              paths: [
-                "docs/models",
-                "docs/context",
-                "docs/flows",
-                "docs/dotprompt",
-                "docs/chat",
-                "docs/tool-calling",
-                "docs/interrupts",
-                "docs/rag",
-                "docs/multi-agent",
-                "docs/evaluation",
-                "docs/local-observability",
-                "docs/errors/types",
-              ],
-            },
-            {
-              label: "Deploying AI Workflows",
-              description:
-                "Guidance on how to deploy Genkit code to various environments including Firebase and Cloud Run or use within a Next.js app.",
-              paths: [
-                "docs/firebase",
-                "docs/cloud-run",
-                "docs/deploy-node",
-                "docs/auth",
-                "docs/nextjs",
-              ],
-            },
-            {
-              label: "Observing AI Workflows",
-              description:
-                "Guidance about Genkit's various observability features and how to use them.",
-              paths: [
-                "docs/observability/getting-started",
-                "docs/observability/authentication",
-                "docs/observability/advanced-configuration",
-                "docs/observability/telemetry-collection",
-                "docs/observability/troubleshooting",
-              ],
-            },
-            {
-              label: "Writing Plugins",
-              description: "Guidance about how to author plugins for Genkit.",
-              paths: [
-                "docs/plugin-authoring",
-                "docs/plugin-authoring-evaluator",
-              ],
-            },
-            {
-              label: "Plugin Documentation",
-              description:
-                "Provider-specific documentation for the Google AI, Vertex AI, Firebase, Ollama, Chroma, and Pinecone plugins.",
-              paths: [
-                "docs/plugins/google-genai",
-                "docs/plugins/vertex-ai",
-                "docs/plugins/firebase",
-                "docs/plugins/ollama",
-                "docs/plugins/chroma",
-                "docs/plugins/pinecone",
-              ],
-            },
-          ],
-        }),
       ],
       logo: {
         dark: "./src/assets/lockup_white_tight2.png",

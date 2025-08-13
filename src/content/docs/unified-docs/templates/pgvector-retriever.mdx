@@ -1,0 +1,682 @@
+---
+title: pgvector Retriever Template
+description: Learn how to implement a custom retriever using PostgreSQL and pgvector for semantic search across JavaScript, Go, and Python applications.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+This template shows how to implement a custom retriever using PostgreSQL with the pgvector extension for semantic search in your Genkit applications. This is ideal for building RAG (Retrieval-Augmented Generation) systems with your own data.
+
+## Overview
+
+The pgvector retriever template demonstrates:
+
+- **Custom retriever implementation**: Building retrievers that work with your database schema
+- **Semantic search**: Using vector embeddings for similarity-based document retrieval
+- **PostgreSQL integration**: Leveraging pgvector for efficient vector operations
+- **RAG workflows**: Combining retrieval with generation for context-aware responses
+
+## Prerequisites
+
+- PostgreSQL database with pgvector extension installed
+- Database table with vector embeddings
+- Appropriate database credentials and connection setup
+
+## Database setup
+
+First, ensure your PostgreSQL database has the pgvector extension and appropriate schema:
+
+```sql
+-- Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Example table schema
+CREATE TABLE embeddings (
+    id SERIAL PRIMARY KEY,
+    episode_id VARCHAR(255),
+    season_number INTEGER,
+    show_id VARCHAR(255),
+    chunk TEXT,
+    embedding vector(768)  -- Adjust dimension based on your embedder
+);
+
+-- Create index for efficient similarity search
+CREATE INDEX ON embeddings USING ivfflat (embedding vector_cosine_ops);
+```
+
+## Implementation
+
+<LanguageContent lang="js">
+### JavaScript/TypeScript Implementation
+
+```typescript
+import { genkit, z, Document } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
+import { toSql } from 'pgvector';
+import postgres from 'postgres';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+// Database connection
+const sql = postgres({ 
+  ssl: false, 
+  database: 'your_database',
+  host: 'localhost',
+  port: 5432,
+  username: 'your_username',
+  password: 'your_password'
+});
+
+// Configuration schema for the retriever
+const QueryOptions = z.object({
+  show: z.string(),
+  k: z.number().optional().default(3),
+  threshold: z.number().optional().default(0.8),
+});
+
+// Define the custom retriever
+const pgvectorRetriever = ai.defineRetriever(
+  {
+    name: 'pgvector-retriever',
+    configSchema: QueryOptions,
+  },
+  async (input, options) => {
+    // Generate embedding for the query
+    const embedding = (
+      await ai.embed({
+        embedder: googleAI.embedder('gemini-embedding-001'),
+        content: input,
+      })
+    )[0].embedding;
+
+    // Perform similarity search
+    const results = await sql`
+      SELECT 
+        episode_id, 
+        season_number, 
+        chunk as content,
+        1 - (embedding <=> ${toSql(embedding)}) as similarity
+      FROM embeddings
+      WHERE show_id = ${options.show}
+        AND 1 - (embedding <=> ${toSql(embedding)}) > ${options.threshold}
+      ORDER BY embedding <=> ${toSql(embedding)}
+      LIMIT ${options.k}
+    `;
+
+    return {
+      documents: results.map((row) => {
+        const { content, similarity, ...metadata } = row;
+        return Document.fromText(content, {
+          ...metadata,
+          similarity: similarity.toString(),
+        });
+      }),
+    };
+  }
+);
+
+// Example flow using the retriever
+export const askQuestions = ai.defineFlow(
+  {
+    name: 'askQuestions',
+    inputSchema: z.object({ 
+      question: z.string(),
+      show: z.string().optional().default('Game of Thrones')
+    }),
+    outputSchema: z.object({ answer: z.string() }),
+  },
+  async ({ question, show }) => {
+    // Retrieve relevant documents
+    const docs = await ai.retrieve({
+      retriever: pgvectorRetriever,
+      query: question,
+      options: { show },
+    });
+
+    console.log(`Retrieved ${docs.documents.length} documents`);
+
+    // Generate answer using retrieved context
+    const { text } = await ai.generate({
+      model: googleAI.model('gemini-2.5-flash'),
+      prompt: `
+        Answer this question using the provided context. If the context doesn't contain 
+        enough information to answer the question, say so.
+        
+        Question: ${question}
+        
+        Context:
+        ${docs.documents.map(doc => doc.text).join('\n\n')}
+      `,
+    });
+
+    return { answer: text };
+  }
+);
+```
+
+### Advanced usage with custom embeddings
+
+```typescript
+// Custom embedder configuration
+const customEmbedder = ai.defineEmbedder(
+  {
+    name: 'custom-embedder',
+    configSchema: z.object({
+      model: z.string().optional().default('gemini-embedding-001'),
+    }),
+  },
+  async (input, options) => {
+    const embeddings = await ai.embed({
+      embedder: googleAI.embedder(options.model),
+      content: input,
+    });
+    return embeddings;
+  }
+);
+
+// Retriever with custom embedder
+const advancedRetriever = ai.defineRetriever(
+  {
+    name: 'advanced-pgvector-retriever',
+    configSchema: QueryOptions.extend({
+      embedderModel: z.string().optional(),
+    }),
+  },
+  async (input, options) => {
+    const embeddings = await ai.embed({
+      embedder: customEmbedder,
+      content: input,
+      config: { model: options.embedderModel },
+    });
+
+    const embedding = embeddings[0].embedding;
+
+    const results = await sql`
+      SELECT 
+        episode_id,
+        season_number,
+        chunk as content,
+        embedding <-> ${toSql(embedding)} as distance
+      FROM embeddings
+      WHERE show_id = ${options.show}
+      ORDER BY embedding <-> ${toSql(embedding)}
+      LIMIT ${options.k ?? 3}
+    `;
+
+    return {
+      documents: results.map((row) => {
+        const { content, distance, ...metadata } = row;
+        return Document.fromText(content, {
+          ...metadata,
+          distance: distance.toString(),
+        });
+      }),
+    };
+  }
+);
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+### Go Implementation
+
+```go
+package main
+
+import (
+    "context"
+    "database/sql"
+    "fmt"
+    "log"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+    "github.com/lib/pq"
+    "github.com/pgvector/pgvector-go"
+    _ "github.com/lib/pq"
+)
+
+type QueryOptions struct {
+    Show      string  `json:"show"`
+    K         int     `json:"k,omitempty"`
+    Threshold float64 `json:"threshold,omitempty"`
+}
+
+type RetrievalResult struct {
+    EpisodeID    string  `json:"episode_id"`
+    SeasonNumber int     `json:"season_number"`
+    Content      string  `json:"content"`
+    Similarity   float64 `json:"similarity"`
+}
+
+func setupPgvectorRetriever(ctx context.Context, g *genkit.Genkit, db *sql.DB) error {
+    // Define the retriever
+    retriever := ai.DefineRetriever(g, "pgvector-retriever", func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
+        var options QueryOptions
+        if err := req.Options.UnmarshalInto(&options); err != nil {
+            return nil, fmt.Errorf("failed to unmarshal options: %w", err)
+        }
+
+        // Set defaults
+        if options.K == 0 {
+            options.K = 3
+        }
+        if options.Threshold == 0 {
+            options.Threshold = 0.8
+        }
+
+        // Generate embedding for the query
+        embedResp, err := ai.Embed(ctx, g,
+            ai.WithEmbedder("googleai/gemini-embedding-001"),
+            ai.WithEmbedContent(ai.NewTextPart(req.Document.Text())),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("failed to generate embedding: %w", err)
+        }
+
+        embedding := embedResp.Embeddings[0].Embedding
+
+        // Perform similarity search
+        query := `
+            SELECT 
+                episode_id, 
+                season_number, 
+                chunk as content,
+                1 - (embedding <=> $1) as similarity
+            FROM embeddings
+            WHERE show_id = $2
+                AND 1 - (embedding <=> $1) > $3
+            ORDER BY embedding <=> $1
+            LIMIT $4
+        `
+
+        rows, err := db.QueryContext(ctx, query, 
+            pgvector.NewVector(embedding), 
+            options.Show, 
+            options.Threshold, 
+            options.K,
+        )
+        if err != nil {
+            return nil, fmt.Errorf("failed to query database: %w", err)
+        }
+        defer rows.Close()
+
+        var documents []*ai.Document
+        for rows.Next() {
+            var result RetrievalResult
+            if err := rows.Scan(&result.EpisodeID, &result.SeasonNumber, &result.Content, &result.Similarity); err != nil {
+                return nil, fmt.Errorf("failed to scan row: %w", err)
+            }
+
+            doc := ai.DocumentFromText(result.Content, map[string]any{
+                "episode_id":    result.EpisodeID,
+                "season_number": result.SeasonNumber,
+                "similarity":    result.Similarity,
+            })
+            documents = append(documents, doc)
+        }
+
+        return &ai.RetrieverResponse{Documents: documents}, nil
+    })
+
+    return nil
+}
+
+// Example flow using the retriever
+func setupQuestionFlow(ctx context.Context, g *genkit.Genkit) {
+    ai.DefineFlow(g, "askQuestions", func(ctx context.Context, input map[string]any) (map[string]any, error) {
+        question, ok := input["question"].(string)
+        if !ok {
+            return nil, fmt.Errorf("question is required")
+        }
+
+        show, ok := input["show"].(string)
+        if !ok {
+            show = "Game of Thrones"
+        }
+
+        // Retrieve relevant documents
+        retrieveResp, err := ai.Retrieve(ctx, g,
+            ai.WithRetriever("pgvector-retriever"),
+            ai.WithRetrieverQuery(ai.DocumentFromText(question, nil)),
+            ai.WithRetrieverOptions(map[string]any{
+                "show": show,
+            }),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("failed to retrieve documents: %w", err)
+        }
+
+        log.Printf("Retrieved %d documents", len(retrieveResp.Documents))
+
+        // Build context from retrieved documents
+        var context string
+        for _, doc := range retrieveResp.Documents {
+            context += doc.Text() + "\n\n"
+        }
+
+        // Generate answer using retrieved context
+        genResp, err := ai.Generate(ctx, g,
+            ai.WithModel("googleai/gemini-2.5-flash"),
+            ai.WithPrompt(fmt.Sprintf(`
+                Answer this question using the provided context. If the context doesn't contain 
+                enough information to answer the question, say so.
+                
+                Question: %s
+                
+                Context:
+                %s
+            `, question, context)),
+        )
+        if err != nil {
+            return nil, fmt.Errorf("failed to generate answer: %w", err)
+        }
+
+        return map[string]any{
+            "answer": genResp.Text(),
+        }, nil
+    })
+}
+
+func main() {
+    ctx := context.Background()
+
+    // Initialize Genkit
+    g, err := genkit.Init(ctx,
+        genkit.WithPlugins(&googlegenai.GoogleAI{}),
+    )
+    if err != nil {
+        log.Fatalf("failed to initialize Genkit: %v", err)
+    }
+
+    // Connect to PostgreSQL
+    db, err := sql.Open("postgres", "postgres://username:password@localhost/dbname?sslmode=disable")
+    if err != nil {
+        log.Fatalf("failed to connect to database: %v", err)
+    }
+    defer db.Close()
+
+    // Setup retriever and flows
+    if err := setupPgvectorRetriever(ctx, g, db); err != nil {
+        log.Fatalf("failed to setup retriever: %v", err)
+    }
+
+    setupQuestionFlow(ctx, g)
+
+    log.Println("Server ready")
+    select {} // Keep server running
+}
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+### Python Implementation
+
+```python
+import asyncio
+import asyncpg
+import numpy as np
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+
+from genkit.ai import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+@dataclass
+class QueryOptions:
+    show: str
+    k: int = 3
+    threshold: float = 0.8
+
+@dataclass
+class RetrievalResult:
+    episode_id: str
+    season_number: int
+    content: str
+    similarity: float
+
+class PgvectorRetriever:
+    def __init__(self, ai: Genkit, connection_string: str):
+        self.ai = ai
+        self.connection_string = connection_string
+        self.pool = None
+    
+    async def initialize(self):
+        """Initialize the database connection pool."""
+        self.pool = await asyncpg.create_pool(self.connection_string)
+    
+    async def retrieve(self, query: str, options: QueryOptions) -> List[Dict[str, Any]]:
+        """Retrieve documents using semantic search."""
+        if not self.pool:
+            await self.initialize()
+        
+        # Generate embedding for the query
+        embedding_response = await self.ai.embed(
+            content=query,
+            embedder="googleai/gemini-embedding-001"
+        )
+        embedding = embedding_response.embeddings[0].embedding
+        
+        # Perform similarity search
+        async with self.pool.acquire() as conn:
+            query_sql = """
+                SELECT 
+                    episode_id, 
+                    season_number, 
+                    chunk as content,
+                    1 - (embedding <=> $1) as similarity
+                FROM embeddings
+                WHERE show_id = $2
+                    AND 1 - (embedding <=> $1) > $3
+                ORDER BY embedding <=> $1
+                LIMIT $4
+            """
+            
+            rows = await conn.fetch(
+                query_sql,
+                embedding,
+                options.show,
+                options.threshold,
+                options.k
+            )
+        
+        documents = []
+        for row in rows:
+            documents.append({
+                "content": row["content"],
+                "metadata": {
+                    "episode_id": row["episode_id"],
+                    "season_number": row["season_number"],
+                    "similarity": float(row["similarity"])
+                }
+            })
+        
+        return documents
+
+# Initialize Genkit and retriever
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model="googleai/gemini-2.5-flash"
+)
+
+retriever = PgvectorRetriever(
+    ai=ai,
+    connection_string="postgresql://username:password@localhost/dbname"
+)
+
+@ai.flow()
+async def ask_questions(question: str, show: str = "Game of Thrones") -> str:
+    """Answer questions using retrieved context."""
+    
+    # Retrieve relevant documents
+    options = QueryOptions(show=show)
+    documents = await retriever.retrieve(question, options)
+    
+    print(f"Retrieved {len(documents)} documents")
+    
+    # Build context from retrieved documents
+    context = "\n\n".join([doc["content"] for doc in documents])
+    
+    # Generate answer using retrieved context
+    response = await ai.generate(
+        prompt=f"""
+        Answer this question using the provided context. If the context doesn't contain 
+        enough information to answer the question, say so.
+        
+        Question: {question}
+        
+        Context:
+        {context}
+        """
+    )
+    
+    return response.text
+
+# Advanced usage with custom configuration
+@ai.flow()
+async def advanced_search(
+    question: str, 
+    show: str = "Game of Thrones",
+    k: int = 5,
+    threshold: float = 0.7
+) -> Dict[str, Any]:
+    """Advanced search with custom parameters."""
+    
+    options = QueryOptions(show=show, k=k, threshold=threshold)
+    documents = await retriever.retrieve(question, options)
+    
+    # Generate answer
+    context = "\n\n".join([doc["content"] for doc in documents])
+    response = await ai.generate(
+        prompt=f"""
+        Answer this question using the provided context: {question}
+        
+        Context:
+        {context}
+        """
+    )
+    
+    return {
+        "answer": response.text,
+        "sources": [
+            {
+                "content": doc["content"][:200] + "...",
+                "metadata": doc["metadata"]
+            }
+            for doc in documents
+        ],
+        "total_sources": len(documents)
+    }
+
+# Example usage
+async def main():
+    await retriever.initialize()
+    
+    result = await ask_questions(
+        question="What happened in the final season?",
+        show="Game of Thrones"
+    )
+    print("Answer:", result)
+
+if __name__ == "__main__":
+    ai.run_main(main())
+```
+</LanguageContent>
+
+## Configuration options
+
+### Database connection
+
+<LanguageContent lang="js">
+```typescript
+// Environment-based configuration
+const sql = postgres({
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || '5432'),
+  database: process.env.DB_NAME || 'your_database',
+  username: process.env.DB_USER || 'your_username',
+  password: process.env.DB_PASSWORD || 'your_password',
+  ssl: process.env.NODE_ENV === 'production',
+});
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+// Connection string from environment
+connectionString := fmt.Sprintf(
+    "postgres://%s:%s@%s:%s/%s?sslmode=%s",
+    os.Getenv("DB_USER"),
+    os.Getenv("DB_PASSWORD"),
+    os.Getenv("DB_HOST"),
+    os.Getenv("DB_PORT"),
+    os.Getenv("DB_NAME"),
+    os.Getenv("DB_SSL_MODE"),
+)
+```
+</LanguageContent>
+
+<LanguageContent lang="python">
+```python
+import os
+
+connection_string = (
+    f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+)
+```
+</LanguageContent>
+
+### Similarity search options
+
+- **Cosine similarity**: `<=>` operator (most common)
+- **Euclidean distance**: `<->` operator
+- **Inner product**: `<#>` operator
+
+### Index optimization
+
+```sql
+-- Different index types for different use cases
+CREATE INDEX ON embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops);
+```
+
+## Best practices
+
+### Performance optimization
+
+1. **Use appropriate indexes**: Choose the right index type for your use case
+2. **Batch operations**: Process multiple embeddings together when possible
+3. **Connection pooling**: Use connection pools for better performance
+4. **Query optimization**: Add appropriate WHERE clauses to filter data
+
+### Data management
+
+1. **Embedding consistency**: Use the same embedder for indexing and querying
+2. **Metadata storage**: Store relevant metadata for filtering and display
+3. **Data versioning**: Consider versioning your embeddings when updating models
+4. **Backup strategy**: Regular backups of your vector data
+
+### Error handling
+
+1. **Connection failures**: Implement retry logic for database connections
+2. **Embedding failures**: Handle cases where embedding generation fails
+3. **Empty results**: Gracefully handle cases with no matching documents
+4. **Resource limits**: Monitor and handle memory/connection limits
+
+## Next steps
+
+- Learn about [RAG implementation](/unified-docs/rag) for complete retrieval-augmented generation
+- Explore [pgvector plugin](/unified-docs/vector-databases/pgvector) for more advanced features
+- Review [evaluation strategies](/unified-docs/evaluation) for measuring retrieval quality
+- Set up [observability](/unified-docs/local-observability) for monitoring retrieval performance
