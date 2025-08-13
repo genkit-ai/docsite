@@ -49,8 +49,8 @@ function extractPathsFromSidebar(items: SidebarItem[]): string[] {
 
 // Get the docs sidebar from the imported sidebar structure
 function getDocsSidebar(): SidebarItem[] {
-  const docsSection = sidebar.find(section => section.label === "Documentation");
-  return docsSection?.items || [];
+  // Filter out the Introduction item and return the rest
+  return sidebar.filter(item => item.label !== "Introduction");
 }
 
 // Create language sets based on sidebar structure

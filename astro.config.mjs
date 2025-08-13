@@ -3,7 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLinksValidatorPlugin from "starlight-links-validator";
 import sitemap from "@astrojs/sitemap";
-import { sidebar } from "./src/sidebar";
+import { sidebar } from "./src/sidebar.ts";
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
 
 const site = "https://genkit.dev";

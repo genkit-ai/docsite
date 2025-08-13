@@ -1,7 +1,12 @@
 const DOCS_SIDEBAR = [
-  { label: "Get started", slug: "docs/get-started" },
-  { label: "Developer tools", slug: "docs/devtools" },
-  { label: "MCP Server", slug: "docs/mcp-server" },
+  {
+    label: "Get started",
+    items: [
+      { label: "Get started", slug: "docs/get-started" },
+      { label: "Developer tools", slug: "docs/devtools" },
+      { label: "MCP Server", slug: "docs/mcp-server" },
+    ],
+  },
   {
     label: "Tutorials",
     items: [
@@ -108,9 +113,5 @@ const DOCS_SIDEBAR = [
 
 export const sidebar = [
   { label: "Introduction", slug: "" },
-  {
-    label: "Documentation",
-    items: DOCS_SIDEBAR,
-    collapsed: false,
-  },
+  ...DOCS_SIDEBAR,
 ];
