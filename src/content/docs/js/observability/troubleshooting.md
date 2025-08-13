@@ -43,7 +43,7 @@ into when using Genkit Monitoring.
     ```
 
     See the
-    [ADC](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment)
+    [ADC](https://cloud.google.com/js/authentication/set-up-adc-local-dev-environment)
     documentation for more information.
 
 ## Request count does not match traces count

@@ -32,7 +32,7 @@ Monitoring, you will need to authenticate yourself with Google Cloud.
 
 The easiest way to authenticate as yourself is using the gcloud CLI, which will
 automatically make your credentials available to the framework through
-[Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials).
+[Application Default Credentials (ADC)](https://cloud.google.com/js/authentication/application-default-credentials).
 
 If you don't have the gcloud CLI installed, first follow the [installation instructions](https://cloud.google.com/sdk/docs/install#installation_instructions).
 
@@ -53,7 +53,7 @@ If you don't have the gcloud CLI installed, first follow the [installation instr
 If deploying your code to a Google Cloud or Firebase environment (Cloud
 Functions, Cloud Run, App Hosting, etc), the project ID and credentials will be
 discovered automatically with
-[Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc).
+[Application Default Credentials](https://cloud.google.com/js/authentication/provide-credentials-adc).
 
 You will need to apply the following roles to the service account that is
 running your code (i.e. 'attached service account') using the
@@ -70,7 +70,7 @@ section.
 ## Deploy outside of Google Cloud (with ADC)
 
 If possible, use
-[Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc)
+[Application Default Credentials](https://cloud.google.com/js/authentication/provide-credentials-adc)
 to make credentials available to the plugin.
 
 Typically this involves generating a service account key and deploying

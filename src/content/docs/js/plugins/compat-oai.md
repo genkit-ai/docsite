@@ -8,9 +8,9 @@ The `@genkit-ai/compat-oai` package provides plugins for services that are compa
 This package contains four main exports:
 
 - `openAICompatible`: A general-purpose plugin for any OpenAI-compatible service.
-- [`openAI`](/docs/plugins/openai): A pre-configured plugin for OpenAI's own services (GPT models, DALL-E, etc.).
-- [`xai`](/docs/plugins/xai): A pre-configured plugin for xAI (Grok) models.
-- [`deepSeek`](/docs/plugins/deepseek): A pre-configured plugin for DeepSeek models.
+- [`openAI`](/js/plugins/openai): A pre-configured plugin for OpenAI's own services (GPT models, DALL-E, etc.).
+- [`xai`](/js/plugins/xai): A pre-configured plugin for xAI (Grok) models.
+- [`deepSeek`](/js/plugins/deepseek): A pre-configured plugin for DeepSeek models.
 
 ## Installation
 

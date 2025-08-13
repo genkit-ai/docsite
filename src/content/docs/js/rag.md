@@ -107,19 +107,19 @@ your own.
 Genkit provides indexer and retriever support through its plugin system. The
 following plugins are officially supported:
 
-- [Astra DB](/docs/plugins/astra-db) - DataStax Astra DB vector database
-- [Chroma DB](/docs/plugins/chroma) vector database
-- [Cloud Firestore vector store](/docs/plugins/firebase)
-- [Cloud SQL for PostgreSQL](/docs/plugins/cloud-sql-pg) with pgvector extension
-- [LanceDB](/docs/plugins/lancedb) open-source vector database
-- [Neo4j](/docs/plugins/neo4j) graph database with vector search
-- [Pinecone](/docs/plugins/pinecone) cloud vector database
-- [Vertex AI Vector Search](/docs/plugins/vertex-ai)
+- [Astra DB](/js/plugins/astra-db) - DataStax Astra DB vector database
+- [Chroma DB](/js/plugins/chroma) vector database
+- [Cloud Firestore vector store](/js/plugins/firebase)
+- [Cloud SQL for PostgreSQL](/js/plugins/cloud-sql-pg) with pgvector extension
+- [LanceDB](/js/plugins/lancedb) open-source vector database
+- [Neo4j](/js/plugins/neo4j) graph database with vector search
+- [Pinecone](/js/plugins/pinecone) cloud vector database
+- [Vertex AI Vector Search](/js/plugins/vertex-ai)
 
 In addition, Genkit supports the following vector stores through predefined code
 templates, which you can customize for your database configuration and schema:
 
-- PostgreSQL with [`pgvector`](/docs/templates/pgvector)
+- PostgreSQL with [`pgvector`](/js/templates/pgvector)
 
 ## Defining a RAG Flow
 

@@ -165,7 +165,7 @@ If you don't provide a schema type, you can still filter but you won't get type-
 
 ## Further Information
 
-For more on using indexers and retrievers with Genkit check out the documentation on [Retrieval-Augmented Generation with Genkit](/docs/rag).
+For more on using indexers and retrievers with Genkit check out the documentation on [Retrieval-Augmented Generation with Genkit](/js/rag).
 
 ## Learn More
 

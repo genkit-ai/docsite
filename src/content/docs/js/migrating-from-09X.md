@@ -284,7 +284,7 @@ startFlowServer(
 );
 ```
 
-For more details, refer to the [auth documentation](/docs/auth).
+For more details, refer to the [auth documentation](/js/auth).
 
 The following snippet shows an example of handling auth in Cloud Functions
 for Firebase:

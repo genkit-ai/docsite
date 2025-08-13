@@ -57,7 +57,7 @@ The plugin requires you to specify your Google Cloud project ID, the [region](ht
        gcloud auth application-default login --project YOUR_PROJECT_ID
        ```
 
-     - For other environments, see the [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) docs.
+     - For other environments, see the [Application Default Credentials](https://cloud.google.com/js/authentication/provide-credentials-adc) docs.
 
   1. In addition, make sure the account is granted the Vertex AI User IAM role (`roles/aiplatform.user`). See the Vertex AI [access control](https://cloud.google.com/vertex-ai/generative-ai/docs/access-control) docs.
 

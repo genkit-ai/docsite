@@ -127,7 +127,7 @@ export const bobFactsIndexer = neo4jIndexerRef({
 await ai.index({ indexer: bobFactsIndexer, documents });
 ```
 
-See the [Retrieval-augmented generation](/docs/rag) page for a general
+See the [Retrieval-augmented generation](/js/rag) page for a general
 discussion on indexers and retrievers.
 
 ## Learn More

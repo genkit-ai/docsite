@@ -36,9 +36,9 @@ and on the Google Cloud Console.
 
 3. Write a Genkit feature by following the [Get Started Guide](/docs/get-started), and prepare your code for deployment by using one of the following guides:
 
-   a. [Deploy flows using Cloud Functions for Firebase](/docs/firebase)
-   b. [Deploy flows using Cloud Run](/docs/cloud-run)
-   c. [Deploy flows to any Node.js platform](/docs/deploy-node)
+   a. [Deploy flows using Cloud Functions for Firebase](/docs/deployment/firebase)
+   b. [Deploy flows using Cloud Run](/docs/deployment/cloud-run)
+   c. [Deploy flows to any Node.js platform](/js/deploy-node)
 
 ## Step 1. Add the Firebase plugin
 
@@ -134,7 +134,7 @@ dashboard.
    delay by setting `metricExportIntervalMillis` in the telemetry configuration.
 
 4. If metrics are not appearing in the Genkit Monitoring dashboard, view the
-   [Troubleshooting](/docs/observability/troubleshooting) guide for steps
+   [Troubleshooting](/js/observability/troubleshooting) guide for steps
    to debug.
 
 ## Step 5. Re-build and deploy code

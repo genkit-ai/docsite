@@ -243,7 +243,7 @@ export const menuQAFlow = ai.defineFlow(
 );
 ```
 
-See the [Retrieval-augmented generation](/docs/rag) page for a general discussion on indexers and retrievers.
+See the [Retrieval-augmented generation](/js/rag) page for a general discussion on indexers and retrievers.
 
 ## Learn More
 

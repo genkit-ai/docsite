@@ -127,7 +127,7 @@ built-in support for the Cloud Functions for Firebase
 [client SDKs](https://firebase.google.com/docs/functions/callable?gen=2nd#call_the_function).
 When you use these SDKs, the Firebase Auth header is automatically included as
 long as your app client is also using the
-[Firebase Auth SDK](https://firebase.google.com/docs/auth).
+[Firebase Auth SDK](https://firebase.google.com/js/auth).
 You can use Firebase Auth to protect your flows defined with `onCallGenkit()`:
 
 ```ts
@@ -307,4 +307,4 @@ export const POST = appRoute(selfSummaryFlow, {
 <!-- NOTE: Should we provide more docs? E.g. docs into various web frameworks and hosting services? -->
 
 For more information about using Express, see the
-[Cloud Run](/docs/cloud-run) instructions.
+[Cloud Run](/docs/deployment/cloud-run) instructions.
