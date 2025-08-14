@@ -4,8 +4,8 @@ const JS_SIDEBAR = [
   {
     label: "Build with AI",
     items: [   
-      { label: "Develop with AI", slug: "docs/develop-with-ai" },
       { label: "MCP Server", slug: "docs/mcp-server" },
+      { label: "Develop with AI", slug: "docs/develop-with-ai" },
     ],
   },
   {
