@@ -12,6 +12,8 @@ import LanguageContent from '../../../components/LanguageContent.astro';
   <CopyMarkdownButton />
 </div>
 
+<LanguageContent lang="js">
+
 The core of your app's AI features are generative model requests, but it's rare
 that you can simply take user input, pass it to the model, and display the model
 output back to the user. Usually, there are pre- and post-processing steps that
@@ -29,11 +31,12 @@ Every step of this workflow must work together for any AI-related task to
 succeed.
 
 In Genkit, you represent this tightly-linked logic using a construction called a
-flow. Flows are written just like functions, using ordinary code, but
+flow. Flows are written just like functions, using ordinary TypeScript code, but
 they add additional capabilities intended to ease the development of AI
 features:
 
-- **Type safety**: Input and output schemas with runtime type checking
+- **Type safety**: Input and output schemas defined using Zod, which provides
+  both static and runtime type checking
 - **Integration with developer UI**: Debug flows independently of your
   application code using the developer UI. In the developer UI, you can run
   flows and view traces for each step of the flow.
@@ -42,7 +45,7 @@ features:
 
 Unlike similar features in other frameworks, Genkit's flows are lightweight and
 unobtrusive, and don't force your app to conform to any specific abstraction.
-All of the flow's logic is written in standard code, and code inside a
+All of the flow's logic is written in standard TypeScript, and code inside a
 flow doesn't need to be flow-aware.
 
 ## Defining and calling flows
@@ -50,7 +53,6 @@ flow doesn't need to be flow-aware.
 In its simplest form, a flow just wraps a function. The following example wraps
 a function that calls `generate()`:
 
-<LanguageContent lang="js">
 ```typescript
 export const menuSuggestionFlow = ai.defineFlow(
   {
@@ -67,50 +69,6 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
 );
 ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-type MenuSuggestionInput struct {
-    Theme string `json:"theme"`
-}
-
-type MenuSuggestionOutput struct {
-    MenuItem string `json:"menuItem"`
-}
-
-menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
-    func(ctx context.Context, input MenuSuggestionInput) (MenuSuggestionOutput, error) {
-        resp, err := genkit.Generate(ctx, g,
-            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
-        )
-        if err != nil {
-            return MenuSuggestionOutput{}, err
-        }
-
-        return MenuSuggestionOutput{MenuItem: resp.Text()}, nil
-    })
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-from pydantic import BaseModel
-
-class MenuSuggestionInput(BaseModel):
-    theme: str
-
-class MenuSuggestionOutput(BaseModel):
-    menu_item: str
-
-@ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-    )
-    return MenuSuggestionOutput(menu_item=response.text)
-```
-</LanguageContent>
 
 Just by wrapping your `generate()` calls like this, you add some functionality:
 doing so lets you run the flow from the Genkit CLI and from the developer UI,
@@ -121,18 +79,19 @@ observability (later sections discuss these topics).
 
 One of the most important advantages Genkit flows have over directly calling a
 model API is type safety of both inputs and outputs. When defining flows, you
-can define schemas for them, in much the same way as you define the
+can define schemas for them using Zod, in much the same way as you define the
 output schema of a `generate()` call; however, unlike with `generate()`, you can
 also specify an input schema.
 
-<LanguageContent lang="js">
 While it's not mandatory to wrap your input and output schemas in `z.object()`, it's considered best practice for these reasons:
 
 - **Better developer experience**: Wrapping schemas in objects provides a better experience in the Developer UI by giving you labeled input fields. 
 - **Future-proof API design**: Object-based schemas allow for easy extensibility in the future. You can add new fields to your input or output schemas without breaking existing clients, which is a core principle of robust API design.
 
-Here's a refinement of the last example, which defines a flow that takes an
-object as input and outputs a structured object:
+All examples in this documentation use object-based schemas to follow these best practices.
+
+Here's a refinement of the last example, which defines a flow that takes a
+string as input and outputs an object:
 
 ```typescript
 import { z } from 'genkit';
@@ -162,79 +121,12 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
 );
 ```
 
-Model output schemas are specified using the [Zod](https://zod.dev/)
-library. In addition to a schema definition language, Zod also provides runtime
-type checking, which bridges the gap between static TypeScript types and the
-unpredictable output of generative AI models.
-</LanguageContent>
-
-<LanguageContent lang="go">
-Here's a refinement of the last example, which defines a flow that takes an
-object as input and outputs a structured object:
-
-```go
-type MenuSuggestionInput struct {
-    Theme string `json:"theme"`
-}
-
-type MenuItem struct {
-    Dishname    string `json:"dishname"`
-    Description string `json:"description"`
-}
-
-menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
-    func(ctx context.Context, input MenuSuggestionInput) (MenuItem, error) {
-        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
-        )
-        if err != nil {
-            return MenuItem{}, err
-        }
-        return item, nil
-    })
-```
-
-Model output types are specified as JSON schema using the
-[`invopop/jsonschema`](https://github.com/invopop/jsonschema) package. This
-provides runtime type checking, which bridges the gap between static Go types
-and the unpredictable output of generative AI models.
-</LanguageContent>
-
-<LanguageContent lang="python">
-Here's a refinement of the last example, which defines a flow that takes an
-object as input and outputs a structured object:
-
-```python
-from pydantic import BaseModel
-
-class MenuSuggestionInput(BaseModel):
-    theme: str
-
-class MenuItemSchema(BaseModel):
-    dish_name: str
-    description: str
-
-@ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuItemSchema:
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-        output_schema=MenuItemSchema,
-    )
-    return response.output
-```
-
-Model output schemas are specified using [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/). In addition to a schema definition language, Pydantic also provides runtime
-type checking, which bridges the gap between static Python types and the
-unpredictable output of generative AI models.
-</LanguageContent>
-
 Note that the schema of a flow does not necessarily have to line up with the
 schema of the `generate()` calls within the flow (in fact, a flow might not even
 contain `generate()` calls). Here's a variation of the example that passes a
 schema to `generate()`, but uses the structured output to format a simple
 string, which the flow returns.
 
-<LanguageContent lang="js">
 ```typescript
 export const menuSuggestionFlowMarkdown = ai.defineFlow(
   {
@@ -257,54 +149,13 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
 );
 ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-type FormattedMenuOutput struct {
-    FormattedMenuItem string `json:"formattedMenuItem"`
-}
-
-menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
-    func(ctx context.Context, input MenuSuggestionInput) (FormattedMenuOutput, error) {
-        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
-            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
-        )
-        if err != nil {
-            return FormattedMenuOutput{}, err
-        }
-
-        formatted := fmt.Sprintf("**%s**: %s", item.Dishname, item.Description)
-        return FormattedMenuOutput{FormattedMenuItem: formatted}, nil
-    })
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-class FormattedMenuOutput(BaseModel):
-    formatted_menu_item: str
-
-@ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput) -> FormattedMenuOutput:
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-        output_schema=MenuItemSchema,
-    )
-    output: MenuItemSchema = response.output
-    formatted = f'**{output.dish_name}**: {output.description}'
-    return FormattedMenuOutput(formatted_menu_item=formatted)
-```
-</LanguageContent>
 
 ### Calling flows
 
-Once you've defined a flow, you can call it from your code:
+Once you've defined a flow, you can call it from your Node.js code:
 
-<LanguageContent lang="js">
 ```typescript
-const result = await menuSuggestionFlow({ theme: 'bistro' });
-console.log(result.menuItem);
+const { text } = await menuSuggestionFlow({ theme: 'bistro' });
 ```
 
 The argument to the flow must conform to the input schema, if you defined one.
@@ -316,54 +167,6 @@ contain its properties:
 ```typescript
 const { dishname, description } = await menuSuggestionFlowWithSchema({ theme: 'bistro' });
 ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-input := MenuSuggestionInput{Theme: "bistro"}
-result, err := menuSuggestionFlow.Run(context.Background(), input)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Println(result.MenuItem)
-```
-
-The argument to the flow must conform to the input schema.
-
-If you defined an output schema, the flow response will conform to it. For
-example, if you set the output schema to `MenuItem`, the flow output will
-contain its properties:
-
-```go
-item, err := menuSuggestionFlow.Run(context.Background(), input)
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Println(item.Dishname)
-fmt.Println(item.Description)
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-input_data = MenuSuggestionInput(theme='bistro')
-result = await menu_suggestion_flow(input_data)
-print(result.menu_item)
-```
-
-The argument to the flow must conform to the input schema, if you defined one.
-
-If you defined an output schema, the flow response will conform to it. For
-example, if you set the output schema to `MenuItemSchema`, the flow output will
-contain its properties:
-
-```python
-item = await menu_suggestion_flow(input_data)
-print(item.dish_name)
-print(item.description)
-```
-</LanguageContent>
 
 ## Streaming flows
 
@@ -376,11 +179,10 @@ generated.
 
 Here's an example of a flow that supports streaming:
 
-<LanguageContent lang="js">
 ```typescript
 export const menuSuggestionStreamingFlow = ai.defineFlow(
   {
-    name: 'menuSuggestionStreamingFlow',
+    name: 'menuSuggestionFlow',
     inputSchema: z.object({ theme: z.string() }),
     streamSchema: z.string(),
     outputSchema: z.object({ theme: z.string(), menuItem: z.string() }),
@@ -416,84 +218,8 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   The `sendChunk` callback takes a single parameter, of
   the type specified by `streamSchema`. Whenever data becomes available within
   your flow, send the data to the output stream by calling this function.
-</LanguageContent>
 
-<LanguageContent lang="go">
-```go
-type StreamingMenuInput struct {
-    Theme string `json:"theme"`
-}
-
-type StreamingMenuOutput struct {
-    Theme    string `json:"theme"`
-    MenuItem string `json:"menuItem"`
-}
-
-menuSuggestionStreamingFlow := genkit.DefineStreamingFlow(g, "menuSuggestionStreamingFlow",
-    func(ctx context.Context, input StreamingMenuInput, callback core.StreamCallback[string]) (StreamingMenuOutput, error) {
-        var menuItem string
-        _, err := genkit.Generate(ctx, g,
-            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
-            ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-                // Here, you could process the chunk in some way before sending it to
-                // the output stream using StreamCallback. In this example, we output
-                // the text of the chunk, unmodified.
-                return callback(ctx, chunk.Text())
-            }),
-        )
-        if err != nil {
-            return StreamingMenuOutput{}, err
-        }
-
-        return StreamingMenuOutput{
-            Theme:    input.Theme,
-            MenuItem: menuItem,
-        }, nil
-    })
-```
-
-The `string` type in `StreamCallback[string]` specifies the type of
-values your flow streams. This does not necessarily need to be the same
-type as the return type, which is the type of the flow's complete output
-(`StreamingMenuOutput` in this example).
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-class StreamingMenuInput(BaseModel):
-    theme: str
-
-class StreamingMenuOutput(BaseModel):
-    theme: str
-    menu_item: str
-
-@ai.flow()
-async def menu_suggestion_streaming_flow(input: StreamingMenuInput, ctx):
-    stream, response = ai.generate_stream(
-        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-    )
-
-    async for chunk in stream:
-        # Here, you could process the chunk in some way before sending it to
-        # the output stream via ctx.send_chunk(). In this example, we output
-        # the text of the chunk, unmodified.
-        ctx.send_chunk(chunk.text)
-
-    final_response = await response
-    return StreamingMenuOutput(
-        theme=input.theme,
-        menu_item=final_response.text,
-    )
-```
-
-The second parameter to your flow definition is called "side channel". It
-provides features such as request context and the `send_chunk` callback.
-The `send_chunk` callback takes a single parameter. Whenever data becomes
-available within your flow, send the data to the output stream by calling
-this function.
-</LanguageContent>
-
-In the above examples, the values streamed by the flow are directly coupled to
+In the above example, the values streamed by the flow are directly coupled to
 the values streamed by the `generate()` call inside the flow. Although this is
 often the case, it doesn't have to be: you can output values to the stream using
 the callback as often as is useful for your flow.
@@ -503,7 +229,6 @@ the callback as often as is useful for your flow.
 Streaming flows are also callable, but they immediately return a response object
 rather than a promise:
 
-<LanguageContent lang="js">
 ```typescript
 const response = menuSuggestionStreamingFlow.stream({ theme: 'Danube' });
 ```
@@ -527,75 +252,21 @@ const output = await response.output;
 Note that the streaming output of a flow might not be the same type as the
 complete output; the streaming output conforms to `streamSchema`, whereas the
 complete output conforms to `outputSchema`.
-</LanguageContent>
-
-<LanguageContent lang="go">
-Streaming flows can be run like non-streaming flows with
-`menuSuggestionStreamingFlow.Run(ctx, input)` or they can be streamed:
-
-```go
-input := StreamingMenuInput{Theme: "bistro"}
-streamCh, err := menuSuggestionStreamingFlow.Stream(context.Background(), input)
-if err != nil {
-    log.Fatal(err)
-}
-
-for result := range streamCh {
-    if result.Err != nil {
-        log.Fatal("Stream error: %v", result.Err)
-    }
-    if result.Done {
-        log.Printf("Menu with %s theme: %s\n", result.Output.Theme, result.Output.MenuItem)
-    } else {
-        log.Println("Stream chunk:", result.Stream)
-    }
-}
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-input_data = StreamingMenuInput(theme='bistro')
-stream, response = menu_suggestion_streaming_flow.stream(input_data)
-async for chunk in stream:
-    print(chunk)
-```
-
-You can also get the complete output of the flow, as you can with a
-non-streaming flow. The final response is a future that you can `await` on.
-
-```python
-final_output = await response
-print(final_output.theme, final_output.menu_item)
-```
-
-Note that the streaming output of a flow might not be the same type as the
-complete output.
-</LanguageContent>
 
 ## Running flows from the command line
 
 You can run flows from the command line using the Genkit CLI tool:
 
-<LanguageContent lang="js go">
 ```bash
-# For flows with object input
 genkit flow:run menuSuggestionFlow '{"theme": "French"}'
-
-# For streaming flows, add the -s flag
-genkit flow:run menuSuggestionStreamingFlow '{"theme": "French"}' -s
 ```
-</LanguageContent>
 
-<LanguageContent lang="python">
+For streaming flows, you can print the streaming output to the console by adding
+the `-s` flag:
+
 ```bash
-# For flows with object input
-genkit flow:run menu_suggestion_flow '{"theme": "French"}'
-
-# For streaming flows, add the -s flag
-genkit flow:run menu_suggestion_streaming_flow '{"theme": "French"}' -s
+genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s
 ```
-</LanguageContent>
 
 Running a flow from the command line is useful for testing a flow, or for
 running flows that perform tasks needed on an ad hoc basis&mdash;for example, to
@@ -610,30 +281,9 @@ UI.
 To start the developer UI, run the following commands from your project
 directory:
 
-<LanguageContent lang="js">
 ```bash
 genkit start -- tsx --watch src/your-code.ts
 ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```bash
-genkit start -- go run .
-```
-
-The developer UI relies on the Go app continuing to run, even if the logic has
-completed. If you are just getting started and Genkit is not part of a broader
-app, add `select {}` as the last line of `main()` to prevent the app from
-shutting down so that you can inspect it in the UI.
-</LanguageContent>
-
-<LanguageContent lang="python">
-```bash
-genkit start -- python app.py
-```
-
-Update `python app.py` to match the way you normally run your app.
-</LanguageContent>
 
 From the **Run** tab of developer UI, you can run any of the flows defined in
 your project:
@@ -648,7 +298,6 @@ as well as details for each of the individual steps within the flow. For
 example, consider the following flow, which contains several generation
 requests:
 
-<LanguageContent lang="js">
 ```typescript
 const PrixFixeMenuSchema = z.object({
   starter: z.string(),
@@ -682,82 +331,6 @@ export const complexMenuSuggestionFlow = ai.defineFlow(
   },
 );
 ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-type ComplexMenuInput struct {
-    Theme string `json:"theme"`
-}
-
-type PrixFixeMenu struct {
-    Starter string `json:"starter"`
-    Soup    string `json:"soup"`
-    Main    string `json:"main"`
-    Dessert string `json:"dessert"`
-}
-
-complexMenuSuggestionFlow := genkit.DefineFlow(g, "complexMenuSuggestionFlow",
-    func(ctx context.Context, input ComplexMenuInput) (PrixFixeMenu, error) {
-        chat := genkit.NewChat(g, googlegenai.Model("gemini-2.5-flash"))
-        
-        _, err := chat.Send(ctx, "What makes a good prix fixe menu?")
-        if err != nil {
-            return PrixFixeMenu{}, err
-        }
-        
-        _, err = chat.Send(ctx, fmt.Sprintf(
-            "What are some ingredients, seasonings, and cooking techniques that would work for a %s themed menu?",
-            input.Theme,
-        ))
-        if err != nil {
-            return PrixFixeMenu{}, err
-        }
-        
-        menu, _, err := chat.SendData[PrixFixeMenu](ctx, 
-            fmt.Sprintf("Based on our discussion, invent a prix fixe menu for a %s themed restaurant.", input.Theme),
-        )
-        if err != nil {
-            return PrixFixeMenu{}, err
-        }
-        
-        return menu, nil
-    })
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-class ComplexMenuInput(BaseModel):
-    theme: str
-
-class PrixFixeMenuSchema(BaseModel):
-    starter: str
-    soup: str
-    main: str
-    dessert: str
-
-@ai.flow()
-async def complex_menu_suggestion_flow(input: ComplexMenuInput) -> PrixFixeMenuSchema:
-    chat = ai.chat()
-    
-    await chat.send('What makes a good prix fixe menu?')
-    await chat.send(
-        f'What are some ingredients, seasonings, and cooking techniques that '
-        f'would work for a {input.theme} themed menu?'
-    )
-    
-    response = await chat.send(
-        prompt=f'Based on our discussion, invent a prix fixe menu for a {input.theme} themed restaurant.',
-        output_schema=PrixFixeMenuSchema,
-    )
-    
-    if not response.output:
-        raise ValueError('No data generated.')
-    
-    return response.output
-```
-</LanguageContent>
 
 When you run this flow, the trace viewer shows you details about each generation
 request including its output:
@@ -781,7 +354,6 @@ by wrapping the code in a `run()` call. You might do this for calls to
 third-party libraries that are not Genkit-aware, or for any critical section of
 code.
 
-<LanguageContent lang="js">
 For example, here's a flow with two steps: the first step retrieves a menu using
 some unspecified method, and the second step includes the menu as context for a
 `generate()` call.
@@ -817,78 +389,6 @@ Because the retrieval step is wrapped in a `run()` call, it's included as a step
 in the trace viewer:
 
 ![Genkit DevUI flows](../../../assets/devui-runstep.png)
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-type MenuQuestionInput struct {
-    Question string `json:"question"`
-}
-
-type MenuQuestionOutput struct {
-    Answer string `json:"answer"`
-}
-
-menuQuestionFlow := genkit.DefineFlow(g, "menuQuestionFlow",
-    func(ctx context.Context, input MenuQuestionInput) (MenuQuestionOutput, error) {
-        menu, err := genkit.Run(ctx, g, "retrieve-daily-menu", func() (string, error) {
-            // Retrieve today's menu. (This could be a database access or simply
-            // fetching the menu from your website.)
-            
-            // ...
-            
-            return "Today's menu content", nil
-        })
-        if err != nil {
-            return MenuQuestionOutput{}, err
-        }
-        
-        resp, err := genkit.Generate(ctx, g,
-            ai.WithPrompt(input.Question),
-            ai.WithSystem("Help the user answer questions about today's menu."),
-            ai.WithDocs(ai.Document{Content: []ai.Part{ai.NewTextPart(menu)}}),
-        )
-        if err != nil {
-            return MenuQuestionOutput{}, err
-        }
-        
-        return MenuQuestionOutput{Answer: resp.Text()}, nil
-    })
-```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-class MenuQuestionInput(BaseModel):
-    question: str
-
-class MenuQuestionOutput(BaseModel):
-    answer: str
-
-@ai.flow()
-async def menu_question_flow(input: MenuQuestionInput) -> MenuQuestionOutput:
-    async def retrieve_daily_menu() -> str:
-        # Retrieve today's menu. (This could be a database access or simply
-        # fetching the menu from your website.)
-        
-        # ...
-        
-        return "Today's menu content"
-    
-    menu = await ai.run('retrieve-daily-menu', retrieve_daily_menu)
-    
-    response = await ai.generate(
-        system="Help the user answer questions about today's menu.",
-        prompt=input.question,
-        docs=[{'content': [{'text': menu}]}],
-    )
-    
-    return MenuQuestionOutput(answer=response.text)
-```
-</LanguageContent>
-
-Because the retrieval step is wrapped in a `run()` call, it's included as a step
-in the trace viewer.
 
 ## Deploying flows
 
@@ -898,7 +398,6 @@ but this section gives brief overviews of your deployment options.
 
 ### Cloud Functions for Firebase
 
-<LanguageContent lang="js">
 To deploy flows with Cloud Functions for Firebase, use the `onCallGenkit`
 feature of `firebase-functions/https`. `onCallGenkit` wraps your flow in a
 callable function. You may set an auth policy and configure App Check.
@@ -933,21 +432,11 @@ export const menuSuggestion = onCallGenkit(
 For more information, see the following pages:
 
 - [Deploy with Firebase](/docs/deployment/firebase)
-- [Authorization and integrity](/js/auth#authorize-using-cloud-functions-for-firebase)
-- [Firebase plugin](/js/plugins/firebase)
-</LanguageContent>
+- [Authorization and integrity](/docs/deployment/authorization)
+- [Firebase plugin](/docs/deployment/firebase)
 
-<LanguageContent lang="go">
-Cloud Functions for Firebase support for Go is not currently available. Use the HTTP server deployment method instead.
-</LanguageContent>
+### Express.js
 
-<LanguageContent lang="python">
-Cloud Functions for Firebase support for Python is not currently available. Use the Flask/HTTP server deployment method instead.
-</LanguageContent>
-
-### HTTP Server Deployment
-
-<LanguageContent lang="js">
 To deploy flows using any Node.js hosting platform, such as Cloud Run, define
 your flows using `defineFlow()` and then call `startFlowServer()`:
 
@@ -979,12 +468,319 @@ curl -X POST "http://localhost:3400/menuSuggestionFlow" \
   -H "Content-Type: application/json"  -d '{"data": {"theme": "banana"}}'
 ```
 
+If needed, you can customize the flows server to serve a specific list of flows,
+as shown below. You can also specify a custom port (it will use the PORT
+environment variable if set) or specify CORS settings.
+
+```typescript
+export const flowA = ai.defineFlow(
+  { 
+    name: 'flowA',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
+  }, 
+  async ({ subject }) => {
+    // ...
+    return { response: "Generated response would go here" };
+  }
+);
+
+export const flowB = ai.defineFlow(
+  { 
+    name: 'flowB',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ response: z.string() }),
+  }, 
+  async ({ subject }) => {
+    // ...
+    return { response: "Generated response would go here" };
+  }
+);
+
+startFlowServer({
+  flows: [flowB],
+  port: 4567,
+  cors: {
+    origin: '*',
+  },
+});
+```
+
 For information on deploying to specific platforms, see
 [Deploy with Cloud Run](/docs/deployment/cloud-run) and
 [Deploy flows to any Node.js platform](/docs/deployment/any-platform).
+
 </LanguageContent>
 
 <LanguageContent lang="go">
+
+The core of your app's AI features is generative model requests, but it's rare
+that you can simply take user input, pass it to the model, and display the model
+output back to the user. Usually, there are pre- and post-processing steps that
+must accompany the model call. For example:
+
+- Retrieving contextual information to send with the model call.
+- Retrieving the history of the user's current session, for example in a chat
+  app.
+- Using one model to reformat the user input in a way that's suitable to pass
+  to another model.
+- Evaluating the "safety" of a model's output before presenting it to the
+  user.
+- Combining the output of several models.
+
+Every step of this workflow must work together for any AI-related task to
+succeed.
+
+In Genkit, you represent this tightly-linked logic using a construction called a
+flow. Flows are written just like functions, using ordinary Go code, but
+they add additional capabilities intended to ease the development of AI
+features:
+
+- **Type safety**: Input and output schemas, which provides both static and
+  runtime type checking.
+- **Integration with developer UI**: Debug flows independently of your
+  application code using the developer UI. In the developer UI, you can run
+  flows and view traces for each step of the flow.
+- **Simplified deployment**: Deploy flows directly as web API endpoints, using
+  any platform that can host a web app.
+
+Genkit's flows are lightweight and unobtrusive, and don't force your app to
+conform to any specific abstraction. All of the flow's logic is written in
+standard Go, and code inside a flow doesn't need to be flow-aware.
+
+## Defining and calling flows
+
+In its simplest form, a flow just wraps a function. The following example wraps
+a function that calls `genkit.Generate()`:
+
+```go
+menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string) (string, error) {
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return resp.Text(), nil
+    })
+```
+
+Just by wrapping your `genkit.Generate()` calls like this, you add some
+functionality: Doing so lets you run the flow from the Genkit CLI and from the
+developer UI, and is a requirement for several of Genkit's features,
+including deployment and observability (later sections discuss these topics).
+
+### Input and output schemas
+
+One of the most important advantages Genkit flows have over directly calling a
+model API is type safety of both inputs and outputs. When defining flows, you
+can define schemas, in much the same way as you define the output schema of a
+`genkit.Generate()` call; however, unlike with `genkit.Generate()`, you can also
+specify an input schema.
+
+Here's a refinement of the last example, which defines a flow that takes a
+string as input and outputs an object:
+
+```go
+type MenuItem struct {
+    Name        string `json:"name"`
+    Description string `json:"description"`
+}
+
+menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string) (MenuItem, error) {
+        return genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+    })
+```
+
+Note that the schema of a flow does not necessarily have to line up with the
+schema of the `genkit.Generate()` calls within the flow (in fact, a flow might
+not even contain `genkit.Generate()` calls). Here's a variation of the example
+that calls `genkit.GenerateData()`, but uses the structured
+output to format a simple string, which the flow returns. Note how we pass
+`MenuItem` as a type parameter; this is the equivalent of passing the
+`WithOutputType()` option and getting a value of that type in response.
+
+```go
+type MenuItem struct {
+    Name        string `json:"name"`
+    Description string `json:"description"`
+}
+
+menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
+    func(ctx context.Context, theme string) (string, error) {
+        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+        )
+        if err != nil {
+            return "", err
+        }
+
+        return fmt.Sprintf("**%s**: %s", item.Name, item.Description), nil
+    })
+```
+
+### Calling flows
+
+Once you've defined a flow, you can call it from your Go code:
+
+```go
+item, err := menuSuggestionFlow.Run(context.Background(), "bistro")
+```
+
+The argument to the flow must conform to the input schema.
+
+If you defined an output schema, the flow response will conform to it. For
+example, if you set the output schema to `MenuItem`, the flow output will
+contain its properties:
+
+```go
+item, err := menuSuggestionFlow.Run(context.Background(), "bistro")
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Println(item.Name)
+log.Println(item.Description)
+```
+
+## Streaming flows
+
+Flows support streaming using an interface similar to `genkit.Generate()`'s
+streaming interface. Streaming is useful when your flow generates a large
+amount of output, because you can present the output to the user as it's being
+generated, which improves the perceived responsiveness of your app. As a
+familiar example, chat-based LLM interfaces often stream their responses to the
+user as they are generated.
+
+Here's an example of a flow that supports streaming:
+
+```go
+type Menu struct {
+    Theme  string     `json:"theme"`
+    Items  []MenuItem `json:"items"`
+}
+
+type MenuItem struct {
+    Name        string `json:"name"`
+    Description string `json:"description"`
+}
+
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+    func(ctx context.Context, theme string, callback core.StreamCallback[string]) (Menu, error) {
+        item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+            ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+            ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+                // Here, you could process the chunk in some way before sending it to
+                // the output stream using StreamCallback. In this example, we output
+                // the text of the chunk, unmodified.
+                return callback(ctx, chunk.Text())
+            }),
+        )
+        if err != nil {
+            return nil, err
+        }
+
+        return Menu{
+            Theme: theme,
+            Items: []MenuItem{item},
+        }, nil
+    })
+```
+
+The `string` type in `StreamCallback[string]` specifies the type of
+values your flow streams. This does not necessarily need to be the same
+type as the return type, which is the type of the flow's complete output
+(`Menu` in this example).
+
+In this example, the values streamed by the flow are directly coupled to
+the values streamed by the `genkit.Generate()` call inside the flow.
+Although this is often the case, it doesn't have to be: you can output values
+to the stream using the callback as often as is useful for your flow.
+
+### Calling streaming flows
+
+Streaming flows can be run like non-streaming flows with
+`menuSuggestionFlow.Run(ctx, "bistro")` or they can be streamed:
+
+```go
+streamCh, err := menuSuggestionFlow.Stream(context.Background(), "bistro")
+if err != nil {
+    log.Fatal(err)
+}
+
+for result := range streamCh {
+    if result.Err != nil {
+        log.Fatal("Stream error: %v", result.Err)
+    }
+    if result.Done {
+        log.Printf("Menu with %s theme:\n", result.Output.Theme)
+        for item := range result.Output.Items {
+            log.Println(" - %s: %s", item.Name, item.Description)
+        }
+    } else {
+        log.Println("Stream chunk:", result.Stream)
+    }
+}
+```
+
+## Running flows from the command line
+
+You can run flows from the command line using the Genkit CLI tool:
+
+```bash
+genkit flow:run menuSuggestionFlow '"French"'
+```
+
+For streaming flows, you can print the streaming output to the console by adding
+the `-s` flag:
+
+```bash
+genkit flow:run menuSuggestionFlow '"French"' -s
+```
+
+Running a flow from the command line is useful for testing a flow, or for
+running flows that perform tasks needed on an ad hoc basis&mdash;for example, to
+run a flow that ingests a document into your vector database.
+
+## Debugging flows
+
+One of the advantages of encapsulating AI logic within a flow is that you can
+test and debug the flow independently from your app using the Genkit developer
+UI.
+
+The developer UI relies on the Go app continuing to run, even if the logic has
+completed. If you are just getting started and Genkit is not part of a broader
+app, add `select {}` as the last line of `main()` to prevent the app from
+shutting down so that you can inspect it in the UI.
+
+To start the developer UI, run the following command from your project
+directory:
+
+```bash
+genkit start -- go run .
+```
+
+From the **Run** tab of developer UI, you can run any of the flows defined in
+your project:
+
+![Screenshot of the Flow runner](../../../assets/devui-flows.png)
+
+After you've run a flow, you can inspect a trace of the flow invocation by
+either clicking **View trace** or looking at the **Inspect** tab.
+
+## Deploying flows
+
+You can deploy your flows directly as web API endpoints, ready for you to call
+from your app clients. Deployment is discussed in detail on several other pages,
+but this section gives brief overviews of your deployment options.
+
+### `net/http` Server
+
 To deploy a flow using any Go hosting platform, such as Cloud Run, define
 your flow using `genkit.DefineFlow()` and start a `net/http` server with the
 provided flow handler using `genkit.Handler()`:
@@ -993,102 +789,290 @@ provided flow handler using `genkit.Handler()`:
 package main
 
 import (
-    "context"
-    "log"
-    "net/http"
+	"context"
+	"log"
+	"net/http"
 
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
-    "github.com/firebase/genkit/go/plugins/googlegenai"
-    "github.com/firebase/genkit/go/plugins/server"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/server"
 )
 
-type MenuSuggestionInput struct {
-    Theme string `json:"theme"`
-}
-
-type MenuSuggestionOutput struct {
-    MenuItem string `json:"menuItem"`
+type MenuItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 func main() {
-    ctx := context.Background()
+	ctx := context.Background()
 
-    g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-    if err != nil {
-        log.Fatal(err)
-    }
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
-        func(ctx context.Context, input MenuSuggestionInput) (MenuSuggestionOutput, error) {
-            resp, err := genkit.Generate(ctx, g,
-                ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
-            )
-            if err != nil {
-                return MenuSuggestionOutput{}, err
-            }
-            return MenuSuggestionOutput{MenuItem: resp.Text()}, nil
-        })
+	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+		func(ctx context.Context, theme string) (MenuItem, error) {
+			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+			)
+			return item, err
+		})
 
-    mux := http.NewServeMux()
-    mux.HandleFunc("POST /menuSuggestionFlow", genkit.Handler(menuSuggestionFlow))
-    log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /menuSuggestionFlow", genkit.Handler(menuSuggestionFlow))
+	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
 }
+```
+
+`server.Start()` is an optional helper function that starts the server and
+manages its lifecycle, including capturing interrupt signals to ease local
+development, but you may use your own method.
+
+To serve all the flows defined in your codebase, you can use
+`genkit.ListFlows()`:
+
+```go
+mux := http.NewServeMux()
+for _, flow := range genkit.ListFlows(g) {
+    mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
+}
+log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
 ```
 
 You can call a flow endpoint with a POST request as follows:
 
 ```bash
 curl -X POST "http://localhost:3400/menuSuggestionFlow" \
-    -H "Content-Type: application/json" -d '{"data": {"theme": "banana"}}'
+    -H "Content-Type: application/json" -d '{"data": "banana"}'
+```
+
+### Other server frameworks
+
+You can also use other server frameworks to deploy your flows. For
+example, you can use [Gin](https://gin-gonic.com/) with just a few lines:
+
+```go
+router := gin.Default()
+for _, flow := range genkit.ListFlows(g) {
+    router.POST("/"+flow.Name(), func(c *gin.Context) {
+        genkit.Handler(flow)(c.Writer, c.Request)
+    })
+}
+log.Fatal(router.Run(":3400"))
 ```
 
 For information on deploying to specific platforms, see
 [Genkit with Cloud Run](/docs/deployment/cloud-run).
+
 </LanguageContent>
 
 <LanguageContent lang="python">
-To deploy flows using any Python hosting platform, such as Cloud Run, you can use Flask or other web frameworks:
+
+The core of your app's AI features are generative model requests, but it's rare
+that you can simply take user input, pass it to the model, and display the model
+output back to the user. Usually, there are pre- and post-processing steps that
+must accompany the model call. For example:
+
+- Retrieving contextual information to send with the model call
+- Retrieving the history of the user's current session, for example in a chat
+  app
+- Using one model to reformat the user input in a way that's suitable to pass
+  to another model
+- Evaluating the "safety" of a model's output before presenting it to the user
+- Combining the output of several models
+
+Every step of this workflow must work together for any AI-related task to
+succeed.
+
+In Genkit, you represent this tightly-linked logic using a construction called a
+flow. Flows are written just like functions, using ordinary Python code, but
+they add additional capabilities intended to ease the development of AI
+features:
+
+- **Type safety**: Input and output schemas defined using
+  [Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/), which
+  provides both static and runtime type checking
+- **Streaming**: Flows support streaming of data, such as parital LLM responses,
+  or any custom serializable objects.
+- **Integration with developer UI**: Debug flows independently of your
+  application code using the developer UI. In the developer UI, you can run
+  flows and view traces for each step of the flow.
+- **Simplified deployment**: Deploy flows directly as web API endpoints, using
+  Cloud Run or any platform that can host a web app.
+
+Unlike similar features in other frameworks, Genkit's flows are lightweight and
+unobtrusive, and don't force your app to conform to any specific abstraction.
+All of the flow's logic is written in standard Python, and code inside a
+flow doesn't need to be flow-aware.
+
+## Defining and calling flows
+
+In its simplest form, a flow just wraps a function. The following example wraps
+a function that calls `generate()`:
 
 ```python
-from flask import Flask, request, jsonify
-from genkit.ai import Genkit
+@ai.flow()
+async def menu_suggestion_flow(theme: str):
+    response = await ai.generate(
+      prompt=f'Invent a menu item for a {theme} themed restaurant.',
+    )
+    return response.text
+```
 
-app = Flask(__name__)
-ai = Genkit()
+Just by wrapping your `generate()` calls like this, you add some functionality:
+doing so lets you run the flow from the Genkit CLI and from the developer UI,
+and is a requirement for several of Genkit's features, including deployment and
+observability (later sections discuss these topics).
 
-class MenuSuggestionInput(BaseModel):
-    theme: str
+### Input and output schemas
 
-class MenuSuggestionOutput(BaseModel):
-    menu_item: str
+One of the most important advantages Genkit flows have over directly calling a
+model API is type safety of both inputs and outputs. When defining flows, you
+can define schemas for them using Pydantic.
+
+Here's a refinement of the last example, which defines a flow that takes a
+string as input and outputs an object:
+
+```python
+from pydantic import BaseModel
+
+class MenuItemSchema(BaseModel):
+    dishname: str
+    description: str
 
 @ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
+async def menu_suggestion_flow(theme: str) -> MenuItemSchema:
     response = await ai.generate(
-        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
+      prompt=f'Invent a menu item for a {theme} themed restaurant.',
+      output_schema=MenuItemSchema,
     )
-    return MenuSuggestionOutput(menu_item=response.text)
-
-@app.route('/menuSuggestionFlow', methods=['POST'])
-async def handle_menu_suggestion():
-    data = request.json.get('data', {})
-    input_data = MenuSuggestionInput(**data)
-    result = await menu_suggestion_flow(input_data)
-    return jsonify(result.dict())
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3400)
+    return response.output
 ```
 
-You can call a flow endpoint with a POST request as follows:
+Note that the schema of a flow does not necessarily have to line up with the
+schema of the `generate()` calls within the flow (in fact, a flow might not even
+contain `generate()` calls). Here's a variation of the example that passes a
+schema to `generate()`, but uses the structured output to format a simple
+string, which the flow returns.
+
+```python
+@ai.flow()
+async def menu_suggestion_flow(theme: str) -> str: # Changed return type annotation
+    response = await ai.generate(
+      prompt=f'Invent a menu item for a {theme} themed restaurant.',
+      output_schema=MenuItemSchema,
+    )
+    output: MenuItemSchema = response.output
+    return f'**{output.dishname}**: {output.description}'
+```
+
+### Calling flows
+
+Once you've defined a flow, you can call it from your Python code as a regular function. The argument to the flow must conform to the input schema, if you defined one.
+
+```python
+response = await menu_suggestion_flow('bistro')
+```
+
+If you defined an output schema, the flow response will conform to it. For
+example, if you set the output schema to `MenuItemSchema`, the flow output will
+contain its properties.
+
+## Streaming flows
+
+Flows support streaming using an interface similar to `generate_stream()`'s streaming
+interface. Streaming is useful when your flow generates a large amount of
+output, because you can present the output to the user as it's being generated,
+which improves the perceived responsiveness of your app. As a familiar example,
+chat-based LLM interfaces often stream their responses to the user as they are
+generated.
+
+Here's an example of a flow that supports streaming:
+
+```python
+@ai.flow()
+async def menu_suggestion_flow(theme: str, ctx):
+    stream, response = ai.generate_stream(
+      prompt=f'Invent a menu item for a {theme} themed restaurant.',
+    )
+
+    async for chunk in stream:
+        ctx.send_chunk(chunk.text)
+
+    return {
+      'theme': theme,
+      'menu_item': (await response).text,
+    }
+
+```
+
+The second parameter to your flow definition is called "side channel". It
+provides features such as request context and the `send_chunk` callback.
+The `send_chunk` callback takes a single parameter. Whenever data becomes
+available within your flow, send the data to the output stream by calling
+this function.
+
+In the above example, the values streamed by the flow are directly coupled to
+the values streamed by the `generate_stream()` call inside the flow. Although this is
+often the case, it doesn't have to be: you can output values to the stream using
+the callback as often as is useful for your flow.
+
+### Calling streaming flows
+
+Streaming flows are also callable, but they immediately return a response object
+rather than a promise. Flow's `stream` method returns the stream async iterable,
+which you can iterate over the streaming output of the flow as it's generated.
+
+```python
+stream, response = menu_suggestion_flow.stream('bistro')
+async for chunk in stream:
+    print(chunk)
+```
+
+You can also get the complete output of the flow, as you can with a
+non-streaming flow. The final response is a future that you can `await` on.
+
+```python
+print(await response)
+```
+
+Note that the streaming output of a flow might not be the same type as the
+complete output.
+
+## Debugging flows
+
+One of the advantages of encapsulating AI logic within a flow is that you can
+test and debug the flow independently from your app using the Genkit developer
+UI.
+
+To start the developer UI, run the following commands from your project
+directory:
 
 ```bash
-curl -X POST "http://localhost:3400/menuSuggestionFlow" \
-    -H "Content-Type: application/json" -d '{"data": {"theme": "banana"}}'
+genkit start -- python app.py
 ```
 
-For information on deploying to specific platforms, see:
-- [Deploy with Cloud Run](/docs/deployment/cloud-run)
-- [Deploy with Flask](/python/docs/flask)
+Update `python app.py` to match the way you normally run your app.
+
+From the **Run** tab of developer UI, you can run any of the flows defined in
+your project:
+
+After you've run a flow, you can inspect a trace of the flow invocation by
+either clicking **View trace** or looking on the **Inspect** tab.
+
+In the trace viewer, you can see details about the execution of the entire flow,
+as well as details for each of the individual steps within the flow.
+
+## Deploying flows
+
+You can deploy your flows directly as web API endpoints, ready for you to call
+from your app clients. Deployment is discussed in detail on several other pages,
+but this section gives brief overviews of your deployment options.
+
+For information on deploying to specific platforms, see
+[Deploy with Cloud Run](/docs/deployment/cloud-run) and
+[Deploy with Flask](/docs/frameworks/flask).
+
 </LanguageContent>
