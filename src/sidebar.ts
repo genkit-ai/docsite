@@ -27,7 +27,7 @@ const DOCS_SIDEBAR = [
       { label: "Pause generation using interrupts", slug: "docs/interrupts" },
       { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
       { label: "Building multi-agent systems", slug: "docs/multi-agent" },
-      { label: "Error handling", slug: "docs/error-handling" },
+      { label: "Error types", slug: "docs/error-types" },
       { label: "Evaluation", slug: "docs/evaluation" },
       { label: "Local observability and metrics", slug: "docs/local-observability" },
     ],
