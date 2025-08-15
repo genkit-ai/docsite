@@ -78,6 +78,7 @@ Install the required dependencies:
 ```bash
 go get github.com/firebase/genkit/go
 go get github.com/ledongthuc/pdf
+go mod tidy
 ```
 
 Create your main file:
@@ -159,7 +160,9 @@ import (
     "fmt"
     "log"
     "os"
+    "os/signal"
     "strings"
+    "syscall"
 
     "github.com/firebase/genkit/go/ai"
     "github.com/firebase/genkit/go/genkit"
@@ -217,7 +220,7 @@ Add the main function with PDF loading logic:
     }
 
     // Load PDF file
-    let dataBuffer = fs.readFileSync(filename);
+    const dataBuffer = fs.readFileSync(filename);
     const { text } = await pdf(dataBuffer);
 
     // Set up the prompt
@@ -265,41 +268,88 @@ func main() {
         log.Fatalf("Error reading PDF: %v", err)
     }
 
-    // Set up the prompt
+    // Set up the system prompt
     prefix := "Answer the user's questions about the contents of this PDF file."
     if len(os.Args) > 2 {
         prefix = os.Args[2]
     }
     
     systemPrompt := fmt.Sprintf(`%s
+
 Context:
 %s`, prefix, content)
 
-    // Start chat session
-    session := ai.NewChatSession(ctx, g, ai.WithSystemPrompt(systemPrompt))
-    
-    scanner := bufio.NewScanner(os.Stdin)
+    // Set up signal handling for graceful shutdown
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+    // Set up input channel for concurrent reading
+    inputChan := make(chan string)
+    go func() {
+        scanner := bufio.NewScanner(os.Stdin)
+        for {
+            fmt.Print("> ")
+            if scanner.Scan() {
+                inputChan <- scanner.Text()
+            } else {
+                close(inputChan)
+                return
+            }
+        }
+    }()
+
     fmt.Println("You're chatting with Gemini about the PDF. Ctrl-C to quit.\n")
 
-    // Chat loop
+    // Chat loop - simulate conversation by including previous context
+    var conversationHistory []string
+    
     for {
-        fmt.Print("> ")
-        if !scanner.Scan() {
-            break
+        select {
+        case <-sigChan:
+            fmt.Println("\nGoodbye!")
+            return
+        case userInput, ok := <-inputChan:
+            if !ok {
+                return
+            }
+            if userInput == "" {
+                continue
+            }
+
+        // Build conversation context
+        var fullPrompt strings.Builder
+        fullPrompt.WriteString(systemPrompt)
+        fullPrompt.WriteString("\n\nConversation history:\n")
+        
+        for _, msg := range conversationHistory {
+            fullPrompt.WriteString(msg)
+            fullPrompt.WriteString("\n")
         }
         
-        userInput := scanner.Text()
-        if userInput == "" {
-            continue
-        }
+        fullPrompt.WriteString(fmt.Sprintf("User: %s\nAssistant:", userInput))
 
-        resp, err := session.Send(ctx, userInput)
+        // Generate response
+        resp, err := genkit.Generate(ctx, g,
+            ai.WithPrompt(fullPrompt.String()),
+        )
         if err != nil {
             log.Printf("Error: %v", err)
             continue
         }
 
-        fmt.Println(resp.Text())
+        response := resp.Text()
+        fmt.Println(response)
+        
+        // Add to conversation history
+        conversationHistory = append(conversationHistory,
+            fmt.Sprintf("User: %s", userInput),
+            fmt.Sprintf("Assistant: %s", response))
+        
+            // Keep conversation history manageable (last 10 exchanges)
+            if len(conversationHistory) > 20 {
+                conversationHistory = conversationHistory[2:]
+            }
+        }
     }
 }
 
@@ -317,7 +367,7 @@ func readPDF(filename string) (string, error) {
             continue
         }
         
-        text, err := page.GetPlainText()
+        text, err := page.GetPlainText(nil)
         if err != nil {
             continue
         }
@@ -427,6 +477,33 @@ python main.py path/to/your/document.pdf "Summarize the key points from this doc
 ```
 </LanguageContent>
 
+## Using the chat interface
+
+Once you run the application, you'll see a prompt like this:
+
+```
+You're chatting with Gemini about the PDF. Ctrl-C to quit.
+
+>
+```
+
+You can now start an ongoing conversation by typing questions and pressing Enter. For example:
+
+```
+> What is this document about?
+[AI response about the PDF content]
+
+> Can you summarize the main points?
+[AI response with summary]
+
+> What are the key findings?
+[AI response about findings]
+
+>
+```
+
+The application maintains conversation history, so the AI remembers previous questions and answers within the same session. To exit, press `Ctrl-C`.
+
 ## What you learned
 
 In this tutorial, you built a conversational PDF chat application that demonstrates:
@@ -435,6 +512,55 @@ In this tutorial, you built a conversational PDF chat application that demonstra
 - **Chat sessions**: Creating persistent conversations with context
 - **System prompts**: Providing context and instructions to the AI model
 - **Command-line interfaces**: Building interactive applications
+
+## Troubleshooting
+
+<LanguageContent lang="go">
+**Build errors with missing dependencies:**
+If you encounter build errors about missing packages, run:
+```bash
+go mod tidy
+```
+
+**Application won't exit with Ctrl-C:**
+The tutorial includes proper signal handling to ensure Ctrl-C works correctly. If you're still having issues:
+- Make sure you're using the complete code with signal handling imports (`os/signal`, `syscall`)
+- Try `Ctrl-C` followed by Enter if the application seems unresponsive
+- As a last resort, use `kill -9 <process_id>` from another terminal
+
+**PDF parsing issues:**
+- Ensure your PDF file is not password-protected
+- Some PDFs may have complex layouts that don't extract text well
+- Try with a simple text-based PDF first to verify the setup
+
+**API key issues:**
+- Verify your `GEMINI_API_KEY` environment variable is set correctly
+- Check that your API key has the necessary permissions
+</LanguageContent>
+
+<LanguageContent lang="js">
+**TypeScript compilation issues:**
+Make sure you have TypeScript installed:
+```bash
+npm install -g tsx
+```
+
+**PDF parsing issues:**
+- Ensure your PDF file is readable and not corrupted
+- Some PDFs may require different parsing libraries for complex layouts
+</LanguageContent>
+
+<LanguageContent lang="python">
+**Virtual environment issues:**
+If you encounter import errors, ensure your virtual environment is activated:
+```bash
+source bin/activate  # for bash
+```
+
+**PDF parsing issues:**
+- Some PDFs may not extract text properly with PyPDF2
+- Consider using alternative libraries like `pdfplumber` for complex PDFs
+</LanguageContent>
 
 ## Next steps
 
