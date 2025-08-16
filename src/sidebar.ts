@@ -2,6 +2,7 @@ const JS_SIDEBAR = [
   { label: "Get started", slug: "docs/get-started" },
   { label: "Developer tools", slug: "docs/devtools" },
   { label: "MCP Server", slug: "docs/mcp-server" },
+  { label: "Changelog", link: "/changelog" },
   {
     label: "Tutorials",
     items: [
