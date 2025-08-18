@@ -27,15 +27,12 @@ To use this plugin, specify it when you initialize Genkit:
 ```python
 from genkit.ai import Genkit
 from genkit.plugins.firebase.firestore import FirestoreVectorStore
-from genkit.plugins.google_genai import VertexAI # Assuming VertexAI provides the embedder
 from google.cloud import firestore
 
-# Ensure you have authenticated with gcloud and set the project
 firestore_client = firestore.Client()
 
 ai = Genkit(
     plugins=[
-        VertexAI(), # Ensure the embedder's plugin is loaded
         FirestoreVectorStore(
             name='my_firestore_retriever',
             collection='my_collection', # Replace with your collection name
@@ -45,8 +42,6 @@ ai = Genkit(
             firestore_client=firestore_client,
         ),
     ]
-    # Define a default model if needed
-    # model='vertexai/gemini-1.5-flash',
 )
 ```
 
@@ -65,7 +60,6 @@ ai = Genkit(
 
     ```python
     from google.cloud import firestore
-    # Ensure you have authenticated with gcloud and set the project
     firestore_client = firestore.Client()
     ```
 
@@ -74,15 +68,10 @@ ai = Genkit(
     ```python
     from genkit.ai import Genkit
     from genkit.plugins.firebase.firestore import FirestoreVectorStore
-    from genkit.plugins.google_genai import VertexAI # Assuming VertexAI provides the embedder
     from google.cloud import firestore
-
-    # Assuming firestore_client is already created
-    # firestore_client = firestore.Client()
 
     ai = Genkit(
         plugins=[
-            VertexAI(), # Ensure the embedder's plugin is loaded
             FirestoreVectorStore(
                 name='my_firestore_retriever',
                 collection='my_collection', # Replace with your collection name
@@ -92,29 +81,17 @@ ai = Genkit(
                 firestore_client=firestore_client,
             ),
         ]
-        # Define a default model if needed
-        # model='vertexai/gemini-1.5-flash',
     )
     ```
 
 3.  **Retrieve Documents**:
 
     ```python
-    from genkit.ai import Document # Import Document
-    # Assuming 'ai' is configured as above
-
     async def retrieve_documents():
-        # Note: ai.retrieve expects a Document object for the query
-        query_doc = Document.from_text("What are the main topics?")
         return await ai.retrieve(
-            query=query_doc,
+            query="What are the main topics?",
             retriever='my_firestore_retriever', # Matches the 'name' in FirestoreVectorStore config
         )
-
-    # Example of calling the async function
-    # import asyncio
-    # retrieved_docs = asyncio.run(retrieve_documents())
-    # print(retrieved_docs)
     ```
 
 ## Populating the Index
@@ -130,18 +107,14 @@ Before you can retrieve documents, you need to populate your Firestore collectio
 Here's an example of how to index data:
 
 ```python
-from genkit.ai import Document, Genkit # Import Genkit and Document
+from genkit.ai import Document
 from genkit.types import TextPart
-from google.cloud import firestore # Import firestore
-
-# Assuming 'ai' is configured with VertexAI and FirestoreVectorStore plugins
-# Assuming 'firestore_client' is an initialized firestore.Client() instance
 
 async def index_documents(documents: list[str], collection_name: str):
     """Indexes the documents in Firestore."""
     genkit_documents = [Document(content=[TextPart(text=doc)]) for doc in documents]
     # Ensure the embedder name matches the one configured in Genkit
-    embed_response = await ai.embed(embedder='vertexai/text-embedding-004', content=genkit_documents) # Use 'content' parameter
+    embed_response = await ai.embed(embedder='vertexai/text-embedding-004', documents=genkit_documents)
     embeddings = [emb.embedding for emb in embed_response.embeddings]
 
     for i, document_text in enumerate(documents):
@@ -181,5 +154,5 @@ gcloud firestore indexes composite create \
 - Replace `<YOUR_FIREBASE_PROJECT_ID>` with the ID of your Firebase project.
 - Replace `<YOUR_COLLECTION_NAME>` with the name of your Firestore collection (e.g., `my_collection`).
 - Replace `<YOUR_DIMENSION_COUNT>` with the correct dimension for your embedding model. Common values are:
-  - `768` for `text-embedding-004` (Vertex AI)
+  - `768` for `vertexai/text-embedding-004`
 - Replace `<YOUR_VECTOR_FIELD>` with the name of the field containing vector embeddings (e.g., `embedding`).
