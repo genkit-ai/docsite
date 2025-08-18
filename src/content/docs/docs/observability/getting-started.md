@@ -19,6 +19,21 @@ Key capabilities of Genkit Monitoring include:
 Setting up Genkit Monitoring requires completing tasks in both your codebase
 and on the Google Cloud Console.
 
+## Video Overview
+
+<div style="position: relative; width: 100%; max-width: 800px; margin: 2rem auto 0;">
+  <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden;">
+    <iframe 
+      src="https://www.youtube.com/embed/9zTgJgXTHPQ" 
+      title="Genkit monitoring - Release Notes Deep Dive" 
+      frameborder="0" 
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+      allow="fullscreen"
+      style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
+    ></iframe>
+  </div>
+</div>
+
 ## Before you begin
 
 1. If you haven't already, create a Firebase project.
