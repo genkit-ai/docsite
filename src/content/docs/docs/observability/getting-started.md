@@ -2,6 +2,17 @@
 title: Get started with Genkit Monitoring
 description: This quickstart guide explains how to set up Genkit Monitoring for your deployed Genkit features to collect and view real-time telemetry data, including metrics, traces, and production trace exports for evaluations.
 ---
+<div style="float: right; width: 50%; margin: 0.5rem 0 1rem 2rem; position: relative;">
+  <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden;">
+    <iframe 
+      src="https://www.youtube.com/embed/9zTgJgXTHPQ" 
+      title="Genkit monitoring - Release Notes Deep Dive" 
+      frameborder="0" 
+      allow="fullscreen"
+      style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
+    ></iframe>
+  </div>
+</div>
 
 This quickstart guide describes how to set up Genkit Monitoring for
 your deployed Genkit features, so that you can collect and view real-time
@@ -19,20 +30,7 @@ Key capabilities of Genkit Monitoring include:
 Setting up Genkit Monitoring requires completing tasks in both your codebase
 and on the Google Cloud Console.
 
-## Video Overview
 
-<div style="position: relative; width: 100%; max-width: 800px; margin: 2rem auto 0;">
-  <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden;">
-    <iframe 
-      src="https://www.youtube.com/embed/9zTgJgXTHPQ" 
-      title="Genkit monitoring - Release Notes Deep Dive" 
-      frameborder="0" 
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-      allow="fullscreen"
-      style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
-    ></iframe>
-  </div>
-</div>
 
 ## Before you begin
 
