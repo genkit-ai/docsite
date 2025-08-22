@@ -1,6 +1,6 @@
 ---
 title: AlloyDB for PostgreSQL
-description: Learn how to use AlloyDB for PostgreSQL with pgvector extension as a vector database for semantic search and RAG applications across JavaScript, Go, and Python.
+description: Learn how to use AlloyDB for PostgreSQL with pgvector extension as a vector database for semantic search and RAG applications in Go.
 ---
 
 import LanguageSelector from '../../../../components/LanguageSelector.astro';
@@ -8,10 +8,23 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
 import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector />
+  <LanguageSelector supportedLanguages="go"/>
   <CopyMarkdownButton />
 </div>
 
+<LanguageContent lang="js">
+:::note[Feature unavailable for JavaScript]
+AlloyDB integration is not currently supported for JavaScript/TypeScript. You can implement AlloyDB integration yourself using standard PostgreSQL drivers with connection to AlloyDB endpoints and the [pgvector](https://github.com/pgvector/pgvector) extension.
+:::
+</LanguageContent>
+
+<LanguageContent lang="python">
+:::note[Feature unavailable for Python]
+AlloyDB integration is not currently supported for Python. You can implement AlloyDB integration yourself using standard PostgreSQL drivers with connection to AlloyDB endpoints and the [pgvector](https://github.com/pgvector/pgvector) extension.
+:::
+</LanguageContent>
+
+<LanguageContent lang="go">
 AlloyDB for PostgreSQL is Google Cloud's fully managed PostgreSQL-compatible database service that provides enterprise-grade performance, availability, and scale. With the pgvector extension, AlloyDB becomes a powerful vector database for AI applications.
 
 ## Overview
@@ -54,530 +67,148 @@ AlloyDB supports multiple authentication methods:
 
 ## Implementation
 
-<LanguageContent lang="js">
-### JavaScript/TypeScript
+The AlloyDB plugin provides the retriever implementation to search a [AlloyDB](https://cloud.google.com/alloydb/docs) database using the [pgvector](https://github.com/pgvector/pgvector) extension.
 
-Currently, AlloyDB integration for JavaScript/TypeScript uses standard PostgreSQL drivers with connection to AlloyDB endpoints.
+### Configuration
 
-```typescript
-import { genkit, z, Document } from 'genkit';
-import { googleAI } from '@genkit-ai/googleai';
-import { toSql } from 'pgvector';
-import postgres from 'postgres';
+To use this plugin, follow these steps:
 
-const ai = genkit({
-  plugins: [googleAI()],
-});
+1. Import the plugin
 
-// AlloyDB connection configuration
-const sql = postgres({
-  host: 'your-alloydb-instance-ip', // AlloyDB private IP
-  port: 5432,
-  database: 'your-database',
-  username: 'your-username',
-  password: 'your-password',
-  ssl: true, // Recommended for AlloyDB
-});
+	```go
+	import "github.com/firebase/genkit/go/plugins/alloydb"
+	```
 
-// Configuration for the retriever
-const AlloyDBConfig = z.object({
-  tableName: z.string().default('documents'),
-  contentColumn: z.string().default('content'),
-  embeddingColumn: z.string().default('embedding'),
-  metadataColumns: z.array(z.string()).default(['source', 'category']),
-  k: z.number().default(5),
-  threshold: z.number().optional(),
-});
+2. Create a `PostgresEngine` instance:
 
-// Define AlloyDB retriever
-const alloydbRetriever = ai.defineRetriever(
-  {
-    name: 'alloydb-retriever',
-    configSchema: AlloyDBConfig,
-  },
-  async (input, options) => {
-    // Generate embedding for the query
-    const embedding = (
-      await ai.embed({
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        content: input,
-      })
-    )[0].embedding;
+	- Using basic authentication
+		```go
+		pEngine, err := alloydb.NewPostgresEngine(ctx,
+				WithUser('user'),
+				WithPassword('password'),
+				WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+				WithDatabase('my-database')
+		```
+	- Using email authentication
+		```go
+		pEngine, err := alloydb.NewPostgresEngine(ctx,
+			WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+			WithDatabase('my-database'),
+			WithIAMAccountEmail('mail@company.com'))
+		```
+	- Using custom pool
+		```go
+		pool, err := pgxpool.New(ctx, "add_your_connection_string")
+		if err != nil {
+			return err
+		}
 
-    // Build dynamic query based on configuration
-    const metadataSelect = options.metadataColumns.length > 0 
-      ? `, ${options.metadataColumns.join(', ')}` 
-      : '';
+		pEngine, err := alloydb.NewPostgresEngine(ctx,
+			WithDatabase("db_test"),
+			WithPool(pool))
+		```
 
-    const whereClause = options.threshold 
-      ? `WHERE 1 - (${options.embeddingColumn} <=> ${toSql(embedding)}) > ${options.threshold}`
-      : '';
+3. Create the Postgres plugin
+	- Using plugin method Init
 
-    const query = `
-      SELECT 
-        ${options.contentColumn} as content,
-        1 - (${options.embeddingColumn} <=> ${toSql(embedding)}) as similarity
-        ${metadataSelect}
-      FROM ${options.tableName}
-      ${whereClause}
-      ORDER BY ${options.embeddingColumn} <=> ${toSql(embedding)}
-      LIMIT ${options.k}
-    `;
+		```go
+			postgres := &alloydb.Postgres{
+				engine: pEngine,
+			}
 
-    const results = await sql.unsafe(query);
+			if err := (postgres).Init(ctx, g); err != nil {
+				return err
+			}
+		```
 
-    return {
-      documents: results.map((row) => {
-        const { content, similarity, ...metadata } = row;
-        return Document.fromText(content, {
-          ...metadata,
-          similarity: similarity.toString(),
-        });
-      }),
-    };
-  }
-);
+	- Using the genkit method init
 
-// Example usage in a flow
-export const searchAlloyDB = ai.defineFlow(
-  {
-    name: 'searchAlloyDB',
-    inputSchema: z.object({ 
-      query: z.string(),
-      tableName: z.string().optional(),
-    }),
-    outputSchema: z.object({ 
-      results: z.array(z.object({
-        content: z.string(),
-        similarity: z.number(),
-        metadata: z.record(z.any()),
-      }))
-    }),
-  },
-  async ({ query, tableName }) => {
-    const docs = await ai.retrieve({
-      retriever: alloydbRetriever,
-      query,
-      options: { 
-        tableName: tableName || 'documents',
-        k: 10,
-        threshold: 0.7,
-      },
-    });
+		```go
+			postgres := &alloydb.Postgres{
+				engine: pEngine,
+			}
 
-    return {
-      results: docs.documents.map(doc => ({
-        content: doc.text,
-        similarity: parseFloat(doc.metadata.similarity as string),
-        metadata: doc.metadata,
-      }))
-    };
-  }
-);
-```
+			g, err := genkit.Init(ctx, genkit.WithPlugins(postgres))
 
-### Indexing documents
+			if  err != nil {
+				return err
+			}
+		```
 
-```typescript
-// Function to index documents in AlloyDB
-export const indexDocuments = ai.defineFlow(
-  {
-    name: 'indexDocuments',
-    inputSchema: z.object({
-      documents: z.array(z.object({
-        content: z.string(),
-        metadata: z.record(z.any()).optional(),
-      })),
-      tableName: z.string().default('documents'),
-    }),
-    outputSchema: z.object({ indexed: z.number() }),
-  },
-  async ({ documents, tableName }) => {
-    let indexed = 0;
+### Usage
 
-    for (const doc of documents) {
-      // Generate embedding
-      const embedding = (
-        await ai.embed({
-          embedder: googleAI.embedder('gemini-embedding-001'),
-          content: doc.content,
-        })
-      )[0].embedding;
-
-      // Insert document with embedding
-      await sql`
-        INSERT INTO ${sql(tableName)} (content, embedding, metadata)
-        VALUES (${doc.content}, ${toSql(embedding)}, ${JSON.stringify(doc.metadata || {})})
-      `;
-      
-      indexed++;
-    }
-
-    return { indexed };
-  }
-);
-```
-</LanguageContent>
-
-<LanguageContent lang="go">
-### Go Implementation
+To add documents to a AlloyDB index, first create an index definition that specifies the features of the table:
 
 ```go
-package main
-
-import (
-    "context"
-    "database/sql"
-    "fmt"
-    "log"
-
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
-    "github.com/firebase/genkit/go/plugins/alloydb"
-    "github.com/firebase/genkit/go/plugins/googlegenai"
-)
-
-func setupAlloyDB(ctx context.Context, g *genkit.Genkit) error {
-    // Create AlloyDB engine with basic authentication
-    pEngine, err := alloydb.NewPostgresEngine(ctx,
-        alloydb.WithUser("your-username"),
-        alloydb.WithPassword("your-password"),
-        alloydb.WithAlloyDBInstance("your-project", "us-central1", "your-cluster", "your-instance"),
-        alloydb.WithDatabase("your-database"),
-    )
-    if err != nil {
-        return fmt.Errorf("failed to create AlloyDB engine: %w", err)
-    }
-
-    // Alternative: Using IAM authentication
-    /*
-    pEngine, err := alloydb.NewPostgresEngine(ctx,
-        alloydb.WithAlloyDBInstance("your-project", "us-central1", "your-cluster", "your-instance"),
-        alloydb.WithDatabase("your-database"),
-        alloydb.WithIAMAccountEmail("service-account@your-project.iam.gserviceaccount.com"),
-    )
-    */
-
-    // Create the AlloyDB plugin
-    postgres := &alloydb.Postgres{
-        Engine: pEngine,
-    }
-
-    // Initialize the plugin
-    if err := postgres.Init(ctx, g); err != nil {
-        return fmt.Errorf("failed to initialize AlloyDB plugin: %w", err)
-    }
-
-    return nil
+cfg := &alloydb.Config{
+	TableName:             'documents',
+	SchemaName:            'public',
+	ContentColumn:         "content",
+	EmbeddingColumn:       "embedding",
+	MetadataColumns:       []string{"source", "category"},
+	IDColumn:              "custom_id",
+	MetadataJSONColumn:    "custom_metadata",
+	Embedder:              embedder,
+	EmbedderOptions:       nil,
 }
 
-func setupRetriever(ctx context.Context, g *genkit.Genkit, postgres *alloydb.Postgres) error {
-    // Configure the retriever
-    cfg := &alloydb.Config{
-        TableName:          "documents",
-        SchemaName:         "public",
-        ContentColumn:      "content",
-        EmbeddingColumn:    "embedding",
-        MetadataColumns:    []string{"source", "category"},
-        IDColumn:           "id",
-        MetadataJSONColumn: "metadata",
-        Embedder:           "googleai/gemini-embedding-001",
-        EmbedderOptions:    nil,
-    }
+doc, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
+if err != nil {
+  return err
+}
 
-    // Define the retriever
-    indexer, retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
-    if err != nil {
-        return fmt.Errorf("failed to define retriever: %w", err)
-    }
-
-    // Example: Index documents
-    docs := []*ai.Document{{
+docs := []*ai.Document{{
         Content: []*ai.Part{{
-            Kind:        ai.PartText,
-            ContentType: "text/plain",
-            Text:        "AlloyDB is a fully managed PostgreSQL-compatible database service.",
+        Kind:        ai.PartText,
+        ContentType: "text/plain",
+        Text:        "The product features include...",
         }},
-        Metadata: map[string]any{
-            "source":   "documentation",
-            "category": "database",
-            "id":       "doc-001",
-        },
-    }}
+      Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+  }}
 
-    if err := indexer.Index(ctx, docs); err != nil {
-        return fmt.Errorf("failed to index documents: %w", err)
-    }
-
-    // Example: Retrieve documents
-    query := ai.DocumentFromText("What is AlloyDB?", nil)
-    
-    resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
-        Document: query,
-        Options: map[string]any{
-            "k":      5,
-            "filter": "source='documentation'",
-        },
-    })
-    if err != nil {
-        return fmt.Errorf("failed to retrieve documents: %w", err)
-    }
-
-    log.Printf("Retrieved %d documents", len(resp.Documents))
-    for i, doc := range resp.Documents {
-        log.Printf("Document %d: %s", i+1, doc.Text())
-    }
-
-    return nil
-}
-
-// Example flow using AlloyDB retriever
-func setupSearchFlow(ctx context.Context, g *genkit.Genkit) {
-    ai.DefineFlow(g, "searchAlloyDB", func(ctx context.Context, input map[string]any) (map[string]any, error) {
-        query, ok := input["query"].(string)
-        if !ok {
-            return nil, fmt.Errorf("query is required")
-        }
-
-        k := 5
-        if kVal, ok := input["k"].(float64); ok {
-            k = int(kVal)
-        }
-
-        // Use the retriever
-        retrieverOptions := &alloydb.RetrieverOptions{
-            K:      k,
-            Filter: "category='database'",
-        }
-
-        queryDoc := ai.DocumentFromText(query, nil)
-        resp, err := ai.Retrieve(ctx, g,
-            ai.WithRetriever("alloydb-retriever"),
-            ai.WithRetrieverQuery(queryDoc),
-            ai.WithRetrieverOptions(retrieverOptions),
-        )
-        if err != nil {
-            return nil, fmt.Errorf("failed to retrieve: %w", err)
-        }
-
-        // Format results
-        results := make([]map[string]any, len(resp.Documents))
-        for i, doc := range resp.Documents {
-            results[i] = map[string]any{
-                "content":  doc.Text(),
-                "metadata": doc.Metadata,
-            }
-        }
-
-        return map[string]any{
-            "results": results,
-            "count":   len(results),
-        }, nil
-    })
-}
-
-func main() {
-    ctx := context.Background()
-
-    // Initialize Genkit
-    g, err := genkit.Init(ctx,
-        genkit.WithPlugins(&googlegenai.GoogleAI{}),
-    )
-    if err != nil {
-        log.Fatalf("failed to initialize Genkit: %v", err)
-    }
-
-    // Setup AlloyDB
-    if err := setupAlloyDB(ctx, g); err != nil {
-        log.Fatalf("failed to setup AlloyDB: %v", err)
-    }
-
-    log.Println("AlloyDB integration ready")
+if err := doc.Index(ctx, docs); err != nil {
+    return err
 }
 ```
-</LanguageContent>
 
-<LanguageContent lang="python">
-### Python Implementation
+Similarly, to retrieve documents from an index, use the retriever method:
 
-Currently, AlloyDB integration for Python uses standard PostgreSQL drivers with connection to AlloyDB endpoints.
+```go
+doc,  retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
+if err != nil {
+  return err
+}
 
-```python
-import asyncio
-import asyncpg
-import os
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+d2 := ai.DocumentFromText( "The product features include..." , nil)
 
-from genkit.ai import Genkit
-from genkit.plugins.google_genai import GoogleAI
+resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
+    Query: d2,
+    k:5,
+    filter: "source='website' AND category='product-docs'"
+})
 
-@dataclass
-class AlloyDBConfig:
-    host: str
-    port: int = 5432
-    database: str
-    username: str
-    password: str
-    table_name: str = "documents"
-    content_column: str = "content"
-    embedding_column: str = "embedding"
-    metadata_column: str = "metadata"
-
-class AlloyDBRetriever:
-    def __init__(self, ai: Genkit, config: AlloyDBConfig):
-        self.ai = ai
-        self.config = config
-        self.pool = None
-    
-    async def initialize(self):
-        """Initialize the AlloyDB connection pool."""
-        connection_string = (
-            f"postgresql://{self.config.username}:{self.config.password}"
-            f"@{self.config.host}:{self.config.port}/{self.config.database}"
-            f"?sslmode=require"  # AlloyDB requires SSL
-        )
-        
-        self.pool = await asyncpg.create_pool(
-            connection_string,
-            min_size=1,
-            max_size=10,
-        )
-    
-    async def index_documents(self, documents: List[Dict[str, Any]]) -> int:
-        """Index documents in AlloyDB."""
-        if not self.pool:
-            await self.initialize()
-        
-        indexed = 0
-        async with self.pool.acquire() as conn:
-            for doc in documents:
-                # Generate embedding
-                embedding_response = await self.ai.embed(
-                    content=doc["content"],
-                    embedder="googleai/gemini-embedding-001"
-                )
-                embedding = embedding_response.embeddings[0].embedding
-                
-                # Insert document
-                await conn.execute(
-                    f"""
-                    INSERT INTO {self.config.table_name} 
-                    ({self.config.content_column}, {self.config.embedding_column}, {self.config.metadata_column})
-                    VALUES ($1, $2, $3)
-                    """,
-                    doc["content"],
-                    embedding,
-                    doc.get("metadata", {})
-                )
-                indexed += 1
-        
-        return indexed
-    
-    async def retrieve(self, query: str, k: int = 5, threshold: float = 0.0) -> List[Dict[str, Any]]:
-        """Retrieve documents using semantic search."""
-        if not self.pool:
-            await self.initialize()
-        
-        # Generate embedding for query
-        embedding_response = await self.ai.embed(
-            content=query,
-            embedder="googleai/gemini-embedding-001"
-        )
-        embedding = embedding_response.embeddings[0].embedding
-        
-        # Search for similar documents
-        async with self.pool.acquire() as conn:
-            query_sql = f"""
-                SELECT 
-                    {self.config.content_column} as content,
-                    {self.config.metadata_column} as metadata,
-                    1 - ({self.config.embedding_column} <=> $1) as similarity
-                FROM {self.config.table_name}
-                WHERE 1 - ({self.config.embedding_column} <=> $1) > $2
-                ORDER BY {self.config.embedding_column} <=> $1
-                LIMIT $3
-            """
-            
-            rows = await conn.fetch(query_sql, embedding, threshold, k)
-        
-        return [
-            {
-                "content": row["content"],
-                "metadata": row["metadata"],
-                "similarity": float(row["similarity"])
-            }
-            for row in rows
-        ]
-
-# Initialize Genkit and AlloyDB
-ai = Genkit(
-    plugins=[GoogleAI()],
-    model="googleai/gemini-2.5-flash"
-)
-
-# Configure AlloyDB connection
-alloydb_config = AlloyDBConfig(
-    host=os.getenv("ALLOYDB_HOST"),
-    database=os.getenv("ALLOYDB_DATABASE"),
-    username=os.getenv("ALLOYDB_USERNAME"),
-    password=os.getenv("ALLOYDB_PASSWORD"),
-)
-
-retriever = AlloyDBRetriever(ai, alloydb_config)
-
-@ai.flow()
-async def search_alloydb(query: str, k: int = 5) -> Dict[str, Any]:
-    """Search documents in AlloyDB."""
-    results = await retriever.retrieve(query, k=k, threshold=0.7)
-    
-    return {
-        "query": query,
-        "results": results,
-        "count": len(results)
-    }
-
-@ai.flow()
-async def index_to_alloydb(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Index documents to AlloyDB."""
-    indexed = await retriever.index_documents(documents)
-    
-    return {
-        "indexed": indexed,
-        "total": len(documents)
-    }
-
-# Example usage
-async def main():
-    await retriever.initialize()
-    
-    # Index some documents
-    docs = [
-        {
-            "content": "AlloyDB is Google Cloud's fully managed PostgreSQL service.",
-            "metadata": {"source": "documentation", "category": "database"}
-        },
-        {
-            "content": "AlloyDB provides enterprise-grade performance and availability.",
-            "metadata": {"source": "documentation", "category": "features"}
-        }
-    ]
-    
-    index_result = await index_to_alloydb(docs)
-    print(f"Indexed {index_result['indexed']} documents")
-    
-    # Search documents
-    search_result = await search_alloydb("What is AlloyDB?")
-    print(f"Found {search_result['count']} results")
-    
-    for result in search_result['results']:
-        print(f"Similarity: {result['similarity']:.3f}")
-        print(f"Content: {result['content'][:100]}...")
-
-if __name__ == "__main__":
-    ai.run_main(main())
+if err != nil {
+    return err
+}
 ```
-</LanguageContent>
+
+It's also possible to use the Retrieve method from Retriever
+
+```go
+d2 := ai.DocumentFromText( "The product features include..." , nil)
+
+retrieverOptions := &alloydb.RetrieverOptions{
+	k:5,
+    filter: "source='website' AND category='product-docs'"
+}
+
+resp, err := ai.Retrieve(ctx, retriever,ai.WithDocs(d2), &ai.WithConfig(retrieverOptions))
+if err != nil {
+    return err
+}
+```
+
+See the [Retrieval-augmented generation](/docs/rag) page for a general discussion on using retrievers for RAG.
 
 ## Database schema
 
@@ -608,21 +239,6 @@ CREATE INDEX ON documents (category);
 
 ### Connection settings
 
-<LanguageContent lang="js">
-```typescript
-// Environment-based configuration
-const alloydbConfig = {
-  host: process.env.ALLOYDB_HOST,
-  port: parseInt(process.env.ALLOYDB_PORT || '5432'),
-  database: process.env.ALLOYDB_DATABASE,
-  username: process.env.ALLOYDB_USERNAME,
-  password: process.env.ALLOYDB_PASSWORD,
-  ssl: true, // Always use SSL with AlloyDB
-};
-```
-</LanguageContent>
-
-<LanguageContent lang="go">
 ```go
 // Using environment variables
 pEngine, err := alloydb.NewPostgresEngine(ctx,
@@ -637,23 +253,9 @@ pEngine, err := alloydb.NewPostgresEngine(ctx,
     alloydb.WithDatabase(os.Getenv("ALLOYDB_DATABASE")),
 )
 ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-# Environment-based configuration
-alloydb_config = AlloyDBConfig(
-    host=os.getenv("ALLOYDB_HOST"),
-    database=os.getenv("ALLOYDB_DATABASE"),
-    username=os.getenv("ALLOYDB_USERNAME"),
-    password=os.getenv("ALLOYDB_PASSWORD"),
-)
-```
-</LanguageContent>
 
 ### IAM authentication
 
-<LanguageContent lang="go">
 ```go
 // Using IAM authentication
 pEngine, err := alloydb.NewPostgresEngine(ctx,
@@ -662,7 +264,6 @@ pEngine, err := alloydb.NewPostgresEngine(ctx,
     alloydb.WithIAMAccountEmail("service-account@project.iam.gserviceaccount.com"),
 )
 ```
-</LanguageContent>
 
 ## Best practices
 
@@ -716,4 +317,5 @@ pEngine, err := alloydb.NewPostgresEngine(ctx,
 - Learn about [RAG implementation](/docs/rag) for complete retrieval-augmented generation
 - Explore [pgvector optimization](/docs/vector-databases/pgvector) techniques
 - Review [evaluation strategies](/docs/evaluation) for measuring retrieval quality
-- Set up [observability](/docs/local-observability) for monitoring performance
+- Set up [observability](/docs/observability-monitoring) for monitoring performance
+</LanguageContent>
