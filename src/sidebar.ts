@@ -4,14 +4,13 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Get started", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
-      { label: "MCP Server", slug: "docs/mcp-server" },
     ],
   },
-  {
-    label: "Tutorials",
+    {
+    label: "Build with AI",
     items: [
-      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
-      { label: "Summarize YouTube videos", slug: "docs/tutorials/summarize-youtube-videos" },
+      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
+      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
     ],
   },
   {
@@ -30,6 +29,13 @@ const DOCS_SIDEBAR = [
       { label: "Error types", slug: "docs/error-types" },
       { label: "Evaluation", slug: "docs/evaluation" },
       { label: "Local observability and metrics", slug: "docs/local-observability" },
+    ],
+  },
+  {
+    label: "Tutorials",
+    items: [
+      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
+      { label: "Summarize YouTube videos", slug: "docs/tutorials/summarize-youtube-videos" },
     ],
   },
   {
