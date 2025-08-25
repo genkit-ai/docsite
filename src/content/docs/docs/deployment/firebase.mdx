@@ -12,944 +12,436 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
   <CopyMarkdownButton />
 </div>
 
-Firebase Cloud Functions provides a serverless platform for deploying Genkit flows with built-in authentication, authorization, and scaling. This deployment option is ideal for applications that need Firebase's ecosystem features like Authentication, Firestore, and App Check.
-
-## Key Features
-
-- **Serverless**: Automatic scaling with pay-per-use pricing
-- **Built-in Authentication**: Firebase Auth integration
-- **App Check**: Client integrity verification
-- **Firebase Ecosystem**: Seamless integration with other Firebase services
-- **Global CDN**: Automatic global distribution
-
-## Prerequisites
-
-- Firebase project with Blaze plan (required for Cloud Functions)
-- Firebase CLI installed and configured
-- Familiarity with [Genkit flows](/docs/flows)
-
-## Setup
-
-### Firebase Project Setup
-
-<LanguageContent lang="js">
-1. **Create or select a Firebase project**:
-       ```bash
-       firebase login
-       firebase projects:list
-       ```
-
-    2. **Initialize Firebase in your project**:
-       ```bash
-       mkdir my-genkit-firebase-app
-       cd my-genkit-firebase-app
-       firebase init genkit
-       ```
-
-    3. **Install dependencies**:
-       ```bash
-       cd functions
-       npm install genkit @genkit-ai/googleai firebase-functions
-       ```
-</LanguageContent>
-
 <LanguageContent lang="go">
-Go doesn't have direct Firebase Functions support, but you can deploy Go applications to Cloud Run and integrate with Firebase services:
 
-    1. **Set up Firebase project**:
-       ```bash
-       firebase login
-       firebase init
-       ```
+:::note[Feature unavailable for Go]
+Firebase deployment is not yet available for Go. Please use JavaScript for Firebase deployment functionality.
+:::
 
-    2. **Create Go module**:
-       ```bash
-       mkdir my-genkit-go-app
-       cd my-genkit-go-app
-       go mod init example/firebase-app
-       go get github.com/firebase/genkit/go
-       ```
-
-    3. **Install Firebase Admin SDK**:
-       ```bash
-       go get firebase.google.com/go/v4
-       ```
 </LanguageContent>
 
 <LanguageContent lang="python">
-Python doesn't have direct Firebase Functions support, but you can deploy Python applications to Cloud Run and integrate with Firebase services:
 
-    1. **Set up Firebase project**:
-       ```bash
-       firebase login
-       firebase init
-       ```
+:::note[Feature unavailable for Python]
+Firebase deployment is not yet available for Python. Please use JavaScript for Firebase deployment functionality.
+:::
 
-    2. **Create Python project**:
-       ```bash
-       mkdir my-genkit-python-app
-       cd my-genkit-python-app
-       python -m venv venv
-       source venv/bin/activate  # On Windows: venv\Scripts\activate
-       ```
-
-    3. **Install dependencies**:
-       ```bash
-       pip install genkit genkit-plugin-google-genai firebase-admin
-       ```
 </LanguageContent>
-
-## Implementation
-
-### Basic Flow Setup
 
 <LanguageContent lang="js">
-Create your flow in `functions/src/index.ts`:
 
-    ```ts
-    import { genkit, z } from 'genkit';
-    import { googleAI } from '@genkit-ai/googleai';
-    import { onCallGenkit, hasClaim } from 'firebase-functions/https';
-    import { defineSecret } from 'firebase-functions/params';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-    // Define secrets for API keys
-    const apiKey = defineSecret('GEMINI_API_KEY');
+Cloud Functions for Firebase has an `onCallGenkit` method that lets you
+quickly create a [callable function](https://firebase.google.com/docs/functions/callable?gen=2nd)
+with a Genkit action (e.g. a Flow). These functions can be called using
+`genkit/beta/client`or the [Functions client SDK](https://firebase.google.com/docs/functions/callable?gen=2nd#call_the_function),
+which automatically adds auth info.
 
-    const ai = genkit({
-      plugins: [googleAI()],
-      model: googleAI.model('gemini-2.5-flash'),
-    });
+## Before you begin
 
-    // Define your flow
-    const generatePoemFlow = ai.defineFlow(
-      {
-        name: 'generatePoem',
-        inputSchema: z.object({ subject: z.string() }),
-        outputSchema: z.object({ poem: z.string() }),
-      },
-      async ({ subject }) => {
-        const { text } = await ai.generate(`Compose a poem about ${subject}.`);
-        return { poem: text };
-      }
-    );
+- You should be familiar with Genkit's concept of [flows](/docs/flows), and how to
+  write them. The instructions on this page assume that you already have some
+  flows defined, which you want to deploy.
+- It would be helpful, but not required, if you've already used Cloud
+  Functions for Firebase before.
 
-    // Export as Cloud Function
-    export const generatePoem = onCallGenkit(
-      {
-        secrets: [apiKey],
-        authPolicy: hasClaim('email_verified'),
-        enforceAppCheck: true,
-      },
-      generatePoemFlow
-    );
+## 1. Set up a Firebase project
+
+If you don't already have a Firebase project with TypeScript Cloud Functions set
+up, follow these steps:
+
+1.  Create a new Firebase project using the [Firebase
+    console](https://console.firebase.google.com/) or choose an existing one.
+
+1.  Upgrade the project to the Blaze plan, which is required to deploy Cloud
+    Functions.
+
+1.  Install the [Firebase CLI](https://firebase.google.com/docs/cli).
+
+1.  Log in with the Firebase CLI:
+
+    ```bash
+    firebase login
+
+    firebase login --reauth # alternative, if necessary
+
+    firebase login --no-localhost # if running in a remote shell
     ```
-</LanguageContent>
 
-<LanguageContent lang="go">
-Create your application with Firebase integration:
+1.  Create a new project directory:
 
-    ```go
-    package main
+    ```bash
+    export PROJECT_ROOT=~/tmp/genkit-firebase-project1
 
-    import (
-        "context"
-        "log"
-        "net/http"
-        "os"
-
-        "github.com/firebase/genkit/go/genkit"
-        "github.com/firebase/genkit/go/plugins/googlegenai"
-        "github.com/firebase/genkit/go/plugins/server"
-        "firebase.google.com/go/v4"
-        "firebase.google.com/go/v4/auth"
-    )
-
-    func main() {
-        ctx := context.Background()
-
-        // Initialize Firebase
-        app, err := firebase.NewApp(ctx, nil)
-        if err != nil {
-            log.Fatalf("error initializing app: %v", err)
-        }
-
-        authClient, err := app.Auth(ctx)
-        if err != nil {
-            log.Fatalf("error getting Auth client: %v", err)
-        }
-
-        // Initialize Genkit
-        g, err := genkit.Init(ctx,
-            genkit.WithPlugins(&googlegenai.GoogleAI{}),
-            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
-        )
-        if err != nil {
-            log.Fatalf("failed to initialize Genkit: %v", err)
-        }
-
-        // Define flow with Firebase Auth
-        poemFlow := genkit.DefineFlow(g, "generatePoem", 
-            func(ctx context.Context, input struct{ Subject string }) (struct{ Poem string }, error) {
-                resp, err := genkit.Generate(ctx, g,
-                    ai.WithPrompt("Compose a poem about %s", input.Subject),
-                )
-                if err != nil {
-                    return struct{ Poem string }{}, err
-                }
-                return struct{ Poem string }{Poem: resp.Text()}, nil
-            })
-
-        // Create HTTP handler with Firebase Auth middleware
-        mux := http.NewServeMux()
-        mux.HandleFunc("POST /generatePoem", func(w http.ResponseWriter, r *http.Request) {
-            // Verify Firebase ID token
-            idToken := r.Header.Get("Authorization")
-            if idToken == "" {
-                http.Error(w, "Unauthorized", http.StatusUnauthorized)
-                return
-            }
-
-            token, err := authClient.VerifyIDToken(ctx, idToken)
-            if err != nil {
-                http.Error(w, "Invalid token", http.StatusUnauthorized)
-                return
-            }
-
-            // Check if email is verified
-            if !token.Claims["email_verified"].(bool) {
-                http.Error(w, "Email not verified", http.StatusForbidden)
-                return
-            }
-
-            // Call the flow
-            genkit.Handler(poemFlow)(w, r)
-        })
-
-        log.Fatal(server.Start(ctx, "0.0.0.0:"+os.Getenv("PORT"), mux))
-    }
+    mkdir -p $PROJECT_ROOT
     ```
-</LanguageContent>
 
-<LanguageContent lang="python">
-Create your application with Firebase integration:
+1.  Initialize a Firebase project in the directory:
 
-    ```python
-    import os
-    from flask import Flask, request, jsonify
-    import firebase_admin
-    from firebase_admin import auth, credentials
+    ```bash
+    cd $PROJECT_ROOT
 
-    from genkit.ai import Genkit
-    from genkit.plugins.flask import genkit_flask_handler
-    from genkit.plugins.google_genai import GoogleGenAI, google_genai_name
-
-    # Initialize Firebase Admin
-    if not firebase_admin._apps:
-        cred = credentials.ApplicationDefault()
-        firebase_admin.initialize_app(cred)
-
-    # Initialize Genkit
-    ai = Genkit(
-        plugins=[GoogleGenAI()],
-        model=google_genai_name('gemini-2.5-flash'),
-    )
-
-    app = Flask(__name__)
-
-    def verify_firebase_token(request):
-        """Middleware to verify Firebase ID token"""
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return None
-        
-        id_token = auth_header.split('Bearer ')[1]
-        try:
-            decoded_token = auth.verify_id_token(id_token)
-            return decoded_token
-        except Exception:
-            return None
-
-    async def firebase_context_provider(request):
-        """Context provider for Firebase authentication"""
-        token = verify_firebase_token(request)
-        if not token:
-            return {'auth': None}
-        
-        return {
-            'auth': {
-                'uid': token['uid'],
-                'email': token.get('email'),
-                'email_verified': token.get('email_verified', False)
-            }
-        }
-
-    @app.post('/generatePoem')
-    @genkit_flask_handler(ai, context_provider=firebase_context_provider)
-    @ai.flow()
-    async def generate_poem(subject: str, ctx):
-        # Check authentication
-        if not ctx.context.get('auth'):
-            raise Exception('Unauthorized')
-        
-        if not ctx.context['auth'].get('email_verified'):
-            raise Exception('Email not verified')
-
-        response = await ai.generate(
-            on_chunk=ctx.send_chunk,
-            prompt=f'Compose a poem about {subject}.',
-        )
-        return {'poem': response.text}
-
-    if __name__ == "__main__":
-        app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    firebase init genkit
     ```
-</LanguageContent>
 
-## Authentication and Authorization
+    The rest of this page assumes that you've decided to write your functions
+    in TypeScript, but you can also deploy your Genkit flows if you're using
+    JavaScript.
 
-### Firebase Authentication
+## 2. Wrap the Flow in onCallGenkit
 
-<LanguageContent lang="js">
+After you've set up a Firebase project with Cloud Functions, you can copy or
+write flow definitions in the project's `functions/src` directory, and export
+them in `index.ts`.
+
+For your flows to be deployable, you need to wrap them in `onCallGenkit`.
+This method has all the features of the normal `onCall`. It automatically
+supports both streaming and JSON responses.
+
+Suppose you have the following flow:
+
 ```ts
-    import { onCallGenkit, hasClaim, signedIn } from 'firebase-functions/https';
+const generatePoemFlow = ai.defineFlow(
+  {
+    name: 'generatePoem',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ poem: z.string() }),
+  },
+  async ({ subject }) => {
+    const { text } = await ai.generate(`Compose a poem about ${subject}.`);
+    return { poem: text };
+  },
+);
+```
 
-    // Require signed-in users
-    export const protectedFlow = onCallGenkit(
-      {
-        authPolicy: signedIn(),
-      },
-      myFlow
-    );
+You can expose this flow as a callable function using `onCallGenkit`:
 
-    // Require email verification
-    export const verifiedFlow = onCallGenkit(
-      {
-        authPolicy: hasClaim('email_verified'),
-      },
-      myFlow
-    );
-
-    // Custom authorization logic
-    export const adminFlow = onCallGenkit(
-      {
-        authPolicy: (auth) => {
-          return auth?.token?.email_verified && 
-                 auth?.token?.admin === true;
-        },
-      },
-      myFlow
-    );
-
-    // Access auth context in flow
-    const contextAwareFlow = ai.defineFlow(
-      {
-        name: 'contextAware',
-        inputSchema: z.object({ data: z.string() }),
-      },
-      async (input, { context }) => {
-        const userId = context.auth?.uid;
-        const isAdmin = context.auth?.token?.admin;
-        
-        // Use auth context in your logic
-        return { result: `Hello ${userId}` };
-      }
-    );
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-    // Middleware for Firebase Auth verification
-    func firebaseAuthMiddleware(authClient *auth.Client) func(http.Handler) http.Handler {
-        return func(next http.Handler) http.Handler {
-            return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                authHeader := r.Header.Get("Authorization")
-                if authHeader == "" {
-                    http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
-                    return
-                }
-
-                // Extract token from "Bearer <token>"
-                parts := strings.Split(authHeader, " ")
-                if len(parts) != 2 || parts[0] != "Bearer" {
-                    http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
-                    return
-                }
-
-                idToken := parts[1]
-                token, err := authClient.VerifyIDToken(r.Context(), idToken)
-                if err != nil {
-                    http.Error(w, "Invalid token", http.StatusUnauthorized)
-                    return
-                }
-
-                // Add user info to context
-                ctx := context.WithValue(r.Context(), "user", token)
-                next.ServeHTTP(w, r.WithContext(ctx))
-            })
-        }
-    }
-
-    // Use in your handlers
-    mux.Handle("POST /protectedFlow", 
-        firebaseAuthMiddleware(authClient)(genkit.Handler(protectedFlow)))
-
-    // Access user context in flow
-    protectedFlow := genkit.DefineFlow(g, "protected", 
-        func(ctx context.Context, input string) (string, error) {
-            user := ctx.Value("user").(*auth.Token)
-            userID := user.UID
-            
-            // Use user context in your logic
-            return fmt.Sprintf("Hello %s", userID), nil
-        })
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-    from genkit.types import GenkitError
-
-    async def firebase_auth_context_provider(request):
-        """Enhanced context provider with role checking"""
-        token = verify_firebase_token(request)
-        if not token:
-            return {'auth': None}
-        
-        # Get custom claims for roles
-        user_record = auth.get_user(token['uid'])
-        custom_claims = user_record.custom_claims or {}
-        
-        return {
-            'auth': {
-                'uid': token['uid'],
-                'email': token.get('email'),
-                'email_verified': token.get('email_verified', False),
-                'admin': custom_claims.get('admin', False),
-                'roles': custom_claims.get('roles', [])
-            }
-        }
-
-    @app.post('/adminFlow')
-    @genkit_flask_handler(ai, context_provider=firebase_auth_context_provider)
-    @ai.flow()
-    async def admin_flow(data: str, ctx):
-        # Check authentication and authorization
-        auth = ctx.context.get('auth')
-        if not auth:
-            raise GenkitError(status='UNAUTHENTICATED', message='Authentication required')
-        
-        if not auth.get('email_verified'):
-            raise GenkitError(status='PERMISSION_DENIED', message='Email verification required')
-        
-        if not auth.get('admin'):
-            raise GenkitError(status='PERMISSION_DENIED', message='Admin access required')
-
-        # Flow logic here
-        return await ai.generate(prompt=f'Admin task: {data}')
-    ```
-</LanguageContent>
-
-### App Check Integration
-
-<LanguageContent lang="js">
 ```ts
-    export const secureFlow = onCallGenkit(
-      {
-        // Enable App Check enforcement
-        enforceAppCheck: true,
-        
-        // Optional: Consume tokens for replay protection
-        consumeAppCheckToken: true,
-        
-        // Combine with authentication
-        authPolicy: signedIn(),
-      },
-      myFlow
-    );
+import { onCallGenkit } from 'firebase-functions/https';
+
+export generatePoem = onCallGenkit(generatePoemFlow);
+```
+
+### Define an authorization policy
+
+All deployed flows, whether deployed to Firebase or not, should have an
+authorization policy; without one, anyone can invoke your potentially-expensive
+generative AI flows. To define an authorization policy, use the
+`authPolicy` parameter of `onCallGenkit`:
+
+```ts
+export const generatePoem = onCallGenkit(
+  {
+    authPolicy: (auth) => auth?.token?.email_verified,
+  },
+  generatePoemFlow,
+);
+```
+
+This sample uses a manual function as its auth policy. In addition, the https
+library exports the `signedIn()` and `hasClaim()` helpers. Here is the same code
+using one of those helpers:
+
+```ts
+import { hasClaim } from 'firebase-functions/https';
+
+export const generatePoem = onCallGenkit(
+  {
+    authPolicy: hasClaim('email_verified'),
+  },
+  generatePoemFlow,
+);
+```
+
+### Make API credentials available to deployed flows
+
+Once deployed, your flows need some way to authenticate with any remote services
+they rely on. Most flows need, at a minimum, credentials for accessing the
+model API service they use.
+
+For this example, do one of the following, depending on the model provider you chose:
+
+<Tabs syncKey="model-provider">
+  <TabItem label="Gemini (Google AI)">
+    1.  Make sure Google AI is [available in your region](https://ai.google.dev/available_regions).
+
+    2.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
+        Gemini API using Google AI Studio.
+
+    3.  Store your API key in Cloud Secret Manager:
+
+        ```bash
+        firebase functions:secrets:set GEMINI_API_KEY
+        ```
+
+        This step is important to prevent accidentally leaking your API key,
+        which grants access to a potentially metered service.
+
+        See [Store and access sensitive configuration information](https://firebase.google.com/docs/functions/config-env?gen=2nd#secret-manager)
+        for more information on managing secrets.
+
+    4.  Edit `src/index.ts` and add the following after the existing imports:
+
+        ```ts
+        import { defineSecret } from "firebase-functions/params";
+        const googleAIapiKey = defineSecret("GEMINI_API_KEY");
+        ```
+
+        Then, in the flow definition, declare that the cloud function needs
+        access to this secret value:
+
+        ```ts
+        export const generatePoem = onCallGenkit(
+          {
+            secrets: [googleAIapiKey],
+          },
+          generatePoemFlow
+        );
+        ```
+
+    Now, when you deploy this function, your API key is stored in Cloud Secret Manager, and available from the Cloud Functions environment.
+
+  </TabItem>
+  <TabItem label="Gemini (Vertex AI)">
+    1.  In the Cloud console, [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
+        for your Firebase project.
+
+    2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
+        page, ensure that the **Default compute service account** is granted the
+        **Vertex AI User** role.
+
+  </TabItem>
+</Tabs>
+
+The only secret you need to set up for this tutorial is for the model provider,
+but in general, you must do something similar for each service your flow uses.
+
+### Add App Check enforcement
+
+[Firebase App Check](https://firebase.google.com/docs/app-check) uses a
+built-in attestation mechanism to verify that your API is only being called by
+your application. `onCallGenkit` supports App Check enforcement declaratively.
+
+```ts
+export const generatePoem = onCallGenkit(
+  {
+    enforceAppCheck: true,
+    // Optional. Makes App Check tokens only usable once. This adds extra security
+    // at the expense of slowing down your app to generate a token for every API
+    // call
+    consumeAppCheckToken: true,
+  },
+  generatePoemFlow,
+);
+```
+
+### Set a CORS policy
+
+Callable functions default to allowing any domain to call your function. If you
+want to customize the domains that can do this, use the `cors` option.
+With proper authentication (especially App Check), CORS is often unnecessary.
+
+```ts
+export const generatePoem = onCallGenkit(
+  {
+    cors: 'mydomain.com',
+  },
+  generatePoemFlow,
+);
+```
+
+### Complete example
+
+After you've made all of the changes described earlier, your deployable flow
+looks something like the following example:
+
+```ts
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/googleai';
+import { onCallGenkit, hasClaim } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
+
+const apiKey = defineSecret('GEMINI_API_KEY');
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.5-flash'),
+});
+
+const generatePoemFlow = ai.defineFlow(
+  {
+    name: 'generatePoem',
+    inputSchema: z.object({ subject: z.string() }),
+    outputSchema: z.object({ poem: z.string() }),
+  },
+  async ({ subject }) => {
+    const { text } = await ai.generate(`Compose a poem about ${subject}.`);
+    return { poem: text };
+  },
+);
+
+export const generatePoem = onCallGenkit(
+  {
+    secrets: [apiKey],
+    authPolicy: hasClaim('email_verified'),
+    enforceAppCheck: true,
+  },
+  generatePoemFlow,
+);
+```
+
+## 3. Deploy flows to Firebase
+
+After you've defined flows using `onCallGenkit`, you can deploy them the same
+way you would deploy other Cloud Functions:
+
+```bash
+cd $PROJECT_ROOT
+
+firebase deploy --only functions
+```
+
+You've now deployed the flow as a Cloud Function! But you can't
+access your deployed endpoint with `curl` or similar, because of the flow's
+authorization policy. The next section explains how to securely access the
+flow.
+
+## Optional: Try the deployed flow
+
+To try out your flow endpoint, you can deploy the following minimal example web
+app:
+
+1.  In the [Project settings](https://console.firebase.google.com/project/_/settings/general)
+    section of the Firebase console, add a new web app, selecting the option to
+    also set up Hosting.
+
+1.  In the
+    [Authentication](https://console.firebase.google.com/project/_/authentication/providers)
+    section of the Firebase console, enable the **Google** provider, used in
+    this example.
+
+1.  In your project directory, set up Firebase Hosting, where you will deploy
+    the sample app:
+
+    ```bash
+    cd $PROJECT_ROOT
+
+    firebase init hosting
     ```
 
-    **Client-side App Check setup**:
+    Accept the defaults for all of the prompts.
+
+1.  Replace `public/index.html` with the following:
+
     ```html
-    <script type="module">
-      import { initializeApp } from 'firebase/app';
-      import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
-
-      const app = initializeApp(firebaseConfig);
-      
-      // Initialize App Check
-      const appCheck = initializeAppCheck(app, {
-        provider: new ReCaptchaV3Provider('your-recaptcha-site-key'),
-        isTokenAutoRefreshEnabled: true
-      });
-    </script>
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```go
-    // App Check verification middleware
-    func appCheckMiddleware() func(http.Handler) http.Handler {
-        return func(next http.Handler) http.Handler {
-            return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                appCheckToken := r.Header.Get("X-Firebase-AppCheck")
-                if appCheckToken == "" {
-                    http.Error(w, "Missing App Check token", http.StatusUnauthorized)
-                    return
-                }
-
-                // Verify App Check token with Firebase Admin SDK
-                // Implementation depends on your specific setup
-                
-                next.ServeHTTP(w, r)
-            })
-        }
-    }
-
-    // Apply to protected routes
-    mux.Handle("POST /secureFlow", 
-        appCheckMiddleware()(
-            firebaseAuthMiddleware(authClient)(
-                genkit.Handler(secureFlow))))
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```python
-    from firebase_admin import app_check
-
-    def verify_app_check_token(request):
-        """Verify Firebase App Check token"""
-        app_check_token = request.headers.get('X-Firebase-AppCheck')
-        if not app_check_token:
-            return False
-        
-        try:
-            # Verify the App Check token
-            app_check.verify_token(app_check_token)
-            return True
-        except Exception:
-            return False
-
-    async def secure_context_provider(request):
-        """Context provider with App Check verification"""
-        # Verify App Check first
-        if not verify_app_check_token(request):
-            raise GenkitError(status='PERMISSION_DENIED', message='App Check verification failed')
-        
-        # Then verify Firebase Auth
-        token = verify_firebase_token(request)
-        if not token:
-            raise GenkitError(status='UNAUTHENTICATED', message='Authentication required')
-        
-        return {
-            'auth': {
-                'uid': token['uid'],
-                'email': token.get('email'),
-                'email_verified': token.get('email_verified', False)
-            },
-            'app_check_verified': True
-        }
-    ```
-</LanguageContent>
-
-## Secrets Management
-
-<LanguageContent lang="js">
-**Set up secrets**:
-    ```bash
-    # Store API key in Firebase Functions secrets
-    firebase functions:secrets:set GEMINI_API_KEY
-    ```
-
-    **Use in functions**:
-    ```ts
-    import { defineSecret } from 'firebase-functions/params';
-
-    const geminiApiKey = defineSecret('GEMINI_API_KEY');
-    const openaiApiKey = defineSecret('OPENAI_API_KEY');
-
-    export const multiModelFlow = onCallGenkit(
-      {
-        secrets: [geminiApiKey, openaiApiKey],
-        authPolicy: signedIn(),
-      },
-      myFlow
-    );
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-**Use Google Secret Manager**:
-    ```go
-    import (
-        secretmanager "cloud.google.com/go/secretmanager/apiv1"
-        "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
-    )
-
-    func getSecret(ctx context.Context, projectID, secretID string) (string, error) {
-        client, err := secretmanager.NewClient(ctx)
-        if err != nil {
-            return "", err
-        }
-        defer client.Close()
-
-        req := &secretmanagerpb.AccessSecretVersionRequest{
-            Name: fmt.Sprintf("projects/%s/secrets/%s/versions/latest", projectID, secretID),
-        }
-
-        result, err := client.AccessSecretVersion(ctx, req)
-        if err != nil {
-            return "", err
-        }
-
-        return string(result.Payload.Data), nil
-    }
-
-    // Use in your application
-    func main() {
-        ctx := context.Background()
-        
-        apiKey, err := getSecret(ctx, "your-project-id", "gemini-api-key")
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        g, err := genkit.Init(ctx,
-            genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
-        )
-    }
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-**Use Google Secret Manager**:
-    ```python
-    from google.cloud import secretmanager
-
-    def get_secret(project_id: str, secret_id: str) -> str:
-        """Retrieve secret from Google Secret Manager"""
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
-        
-        response = client.access_secret_version(request={"name": name})
-        return response.payload.data.decode("UTF-8")
-
-    # Use in your application
-    GEMINI_API_KEY = get_secret("your-project-id", "gemini-api-key")
-
-    ai = Genkit(
-        plugins=[GoogleGenAI(api_key=GEMINI_API_KEY)],
-        model=google_genai_name('gemini-2.5-flash'),
-    )
-    ```
-</LanguageContent>
-
-## Deployment
-
-<LanguageContent lang="js">
-**Deploy to Firebase Functions**:
-    ```bash
-    # Deploy all functions
-    firebase deploy --only functions
-
-    # Deploy specific function
-    firebase deploy --only functions:generatePoem
-
-    # Deploy with environment
-    firebase use production
-    firebase deploy --only functions
-    ```
-
-    **Test deployed function**:
-    ```bash
-    # Get function URL
-    firebase functions:config:get
-
-    # Test with curl
-    curl -X POST https://your-region-your-project.cloudfunctions.net/generatePoem \
-      -H "Authorization: Bearer $(firebase auth:print-access-token)" \
-      -H "Content-Type: application/json" \
-      -d '{"data": {"subject": "mountains"}}'
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-**Deploy to Cloud Run with Firebase integration**:
-    ```bash
-    # Build and deploy
-    gcloud run deploy genkit-firebase-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id
-
-    # Test deployed service
-    curl -X POST https://genkit-firebase-app-hash-uc.a.run.app/generatePoem \
-      -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-      -H "Content-Type: application/json" \
-      -d '{"subject": "mountains"}'
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-**Deploy to Cloud Run with Firebase integration**:
-    ```bash
-    # Create requirements.txt
-    echo "genkit
-    genkit-plugin-google-genai
-    genkit-plugin-flask
-    firebase-admin
-    flask" > requirements.txt
-
-    # Deploy
-    gcloud run deploy genkit-firebase-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id
-
-    # Test deployed service
-    curl -X POST https://genkit-firebase-app-hash-uc.a.run.app/generatePoem \
-      -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-      -H "Content-Type: application/json" \
-      -d '{"data": "mountains"}'
-    ```
-</LanguageContent>
-
-## Client Integration
-
-### Web Client
-
-<LanguageContent lang="js">
-```html
     <!DOCTYPE html>
     <html>
-    <head>
-        <title>Genkit Firebase App</title>
-    </head>
-    <body>
+      <head>
+        <title>Genkit demo</title>
+      </head>
+      <body>
         <div id="signin" hidden>
-            <button id="signinBtn">Sign in with Google</button>
+          <button id="signinBtn">Sign in with Google</button>
         </div>
-        <div id="app" hidden>
-            <input type="text" id="subject" placeholder="Poem subject">
-            <button id="generateBtn">Generate Poem</button>
-            <div id="result"></div>
+        <div id="callGenkit" hidden>
+          Subject: <input type="text" id="subject" />
+          <button id="generatePoem">Compose a poem on this subject</button>
+          <p id="generatedPoem"></p>
         </div>
-
         <script type="module">
-            import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.0.0/firebase-app.js';
-            import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from 'https://www.gstatic.com/firebasejs/10.0.0/firebase-auth.js';
-            import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.0.0/firebase-functions.js';
-            import { initializeAppCheck, ReCaptchaV3Provider } from 'https://www.gstatic.com/firebasejs/10.0.0/firebase-app-check.js';
+          import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js';
+          import {
+            getAuth,
+            onAuthStateChanged,
+            GoogleAuthProvider,
+            signInWithPopup,
+          } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js';
+          import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-functions.js';
 
-            const firebaseConfig = {
-                // Your config
-            };
+          const firebaseConfig = await fetch('/__/firebase/init.json');
+          initializeApp(await firebaseConfig.json());
 
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const functions = getFunctions(app);
+          async function generatePoem() {
+            const poemFlow = httpsCallable(getFunctions(), 'generatePoem');
+            const subject = document.querySelector('#subject').value;
+            const response = await poemFlow({ subject });
+            document.querySelector('#generatedPoem').innerText = response.data.poem;
+          }
 
-            // Initialize App Check
-            const appCheck = initializeAppCheck(app, {
-                provider: new ReCaptchaV3Provider('your-recaptcha-site-key'),
-                isTokenAutoRefreshEnabled: true
-            });
+          function signIn() {
+            signInWithPopup(getAuth(), new GoogleAuthProvider());
+          }
 
-            const generatePoem = httpsCallable(functions, 'generatePoem');
+          document.querySelector('#signinBtn').addEventListener('click', signIn);
+          document.querySelector('#generatePoem').addEventListener('click', generatePoem);
 
-            document.getElementById('signinBtn').addEventListener('click', () => {
-                signInWithPopup(auth, new GoogleAuthProvider());
-            });
+          const signinEl = document.querySelector('#signin');
+          const genkitEl = document.querySelector('#callGenkit');
 
-            document.getElementById('generateBtn').addEventListener('click', async () => {
-                const subject = document.getElementById('subject').value;
-                try {
-                    const result = await generatePoem({ subject });
-                    document.getElementById('result').textContent = result.data.poem;
-                } catch (error) {
-                    console.error('Error:', error);
-                }
-            });
-
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    document.getElementById('signin').hidden = true;
-                    document.getElementById('app').hidden = false;
-                } else {
-                    document.getElementById('signin').hidden = false;
-                    document.getElementById('app').hidden = true;
-                }
-            });
+          onAuthStateChanged(getAuth(), (user) => {
+            if (!user) {
+              signinEl.hidden = false;
+              genkitEl.hidden = true;
+            } else {
+              signinEl.hidden = true;
+              genkitEl.hidden = false;
+            }
+          });
         </script>
-    </body>
+      </body>
     </html>
     ```
-</LanguageContent>
 
-<LanguageContent lang="go">
-```javascript
-    // Client-side JavaScript for Go backend
-    import { initializeApp } from 'firebase/app';
-    import { getAuth, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+1.  Deploy the web app and Cloud Function:
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-
-    async function callGenkitFlow(subject) {
-        const user = auth.currentUser;
-        if (!user) {
-            throw new Error('User not authenticated');
-        }
-
-        const idToken = await user.getIdToken();
-        
-        const response = await fetch('https://your-cloud-run-url/generatePoem', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${idToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ subject }),
-        });
-
-        if (!response.ok) {
-            throw new Error('Request failed');
-        }
-
-        return response.json();
-    }
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```javascript
-    // Client-side JavaScript for Python backend
-    import { initializeApp } from 'firebase/app';
-    import { getAuth, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-
-    async function callGenkitFlow(subject) {
-        const user = auth.currentUser;
-        if (!user) {
-            throw new Error('User not authenticated');
-        }
-
-        const idToken = await user.getIdToken();
-        
-        const response = await fetch('https://your-cloud-run-url/generatePoem', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${idToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ data: subject }),
-        });
-
-        if (!response.ok) {
-            throw new Error('Request failed');
-        }
-
-        return response.json();
-    }
-    ```
-</LanguageContent>
-
-## Local Development
-
-<LanguageContent lang="js">
-**Firebase Emulator Suite**:
     ```bash
-    # Start emulators with Genkit
-    genkit start -- firebase emulators:start --inspect-functions
+    cd $PROJECT_ROOT
 
-    # Or start separately
-    firebase emulators:start
-    genkit start -- npm run serve
+    firebase deploy
     ```
 
-    **Environment setup**:
-    ```bash
-    # Set up local environment
-    export GEMINI_API_KEY=your-api-key
-    export GOOGLE_CLOUD_PROJECT=your-project-id
-    ```
+Open the web app by visiting the URL printed by the `deploy` command. The app
+requires you to sign in with a Google account, after which you can initiate
+endpoint requests.
+
+## Optional: Run flows in the developer UI
+
+You can run flows defined using `onCallGenkit` in the developer UI, exactly the
+same way as you run flows defined using `defineFlow`, so there's no need to
+switch between the two between deployment and development.
+
+```bash
+cd $PROJECT_ROOT/functions
+
+genkit start -- npx tsx --watch src/index.ts
+```
+
+or
+
+```bash
+cd $PROJECT_ROOT/functions
+
+npm run genkit:start
+```
+
+You can now navigate to the URL printed by the `genkit start` command to access.
+
+## Optional: Developing using Firebase Local Emulator Suite
+
+Firebase offers a
+[suite of emulators for local development](https://firebase.google.com/docs/emulator-suite), which you can
+use with Genkit.
+
+To use the Genkit Dev UI with the Firebase Emulator Suite, start the Firebase
+emulators as follows:
+
+```bash
+genkit start -- firebase emulators:start --inspect-functions
+```
+
+This command runs your code in the emulator, and runs the Genkit framework in
+development mode. This launches and exposes the Genkit reflection API (but not
+the Dev UI).
+
 </LanguageContent>
-
-<LanguageContent lang="go">
-**Local development**:
-    ```bash
-    # Set up environment
-    export GOOGLE_CLOUD_PROJECT=your-project-id
-    export GEMINI_API_KEY=your-api-key
-    gcloud auth application-default login
-
-    # Start with Genkit dev UI
-    genkit start -- go run .
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-**Local development**:
-    ```bash
-    # Set up environment
-    export GOOGLE_CLOUD_PROJECT=your-project-id
-    export GEMINI_API_KEY=your-api-key
-    export GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
-
-    # Start with Genkit dev UI
-    genkit start -- python main.py
-    ```
-</LanguageContent>
-
-## Best Practices
-
-### Security
-1. **Always use authentication** for production deployments
-2. **Enable App Check** for client integrity verification
-3. **Use Firebase Security Rules** for Firestore access control
-4. **Store secrets securely** using Firebase Functions secrets or Secret Manager
-5. **Validate input data** in your flows
-
-### Performance
-1. **Optimize cold starts** by minimizing dependencies
-2. **Use connection pooling** for database connections
-3. **Implement caching** for frequently accessed data
-4. **Monitor function performance** using Firebase Performance Monitoring
-
-### Cost Management
-1. **Set up billing alerts** to monitor costs
-2. **Use appropriate timeout values** for functions
-3. **Implement rate limiting** to prevent abuse
-4. **Monitor function invocations** and optimize accordingly
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Authentication errors**:
-   - Verify Firebase project configuration
-   - Check that users have verified emails
-   - Ensure proper token handling
-
-2. **App Check failures**:
-   - Verify reCAPTCHA configuration
-   - Check App Check token generation
-   - Ensure proper client-side setup
-
-3. **Secret access issues**:
-   - Verify secret names and permissions
-   - Check service account roles
-   - Ensure secrets are properly configured
-
-## Next Steps
-
-- Learn about [Cloud Run deployment](/docs/deployment/cloud-run) for more flexible hosting
-- Explore [authorization patterns](/docs/deployment/authorization) for advanced security
-- Check out [monitoring and observability](/docs/observability-monitoring) for production insights

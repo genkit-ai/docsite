@@ -12,188 +12,262 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
   <CopyMarkdownButton />
 </div>
 
-Google Cloud Run provides a fully managed serverless platform for deploying Genkit flows as containerized applications. Cloud Run automatically scales your applications based on traffic and provides excellent performance with pay-per-use pricing.
-
-## Key Features
-
-- **Fully managed**: No infrastructure management required
-- **Automatic scaling**: Scales to zero when not in use
-- **Container-based**: Deploy any language or runtime
-- **Global availability**: Deploy to multiple regions
-- **Custom domains**: Support for custom domain mapping
-- **Traffic splitting**: Blue-green deployments and gradual rollouts
-
-## Prerequisites
-
-- Google Cloud project with billing enabled
-- Google Cloud CLI installed and configured
-- Docker installed (for custom containers)
-- Familiarity with [Genkit flows](/docs/flows)
-
-## Setup
-
-### Google Cloud Project Setup
-
 <LanguageContent lang="js">
-1. **Set up Google Cloud CLI**:
-       ```bash
-       gcloud auth login
-       gcloud config set project your-project-id
-       gcloud services enable run.googleapis.com
-       ```
 
-    2. **Create project directory**:
-       ```bash
-       mkdir my-genkit-cloudrun-app
-       cd my-genkit-cloudrun-app
-       npm init -y
-       ```
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-    3. **Install dependencies**:
-       ```bash
-       npm install genkit @genkit-ai/googleai @genkit-ai/express
-       npm install --save-dev typescript tsx
-       ```
+You can deploy Genkit flows as HTTPS endpoints using Cloud Run. Cloud Run has
+several deployment options, including container based deployment; this page
+explains how to deploy your flows directly from code.
+
+## Before you begin
+
+- Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+- You should be familiar with Genkit's concept of [flows](/docs/flows), and how to
+  write them. This page assumes that you already have flows that you want to
+  deploy.
+- It would be helpful, but not required, if you've already used Google Cloud
+  and Cloud Run before.
+
+## 1. Set up a Google Cloud project
+
+If you don't already have a Google Cloud project set up, follow these steps:
+
+1.  Create a new Google Cloud project using the
+    [Cloud console](https://console.cloud.google.com) or choose an existing one.
+
+1.  Link the project to a billing account, which is required for Cloud Run.
+
+1.  Configure the Google Cloud CLI to use your project:
+
+    ```bash
+    gcloud init
+    ```
+
+## 2. Prepare your Node project for deployment
+
+For your flows to be deployable, you will need to make some small changes to
+your project code:
+
+### Add start and build scripts to package.json
+
+When deploying a Node.js project to Cloud Run, the deployment tools expect your
+project to have a `start` script and, optionally, a `build` script. For a
+typical TypeScript project, the following scripts are usually adequate:
+
+```json
+"scripts": {
+  "start": "node lib/index.js",
+  "build": "tsc"
+},
+```
+
+### Add code to configure and start the flow server
+
+In the file that's run by your `start` script, add a call to `startFlowServer`.
+This method will start an Express server set up to serve your flows as web
+endpoints.
+
+When you make the call, specify the flows you want to serve:
+
+There is also:
+
+```ts
+import { startFlowServer } from '@genkit-ai/express';
+
+startFlowServer({
+  flows: [menuSuggestionFlow],
+});
+```
+
+There are also some optional parameters you can specify:
+
+- `port`: the network port to listen on. If unspecified, the server listens on
+  the port defined in the PORT environment variable, and if PORT is not set,
+  defaults to 3400.
+- `cors`: the flow server's
+  [CORS policy](https://www.npmjs.com/package/cors#configuration-options).
+  If you will be accessing these endpoints from a web application, you likely
+  need to specify this.
+- `pathPrefix`: an optional path prefix to add before your flow endpoints.
+- `jsonParserOptions`: options to pass to Express's
+  [JSON body parser](https://www.npmjs.com/package/body-parser#bodyparserjsonoptions)
+
+### Optional: Define an authorization policy
+
+All deployed flows should require some form of authorization; otherwise, your potentially-expensive generative AI flows would be invocable by anyone.
+
+When you deploy your flows with Cloud Run, you have two options for
+authorization:
+
+- **Cloud IAM-based authorization**: Use Google Cloud's native access management
+  facilities to gate access to your endpoints. For information on providing
+  these credentials, see
+  [Authentication](https://cloud.google.com/run/js/authenticating/overview)
+  in the Cloud Run docs.
+
+- **Authorization policy defined in code**: Use the authorization policy feature
+  of the Genkit express plugin to verify authorization info using custom code.
+  This is often, but not necessarily, token-based authorization.
+
+If you want to define an authorization policy in code, use the `authPolicy`
+parameter in the flow definition:
+
+```ts
+// middleware for handling auth tokens in headers.
+const authMiddleware = async (req, resp, next) => {
+  // parse auth headers and convert to auth object.
+  (req as RequestWithAuth).auth = {
+    user: await verifyAuthToken(req.header('authorization')),
+  };
+  next();
+};
+
+app.post(
+  '/simpleFlow',
+  authMiddleware,
+  expressHandler(simpleFlow, {
+    authPolicy: ({ auth }) => {
+      if (!auth.user) {
+        throw new Error('not authorized');
+      }
+    },
+  }),
+);
+```
+
+The `auth` parameter of the authorization policy comes from the `auth` property
+of the request object. You typically set this property using Express middleware.
+See
+[Authorization and integrity](/docs/deployment/authorization).
+
+Refer to [express plugin documentation](https://js.api.genkit.dev/modules/_genkit-ai_express.html)
+for more details.
+
+### Make API credentials available to deployed flows
+
+Once deployed, your flows need some way to authenticate with any remote services
+they rely on. Most flows will at a minimum need credentials for accessing the
+model API service they use.
+
+For this example, do one of the following, depending on the model provider you
+chose:
+
+<Tabs syncKey="model-provider">
+  <TabItem label="Gemini (Google AI)">
+    1.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
+        Gemini API using Google AI Studio.
+
+    2.  Make the API key available in the Cloud Run environment:
+
+        1.  In the Cloud console, enable the
+            [Secret Manager API](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com?project=_).
+        2.  On the [Secret Manager](https://console.cloud.google.com/security/secret-manager?project=_)
+            page, create a new secret containing your API key.
+        3.  After you create the secret, on the same page, grant your default
+            compute service account access to the secret with the **Secret
+            Manager Secret Accessor** role. (You can look up the name of the
+            default compute service account on the IAM page.)
+
+        In a later step, when you deploy your service, you will need to
+        reference the name of this secret.
+
+  </TabItem>
+  <TabItem label="Gemini (Vertex AI)">
+    1.  In the Cloud console,
+        [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
+        for your project.
+
+    2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
+        page, ensure that the **Default compute service account** is granted the
+        **Vertex AI User** role.
+
+  </TabItem>
+</Tabs>
+
+The only secret you need to set up for this tutorial is for the model provider,
+but in general, you must do something similar for each service your flow uses.
+
+## 3. Deploy flows to Cloud Run
+
+After you've prepared your project for deployment, you can deploy it using the
+`gcloud` tool.
+
+<Tabs syncKey="model-provider">
+  <TabItem label="Gemini (Google AI)">
+    ```bash
+    gcloud run deploy --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
+    ```
+  </TabItem>
+  <TabItem label="Gemini (Vertex AI)">
+    ```bash
+    gcloud run deploy
+    ```
+  </TabItem>
+</Tabs>
+
+The deployment tool will prompt you for any information it requires.
+
+When asked if you want to allow unauthenticated invocations:
+
+- Answer `Y` if you're not using IAM and have instead defined an authorization
+  policy in code.
+- Answer `N` to configure your service to require IAM credentials.
+
+## Optional: Try the deployed flow
+
+After deployment finishes, the tool will print the service URL. You can test
+it with `curl`:
+
+```bash
+curl -X POST https://<service-url>/menuSuggestionFlow \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" -d '{"data": "banana"}'
+```
+
 </LanguageContent>
 
 <LanguageContent lang="go">
-1. **Set up Google Cloud CLI**:
-       ```bash
-       gcloud auth login
-       gcloud config set project your-project-id
-       gcloud services enable run.googleapis.com
-       ```
 
-    2. **Create Go module**:
-       ```bash
-       mkdir my-genkit-cloudrun-app
-       cd my-genkit-cloudrun-app
-       go mod init example/cloudrun-app
-       ```
+You can deploy Genkit flows as web services using Cloud Run. This page,
+as an example, walks you through the process of deploying the default sample
+flow.
 
-    3. **Install dependencies**:
-       ```bash
-       go get github.com/firebase/genkit/go
-       go get github.com/firebase/genkit/go/plugins/googlegenai
-       go get github.com/firebase/genkit/go/plugins/server
-       ```
-</LanguageContent>
+1.  Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) if
+    you haven't already.
 
-<LanguageContent lang="python">
-1. **Set up Google Cloud CLI**:
-       ```bash
-       gcloud auth login
-       gcloud config set project your-project-id
-       gcloud services enable run.googleapis.com
-       ```
+2.  Create a new Google Cloud project using the
+    [Cloud console](https://console.cloud.google.com) or choose an existing one.
+    The project must be linked to a billing account.
 
-    2. **Create Python project**:
-       ```bash
-       mkdir my-genkit-cloudrun-app
-       cd my-genkit-cloudrun-app
-       python -m venv venv
-       source venv/bin/activate  # On Windows: venv\Scripts\activate
-       ```
+    After you create or choose a project, configure the Google Cloud CLI to use
+    it:
 
-    3. **Install dependencies**:
-       ```bash
-       pip install genkit genkit-plugin-google-genai genkit-plugin-flask flask
-       ```
-</LanguageContent>
+    ```bash
+    gcloud auth login
 
-## Implementation
-
-### Basic Application Setup
-
-<LanguageContent lang="js">
-Create `src/index.ts`:
-
-    ```ts
-    import { genkit, z } from 'genkit';
-    import { googleAI } from '@genkit-ai/googleai';
-    import { startFlowServer } from '@genkit-ai/express';
-
-    const ai = genkit({
-      plugins: [googleAI()],
-      model: googleAI.model('gemini-2.5-flash'),
-    });
-
-    // Define your flows
-    const generateJokeFlow = ai.defineFlow(
-      {
-        name: 'generateJoke',
-        inputSchema: z.object({ topic: z.string() }),
-        outputSchema: z.object({ joke: z.string() }),
-      },
-      async ({ topic }) => {
-        const { text } = await ai.generate(
-          `Tell a funny joke about ${topic}. Keep it clean and family-friendly.`
-        );
-        return { joke: text };
-      }
-    );
-
-    const summarizeFlow = ai.defineFlow(
-      {
-        name: 'summarize',
-        inputSchema: z.object({ text: z.string() }),
-        outputSchema: z.object({ summary: z.string() }),
-      },
-      async ({ text }) => {
-        const { text: summary } = await ai.generate(
-          `Summarize the following text in 2-3 sentences: ${text}`
-        );
-        return { summary };
-      }
-    );
-
-    // Start the flow server
-    startFlowServer({
-      flows: [generateJokeFlow, summarizeFlow],
-      port: parseInt(process.env.PORT || '3400'),
-      cors: {
-        origin: true, // Allow all origins in development
-        credentials: true,
-      },
-    });
-
-    console.log(`Server running on port ${process.env.PORT || 3400}`);
+    gcloud init
     ```
 
-    Create `package.json` scripts:
+3.  Create a directory for the Genkit sample project:
 
-    ```json
-    {
-      "scripts": {
-        "build": "tsc",
-        "start": "node lib/index.js",
-        "dev": "tsx src/index.ts"
-      }
-    }
+    ```bash
+    mkdir -p ~/tmp/genkit-cloud-project
+
+    cd ~/tmp/genkit-cloud-project
     ```
 
-    Create `tsconfig.json`:
+    If you're going to use an IDE, open it to this directory.
 
-    ```json
-    {
-      "compilerOptions": {
-        "target": "ES2020",
-        "module": "commonjs",
-        "outDir": "./lib",
-        "rootDir": "./src",
-        "strict": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true
-      },
-      "include": ["src/**/*"],
-      "exclude": ["node_modules", "lib"]
-    }
+4.  Initialize a Go module in your project directory:
+
+    ```bash
+    go mod init example/cloudrun
+
+    go mod get github.com/firebase/genkit/go
     ```
-</LanguageContent>
 
-<LanguageContent lang="go">
-Create `main.go`:
+5.  Create a sample app using Genkit:
 
     ```go
     package main
@@ -214,377 +288,196 @@ Create `main.go`:
     func main() {
         ctx := context.Background()
 
-        // Initialize Genkit
+        // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
+        // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-2.5-flash"
+        // to use Vertex AI as the provider instead.
         g, err := genkit.Init(ctx,
             genkit.WithPlugins(&googlegenai.GoogleAI{}),
             genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
         )
         if err != nil {
-            log.Fatalf("failed to initialize Genkit: %v", err)
+            log.Fatalf("failed to initialize Genkit: %w", err)
         }
 
-        // Define flows
-        jokeFlow := genkit.DefineFlow(g, "generateJoke", 
-            func(ctx context.Context, input struct{ Topic string }) (struct{ Joke string }, error) {
-                resp, err := genkit.Generate(ctx, g,
-                    ai.WithPrompt("Tell a funny joke about %s. Keep it clean and family-friendly.", input.Topic),
-                )
-                if err != nil {
-                    return struct{ Joke string }{}, fmt.Errorf("failed to generate joke: %w", err)
-                }
-                return struct{ Joke string }{Joke: resp.Text()}, nil
-            })
+        flow := genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+            resp, err := genkit.Generate(ctx, g,
+                ai.WithPrompt(`Tell a short joke about %s. Be creative!`, topic),
+            )
+            if err != nil {
+                return "", fmt.Errorf("failed to generate joke: %w", err)
+            }
 
-        summarizeFlow := genkit.DefineFlow(g, "summarize",
-            func(ctx context.Context, input struct{ Text string }) (struct{ Summary string }, error) {
-                resp, err := genkit.Generate(ctx, g,
-                    ai.WithPrompt("Summarize the following text in 2-3 sentences: %s", input.Text),
-                )
-                if err != nil {
-                    return struct{ Summary string }{}, fmt.Errorf("failed to summarize: %w", err)
-                }
-                return struct{ Summary string }{Summary: resp.Text()}, nil
-            })
-
-        // Set up HTTP routes
-        mux := http.NewServeMux()
-        
-        // Add CORS middleware
-        corsHandler := func(h http.Handler) http.Handler {
-            return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                w.Header().Set("Access-Control-Allow-Origin", "*")
-                w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-                
-                if r.Method == "OPTIONS" {
-                    w.WriteHeader(http.StatusOK)
-                    return
-                }
-                
-                h.ServeHTTP(w, r)
-            })
-        }
-
-        mux.Handle("POST /generateJoke", corsHandler(genkit.Handler(jokeFlow)))
-        mux.Handle("POST /summarize", corsHandler(genkit.Handler(summarizeFlow)))
-
-        // Health check endpoint
-        mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-            w.WriteHeader(http.StatusOK)
-            w.Write([]byte("OK"))
+            return resp.Text(), nil
         })
 
-        port := os.Getenv("PORT")
-        if port == "" {
-            port = "8080"
-        }
-
-        log.Printf("Server starting on port %s", port)
-        log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
+        mux := http.NewServeMux()
+        mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
+        log.Fatal(server.Start(ctx, "0.0.0.0:"+os.Getenv("PORT"), mux))
     }
     ```
+
+6.  Make API credentials available to your deployed function. Choose which
+    credentials you need based on your choice in the sample above:
+
+    **Gemini (Google AI)**
+
+    1.  Make sure Google AI is
+        [available in your region](https://ai.google.dev/available_regions).
+
+    2.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
+        Gemini API using Google AI Studio.
+
+    3.  Make the API key available in the Cloud Run environment:
+
+        1.  In the Cloud console, enable the
+            [Secret Manager API](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com?project=_).
+        2.  On the
+            [Secret Manager](https://console.cloud.google.com/security/secret-manager?project=_)
+            page, create a new secret containing your API key.
+        3.  After you create the secret, on the same page, grant your default
+            compute service account access to the secret with the
+            **Secret Manager Secret Accessor** role. (You can look up the name
+            of the default compute service account on the IAM page.)
+
+        In a later step, when you deploy your service, you will need to
+        reference the name of this secret.
+
+    **Gemini (Vertex AI)**
+
+    1.  In the Cloud console,
+        [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
+        for your project.
+
+    2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
+        page, ensure that the **Default compute service account** is granted
+        the **Vertex AI User** role.
+
+    The only secret you need to set up for this tutorial is for the model
+    provider, but in general, you must do something similar for each service
+    your flow uses.
+
+7.  **Optional**: Try your flow in the developer UI:
+
+    1.  Set up your local environment for the model provider you chose:
+
+        **Gemini (Google AI)**
+
+        ```bash
+        export GEMINI_API_KEY=<your API key>
+        ```
+
+        **Gemini (Vertex AI)**
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT=<your project ID>
+
+        export GOOGLE_CLOUD_LOCATION=us-central1
+
+        gcloud auth application-default login
+        ```
+
+    2.  Start the UI:
+
+        ```bash
+        genkit start -- go run .
+        ```
+
+    3.  In the developer UI (`http://localhost:4000/`), run the flow:
+
+        1.  Click **jokesFlow**.
+
+        2.  On the **Input JSON** tab, provide a subject for the model:
+
+            ```json
+            "bananas"
+            ```
+
+        3.  Click **Run**.
+
+8.  If everything's working as expected so far, you can build and deploy the
+    flow:
+
+    **Gemini (Google AI)**
+
+    ```bash
+    gcloud run deploy --port 3400 \
+      --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
+    ```
+
+    **Gemini (Vertex AI)**
+
+    ```bash
+    gcloud run deploy --port 3400 \
+      --set-env-vars GOOGLE_CLOUD_PROJECT=<your-gcloud-project> \
+      --set-env-vars GOOGLE_CLOUD_LOCATION=us-central1
+    ```
+
+    (`GOOGLE_CLOUD_LOCATION` configures the Vertex API region you want to
+    use.)
+
+    Choose `N` when asked if you want to allow unauthenticated invocations.
+    Answering `N` will configure your service to require IAM credentials. See
+    [Authentication](https://cloud.google.com/run/docs/authenticating/overview)
+    in the Cloud Run docs for information on providing these credentials.
+
+After deployment finishes, the tool will print the service URL. You can test
+it with `curl`:
+
+```bash
+curl -X POST https://<service-url>/jokesFlow \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" -d '{"data": "bananas"}'
+```
+
 </LanguageContent>
 
 <LanguageContent lang="python">
-Create `main.py`:
 
-    ```python
-    import os
-    from flask import Flask
+You can easily deploy your Genkit app to Cloud Run.
 
-    from genkit.ai import Genkit
-    from genkit.plugins.flask import genkit_flask_handler
-    from genkit.plugins.google_genai import GoogleGenAI, google_genai_name
+For prerequisites and basic scaffolding see [Cloud Run - Python quickstart](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#before-you-begin) documentation.
 
-    # Initialize Genkit
-    ai = Genkit(
-        plugins=[GoogleGenAI()],
-        model=google_genai_name('gemini-2.5-flash'),
+Once you have a simple Cloud Run app set up and ready to go, update the `requirements.txt` to add Genkit libraries. In this example we'll be using the Google GenAI plugin.
+
+```text title="requirements.txt"
+genkit
+genkit-plugin-google-genai
+```
+
+Update you app code to use Genkit.
+
+```python
+import os
+
+from flask import Flask
+
+from genkit.ai import Genkit
+from genkit.plugins.flask import genkit_flask_handler
+from genkit.plugins.google_genai import (
+    GoogleGenai,
+    google_genai_name,
+)
+
+ai = Genkit(
+    plugins=[GoogleGenai()],
+    model=google_genai_name('gemini-2.5-flash'),
+)
+
+app = Flask(__name__)
+
+@app.post('/joke')
+@genkit_flask_handler(ai)
+@ai.flow()
+async def joke(name: str, ctx):
+    return await ai.generate(
+        on_chunk=ctx.send_chunk,
+        prompt=f'tell a medium sized joke about {name}',
     )
 
-    app = Flask(__name__)
-
-    @app.post('/generateJoke')
-    @genkit_flask_handler(ai)
-    @ai.flow()
-    async def generate_joke(topic: str, ctx):
-        response = await ai.generate(
-            on_chunk=ctx.send_chunk,
-            prompt=f'Tell a funny joke about {topic}. Keep it clean and family-friendly.',
-        )
-        return {'joke': response.text}
-
-    @app.post('/summarize')
-    @genkit_flask_handler(ai)
-    @ai.flow()
-    async def summarize(text: str, ctx):
-        response = await ai.generate(
-            on_chunk=ctx.send_chunk,
-            prompt=f'Summarize the following text in 2-3 sentences: {text}',
-        )
-        return {'summary': response.text}
-
-    @app.route('/health')
-    def health_check():
-        return 'OK', 200
-
-    if __name__ == "__main__":
-        port = int(os.environ.get("PORT", 8080))
-        app.run(debug=False, host="0.0.0.0", port=port)
-    ```
-
-    Create `requirements.txt`:
-
-    ```txt
-    genkit
-    genkit-plugin-google-genai
-    genkit-plugin-flask
-    flask
-    gunicorn
-    ```
-</LanguageContent>
-
-## Deployment
-
-### Direct Source Deployment
-
-<LanguageContent lang="js">
-```bash
-    # Deploy directly from source
-    gcloud run deploy genkit-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-
-    # Deploy with custom settings
-    gcloud run deploy genkit-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --memory 1Gi \
-      --cpu 1 \
-      --timeout 300 \
-      --concurrency 100 \
-      --min-instances 0 \
-      --max-instances 10 \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```bash
-    # Deploy Go application
-    gcloud run deploy genkit-go-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-
-    # Deploy with performance optimizations
-    gcloud run deploy genkit-go-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --memory 512Mi \
-      --cpu 1 \
-      --timeout 60 \
-      --concurrency 1000 \
-      --min-instances 1 \
-      --max-instances 100 \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```bash
-    # Deploy Python application
-    gcloud run deploy genkit-python-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-
-    # Deploy with Gunicorn for production
-    gcloud run deploy genkit-python-app \
-      --source . \
-      --platform managed \
-      --region us-central1 \
-      --memory 1Gi \
-      --cpu 2 \
-      --timeout 300 \
-      --concurrency 80 \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=your-project-id \
-      --update-secrets GEMINI_API_KEY=gemini-api-key:latest
-    ```
-
-    **For production, create a `Procfile`**:
-    ```
-    web: gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
-    ```
-</LanguageContent>
-
-## Testing Deployed Services
-
-<LanguageContent lang="js">
-```bash
-    # Get service URL
-    SERVICE_URL=$(gcloud run services describe genkit-app \
-      --platform managed \
-      --region us-central1 \
-      --format 'value(status.url)')
-
-    # Test joke generation
-    curl -X POST $SERVICE_URL/generateJoke \
-      -H "Content-Type: application/json" \
-      -d '{"data": {"topic": "programming"}}'
-
-    # Test with authentication
-    curl -X POST $SERVICE_URL/generateJoke \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-      -d '{"data": {"topic": "programming"}}'
-    ```
-</LanguageContent>
-
-<LanguageContent lang="go">
-```bash
-    # Get service URL
-    SERVICE_URL=$(gcloud run services describe genkit-go-app \
-      --platform managed \
-      --region us-central1 \
-      --format 'value(status.url)')
-
-    # Test joke generation
-    curl -X POST $SERVICE_URL/generateJoke \
-      -H "Content-Type: application/json" \
-      -d '{"topic": "programming"}'
-
-    # Test health endpoint
-    curl $SERVICE_URL/health
-    ```
-</LanguageContent>
-
-<LanguageContent lang="python">
-```bash
-    # Get service URL
-    SERVICE_URL=$(gcloud run services describe genkit-python-app \
-      --platform managed \
-      --region us-central1 \
-      --format 'value(status.url)')
-
-    # Test joke generation
-    curl -X POST $SERVICE_URL/generateJoke \
-      -H "Content-Type: application/json" \
-      -d '{"data": "programming"}'
-
-    # Test streaming response
-    curl -X POST $SERVICE_URL/generateJoke \
-      -H "Content-Type: application/json" \
-      -H "Accept: text/event-stream" \
-      -d '{"data": "programming"}'
-    ```
-</LanguageContent>
-
-## Advanced Configuration
-
-### Traffic Management
-
-```bash
-# Deploy new version without traffic
-gcloud run deploy genkit-app \
-  --source . \
-  --no-traffic \
-  --tag staging
-
-# Gradually shift traffic
-gcloud run services update-traffic genkit-app \
-  --to-tags staging=10
-
-# Complete the rollout
-gcloud run services update-traffic genkit-app \
-  --to-latest
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 ```
 
-### Custom Domains
+Then proceeed with Cloud Run [deployment](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#deploy) instructions.
 
-```bash
-# Map custom domain
-gcloud run domain-mappings create \
-  --service genkit-app \
-  --domain api.yourdomain.com \
-  --region us-central1
-```
-
-### VPC Connector
-
-```bash
-# Create VPC connector
-gcloud compute networks vpc-access connectors create genkit-connector \
-  --region us-central1 \
-  --subnet default \
-  --subnet-project your-project-id
-
-# Deploy with VPC connector
-gcloud run deploy genkit-app \
-  --source . \
-  --vpc-connector genkit-connector \
-  --vpc-egress all-traffic
-```
-
-## Best Practices
-
-### Security
-1. **Never allow unauthenticated access** in production
-2. **Use IAM roles** for service-to-service communication
-3. **Store secrets securely** using Secret Manager
-4. **Implement rate limiting** to prevent abuse
-5. **Use HTTPS only** for all communications
-
-### Performance
-1. **Set appropriate resource limits** based on your workload
-2. **Use minimum instances** for consistent performance
-3. **Implement health checks** for better reliability
-4. **Monitor cold start times** and optimize accordingly
-5. **Use connection pooling** for external services
-
-### Cost Management
-1. **Set maximum instances** to control costs
-2. **Use appropriate CPU and memory** allocations
-3. **Monitor usage** with Cloud Monitoring
-4. **Implement request timeout** to prevent runaway costs
-5. **Use traffic splitting** for gradual rollouts
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Port binding errors**:
-   - Ensure your app listens on `0.0.0.0:$PORT`
-   - Cloud Run sets the PORT environment variable
-
-2. **Memory issues**:
-   - Increase memory allocation if needed
-   - Monitor memory usage in Cloud Monitoring
-
-3. **Timeout errors**:
-   - Increase timeout settings for long-running operations
-   - Implement proper error handling
-
-4. **Secret access issues**:
-   - Verify service account permissions
-   - Check secret names and versions
-
-## Next Steps
-
-- Learn about [any platform deployment](/docs/deployment/any-platform) for maximum flexibility
-- Explore [authorization patterns](/docs/deployment/authorization) for advanced security
-- Check out [monitoring and observability](/docs/observability-monitoring) for production insights
+</LanguageContent>
