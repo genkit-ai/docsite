@@ -42,7 +42,7 @@ const DOCS_SIDEBAR = [
     label: "AI Providers",
     items: [
       { label: "Overview", slug: "docs/plugins/overview" },
-      { label: "Google AI", slug: "docs/plugins/google-ai" },
+      { label: "Google AI", slug: "docs/plugins/google-genai" },
       { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
       { label: "OpenAI", slug: "docs/plugins/openai" },
       { label: "OpenAI-Compatible APIs", slug: "docs/plugins/openai-compatible" },
