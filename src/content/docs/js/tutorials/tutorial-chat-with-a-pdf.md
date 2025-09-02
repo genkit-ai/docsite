@@ -84,7 +84,7 @@ supports a wide variety of model providers, including:
   as well as community plugins.
 - Open source models through
   [Ollama](/js/plugins/ollama).
-- [Community-supported providers](/docs/plugins/overview) such as OpenAI and Cohere.
+- [Community-supported providers](/docs/integrations/overview) such as OpenAI and Cohere.
   :::
 
 ### 2. Import the required dependencies
