@@ -302,7 +302,6 @@ const PYTHON_SIDEBAR = [
 ];
 
 export const sidebar = [
-  { label: "Introduction", slug: "" },
   {
     label: "Genkit JS",
     items: JS_SIDEBAR,

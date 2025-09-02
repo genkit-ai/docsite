@@ -22,21 +22,24 @@ export const languageSelector = {
       id: "nodejs",
       status: "STABLE", 
       active: true,
-      icon: "nodejs"
+      icon: "nodejs",
+      href: "/docs/get-started"
     },
     { 
       name: "Go", 
       id: "go",
       status: "BETA", 
       active: false,
-      icon: "go"
+      icon: "go",
+      href: "/go/docs/get-started-go"
     },
     { 
       name: "Python", 
       id: "python",
       status: "ALPHA", 
       active: false,
-      icon: "python"
+      icon: "python",
+      href: "/python/docs/get-started"
     }
   ],
   codeExamples
@@ -96,7 +99,7 @@ export const exampleShowcase = {
   leftTitle: "Genkit by Example",
   leftBody: "See how Genkit works with Firebase, Angular, Next.js and more in production-ready apps, with pre-built demos and code you can reuse.",
   leftCtaText: "Launch Genkit by Example",
-  leftCtaUrl: "/docs/tutorials",
+  leftCtaUrl: "https://examples.genkit.dev/",
   rightTitle: "Simple Chatbot",
   rightNote: "Create a chatbot with the context of a business via tools and real-time responses.",
   rightCtaText: "Try this example", 
@@ -108,7 +111,7 @@ export const resourceCards = [
   {
     title: "Docs",
     description: "Developer guide, API reference, tutorials",
-    href: "/docs",
+    href: "/docs/get-started",
     icon: "document" as const
   },
   {
