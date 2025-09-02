@@ -54,6 +54,7 @@ const DOCS_SIDEBAR = [
   {
     label: "Database Providers",
     items: [
+      { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
       { label: "Dev Local Vector Store", slug: "docs/integrations/dev-local-vectorstore" },
       { label: "Pinecone", slug: "docs/integrations/pinecone" },
       { label: "ChromaDB", slug: "docs/integrations/chromadb" },
