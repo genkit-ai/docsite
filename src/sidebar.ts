@@ -96,9 +96,9 @@ const DOCS_SIDEBAR = [
   {
     label: "Observability and Monitoring",
     items: [
-      { label: "Overview", slug: "docs/observability/overview" },
-      { label: "Complete Guide", slug: "docs/observability-monitoring" },
+      { label: "Get started with Genkit Monitoring", slug: "docs/observability/getting-started" },
       { label: "Authentication & Setup", slug: "docs/observability/authentication" },
+      { label: "Telemetry Collection", slug: "docs/observability/telemetry-collection" },
       { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
     ],
