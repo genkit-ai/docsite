@@ -41,7 +41,6 @@ const DOCS_SIDEBAR = [
   {
     label: "Model Providers",
     items: [
-      { label: "Overview", slug: "docs/integrations/models-overview" },
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
@@ -101,12 +100,6 @@ const DOCS_SIDEBAR = [
       { label: "Authentication & Setup", slug: "docs/observability/authentication" },
       { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
-    ],
-  },
-  {
-    label: "Templates",
-    items: [
-      { label: "pgvector Retriever", slug: "docs/templates/pgvector-retriever" },
     ],
   },
   {
