@@ -29,7 +29,7 @@ Configure the plugin to use your API key by doing one of the following:
 
   ```go
   if err := (&pinecone.Pinecone{APIKey: pineconeAPIKey}).Init(ctx, g); err != nil {
-	return err
+  return err
   }
   ```
 
@@ -39,6 +39,7 @@ Configure the plugin to use your API key by doing one of the following:
 ## Usage
 
 Index your documents in pinecone. An example of indexing is provided within the Pinecone plugin as shown below. This functionality should be customized by the user according to their use case.
+
 ```go
 err = pinecone.Index(ctx, docChunks, ds, "")
 if err != nil {

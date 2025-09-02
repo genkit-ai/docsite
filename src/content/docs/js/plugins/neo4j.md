@@ -90,23 +90,23 @@ Use the retriever reference with `ai.retrieve()`:
 
 ```ts
 // To use the index you configured when you loaded the plugin:
-let docs = await ai.retrieve({ 
-  retriever: neo4jRetrieverRef, 
+let docs = await ai.retrieve({
+  retriever: neo4jRetrieverRef,
   query,
   // Optional: limit number of results (max 1000)
-  k: 5 
+  k: 5,
 });
 
 // To specify an index:
 export const bobFactsRetriever = neo4jRetrieverRef({
   indexId: 'bob-facts',
   // Optional: custom display name
-  displayName: 'Bob Facts Database'
+  displayName: 'Bob Facts Database',
 });
-docs = await ai.retrieve({ 
-  retriever: bobFactsRetriever, 
+docs = await ai.retrieve({
+  retriever: bobFactsRetriever,
   query,
-  k: 10 
+  k: 10,
 });
 ```
 
@@ -122,7 +122,7 @@ await ai.index({ indexer: neo4jIndexerRef, documents });
 export const bobFactsIndexer = neo4jIndexerRef({
   indexId: 'bob-facts',
   // Optional: custom display name
-  displayName: 'Bob Facts Database'
+  displayName: 'Bob Facts Database',
 });
 await ai.index({ indexer: bobFactsIndexer, documents });
 ```

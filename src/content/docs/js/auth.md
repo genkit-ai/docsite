@@ -186,7 +186,7 @@ const selfSummaryFlow = ai.defineFlow(
   },
   async ({ userQuery }) => {
     // Flow logic here...
-    return { profileSummary: "User profile summary based on query would go here" };
+    return { profileSummary: 'User profile summary based on query would go here' };
   },
 );
 

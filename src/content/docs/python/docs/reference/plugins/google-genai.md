@@ -28,7 +28,7 @@ from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
   plugins=[GoogleAI()],
-  model='googleai/gemini-2.5-flash', 
+  model='googleai/gemini-2.5-flash',
 )
 ```
 

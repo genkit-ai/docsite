@@ -117,7 +117,7 @@ app.use(express.json());
 app.post(
   '/simpleFlow',
   authMiddleware, // Optional: Express middleware for early auth checks
-  expressHandler(simpleFlow, { context: authContext })
+  expressHandler(simpleFlow, { context: authContext }),
 );
 
 app.listen(8080, () => {
@@ -193,7 +193,7 @@ export const protectedFlow = ai.defineFlow(
       throw new Error('Unauthorized access: Admin role required.');
     }
     return { output: `Hello, ${context.auth.user}! Your role is ${context.auth.role}. You said: ${input}` };
-  }
+  },
 );
 
 // Secure the flow with the custom context provider
@@ -247,7 +247,7 @@ export const securedFlow = ai.defineFlow(
   },
   async ({ sensitiveData }, { context }) => {
     return { output: 'this is protected by API Key check' };
-  }
+  },
 );
 
 // Secure the flow with an API key from environment variables
@@ -295,7 +295,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   async ({ theme }) => {
     // ... your flow logic here
     return { menu: `Suggested menu for ${theme}` };
-  }
+  },
 );
 
 startFlowServer({

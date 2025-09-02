@@ -250,7 +250,7 @@ export const indexMenu = ai.defineFlow(
       return {
         success: false,
         documentsIndexed: 0,
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
       };
     }
   },
@@ -280,10 +280,10 @@ import { googleAI } from '@genkit-ai/googleai';
 export const menuRetriever = devLocalRetrieverRef('menuQA');
 
 export const menuQAFlow = ai.defineFlow(
-  { 
-    name: 'menuQA', 
-    inputSchema: z.object({ query: z.string() }), 
-    outputSchema: z.object({ answer: z.string() }) 
+  {
+    name: 'menuQA',
+    inputSchema: z.object({ query: z.string() }),
+    outputSchema: z.object({ answer: z.string() }),
   },
   async ({ query }) => {
     // retrieve relevant documents

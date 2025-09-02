@@ -75,9 +75,9 @@ export const askQuestionsOnGoT = ai.defineFlow(
     // Continue with using retrieved docs
     // in RAG prompts.
     //...
-    
+
     // Return an answer (placeholder for actual implementation)
-    return { answer: "Answer would be generated here based on retrieved documents" };
+    return { answer: 'Answer would be generated here based on retrieved documents' };
   },
 );
 ```

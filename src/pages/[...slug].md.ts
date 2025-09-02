@@ -35,28 +35,28 @@ export async function getStaticPaths() {
 
           // Add paths for each language
           const languages = ['js', 'go', 'python'];
-          
+
           // Default path (JavaScript)
           entryPaths.push({
             params: { slug: slug },
-            props: { 
+            props: {
               processedContent: standardProcessedContent,
               rawContent: standardProcessedContent,
               title: title,
-              language: 'js'
+              language: 'js',
             },
           });
-          
+
           // Language-specific paths
-          languages.forEach(lang => {
+          languages.forEach((lang) => {
             const filteredContent = filterContentByLanguage(standardProcessedContent, lang);
             entryPaths.push({
               params: { slug: `${slug}.${lang}` },
-              props: { 
+              props: {
                 processedContent: filteredContent,
                 rawContent: filteredContent,
                 title: title,
-                language: lang
+                language: lang,
               },
             });
           });
@@ -76,7 +76,9 @@ export async function getStaticPaths() {
 }
 
 // GET function returns the pre-processed content
-export async function GET({ props }: APIContext<{ processedContent: string; rawContent?: string; title?: string; language?: string }>) {
+export async function GET({
+  props,
+}: APIContext<{ processedContent: string; rawContent?: string; title?: string; language?: string }>) {
   return new Response(props.processedContent, {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',

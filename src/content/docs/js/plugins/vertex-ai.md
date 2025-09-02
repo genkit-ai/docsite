@@ -524,11 +524,8 @@ const response = await ai.generate({
 // Handle the audio data (returned as a data URL)
 if (response.media?.url) {
   // Extract base64 data from the data URL
-  const audioBuffer = Buffer.from(
-    response.media.url.substring(response.media.url.indexOf(',') + 1),
-    'base64'
-  );
-  
+  const audioBuffer = Buffer.from(response.media.url.substring(response.media.url.indexOf(',') + 1), 'base64');
+
   // Save to a file
   await writeFile('output.wav', audioBuffer);
 }
@@ -579,7 +576,7 @@ Vertex AI offers multiple pre-built voices with different characteristics:
 ```ts
 speechConfig: {
   voiceConfig: {
-    prebuiltVoiceConfig: { 
+    prebuiltVoiceConfig: {
       voiceName: 'Algenib' // Other options include: 'Achernar', 'Ankaa', etc.
     },
   },
@@ -596,7 +593,7 @@ You can use markdown-style formatting in your prompt to add emphasis:
 Example:
 
 ```ts
-prompt: 'Genkit is an **amazing** Gen AI *library*!'
+prompt: 'Genkit is an **amazing** Gen AI *library*!';
 ```
 
 #### Advanced Speech Parameters
@@ -606,7 +603,7 @@ For more precise control over the generated speech:
 ```ts
 speechConfig: {
   voiceConfig: {
-    prebuiltVoiceConfig: { 
+    prebuiltVoiceConfig: {
       voiceName: 'Algenib',
       speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
       pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
@@ -629,7 +626,7 @@ prompt: `<speak>
   Here is a <break time="1s"/> pause.
   <prosody rate="slow" pitch="+2st">This text is spoken slowly and with a higher pitch.</prosody>
   <say-as interpret-as="cardinal">12345</say-as>
-</speak>`
+</speak>`;
 ```
 
 Note: When using SSML, you must wrap your entire prompt in `<speak>` tags.

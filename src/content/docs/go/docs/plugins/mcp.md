@@ -117,7 +117,7 @@ if err != nil {
 }
 
 // Use the tool in your workflow
-resp, err := genkit.Generate(ctx, g, 
+resp, err := genkit.Generate(ctx, g,
     ai.WithModel(myModel),
     ai.WithPrompt("Use the echo tool to repeat this message"),
     ai.WithTools(echoTool),
@@ -196,7 +196,7 @@ server := mcp.NewMCPServer(g, mcp.MCPServerOptions{
 
 // Option 2: Expose only specific tools
 server = mcp.NewMCPServer(g, mcp.MCPServerOptions{
-    Name:    "genkit-calculator", 
+    Name:    "genkit-calculator",
     Version: "1.0.0",
     Tools:   []ai.Tool{addTool, multiplyTool},
 })
@@ -212,7 +212,7 @@ if err := server.ServeStdio(ctx); err != nil {
 
 ### Stdio Transport
 
-You can use either Stdio or SSE 
+You can use either Stdio or SSE
 
 ```go
 Stdio: &mcp.StdioConfig{

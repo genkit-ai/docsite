@@ -91,7 +91,7 @@ Embedding model support is provided through the following plugins:
 The following examples show how you could ingest a collection of restaurant menu
 PDF documents into a vector database and retrieve them for use in a flow that
 determines what food items are available.
-*Note*: Although retriever functions are defined using Genkit, users are expected to add their own functionality to index the documents.
+_Note_: Although retriever functions are defined using Genkit, users are expected to add their own functionality to index the documents.
 
 ### Install dependencies
 
@@ -196,7 +196,7 @@ documents and ready to be used in Genkit flows with retrieval steps.
 
 ### Define a flow with retrieval
 
-The following example shows how you might use a retriever in a RAG flow. This 
+The following example shows how you might use a retriever in a RAG flow. This
 example uses Genkit's file-based vector retriever, which you should not use in production.
 
 ```go

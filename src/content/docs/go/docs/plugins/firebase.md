@@ -152,7 +152,7 @@ func main() {
     firebasePlugin := &firebase.Firebase{
         ProjectId: "my-firebase-project",
     }
-    
+
     openaiPlugin := &openai.OpenAI{
         APIKey: "your-openai-api-key",
     }
@@ -176,7 +176,7 @@ func main() {
 
     // RAG query function
     query := "How does machine learning work?"
-    
+
     // Step 1: Retrieve relevant documents
     retrievalResults, err := ai.Retrieve(ctx, retriever, ai.WithDocs(query))
     if err != nil {
@@ -282,7 +282,7 @@ type Firebase struct {
     // ProjectId is your Firebase project ID
     // If empty, uses FIREBASE_PROJECT_ID environment variable
     ProjectId string
-    
+
     // App is a pre-configured Firebase app instance
     // Use either ProjectId or App, not both
     App *firebasev4.App
@@ -295,19 +295,19 @@ type Firebase struct {
 type RetrieverOptions struct {
     // Name is a unique identifier for the retriever
     Name string
-    
+
     // Collection is the Firestore collection name containing documents
     Collection string
-    
+
     // VectorField is the field name containing the embedding vectors
     VectorField string
-    
+
     // EmbedderName is the name of the embedder to use for query vectorization
     EmbedderName string
-    
+
     // TopK is the number of top similar documents to retrieve
     TopK int
-    
+
     // Additional filtering and configuration options
 }
 ```
@@ -409,7 +409,7 @@ technicalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOp
 
 generalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
     Name:         "general-knowledge",
-    Collection:   "general_documents", 
+    Collection:   "general_documents",
     VectorField:  "embedding",
     EmbedderName: "text-embedding-3-small", // Faster for general content
     TopK:         10,
@@ -425,7 +425,7 @@ ragFlow := genkit.DefineFlow(g, "rag-qa", func(ctx context.Context, query string
     if err != nil {
         return "", err
     }
-    
+
     // Generate response
     response, err := genkit.Generate(ctx, g,
         ai.WithPrompt(buildPromptWithContext(query, results)),
@@ -433,7 +433,7 @@ ragFlow := genkit.DefineFlow(g, "rag-qa", func(ctx context.Context, query string
     if err != nil {
         return "", err
     }
-    
+
     return response.Text(), nil
 })
 ```

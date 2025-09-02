@@ -32,9 +32,9 @@ npm install @auth0/ai @auth0/ai-genkit
 Initialize the SDK with your Auth0 credentials:
 
 ```javascript
-import { Auth0AI, setAIContext } from "@auth0/ai-genkit";
-import { genkit } from "genkit/beta";
-import { googleAI } from "@genkit-ai/googleai";
+import { Auth0AI, setAIContext } from '@auth0/ai-genkit';
+import { genkit } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/googleai';
 
 // Initialize Genkit
 const ai = genkit({
@@ -47,14 +47,14 @@ const auth0AI = new Auth0AI({
   // Alternatively, you can use the `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, and `AUTH0_CLIENT_SECRET`
   // environment variables.
   auth0: {
-    domain: "YOUR_AUTH0_DOMAIN",
-    clientId: "YOUR_AUTH0_CLIENT_ID",
-    clientSecret: "YOUR_AUTH0_CLIENT_SECRET",
+    domain: 'YOUR_AUTH0_DOMAIN',
+    clientId: 'YOUR_AUTH0_CLIENT_ID',
+    clientSecret: 'YOUR_AUTH0_CLIENT_SECRET',
   },
 
   // store: new MemoryStore(), // Optional: Use a custom store
 
-  genkit: ai
+  genkit: ai,
 });
 ```
 
@@ -72,66 +72,61 @@ const withGoogleAccess = auth0AI.withTokenForConnection({
     return context.refreshToken;
   },
   // The connection name:
-  connection: "google-oauth2",
+  connection: 'google-oauth2',
   // The scopes to request:
-  scopes: ["https://www.googleapis.com/auth/calendar.freebusy"],
+  scopes: ['https://www.googleapis.com/auth/calendar.freebusy'],
 });
 ```
 
 Then use the `withGoogleAccess` to wrap the tool and use `getAccessTokenForConnection` from the SDK to get the access token:
 
 ```javascript
-import { getAccessTokenForConnection } from "@auth0/ai-genkit";
-import { FederatedConnectionError } from "@auth0/ai/interrupts";
-import { addHours } from "date-fns";
-import { z } from "zod";
+import { getAccessTokenForConnection } from '@auth0/ai-genkit';
+import { FederatedConnectionError } from '@auth0/ai/interrupts';
+import { addHours } from 'date-fns';
+import { z } from 'zod';
 
 export const checkCalendarTool = ai.defineTool(
-  ...withGoogleAccess({
-    name: "check_user_calendar",
-    description:
-      "Check user availability on a given date time on their calendar",
-    inputSchema: z.object({
-      date: z.coerce.date(),
-    }),
-    outputSchema: z.object({
-      available: z.boolean(),
-    }),
-  },
-  async ({ date }) => {
-    const accessToken = getAccessTokenForConnection();
-    const body = JSON.stringify({
-      timeMin: date,
-      timeMax: addHours(date, 1),
-      timeZone: "UTC",
-      items: [{ id: "primary" }],
-    });
+  ...withGoogleAccess(
+    {
+      name: 'check_user_calendar',
+      description: 'Check user availability on a given date time on their calendar',
+      inputSchema: z.object({
+        date: z.coerce.date(),
+      }),
+      outputSchema: z.object({
+        available: z.boolean(),
+      }),
+    },
+    async ({ date }) => {
+      const accessToken = getAccessTokenForConnection();
+      const body = JSON.stringify({
+        timeMin: date,
+        timeMax: addHours(date, 1),
+        timeZone: 'UTC',
+        items: [{ id: 'primary' }],
+      });
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body,
-    });
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new FederatedConnectionError(
-          `Authorization required to access the Federated Connection`
-        );
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new FederatedConnectionError(`Authorization required to access the Federated Connection`);
+        }
+        throw new Error(`Invalid response from Google Calendar API: ${response.status} - ${await response.text()}`);
       }
-      throw new Error(
-        `Invalid response from Google Calendar API: ${
-          response.status
-        } - ${await response.text()}`
-      );
-    }
-    const busyResp = await response.json();
-    return { available: busyResp.calendars.primary.busy.length === 0 };
-  }
-));
+      const busyResp = await response.json();
+      return { available: busyResp.calendars.primary.busy.length === 0 };
+    },
+  ),
+);
 ```
 
 ## CIBA: Client-Initiated Backchannel Authentication
@@ -145,54 +140,47 @@ const buyStockAuthorizer = auth0AI.withAsyncUserConfirmation({
     return config.configurable?.user_id;
   },
   // The message the user will see on the notification
-  bindingMessage: async ({ qty , ticker }) => {
+  bindingMessage: async ({ qty, ticker }) => {
     return `Confirm the purchase of ${qty} ${ticker}`;
   },
   // The scopes and audience to request
-  audience: process.env["AUDIENCE"],
-  scopes: ["stock:trade"]
+  audience: process.env['AUDIENCE'],
+  scopes: ['stock:trade'],
 });
 ```
 
 Then wrap the tool as follows:
 
 ```javascript
-import { z } from "zod";
-import { getCIBACredentials } from "@auth0/ai-genkit";
+import { z } from 'zod';
+import { getCIBACredentials } from '@auth0/ai-genkit';
 
 export const buyTool = ai.defineTool(
-  ...buyStockAuthorizer({
-    name: "buy_stock",
-    description: "Execute a stock purchase given stock ticker and quantity",
-    inputSchema: z.object({
-      tradeID: z
-        .string()
-        .uuid()
-        .describe("The unique identifier for the trade provided by the user"),
-      userID: z
-        .string()
-        .describe("The user ID of the user who created the conditional trade"),
-      ticker: z.string().describe("The stock ticker to trade"),
-      qty: z
-        .number()
-        .int()
-        .positive()
-        .describe("The quantity of shares to trade"),
-    }),
-    outputSchema: z.string(),
-  },
-  async ({ ticker, qty }) => {
-    const { accessToken } = getCIBACredentials();
-    fetch("http://yourapi.com/buy", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ ticker, qty }),
-    });
-    return `Purchased ${qty} shares of ${ticker}`;
-  })
+  ...buyStockAuthorizer(
+    {
+      name: 'buy_stock',
+      description: 'Execute a stock purchase given stock ticker and quantity',
+      inputSchema: z.object({
+        tradeID: z.string().uuid().describe('The unique identifier for the trade provided by the user'),
+        userID: z.string().describe('The user ID of the user who created the conditional trade'),
+        ticker: z.string().describe('The stock ticker to trade'),
+        qty: z.number().int().positive().describe('The quantity of shares to trade'),
+      }),
+      outputSchema: z.string(),
+    },
+    async ({ ticker, qty }) => {
+      const { accessToken } = getCIBACredentials();
+      fetch('http://yourapi.com/buy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ ticker, qty }),
+      });
+      return `Purchased ${qty} shares of ${ticker}`;
+    },
+  ),
 );
 ```
 
@@ -209,21 +197,22 @@ const buyStockAuthorizer = auth0AI.withAsyncUserConfirmation({
     return config.configurable?.user_id;
   },
   // The message the user will see on the notification
-  bindingMessage: async ({ qty , ticker }) => {
+  bindingMessage: async ({ qty, ticker }) => {
     return `Confirm the purchase of ${qty} ${ticker}`;
   },
   authorizationDetails: async ({ qty, ticker }) => {
-    return [{ type: "trade_authorization", qty, ticker, action: "buy" }];
+    return [{ type: 'trade_authorization', qty, ticker, action: 'buy' }];
   },
   // The scopes and audience to request
-  audience: process.env["AUDIENCE"],
-  scopes: ["stock:trade"]
+  audience: process.env['AUDIENCE'],
+  scopes: ['stock:trade'],
 });
 ```
 
 To use RAR with CIBA, you need to [set up authorization details](https://auth0.com/docs/get-started/apis/configure-rich-authorization-requests) in your Auth0 tenant. This includes defining the authorization request parameters and their types. Additionally, the [Guardian SDK](https://auth0.com/docs/secure/multi-factor-authentication/auth0-guardian) is required to handle these authorization details in your authorizer app.
 
 For more information on setting up RAR with CIBA, refer to:
+
 - [Configure Rich Authorization Requests (RAR)](https://auth0.com/docs/get-started/apis/configure-rich-authorization-requests)
 - [User Authorization with CIBA](https://auth0.com/docs/get-started/authentication-and-authorization-flow/client-initiated-backchannel-authentication-flow/user-authorization-with-ciba)
 
@@ -232,51 +221,53 @@ For more information on setting up RAR with CIBA, refer to:
 The Device Flow Authorizer enables secure, user-in-the-loop authentication for devices or tools that cannot directly authenticate users. It uses the OAuth 2.0 Device Authorization Grant to request user authorization and resume execution once authorization is granted.
 
 ```javascript
-import { auth0 } from "./auth0";
+import { auth0 } from './auth0';
 
 export const deviceFlowAuthorizer = auth0AI.withDeviceAuthorizationFlow({
   // The scopes and audience to request
-  scopes: ["read:data", "write:data"],
-  audience: "https://api.example.com",
+  scopes: ['read:data', 'write:data'],
+  audience: 'https://api.example.com',
 });
 ```
 
 Then wrap the tool as follows:
 
 ```javascript
-import { z } from "zod";
-import { getDeviceAuthorizerCredentials } from "@auth0/ai-genkit";
+import { z } from 'zod';
+import { getDeviceAuthorizerCredentials } from '@auth0/ai-genkit';
 
 export const fetchData = ai.defineTool(
-  ...deviceFlowAuthorizer({
-    name: "fetch_data",
-    description: "Fetch data from a secure API",
-    inputSchema: z.object({
-      resourceID: z.string().describe("The ID of the resource to fetch"),
-    }),
-    outputSchema: z.any(),
-  },
-  async ({ resourceID }) => {
-    const credentials = getDeviceAuthorizerCredentials();
-    const response = await fetch(`https://api.example.com/resource/${resourceID}`, {
-      headers: {
-        Authorization: `Bearer ${credentials.accessToken}`,
-      },
-    });
+  ...deviceFlowAuthorizer(
+    {
+      name: 'fetch_data',
+      description: 'Fetch data from a secure API',
+      inputSchema: z.object({
+        resourceID: z.string().describe('The ID of the resource to fetch'),
+      }),
+      outputSchema: z.any(),
+    },
+    async ({ resourceID }) => {
+      const credentials = getDeviceAuthorizerCredentials();
+      const response = await fetch(`https://api.example.com/resource/${resourceID}`, {
+        headers: {
+          Authorization: `Bearer ${credentials.accessToken}`,
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch resource: ${response.statusText}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch resource: ${response.statusText}`);
+      }
 
-    return await response.json();
-  })
+      return await response.json();
+    },
+  ),
 );
 ```
 
 ## FGA
 
 ```javascript
-import { Auth0AI } from "@auth0/ai-llamaindex";
+import { Auth0AI } from '@auth0/ai-llamaindex';
 
 const auth0AI = new Auth0AI.FGA({
   apiScheme,
@@ -302,10 +293,10 @@ const authorizedTool = fgaAI.withFGA(
     buildQuery: async ({ userID, doc }) => ({
       user: userID,
       object: doc,
-      relation: "read",
+      relation: 'read',
     }),
   },
-  myAITool
+  myAITool,
 );
 
 // Or create a wrapper to apply to tools later
@@ -313,7 +304,7 @@ const authorizer = fgaAI.withFGA({
   buildQuery: async ({ userID, doc }) => ({
     user: userID,
     object: doc,
-    relation: "read",
+    relation: 'read',
   }),
 });
 
@@ -332,13 +323,13 @@ Create a Retriever instance using the `FGARetriever.create` method:
 
 ```javascript
 // From examples/langchain/retrievers-with-fga
-import { FGARetriever } from "@auth0/ai-genkit/RAG";
-import { MemoryStore, RetrievalChain } from "./helpers/memory-store";
-import { readDocuments } from "./helpers/read-documents";
+import { FGARetriever } from '@auth0/ai-genkit/RAG';
+import { MemoryStore, RetrievalChain } from './helpers/memory-store';
+import { readDocuments } from './helpers/read-documents';
 
 async function main() {
   // UserID
-  const user = "user1";
+  const user = 'user1';
   const documents = await readDocuments();
   // 1. Call helper function to load LangChain MemoryStore
   const vectorStore = await MemoryStore.fromDocuments(documents);
@@ -350,14 +341,14 @@ async function main() {
       buildQuery: (doc) => ({
         user: `user:${user}`,
         object: `doc:${doc.metadata.id}`,
-        relation: "viewer",
+        relation: 'viewer',
       }),
     }),
   });
 
   // 4. Execute the query
   const { answer } = await retrievalChain.query({
-    query: "Show me forecast for ZEKO?",
+    query: 'Show me forecast for ZEKO?',
   });
 
   console.log(answer);

@@ -11,7 +11,7 @@ The configuration depends on which provider you choose:
 
 ### Google AI
 
-To use this plugin, import the `googlegenai` package and pass 
+To use this plugin, import the `googlegenai` package and pass
 `googlegenai.GoogleAI` to `WithPlugins()` in the Genkit initializer:
 
 ```go
@@ -150,9 +150,9 @@ The following models are supported:
 
 - **Vertex AI**
 
-  `textembedding-gecko@003`, `textembedding-gecko@002`, 
+  `textembedding-gecko@003`, `textembedding-gecko@002`,
   `textembedding-gecko@001`, `text-embedding-004`,
-  `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`, 
+  `textembedding-gecko-multilingual@001`, `text-multilingual-embedding-002`,
   and `multimodalembedding`
 
 Embedder references have an `Embed()` method that calls the Google AI API:

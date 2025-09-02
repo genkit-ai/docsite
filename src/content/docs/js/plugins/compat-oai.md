@@ -28,10 +28,10 @@ To use this plugin, import `openAICompatible` and specify it in your Genkit conf
 
 The `openAICompatible` plugin takes an options object with the following parameters:
 
--   `name`: (Required) A unique name for the plugin instance (e.g., `'ollama'`, `'my-custom-llm'`).
--   `apiKey`: The API key for the service. For local services, this can often be a placeholder string like `'ollama'`.
--   `baseURL`: The base URL of the OpenAI-compatible API endpoint (e.g., `'http://localhost:11434/v1'` for Ollama).
--   Other options from the OpenAI Node.js SDK's `ClientOptions` can also be included, such as `timeout` or `defaultHeaders`.
+- `name`: (Required) A unique name for the plugin instance (e.g., `'ollama'`, `'my-custom-llm'`).
+- `apiKey`: The API key for the service. For local services, this can often be a placeholder string like `'ollama'`.
+- `baseURL`: The base URL of the OpenAI-compatible API endpoint (e.g., `'http://localhost:11434/v1'` for Ollama).
+- Other options from the OpenAI Node.js SDK's `ClientOptions` can also be included, such as `timeout` or `defaultHeaders`.
 
 Here's an example of how to configure the plugin for a local Ollama instance:
 
@@ -91,7 +91,7 @@ export const localLlamaFlow = ai.defineFlow(
       prompt: `Tell me a joke about ${subject}.`,
     });
     return { joke: llmResponse.text };
-  }
+  },
 );
 ```
 
@@ -99,7 +99,7 @@ In this example, `'localLlama/llama3'` tells Genkit to use the `llama3` model pr
 
 ### Passing Model Configuration
 
-You can pass configuration options to the model in the `generate` call. The available options depend on the specific model you are using. 
+You can pass configuration options to the model in the `generate` call. The available options depend on the specific model you are using.
 Common options include `temperature`, `maxOutputTokens`, etc. These are passed through to the underlying service.
 
 ```ts

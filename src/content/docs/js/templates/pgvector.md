@@ -79,7 +79,7 @@ export const askQuestionsOnGoT = ai.defineFlow(
       prompt: `Answer this question using the provided context: ${question}`,
       docs,
     });
-    
+
     return { answer: text };
   },
 );

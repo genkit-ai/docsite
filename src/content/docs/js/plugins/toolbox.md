@@ -20,8 +20,8 @@ Toolbox is an open source server that you deploy and manage yourself. For more
 instructions on deploying and configuring, see the official Toolbox
 documentation:
 
-* [Installing the Server](https://googleapis.github.io/genai-toolbox/getting-started/introduction/#installing-the-server)
-* [Configuring Toolbox](https://googleapis.github.io/genai-toolbox/getting-started/configure/)
+- [Installing the Server](https://googleapis.github.io/genai-toolbox/getting-started/introduction/#installing-the-server)
+- [Configuring Toolbox](https://googleapis.github.io/genai-toolbox/getting-started/configure/)
 
 ### Install client SDK
 
@@ -38,12 +38,12 @@ Once you’re Toolbox server is configured and up and running, you can load tool
 from your server using ADK:
 
 ```javascript
-import {ToolboxClient} from '@toolbox-sdk/core';
+import { ToolboxClient } from '@toolbox-sdk/core';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
-   plugins: [googleAI()],
-   model: googleAI.model('gemini-1.5-pro'),
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-1.5-pro'),
 });
 
 // Replace with your Toolbox Server URL
@@ -52,19 +52,21 @@ const URL = 'https://127.0.0.1:5000';
 let client = ToolboxClient(URL);
 toolboxTools = await client.loadToolset('toolsetName');
 
-const getGenkitTool = (toolboxTool) => ai.defineTool({
-   name: toolboxTool.getName(),
-   description: toolboxTool.getDescription(),
-   inputSchema: toolboxTool.getParams(),
-},
-toolboxTool,
-);
+const getGenkitTool = (toolboxTool) =>
+  ai.defineTool(
+    {
+      name: toolboxTool.getName(),
+      description: toolboxTool.getDescription(),
+      inputSchema: toolboxTool.getParams(),
+    },
+    toolboxTool,
+  );
 
 const tools = toolboxTools.map(getGenkitTool);
 
 await ai.generate({
-   prompt: 'Ask some question.',
-   tools: tools,
+  prompt: 'Ask some question.',
+  tools: tools,
 });
 ```
 
@@ -73,6 +75,6 @@ await ai.generate({
 Toolbox has a variety of features to make developing Gen AI tools for databases.
 For more information, read more about the following features:
 
-* [Authenticated Parameters](https://googleapis.github.io/genai-toolbox/resources/tools/#authenticated-parameters): bind tool inputs to values from OIDC tokens automatically, making it easy to run sensitive queries without potentially leaking data
-* [Authorized Invocations:](https://googleapis.github.io/genai-toolbox/resources/tools/#authorized-invocations)  restrict access to use a tool based on the users Auth token
-* [OpenTelemetry](https://googleapis.github.io/genai-toolbox/how-to/export_telemetry/): get metrics and tracing from Toolbox with OpenTelemetry
+- [Authenticated Parameters](https://googleapis.github.io/genai-toolbox/resources/tools/#authenticated-parameters): bind tool inputs to values from OIDC tokens automatically, making it easy to run sensitive queries without potentially leaking data
+- [Authorized Invocations:](https://googleapis.github.io/genai-toolbox/resources/tools/#authorized-invocations) restrict access to use a tool based on the users Auth token
+- [OpenTelemetry](https://googleapis.github.io/genai-toolbox/how-to/export_telemetry/): get metrics and tracing from Toolbox with OpenTelemetry

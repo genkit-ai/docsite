@@ -13,71 +13,72 @@ To use this plugin, follow these steps:
 
 1. Import the plugin
 
-	```go
-	import "github.com/firebase/genkit/go/plugins/alloydb"
-	```
+   ```go
+   import "github.com/firebase/genkit/go/plugins/alloydb"
+   ```
 
 2. Create a `PostgresEngine` instance:
 
-	- Using basic authentication
-		```go
-		pEngine, err := alloydb.NewPostgresEngine(ctx,
-				WithUser('user'),
-				WithPassword('password'),
-				WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
-				WithDatabase('my-database')
-		```
-	- Using email authentication
-		```go
-		pEngine, err := alloydb.NewPostgresEngine(ctx,
-			WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
-			WithDatabase('my-database'),
-			WithIAMAccountEmail('mail@company.com'))
-		```
-	- Using custom pool
-		```go
+   - Using basic authentication
+     ```go
+     pEngine, err := alloydb.NewPostgresEngine(ctx,
+     		WithUser('user'),
+     		WithPassword('password'),
+     		WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+     		WithDatabase('my-database')
+     ```
+   - Using email authentication
+     ```go
+     pEngine, err := alloydb.NewPostgresEngine(ctx,
+     	WithAlloyDBInstance('my-project', 'us-central1', 'my-cluster', 'my-instance'),
+     	WithDatabase('my-database'),
+     	WithIAMAccountEmail('mail@company.com'))
+     ```
+   - Using custom pool
+
+     ```go
 
 
 
-		pool, err := pgxpool.New(ctx, "add_your_connection_string")
-		if err != nil {
-			return err
-		}
+     pool, err := pgxpool.New(ctx, "add_your_connection_string")
+     if err != nil {
+     	return err
+     }
 
-		pEngine, err := alloydb.NewPostgresEngine(ctx,
-			WithDatabase("db_test"),
-			WithPool(pool))
+     pEngine, err := alloydb.NewPostgresEngine(ctx,
+     	WithDatabase("db_test"),
+     	WithPool(pool))
 
-		```
+     ```
 
 3. Create the Postgres plugin
-	- Using plugin method Init
 
+   - Using plugin method Init
 
-		```go
-			postgres := &alloydb.Postgres{
-				engine: pEngine,
-			}
+     ```go
+     	postgres := &alloydb.Postgres{
+     		engine: pEngine,
+     	}
 
-			if err := (postgres).Init(ctx, g); err != nil {
-				return err
-			}
-		```
+     	if err := (postgres).Init(ctx, g); err != nil {
+     		return err
+     	}
+     ```
 
-	- Using the genkit method init
+   - Using the genkit method init
 
-		```go
-			postgres := &alloydb.Postgres{
-				engine: pEngine,
-			}
+     ```go
+     	postgres := &alloydb.Postgres{
+     		engine: pEngine,
+     	}
 
-			g, err := genkit.Init(ctx, genkit.WithPlugins(postgres))
+     	g, err := genkit.Init(ctx, genkit.WithPlugins(postgres))
 
-			if  err != nil {
-				return err
-			}
+     	if  err != nil {
+     		return err
+     	}
 
-		```
+     ```
 
 ## Usage
 
@@ -153,7 +154,6 @@ if err != nil {
     return err
 }
 ```
-
 
 See the [Retrieval-augmented generation](/go/docs/rag) page for a general
 discussion on using retrievers for RAG.

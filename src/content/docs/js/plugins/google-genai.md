@@ -45,8 +45,8 @@ Suitable for applications leveraging Google Cloud's AI infrastructure.
 
 **Authentication Methods:**
 
--   **Application Default Credentials (ADC):** The standard method for most Vertex AI use cases, especially in production. It uses the credentials from the environment (e.g., service account on GCP, user credentials from `gcloud auth application-default login` locally). This method requires a Google Cloud Project with billing enabled and the Vertex AI API enabled.
--   **Vertex AI Express Mode:** A streamlined way to try out many Vertex AI features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
+- **Application Default Credentials (ADC):** The standard method for most Vertex AI use cases, especially in production. It uses the credentials from the environment (e.g., service account on GCP, user credentials from `gcloud auth application-default login` locally). This method requires a Google Cloud Project with billing enabled and the Vertex AI API enabled.
+- **Vertex AI Express Mode:** A streamlined way to try out many Vertex AI features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
 
 ```typescript
 import { genkit } from 'genkit';
@@ -67,7 +67,7 @@ const ai = genkit({
 });
 ```
 
-*Note: When using Express Mode, you do not provide `projectId` and `location` in the plugin config.*
+_Note: When using Express Mode, you do not provide `projectId` and `location` in the plugin config._
 
 ### Using Both Google AI and Vertex AI
 
@@ -78,10 +78,7 @@ import { genkit } from 'genkit';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
-  plugins: [
-    googleAI(),
-    vertexAI({location: 'us-central1'}),
-  ],
+  plugins: [googleAI(), vertexAI({ location: 'us-central1' })],
 });
 ```
 
@@ -92,6 +89,7 @@ Access models and embedders through the configured plugin instance (`googleAI` o
 ### Text Generation (Gemini)
 
 **With `googleAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
@@ -109,12 +107,13 @@ console.log(response.text());
 ```
 
 **With `vertexAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
-  plugins: [vertexAI({location: 'global'})],
+  plugins: [vertexAI({ location: 'global' })],
 });
 
 const response = await ai.generate({
@@ -128,6 +127,7 @@ console.log(response.text());
 ### Text Embedding
 
 **With `googleAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
@@ -143,6 +143,7 @@ const embeddings = await ai.embed({
 ```
 
 **With `vertexAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
@@ -160,6 +161,7 @@ const embeddings = await ai.embed({
 ### Image Generation (Imagen)
 
 **With `googleAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
@@ -177,6 +179,7 @@ const generatedImage = response.media();
 ```
 
 **With `vertexAI`:**
+
 ```typescript
 import { genkit } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
@@ -195,8 +198,8 @@ const generatedImage = response.media();
 
 ## Key Differences
 
--   **`googleAI`**: Easier setup for smaller projects, great for prototyping with Google AI Studio. Uses API keys.
--   **`vertexAI`**: Enterprise-ready, integrates with Google Cloud IAM and other Vertex AI services. Offers a broader range of models and features like fine-tuning, and more robust governance. Vertex AI Express Mode provides a low-friction entry point using an API key.
+- **`googleAI`**: Easier setup for smaller projects, great for prototyping with Google AI Studio. Uses API keys.
+- **`vertexAI`**: Enterprise-ready, integrates with Google Cloud IAM and other Vertex AI services. Offers a broader range of models and features like fine-tuning, and more robust governance. Vertex AI Express Mode provides a low-friction entry point using an API key.
 
 Choose the interface based on your project's scale, infrastructure, and feature requirements.
 
@@ -291,14 +294,8 @@ ai.defineFlow('text-to-video-veo', async () => {
 async function downloadVideo(video: MediaPart, path: string) {
   const fetch = (await import('node-fetch')).default;
   // Add API key before fetching the video.
-  const videoDownloadResponse = await fetch(
-    `${video.media!.url}&key=${process.env.GEMINI_API_KEY}`
-  );
-  if (
-    !videoDownloadResponse ||
-    videoDownloadResponse.status !== 200 ||
-    !videoDownloadResponse.body
-  ) {
+  const videoDownloadResponse = await fetch(`${video.media!.url}&key=${process.env.GEMINI_API_KEY}`);
+  if (!videoDownloadResponse || videoDownloadResponse.status !== 200 || !videoDownloadResponse.body) {
     throw new Error('Failed to fetch video');
   }
 
@@ -404,19 +401,11 @@ const { media } = await ai.generate({
 if (!media) {
   throw new Error('no media returned');
 }
-const audioBuffer = Buffer.from(
-  media.url.substring(media.url.indexOf(',') + 1),
-  'base64'
-);
+const audioBuffer = Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64');
 // The googleAI plugin returns raw PCM data, which we convert to WAV format.
 await writeFile('output.wav', await toWav(audioBuffer));
 
-async function toWav(
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-): Promise<string> {
+async function toWav(pcmData: Buffer, channels = 1, rate = 24000, sampleWidth = 2): Promise<string> {
   return new Promise((resolve, reject) => {
     // This code depends on `wav` npm library.
     const writer = new wav.Writer({
@@ -504,7 +493,7 @@ You can use markdown-style formatting in your prompt to add emphasis:
 Example:
 
 ```ts
-prompt: 'Genkit is an **amazing** Gen AI *library*!'
+prompt: 'Genkit is an **amazing** Gen AI *library*!';
 ```
 
 ##### Advanced Speech Parameters
