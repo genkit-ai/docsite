@@ -90,7 +90,7 @@ const DOCS_SIDEBAR = [
     label: "Writing Plugins",
     items: [
       { label: "Overview", slug: "docs/plugin-authoring/overview" },
-      { label: "Model Plugins", slug: "docs/plugin-authoring/models" },
+      { label: "Writing Genkit Evaluators", slug: "docs/plugin-authoring/evaluators" },
     ],
   },
   {
