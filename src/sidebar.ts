@@ -78,12 +78,11 @@ const DOCS_SIDEBAR = [
   {
     label: "Deployment",
     items: [
-      { label: "Overview", slug: "docs/deployment" },
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "Authorization & Security", slug: "docs/deployment/authorization" },
-      { label: "Client Access Patterns", slug: "docs/client" },
+      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
+      { label: "JS Client Integration", slug: "docs/client" },
     ],
   },
   {
