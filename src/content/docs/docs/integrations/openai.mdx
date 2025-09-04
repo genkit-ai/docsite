@@ -8,14 +8,174 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js go" />
+  <LanguageSelector supportedLanguages="js go python" />
   <CopyMarkdownButton />
 </div>
 
 <LanguageContent lang="python">
-  :::note[Feature unavailable for Python]
-The OpenAI plugin has not yet been made available for Python.
-:::
+The `genkit-plugin-compat-oai` package includes a pre-configured plugin for official [OpenAI models](https://platform.openai.com/docs/models).
+
+## Installation
+
+```bash
+pip install genkit-plugin-compat-oai
+```
+
+## Configuration
+
+To use this plugin, import `OpenAI` and `openai_model` and specify it when you initialize Genkit:
+
+```python
+from genkit.ai import Genkit
+from genkit.plugins.compat_oai import OpenAI, openai_model
+
+ai = Genkit(plugins=[OpenAI()], model=openai_model('gpt-4o'))
+```
+
+The plugin requires an API key for the OpenAI API. You can get one from the [OpenAI Platform](https://platform.openai.com/api-keys).
+
+Configure the plugin to use your API key by doing one of the following:
+
+- Set the `OPENAI_API_KEY` environment variable to your API key.
+- Specify the API key when you initialize the plugin:
+
+  ```python
+  OpenAI(api_key=your_key)
+  ```
+
+  However, don't embed your API key directly in code!
+
+## Usage
+
+The plugin provides helpers to reference supported models.
+
+### Chat Models
+
+You can reference chat models like `gpt-4o` and `gpt-4-turbo` using the `openai_model()` helper.
+
+```python
+import structlog
+from pydantic import BaseModel, Field
+
+from genkit.ai import Genkit
+from genkit.plugins.compat_oai import OpenAI, openai_model
+
+logger = structlog.get_logger(__name__)
+
+ai = Genkit(plugins=[OpenAI()])
+
+
+@ai.flow()
+async def say_hi(name: str) -> str:
+    """Say hi to a name.
+
+    Args:
+        name: The name to say hi to.
+
+    Returns:
+        The response from the OpenAI API.
+    """
+    response = await ai.generate(
+        model=openai_model('gpt-4'),
+        prompt=f'hi {name}',
+    )
+    return response.message.content[0].root.text
+```
+
+You can also pass model-specific configuration:
+
+```python
+response = await ai.generate(
+    model=openai_model('gpt-4'),
+    config={'temperature': 1},
+    prompt=f'hi {name}',
+)
+```
+
+### Tool Calling
+
+You can define and use tools with OpenAI models.
+
+```python
+import httpx
+from decimal import Decimal
+from pydantic import BaseModel
+
+from genkit.ai import Genkit
+from genkit.plugins.compat_oai import OpenAI, openai_model
+
+ai = Genkit(plugins=[OpenAI()])
+
+class WeatherRequest(BaseModel):
+    """Weather request."""
+
+    latitude: Decimal
+    longitude: Decimal
+
+@ai.tool(description='Get current temperature for provided coordinates in celsius')
+def get_weather_tool(coordinates: WeatherRequest) -> float:
+    """Get the current temperature for provided coordinates in celsius.
+
+    Args:
+        coordinates: The coordinates to get the weather for.
+
+    Returns:
+        The current temperature for the provided coordinates.
+    """
+    url = (
+        f'https://api.open-meteo.com/v1/forecast?'
+        f'latitude={coordinates.latitude}&longitude={coordinates.longitude}'
+        f'&current=temperature_2m'
+    )
+    with httpx.Client() as client:
+        response = client.get(url)
+        data = response.json()
+        return float(data['current']['temperature_2m'])
+
+@ai.flow()
+async def get_weather_flow(location: str) -> str:
+    """Get the weather for a location.
+
+    Args:
+        location: The location to get the weather for.
+
+    Returns:
+        The weather for the location.
+    """
+    response = await ai.generate(
+        model=openai_model('gpt-4o-mini'),
+        prompt=f"What's the weather like in {location} today?",
+        tools=['get_weather_tool'],
+    )
+    # The response will contain the tool output if the model decided to call it.
+    return response.message.content[0].root.text
+```
+
+### Streaming
+
+The plugin supports streaming responses.
+
+```python
+@ai.flow()
+async def say_hi_stream(name: str) -> str:
+    """Say hi to a name and stream the response.
+
+    Args:
+        name: The name to say hi to.
+
+    Returns:
+        The response from the OpenAI API.
+    """
+    stream, _ = ai.generate_stream(
+        model=openai_model('gpt-4'),
+        prompt=f'hi {name}',
+    )
+    result = ''
+    async for data in stream:
+        for part in data.content:
+            result += part.root.text
+    return result
+```
 </LanguageContent>
 
 <LanguageContent lang="js">

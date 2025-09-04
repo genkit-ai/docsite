@@ -100,10 +100,10 @@ Use the Genkit instance's `tool()` decorator to write tool definitions:
 ```python
 from pydantic import BaseModel, Field
 from genkit.ai import Genkit
-from genkit.plugins.google_genai import GoogleGenai
+from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
-    plugins=[GoogleGenai()],
+    plugins=[GoogleAI()],
     model='googleai/gemini-2.5-flash',
 )
 
