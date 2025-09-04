@@ -20,6 +20,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
+      tableOfContents: false,
       favicon: "favicon.ico",
       expressiveCode: {
         themes: [GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME],

@@ -3,7 +3,7 @@ title: Generating content with AI models
 description: Learn how to use Genkit's unified API in Go to generate content with various AI models like LLMs and image generators.
 ---
 
-At the heart of generative AI are AI _models_. The two most prominent
+At the heart of generative AI are Gooooooooooo AI _models_. The two most prominent
 examples of generative models are large language models (LLMs) and image
 generation models. These models take input, called a _prompt_ (most commonly
 text, an image, or a combination of both), and from it produce as output text,
