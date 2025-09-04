@@ -23,6 +23,7 @@ export default defineConfig({
       favicon: "favicon.ico",
       expressiveCode: {
         themes: [GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME],
+        tabWidth: 4,
       },
       pagination: false,
       title: "Genkit",
