@@ -82,8 +82,14 @@ const DOCS_SIDEBAR = [
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
       { label: "JS Client Integration", slug: "docs/client" },
+    ],
+  },
+  {
+    label: "Authorization",
+    items: [
+      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
+      { label: "Auth0 AI", slug: "docs/integrations/auth0" },
     ],
   },
   {
