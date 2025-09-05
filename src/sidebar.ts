@@ -57,7 +57,7 @@ const DOCS_SIDEBAR = [
       { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
       { label: "Dev Local Vector Store", slug: "docs/integrations/dev-local-vectorstore" },
       { label: "Pinecone", slug: "docs/integrations/pinecone" },
-      { label: "ChromaDB", slug: "docs/integrations/chromadb" },
+      { label: "Chroma", slug: "docs/integrations/chroma" },
       { label: "pgvector", slug: "docs/integrations/pgvector" },
       { label: "LanceDB", slug: "docs/integrations/lancedb" },
       { label: "Astra DB", slug: "docs/integrations/astra-db" },
@@ -73,6 +73,7 @@ const DOCS_SIDEBAR = [
       { label: "Express.js", slug: "docs/frameworks/express" },
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
       { label: "Angular", slug: "docs/frameworks/angular" },
+      { label: "Flask", slug: "docs/frameworks/flask" },
     ],
   },
   {
@@ -106,6 +107,8 @@ const DOCS_SIDEBAR = [
     label: "Reference",
     items: [
       { label: "API References", slug: "docs/api-references" },
+      { label: "API Stability", slug: "docs/api-stability" },
+      { label: "Feedback", slug: "docs/feedback" },
     ],
   },
 ];
