@@ -21,35 +21,32 @@ import { parse } from 'yaml';
 export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
 
 async function main() {
-  const js = await indexLang('js', 'src/content/docs/docs');
-  const go = await indexLang('go', 'src/content/docs/go/docs');
-  const python = await indexLang('python', 'src/content/docs/python/docs');
-
-  await writeFile(`public/docs-bundle-experimental.json`, JSON.stringify({ ...js, ...go, ...python }, undefined, 2));
+  const allDocs = await indexDocs('src/content/docs/docs');
+  await writeFile(`public/docs-bundle-experimental.json`, JSON.stringify(allDocs, undefined, 2));
 }
 
 interface Doc {
   title: string;
   description?: string;
   text: string;
-  lang: string;
   headers: string;
 }
 
-async function indexLang(lang: string, dir: string) {
+async function indexDocs(dir: string) {
   const allFiles = await readdir(dir, { recursive: true });
   const docFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
   const documents: Record<string, Doc> = {};
+  
   for (const file of docFiles) {
     const markdown = await readFile(path.resolve(dir, file), { encoding: 'utf8' });
     const { frontmatter, body } = await extractFrontmatterAndBody(markdown);
     const headers = body.match(/^#.*\n/gm)?.join('') ?? '';
     const normalizedFileName = file.endsWith('.mdx') ? file.substring(0, file.length - 1) : file;
-    documents[`${lang}/${normalizedFileName}`] = {
+    
+    documents[normalizedFileName] = {
       text: renderContent(file, body, frontmatter.title || normalizedFileName),
       title: frontmatter.title || normalizedFileName,
       description: frontmatter.description,
-      lang,
       headers,
     };
   }
