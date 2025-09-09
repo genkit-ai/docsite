@@ -4,8 +4,8 @@ export default {
   singleQuote: true,
   printWidth: 120,
   objectWrap: 'preserve',
-  useTabs: true,
-  tabWidth: 4,
+  useTabs: false,
+  tabWidth: 2,
   plugins: ['prettier-plugin-astro'],
   overrides: [
     {
@@ -17,8 +17,8 @@ export default {
     {
       files: ['**/*.{md,mdx}'],
       options: {
-        useTabs: true,
-        tabWidth: 4,
+        useTabs: false,
+        tabWidth: 2,
       },
     },
   ],
