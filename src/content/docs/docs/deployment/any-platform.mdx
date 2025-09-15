@@ -1,0 +1,537 @@
+---
+title: Deploy to Any Platform
+description: Learn how to deploy Genkit flows to any Node.js, Go, or Python hosting platform with maximum flexibility and control.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+Genkit has built-in integrations that help you deploy your flows to
+Cloud Functions for Firebase and Google Cloud Run, but you can also deploy your
+flows to any platform that can serve an Express.js app, whether it's a cloud
+service or self-hosted.
+
+This page, as an example, walks you through the process of deploying the default
+sample flow.
+
+## Before you begin
+
+- Node.js 20+: Confirm that your environment is using Node.js version 20 or
+  higher (`node --version`).
+- You should be familiar with Genkit's concept of [flows](/docs/flows).
+
+## 1. Set up your project
+
+1. **Create a directory for the project:**
+
+   ```bash
+   export GENKIT_PROJECT_HOME=~/tmp/genkit-express-project
+
+   mkdir -p $GENKIT_PROJECT_HOME
+   cd $GENKIT_PROJECT_HOME
+   mkdir src
+   ```
+
+1. **Initialize a Node.js project:**
+
+   ```bash
+   npm init -y
+   ```
+
+1. **Install Genkit and necessary dependencies:**
+
+   ```bash
+   npm install --save genkit @genkit-ai/google-genai
+   npm install --save-dev typescript tsx
+   npm install -g genkit-cli
+   ```
+
+## 2. Configure your Genkit app
+
+1. **Set up a sample flow and server:**
+
+   In `src/index.ts`, define a sample flow and configure the flow server:
+
+   ```typescript
+   import { genkit, z } from 'genkit';
+   import { googleAI } from '@genkit-ai/google-genai';
+   import { startFlowServer } from '@genkit-ai/express';
+
+   const ai = genkit({
+     plugins: [googleAI()],
+     model: googleAI.model('gemini-2.5-flash'),
+   });
+
+   const helloFlow = ai.defineFlow(
+     {
+       name: 'helloFlow',
+       inputSchema: z.object({ name: z.string() }),
+       outputSchema: z.object({ greeting: z.string() }),
+     },
+     async (input) => {
+       const { text } = await ai.generate('Say hello to ${input.name}');
+       return { greeting: text };
+     },
+   );
+
+   startFlowServer({
+     flows: [helloFlow],
+   });
+   ```
+
+   There are also some optional parameters for `startFlowServer` you can specify:
+
+   - `port`: the network port to listen on. If unspecified, the server listens on
+     the port defined in the PORT environment variable, and if PORT is not set,
+     defaults to 3400.
+   - `cors`: the flow server's
+     [CORS policy](https://www.npmjs.com/package/cors#configuration-options).
+     If you will be accessing these endpoints from a web application, you likely
+     need to specify this.
+   - `pathPrefix`: an optional path prefix to add before your flow endpoints.
+   - `jsonParserOptions`: options to pass to Express's
+     [JSON body parser](https://www.npmjs.com/package/body-parser#bodyparserjsonoptions)
+
+1. **Set up model provider credentials:**
+
+   Configure the required environment variables for your model provider. This guide
+   uses the Gemini API from Google AI Studio as an example.
+
+   [Get an API key from Google AI Studio](https://makersuite.google.com/app/apikey)
+
+   After you've created an API key, set the `GEMINI_API_KEY` environment
+   variable to your key with the following command:
+
+   ```bash
+   export GEMINI_API_KEY=<your API key>
+   ```
+
+   Different providers for deployment will have different ways of securing your
+   API key in their environment. For security, ensure that your API key is not
+   publicly exposed.
+
+## 3. Prepare your Node.js project for deployment
+
+### Add start and build scripts to `package.json`
+
+To deploy a Node.js project, define `start` and `build` scripts in
+`package.json`. For a TypeScript project, these scripts will look like this:
+
+```json
+"scripts": {
+  "start": "node --watch lib/index.js",
+  "build": "tsc"
+},
+```
+
+### Build and test locally
+
+Run the build command, then start the server and test it locally to confirm it
+works as expected.
+
+```bash
+npm run build
+
+npm start
+```
+
+In another terminal window, test the endpoint:
+
+```bash
+curl -X POST "http://127.0.0.1:3400/helloFlow" \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"name": "Genkit"}}'
+```
+
+## Optional: Start the Developer UI
+
+You can use the Developer UI to test flows interactively during development:
+
+```bash
+genkit start -- npm run start
+```
+
+Navigate to `http://localhost:4000/flows` to
+test your flows in the UI.
+
+## 4. Deploy the project
+
+Once your project is configured and tested locally, you can deploy to
+any Node.js-compatible platform. Deployment steps vary by provider, but
+generally, you configure the following settings:
+
+| Setting                   | Value                                                            |
+| ------------------------- | ---------------------------------------------------------------- |
+| **Runtime**               | Node.js 20 or newer                                              |
+| **Build command**         | `npm run build`                                                  |
+| **Start command**         | `npm start`                                                      |
+| **Environment variables** | Set `GEMINI_API_KEY=<your-api-key>` and other necessary secrets. |
+
+The `start` command (`npm start`) should point to your compiled entry point,
+typically `lib/index.js`. Be sure to add all necessary environment variables
+for your deployment platform.
+
+After deploying, you can use the provided service URL to invoke your flow as
+an HTTPS endpoint.
+
+## Call your flows from the client
+
+In your client-side code (e.g., a web application, mobile app, or another service), you can call your deployed flows using the Genkit client library. This library provides functions for both non-streaming and streaming flow calls.
+
+First, install the Genkit library:
+
+```bash
+npm install genkit
+```
+
+Then, you can use `runFlow` for non-streaming calls and `streamFlow` for streaming calls.
+
+### Non-streaming Flow Calls
+
+For a non-streaming response, use the `runFlow` function. This is suitable for flows that return a single, complete output.
+
+```typescript
+import { runFlow } from 'genkit/beta/client';
+
+async function callHelloFlow() {
+  try {
+    const result = await runFlow({
+      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      input: { name: 'Genkit User' },
+    });
+    console.log('Non-streaming result:', result.greeting);
+  } catch (error) {
+    console.error('Error calling helloFlow:', error);
+  }
+}
+
+callHelloFlow();
+```
+
+### Streaming Flow Calls
+
+For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function.
+
+```typescript
+import { streamFlow } from 'genkit/beta/client';
+
+async function streamHelloFlow() {
+  try {
+    const result = streamFlow({
+      url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+      input: { name: 'Streaming User' },
+    });
+
+    // Process the stream chunks as they arrive
+    for await (const chunk of result.stream) {
+      console.log('Stream chunk:', chunk);
+    }
+
+    // Get the final complete response
+    const finalOutput = await result.output;
+    console.log('Final streaming output:', finalOutput.greeting);
+  } catch (error) {
+    console.error('Error streaming helloFlow:', error);
+  }
+}
+
+streamHelloFlow();
+```
+
+### Authentication (Optional)
+
+If your deployed flow requires authentication, you can pass headers with your requests:
+
+```typescript
+const result = await runFlow({
+  url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
+  headers: {
+    Authorization: 'Bearer your-token-here', // Replace with your actual token
+  },
+  input: { name: 'Authenticated User' },
+});
+```
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+You can deploy Genkit flows as web services using any service that can host a Go
+binary. This page, as an example, walks you through the general process of
+deploying the default sample flow, and points out where you must take
+provider-specific actions.
+
+1.  Create a directory for the Genkit sample project:
+
+    ```bash
+    mkdir -p ~/tmp/genkit-cloud-project
+
+    cd ~/tmp/genkit-cloud-project
+    ```
+
+    If you're going to use an IDE, open it to this directory.
+
+2.  Initialize a Go module in your project directory:
+
+    ```bash
+    go mod init example/cloudrun
+
+    go get github.com/firebase/genkit/go
+    ```
+
+3.  Create a sample app using Genkit:
+
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+        "net/http"
+        "os"
+
+        "github.com/firebase/genkit/go/ai"
+        "github.com/firebase/genkit/go/genkit"
+        "github.com/firebase/genkit/go/plugins/googlegenai"
+        "github.com/firebase/genkit/go/plugins/server"
+    )
+
+    func main() {
+        ctx := context.Background()
+
+        // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
+        // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-2.5-flash"
+        // to use Vertex AI as the provider instead.
+        g := genkit.Init(ctx,
+            genkit.WithPlugins(&googlegenai.GoogleAI{}),
+            genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+        )
+
+        flow := genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+            resp, err := genkit.Generate(ctx, g,
+                ai.WithPrompt(`Tell a short joke about %s. Be creative!`, topic),
+            )
+            if err != nil {
+                return "", fmt.Errorf("failed to generate joke: %w", err)
+            }
+
+            return resp.Text(), nil
+        })
+
+        mux := http.NewServeMux()
+        mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
+        log.Fatal(server.Start(ctx, "127.0.0.1:"+os.Getenv("PORT"), mux))
+    }
+    ```
+
+4.  Implement some form of authentication and authorization to gate access to
+    the flows you plan to deploy.
+
+    Because most generative AI services are metered, you most likely do not want
+    to allow open access to any endpoints that call them. Some hosting services
+    provide an authentication layer as a frontend to apps deployed on them,
+    which you can use for this purpose.
+
+5.  Make API credentials available to your deployed function. Do one of the
+    following, depending on the model provider you chose:
+
+    **Gemini (Google AI)**
+
+    1.  Make sure Google AI is [available in your
+        region](https://ai.google.dev/available_regions).
+
+    2.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
+        Gemini API using Google AI Studio.
+
+    3.  Make the API key available in the deployed environment.
+
+    Most app hosts provide some system for securely handling secrets such as
+    API keys. Often, these secrets are available to your app in the form of
+    environment variables. If you can assign your API key to the
+    `GEMINI_API_KEY` variable, Genkit will use it automatically. Otherwise,
+    you need to modify the `googlegenai.GoogleAI` plugin struct to explicitly
+    set the key. (But don't embed the key directly in code! Use the secret
+    management facilities provided by your hosting provider.)
+
+    **Gemini (Vertex AI)**
+
+    1.  In the Cloud console, [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
+        for your project.
+
+    2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
+        page, create a service account for accessing the Vertex AI API if you
+        don't alreacy have one.
+
+        Grant the account the **Vertex AI User** role.
+
+    3.  [Set up Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc#on-prem)
+        in your hosting environment.
+
+    4.  Configure the plugin with your Google Cloud project ID and the Vertex
+        AI API location you want to use. You can do so either by setting the
+        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` environment
+        variables in your hosting environment, or in your
+        `googlegenai.VertexAI{}` constructor.
+
+        The only secret you need to set up for this tutorial is for the model
+        provider, but in general, you must do something similar for each
+        service your flow uses.
+
+6.  **Optional**: Try your flow in the developer UI:
+
+    1.  Set up your local environment for the model provider you chose:
+
+        **Gemini (Google AI)**
+
+        ```bash
+        export GEMINI_API_KEY=<your API key>
+        ```
+
+        **Gemini (Vertex AI)**
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT=<your project ID>
+
+        export GOOGLE_CLOUD_LOCATION=us-central1
+
+        gcloud auth application-default login
+        ```
+
+    2.  Start the UI:
+
+        ```bash
+        genkit start -- go run .
+        ```
+
+    3.  In the developer UI (`http://localhost:4000/`), run the flow:
+
+    4.  Click **jokesFlow**.
+
+    5.  On the **Input JSON** tab, provide a subject for the model:
+
+        ```json
+        "bananas"
+        ```
+
+    6.  Click **Run**.
+
+7.  If everything's working as expected so far, you can build and deploy the
+    flow using your provider's tools.
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+Prerequisites: make sure you have everything installed from the [Get Started](/docs/get-started) guide.
+
+1.  Install Genkit Flask plugin
+
+    ```bash
+    pip install git+https://github.com/firebase/genkit#subdirectory=py/plugins/flask
+    ```
+
+    Or create a `requirements.txt` file
+
+    ```text title="requirements.txt"
+    genkit-plugin-flask @ git+https://github.com/firebase/genkit#subdirectory=py/plugins/google-genai
+    ```
+
+2.  Create `main.py` file:
+
+    ```python title="main.py"
+    from flask import Flask
+
+    from genkit.ai import Genkit
+    from genkit.plugins.flask import genkit_flask_handler
+    from genkit.plugins.google_genai import (
+        GoogleGenai,
+        google_genai_name,
+    )
+
+    ai = Genkit(
+        plugins=[GoogleGenai()],
+        model=google_genai_name('gemini-2.5-flash'),
+    )
+
+    app = Flask(__name__)
+
+
+    @app.post('/joke')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def joke(name: str, ctx):
+        return await ai.generate(
+            on_chunk=ctx.send_chunk,
+            prompt=f'tell a medium sized joke about {name}',
+        )
+    ```
+
+3.  Run the app:
+
+    ```bash
+    flask --app main.py run
+    ```
+
+    Or with Dev UI:
+
+    ```bash
+    genkit start -- flask --app main.py run
+    ```
+
+    You can invoke the flow via HTTP:
+
+    ```bash
+    curl -X POST http://127.0.0.1:5000/joke -d '{"data": "banana"}' -H 'content-Type: application/json' -H 'Accept: text/event-stream'
+    ```
+
+    or you can use [Genkit client library](https://js.api.genkit.dev/modules/genkit.beta_client.html).
+
+## Authorization and custom context
+
+You can do custom authorization and custom context parsing by passing a `ContextProvider` implementation.
+
+```python
+from genkit.types import GenkitError
+
+# Assume parse_request_header is defined elsewhere
+# def parse_request_header(auth_header):
+#     # Example implementation: Replace with your actual logic
+#     if auth_header and auth_header.startswith('Bearer '):
+#         token = auth_header.split(' ')[1]
+#         # Validate token and return username, or None/raise error
+#         if token == "valid-token":
+#             return "testuser"
+#     return None
+
+async def my_context_provider(request):
+    # This function needs access to the request object from Flask
+    # The exact way to get headers might depend on how genkit_flask_handler passes the request
+    auth_header = request.headers.get('authorization')
+    username = parse_request_header(auth_header) # Call the (assumed) function
+    return {'username': username}
+
+@app.post('/say_hi')
+@genkit_flask_handler(ai, context_provider=my_context_provider)
+@ai.flow()
+async def say_hi(name: str, ctx):
+    if not ctx.context.get('username'):
+        raise GenkitError(status='UNAUTHENTICATED', message='user not provided')
+
+    return await ai.generate(
+        on_chunk=ctx.send_chunk,
+        prompt=f'say hi to {ctx.context.get("username")}',
+    )
+```
+
+`parse_request_header` can be your custom authorization header parsing/validation.
+
+</LanguageContent>

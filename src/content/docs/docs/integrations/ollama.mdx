@@ -1,0 +1,313 @@
+---
+title: Ollama Plugin
+description: Learn how to configure and use the Ollama plugin for Genkit to interact with local LLMs and embedding models across JavaScript, Go, and Python.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+The Ollama plugin provides interfaces to any of the local LLMs supported by
+[Ollama](https://ollama.com/).
+
+## Installation
+
+```bash
+npm install genkitx-ollama
+```
+
+## Configuration
+
+This plugin requires that you first install and run the Ollama server. You can
+follow the instructions on: [Download Ollama](https://ollama.com/download).
+
+You can use the Ollama CLI to download the model you are interested in. For
+example:
+
+```bash
+ollama pull gemma
+```
+
+To use this plugin, specify it when you initialize Genkit:
+
+```ts
+import { genkit } from 'genkit';
+import { ollama } from 'genkitx-ollama';
+
+const ai = genkit({
+  plugins: [
+    ollama({
+      models: [
+        {
+          name: 'gemma',
+          type: 'generate', // type: 'chat' | 'generate' | undefined
+        },
+      ],
+      serverAddress: 'http://127.0.0.1:11434', // default local address
+    }),
+  ],
+});
+```
+
+### Authentication
+
+If you would like to access remote deployments of Ollama that require custom
+headers (static, such as API keys, or dynamic, such as auth headers), you can
+specify those in the Ollama config plugin:
+
+Static headers:
+
+```ts
+ollama({
+  models: [{ name: 'gemma'}],
+  requestHeaders: {
+    'api-key': 'API Key goes here'
+  },
+  serverAddress: 'https://my-deployment',
+}),
+```
+
+You can also dynamically set headers per request. Here's an example of how to
+set an ID token using the Google Auth library:
+
+```ts
+import { GoogleAuth } from 'google-auth-library';
+import { ollama } from 'genkitx-ollama';
+import { genkit } from 'genkit';
+
+const ollamaCommon = { models: [{ name: 'gemma:2b' }] };
+
+const ollamaDev = {
+  ...ollamaCommon,
+  serverAddress: 'http://127.0.0.1:11434',
+};
+
+const ollamaProd = {
+  ...ollamaCommon,
+  serverAddress: 'https://my-deployment',
+  requestHeaders: async (params) => {
+    const headers = await fetchWithAuthHeader(params.serverAddress);
+    return { Authorization: headers['Authorization'] };
+  },
+};
+
+const ai = genkit({
+  plugins: [ollama(isDevEnv() ? ollamaDev : ollamaProd)],
+});
+
+// Function to lazily load GoogleAuth client
+let auth: GoogleAuth;
+function getAuthClient() {
+  if (!auth) {
+    auth = new GoogleAuth();
+  }
+  return auth;
+}
+
+// Function to fetch headers, reusing tokens when possible
+async function fetchWithAuthHeader(url: string) {
+  const client = await getIdTokenClient(url);
+  const headers = await client.getRequestHeaders(url); // Auto-manages token refresh
+  return headers;
+}
+
+async function getIdTokenClient(url: string) {
+  const auth = getAuthClient();
+  const client = await auth.getIdTokenClient(url);
+  return client;
+}
+```
+
+## Usage
+
+This plugin doesn't statically export model references. Specify one of the
+models you configured using a string identifier:
+
+```ts
+const llmResponse = await ai.generate({
+  model: 'ollama/gemma',
+  prompt: 'Tell me a joke.',
+});
+```
+
+## Embedders
+
+The Ollama plugin supports embeddings, which can be used for similarity searches
+and other NLP tasks.
+
+```ts
+const ai = genkit({
+  plugins: [
+    ollama({
+      serverAddress: 'http://localhost:11434',
+      embedders: [{ name: 'nomic-embed-text', dimensions: 768 }],
+    }),
+  ],
+});
+
+async function getEmbeddings() {
+  const embeddings = (
+    await ai.embed({
+      embedder: 'ollama/nomic-embed-text',
+      content: 'Some text to embed!',
+    })
+  )[0].embedding;
+
+  return embeddings;
+}
+
+getEmbeddings().then((e) => console.log(e));
+```
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+The Ollama plugin provides interfaces to any of the local LLMs supported by
+[Ollama](https://ollama.com/).
+
+## Prerequisites
+
+This plugin requires that you first install and run the Ollama server. You can
+follow the instructions on the [Download Ollama](https://ollama.com/download)
+page.
+
+Use the Ollama CLI to download the models you are interested in. For example:
+
+```bash
+ollama pull gemma3
+```
+
+For development, you can run Ollama on your development machine. Deployed apps
+usually run Ollama on a GPU-accelerated machine that is different from the one
+hosting the app backend running Genkit.
+
+## Configuration
+
+To use this plugin, pass `ollama.Ollama` to `WithPlugins()` in the Genkit
+initializer, specifying the address of your Ollama server:
+
+```go
+import "github.com/firebase/genkit/go/plugins/ollama"
+```
+
+```go
+g := genkit.Init(context.Background(), genkit.WithPlugins(&ollama.Ollama{ServerAddress: "http://127.0.0.1:11434"}))
+```
+
+## Usage
+
+To generate content, you first need to create a model definition based on the
+model you installed and want to use. For example, if you installed Gemma 2:
+
+```go
+model := ollama.DefineModel(
+    ollama.ModelDefinition{
+        Name: "gemma3",
+        Type: "chat", // "chat" or "generate"
+    },
+    &ai.ModelInfo{
+        Multiturn:  true,
+        SystemRole: true,
+        Tools:      false,
+        Media:      false,
+    },
+)
+```
+
+Then, you can use the model reference to send requests to your Ollama server:
+
+```go
+resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("Tell me a joke."))
+if err != nil {
+    return err
+}
+
+log.Println(resp.Text())
+```
+
+See [Generating content](/docs/models) for more information.
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+The `genkit-plugin-ollama` package provides integration with [Ollama](https://ollama.com/), allowing you to run various open-source large language models and embedding models locally.
+
+## Installation
+
+```bash
+pip3 install genkit-plugin-ollama
+```
+
+You will need to download and install Ollama separately: [https://ollama.com/download](https://ollama.com/download)
+
+Use the Ollama CLI to pull the models you would like to use. For example:
+
+```bash
+ollama pull gemma2 # Example model
+ollama pull nomic-embed-text # Example embedder
+```
+
+## Configuration
+
+Configure the Ollama plugin in your Genkit initialization, specifying the models and embedders you have pulled and wish to use.
+
+```python
+from genkit.ai import Genkit
+from genkit.plugins.ollama import Ollama, ModelDefinition, EmbeddingModelDefinition
+
+ai = Genkit(
+    plugins=[
+        Ollama(
+           models=[
+               ModelDefinition(name='gemma2'), # Match the model pulled via ollama CLI
+               # Add other models as needed
+               # ModelDefinition(name='mistral'),
+           ],
+           embedders=[
+               EmbeddingModelDefinition(
+                   name='nomic-embed-text', # Match the embedder pulled via ollama CLI
+                   # Specify dimensions if known/required by your use case
+                   # dimensions=768, # Example dimension
+               )
+           ],
+           # Optional: Specify Ollama server address if not default (http://127.0.0.1:11434)
+           # address="http://custom-ollama-host:11434"
+        )
+    ],
+)
+```
+
+Then use Ollama models and embedders by specifying the `ollama/` prefix followed by the model/embedder name defined in the configuration:
+
+```python
+from genkit.ai import Document # Import Document
+# Assuming 'ai' is configured as above
+
+async def run_ollama():
+    generate_response = await ai.generate(
+        prompt='Tell me a short story about a space cat.',
+        model='ollama/gemma2', # Use the configured model name
+    )
+    print("Generated Text:", generate_response.text)
+
+    embedding_response = await ai.embed(
+        embedder='ollama/nomic-embed-text', # Use the configured embedder name
+        content=[Document.from_text('This is text to embed.')], # Pass content as a list of Documents
+    )
+    print("Embedding:", embedding_response.embeddings[0].embedding) # Access the embedding vector
+
+# Example of running the async function
+# import asyncio
+# asyncio.run(run_ollama())
+```
+
+</LanguageContent>
