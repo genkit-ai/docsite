@@ -120,6 +120,5 @@ const DOCS_SIDEBAR = [
 ];
 
 export const sidebar = [
-  { label: "Introduction", slug: "" },
   ...DOCS_SIDEBAR,
 ];
