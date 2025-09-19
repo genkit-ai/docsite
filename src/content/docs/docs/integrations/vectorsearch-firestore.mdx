@@ -12,6 +12,168 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
   <CopyMarkdownButton />
 </div>
 
+<LanguageContent lang="python">
+
+:::note[Feature unavailable for Python]
+Vertex AI Vectorsearch with Firestore database integration is not currently available for Python. Please use Go for Vertex AI Vectorsearch with Firestore database functionality.
+:::
+
+</LanguageContent>
+
+<LanguageContent lang="js">
+
+Vector search provided by Google Cloud services allows you to index and retrieve documents. The documents are stored in Firestore and the corresponding document IDs are indexed using the vector search index provided by GCP. These are suitable for production use cases.
+
+## Installation
+
+The vector search functionality is built into Genkit Go. You need to import the [`vectorsearch`](https://pkg.go.dev/github.com/firebase/genkit/go/plugins/vertexai/vectorsearch) package:
+
+```bash
+npm install @genkit-ai/vertexai
+```
+
+## Configuration
+
+1. Create a vector search index in GCP. Details on creating vector search index can be found at [Create your Vector Search Index](https://cloud.google.com/vertex-ai/docs/vector-search/create-manage-index#create-index)
+2. Create a Firestore Dataset and a Collection within that dataset to store the documents that will be indexed. More information to create Firestore datasets is available [here](https://firebase.google.com/docs/firestore/quickstart#create)
+
+To use the GCP vector search with Firestore, initialize it and define a retriever with an embedder. You can also use a custom indexer and retriever for indexing and retrieving documents from the Firestore dataset:
+
+```ts
+import { initializeApp } from 'firebase-admin/app';
+import { Document, genkit, z } from 'genkit';
+
+import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
+
+import {
+  getFirestoreDocumentIndexer,
+  getFirestoreDocumentRetriever,
+  vertexAIVectorSearch,
+  vertexAiIndexerRef,
+  vertexAiRetrieverRef,
+  type DocumentIndexer,
+  type DocumentRetriever,
+} from '@genkit-ai/vertexai/vectorsearch';
+
+// // Initialize Firebase app
+initializeApp({ projectId: PROJECT_ID });
+
+const db = getFirestore();
+
+// Use our helper functions here, or define your own document retriever and document indexer
+const firestoreDocumentRetriever: DocumentRetriever =
+  getFirestoreDocumentRetriever(db, FIRESTORE_COLLECTION);
+
+const firestoreDocumentIndexer: DocumentIndexer = getFirestoreDocumentIndexer(
+  db,
+  FIRESTORE_COLLECTION
+);
+
+
+// Configure Genkit with Vertex AI plugin
+const ai = genkit({
+  plugins: [
+    vertexAI({
+      projectId: PROJECT_ID,
+      location: LOCATION,
+      googleAuth: {
+        scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+      },
+    }),
+    vertexAIVectorSearch({
+      projectId: PROJECT_ID,
+      location: LOCATION,
+      vectorSearchOptions: [
+        {
+          publicDomainName: VECTOR_SEARCH_PUBLIC_DOMAIN_NAME,
+          indexEndpointId: VECTOR_SEARCH_INDEX_ENDPOINT_ID,
+          indexId: VECTOR_SEARCH_INDEX_ID,
+          deployedIndexId: VECTOR_SEARCH_DEPLOYED_INDEX_ID,
+          documentRetriever: firestoreDocumentRetriever,
+          documentIndexer: firestoreDocumentIndexer,
+          embedder: textEmbedding004,
+        },
+      ],
+    }),
+  ],
+});
+```
+
+### Configuration Options
+
+- **projectId** (string): GCP Project ID
+- **location** (string): GCP Project location
+- **indexId** (string): Vector search index id
+- **indexEndpointId** (string): Vector search endpoint id corresponding to the vector search index. More details can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#create-index-endpoint).
+- **deployedIndexId** (string): Vector search deployed index id corresponding to the vector search endpoint. More details to deploy an index to an index endpoint can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#deploy-index).
+- **publicDomainName** (string): Public Domain Name of the vector search index endpoint.
+- **embedder** ([`ai.Embedder`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Embedder)): The embedding model to use. Must be a configured embedder in your Genkit project.
+- **documentIndexer** (`func(ctx context.Context, docs []*ai.Document) ([]string, error)`): Document indexer used to insert data with unique IDs in Firestore. This can be a custom document indexer as well depending on the user's requirement.
+- **documentRetriever** (`func(ctx context.Context, neighbors []Neighbor, options any) ([]*ai.Document, error)`): Document retriever used to retrieve data with corresponding ID from Firestore. This can be a custom document retriever as well depending on the user's requirement.
+
+## Usage
+
+### Indexing Documents
+
+To populate with data, you need to implement your own indexing logic using the [`ai.Document`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Document) format. Genkit provides a sample indexing function as well:
+
+```ts
+async ({ datapoints }) => {
+    const documents: Document[] = datapoints.map((dp) => {
+        const metadata = {
+        restricts: structuredClone(dp.restricts),
+        numericRestricts: structuredClone(dp.numericRestricts),
+        };
+        return Document.fromText(dp.text, metadata);
+    });
+    await ai.index({
+        indexer: vertexAiIndexerRef({
+        indexId: VECTOR_SEARCH_INDEX_ID,
+        displayName: 'firestore_index',
+        }),
+        documents,
+    });
+    return { result: 'success' };
+}
+```
+
+### Retrieving Documents
+
+Use [`ai.Retrieve`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Retrieve) with the retriever you defined:
+
+```ts
+async ({ query, k, restricts, numericRestricts }) => {
+    const startTime = performance.now();
+    const metadata = {
+        restricts: structuredClone(restricts),
+        numericRestricts: structuredClone(numericRestricts),
+    };
+    const queryDocument = Document.fromText(query, metadata);
+    const res = await ai.retrieve({
+        retriever: vertexAiRetrieverRef({
+        indexId: VECTOR_SEARCH_INDEX_ID,
+        displayName: 'firestore_index',
+        }),
+        query: queryDocument,
+        options: { k },
+    });
+    const endTime = performance.now();
+    return {
+        result: res
+        .map((doc) => ({
+            text: doc.content[0].text!,
+            metadata: JSON.stringify(doc.metadata),
+            distance: doc.metadata?.distance,
+        }))
+        .sort((a, b) => b.distance - a.distance),
+        length: res.length,
+        time: endTime - startTime,
+    };
+}
+```
+
+</LanguageContent>
+
 <LanguageContent lang="go">
 
 Vector search provided by Google Cloud services allows you to index and retrieve documents. The documents are stored in Firestore and the corresponding document IDs are indexed using the vector search index provided by GCP. These are suitable for production use cases.
