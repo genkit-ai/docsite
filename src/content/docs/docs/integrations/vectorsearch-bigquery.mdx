@@ -1,0 +1,159 @@
+---
+title: Vector Search using Bigquery
+description: Learn how to use the GCP Vector search using Bigquery with Genkit.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="go">
+
+Vector search provided by Google Cloud services allows you to index and retrieve documents. The documents are stored in Bigquery and the corresponding document IDs are indexed using the vector search index provided by GCP. These are suitable for production use cases.
+
+## Installation
+
+The vector search functionality is built into Genkit Go. You need to import the [`vectorsearch`](https://pkg.go.dev/github.com/firebase/genkit/go/plugins/vertexai/vectorsearch) package:
+
+```go
+import "github.com/firebase/genkit/go/plugins/vertexai/vectorsearch"
+```
+
+## Configuration
+
+1. Create a vector search index in GCP. Details on creating vector search index can be found at [Create your Vector Search Index](https://cloud.google.com/vertex-ai/docs/vector-search/create-manage-index#create-index)
+2. Create a Bigquery Dataset and a Table within that dataset to store the documents that will be indexed. More information to create Bigquery datasets is available [here](https://cloud.google.com/bigquery/docs/datasets)
+
+To use the GCP vector search with Bigquery, initialize it and define a retriever with an embedder. You can also use a custom indexer and retriever for indexing and retrieving documents from the Bigquery dataset:
+
+```go
+import (
+	"context"
+	"log"
+
+	"cloud.google.com/go/bigquery"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/vertexai/vectorsearch"
+)
+
+ctx := context.Background()
+
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+
+bqClient, err := bigquery.NewClient(ctx, "your-project-id")
+if err != nil {
+    log.Fatalf("Failed to create BigQuery client: %v", err)
+}
+
+documentIndexer := vectorsearch.GetBigQueryDocumentIndexer(bqClient, "your-dataset-id", "your-table-id")
+documentRetriever := vectorsearch.GetBigQueryDocumentRetriever(bqClient, "your-dataset-id", "your-table-id")
+
+vectorsearchParams := &VectorsearchConfig{
+    ProjectID:         vectorsearchPlugin.ProjectID,
+    Location:          vectorsearchPlugin.Location,
+    IndexID:           "${VECTOR_SEARCH_INDEX_ID}",                           // Replace with your index ID
+    IndexEndpointID:   "${VECTOR_SEARCH_INDEX_ENDPOINT_ID}",                  // Replace with your index endpoint ID
+    DeployedIndexID:   "${VECTOR_SEARCH_DEPLOYED_INDEX_ID}",                  // Replace with your deployed index ID
+    ProjectNumber:     "${GOOGLE_CLOUD_PROJECT_NUMBER}",                      // Replace with your Google Cloud project number
+    PublicDomainName:  "${VECTOR_SEARCH_PUBLIC_DOMAIN_NAME}",                 // Replace with your public domain name
+    Embedder:          googlegenai.VertexAIEmbedder(g, "text-embedding-004"), // Replace with your desired embedder
+    NeighborsCount:    10,                                                    // Number of neighbors to retrieve
+    DocumentIndexer:   documentIndexer,
+    DocumentRetriever: documentRetriever,
+}
+```
+
+### Configuration Options
+
+- **ProjectID** (string): GCP Project ID
+- **Location** (string): GCP Project location
+- **IndexID** (string): Vector search index id
+- **IndexEndpointID** (string): Vector search endpoint id corresponding to the vector search index. More details can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#create-index-endpoint).
+- **DeployedIndexID** (string): Vector search deployed index id corresponding to the vector search endpoint. More details to deploy an index to an index endpoint can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#deploy-index).
+- **ProjectNumber** (string): GCP Project Number
+- **PublicDomainName** (string): Public Domain Name of the vector search index endpoint.
+- **Embedder** ([`ai.Embedder`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Embedder)): The embedding model to use. Must be a configured embedder in your Genkit project.
+- **NeighborsCount** (int): Number of neighbors to set in the vector search
+- **DocumentIndexer** (`func(ctx context.Context, docs []*ai.Document) ([]string, error)`): Document indexer used to insert data with unique IDs in Bigquery. This can be a custom document indexer as well depending on the user's requirement.
+- **DocumentRetriever** (`func(ctx context.Context, neighbors []Neighbor, options any) ([]*ai.Document, error)`): Document retriever used to retrieve data with corresponding ID from Bigquery. This can be a custom document retriever as well depending on the user's requirement.
+## Usage
+
+### Indexing Documents
+
+To populate with data, you need to implement your own indexing logic using the [`ai.Document`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Document) format. Genkit provides a sample indexing function as well:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+)
+
+// Create documents from text
+data := []string{
+    "This is the first document.",
+    "This is the second document.",
+    "This is the third document.",
+    "This is the fourth document.",
+}
+
+var docs []*ai.Document
+for _, text := range data {
+	docs = append(docs, ai.DocumentFromText(text, nil))
+}
+
+// Index the docs.
+// Custom Index function can be used which should internally refer the indexer function for Bigquery
+if err := vectorsearch.Index(ctx, g, vectorsearch.IndexParams{
+    IndexID:         vectorsearchParams.IndexID,
+    Embedder:        vectorsearchParams.Embedder,
+    EmbedderOptions: nil,
+    Docs:            docs,
+    ProjectID:       vectorsearchParams.ProjectID,
+    Location:        vectorsearchParams.Location,
+}, vectorsearchParams.DocumentIndexer); err != nil {
+    return nil, err
+}
+```
+
+### Retrieving Documents
+
+Use [`ai.Retrieve`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Retrieve) with the retriever you defined:
+
+```go
+// Define the retriever for vector search.
+retriever, err := vectorsearch.DefineRetriever(ctx, g, vectorsearch.Config{
+    IndexID: vectorsearchParams.IndexID, // Replace with your index ID
+}, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+// The retriever defined above has built in function called Retrieve() which 
+// corresponds to vector search retriever function defined in vector search plugin.
+// The DocumentRetriever passed as argument corresponds to the documentretriever 
+// for Bigquery. This function retrieves the docs corresponding to the Neighbor IDs
+// found using vector search index.
+
+resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
+    Query: ai.DocumentFromText(input.Question, nil),
+    Options: &vectorsearch.RetrieveParams{
+        Embedder:          vectorsearchParams.Embedder,
+        NeighborCount:     vectorsearchParams.NeighborsCount,
+        IndexEndpointID:   vectorsearchParams.IndexEndpointID,
+        DeployedIndexID:   vectorsearchParams.DeployedIndexID,
+        PublicDomainName:  vectorsearchParams.PublicDomainName,
+        ProjectNumber:     vectorsearchParams.ProjectNumber,
+        DocumentRetriever: vectorsearchParams.DocumentRetriever,
+    }})
+if err != nil {
+    return nil, err
+}
+```
+
+</LanguageContent>
