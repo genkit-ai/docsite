@@ -138,6 +138,91 @@ Just by wrapping your generate calls like this...
 3. **Workflow descriptions** - The overall process is usually the same
 4. **Examples and use cases** - Unless the example itself is language-specific
 
+## Special Considerations for Bullet Lists
+
+**Important:** LanguageContent tags render as block-level elements, which creates extra spacing when used within bullet lists. This breaks the visual flow of the list.
+
+### The Problem
+
+When you wrap individual bullet items in LanguageContent tags, it creates unwanted spacing:
+
+**❌ Don't do this:**
+```mdx
+- **Common feature**: Available in all languages
+<LanguageContent lang="js">
+- **JavaScript feature**: Only in JS
+</LanguageContent>
+<LanguageContent lang="python">
+- **Python feature**: Only in Python
+</LanguageContent>
+- **Another common feature**: Available in all languages
+```
+
+This renders with extra spacing between bullets, breaking the list's visual continuity.
+
+### Solutions for Bullet Lists
+
+#### Option 1: Rewrite to Be Language-Agnostic (Preferred)
+
+The best solution is to rewrite bullet points to avoid language-specific content:
+
+**✅ Do this:**
+```mdx
+- **Type safety**: Input and output schemas with runtime type checking
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+```
+
+#### Option 2: Wrap Entire List in LanguageContent
+
+If language-specific bullets are unavoidable, wrap the **entire bullet list** in LanguageContent tags:
+
+**✅ Do this:**
+```mdx
+<LanguageContent lang="js">
+- **Type safety**: Input and output schemas defined using Zod
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+</LanguageContent>
+
+<LanguageContent lang="go">
+- **Type safety**: Input and output schemas with static type checking
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+</LanguageContent>
+
+<LanguageContent lang="python">
+- **Type safety**: Input and output schemas defined using Pydantic Models
+- **Streaming**: Support for streaming data
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+</LanguageContent>
+```
+
+#### Option 3: Use Paragraphs Instead of Bullets
+
+Convert the list to paragraphs with bold headings:
+
+**✅ Do this:**
+```mdx
+**Type safety**: Input and output schemas with runtime type checking.
+
+<LanguageContent lang="python">
+**Streaming**: Flows support streaming of data, such as partial LLM responses.
+</LanguageContent>
+
+**Integration with developer UI**: Debug flows independently of your application code.
+
+**Simplified deployment**: Deploy flows directly as web API endpoints.
+```
+
+### Best Practices for Lists
+
+1. **Prefer language-agnostic lists** - Rewrite to eliminate language-specific bullets when possible
+2. **Wrap entire lists** - If you must have language-specific content, wrap the complete list for each language
+3. **Never mix** - Don't mix wrapped and unwrapped bullets in the same list
+4. **Consider alternatives** - Use paragraphs or other formatting if lists become too complex
+
 ## Multi-Language Syntax
 
 The `lang` attribute accepts space-separated language codes:
@@ -198,27 +283,43 @@ async def my_flow():
 This creates a flow that can be run from the CLI or developer UI.
 ```
 
-### Pattern 2: Mostly Common with Language-Specific Details
+### Pattern 2: Bullet Lists with Language-Specific Content
+
+**Option A: Wrap entire list (recommended for lists with language differences)**
 
 ```mdx
-Flows provide several benefits:
-
-- **Type safety**: Input and output schemas with runtime type checking
-
 <LanguageContent lang="js">
+- **Type safety**: Input and output schemas defined using Zod
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+</LanguageContent>
 
-- **Zod integration**: Define schemas using Zod for TypeScript
-
+<LanguageContent lang="go">
+- **Type safety**: Input and output schemas with static type checking
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
 </LanguageContent>
 
 <LanguageContent lang="python">
+- **Type safety**: Input and output schemas defined using Pydantic Models
+- **Streaming**: Support for streaming data
+- **Integration with developer UI**: Debug flows independently
+- **Simplified deployment**: Deploy as web API endpoints
+</LanguageContent>
+```
 
-- **Pydantic integration**: Define schemas using Pydantic models
+**Option B: Use paragraphs instead of bullets**
 
+```mdx
+**Type safety**: Input and output schemas with runtime type checking.
+
+<LanguageContent lang="python">
+**Streaming**: Flows support streaming of data, such as partial LLM responses.
 </LanguageContent>
 
-- **Developer UI integration**: Debug flows independently
-- **Simplified deployment**: Deploy as web API endpoints
+**Integration with developer UI**: Debug flows independently.
+
+**Simplified deployment**: Deploy as web API endpoints.
 ```
 
 ### Pattern 3: CLI Commands
@@ -253,6 +354,8 @@ When refactoring existing documentation:
 4. ✅ Check for language-specific API references → Consider using generic terms
 5. ✅ Verify no `lang="js go python"` blocks exist → Remove the wrapper
 6. ✅ Ensure code examples remain in language-specific blocks → Keep them wrapped
+7. ✅ **Check bullet lists** → Either make them language-agnostic OR wrap entire lists per language
+8. ✅ **Avoid mixing** → Never mix LanguageContent tags within a single bullet list
 
 ## Maintenance Tips
 
@@ -276,3 +379,4 @@ When in doubt, ask:
 2. Does this content apply to 2 languages? → Use multi-language syntax
 3. Is the difference minor and inconsequential? → Consider rewriting to consolidate
 4. Is this a code example or API-specific? → Keep it language-specific
+5. Is this a bullet list with language-specific items? → Wrap the entire list per language OR rewrite to be language-agnostic
