@@ -1,6 +1,10 @@
 # Genkit Documentation Writing Guide
 
-This guide provides comprehensive best practices for writing clear, effective, and maintainable documentation for Firebase Genkit. Following these principles ensures a consistent, high-quality experience for developers across all supported languages (JavaScript, Go, and Python).
+This guide provides comprehensive best practices for writing clear, effective, and maintainable documentation for Genkit. Following these principles ensures a consistent, high-quality experience for developers across all supported languages (JavaScript, Go, and Python).
+
+## Terminology
+
+**Important:** Always refer to the project as **Genkit**, never "Firebase Genkit". The proper name is simply **Genkit**.
 
 ## Core Documentation Principles
 
@@ -60,33 +64,49 @@ Provide abundant, practical code examples that developers can immediately use.
 - **Include comments**: Explain what the code does inline, especially for complex operations.
 - **Show expected output**: Include comments or snippets demonstrating what the code produces.
 - **Prefer code over prose**: When explaining how to do something, a well-commented code example is often clearer than paragraphs of text.
-- **Test your examples**: Verify that all code samples actually work.
 - **Use recommended models**: Default to using the Google GenAI package with recommended models (see "Default Models and Packages" section below).
+- **Explain lengthier code samples**: After presenting a substantial code example, follow it with a bulleted explanation of what the code does. This helps readers understand the key concepts without having to parse the entire code block.
 
-**✅ Good code sample:**
+**✅ Good code sample with explanation:**
 ```typescript
 import { googleAI } from '@genkit-ai/google-genai';
+import { genkit, z } from 'genkit';
 
-// Define a simple flow that generates a greeting
-export const greetingFlow = ai.defineFlow(
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.5-flash'),
+});
+
+const RecipeSchema = z.object({
+  title: z.string(),
+  ingredients: z.array(z.string()),
+  instructions: z.array(z.string()),
+});
+
+export const recipeGeneratorFlow = ai.defineFlow(
   {
-    name: 'greetingFlow',
-    inputSchema: z.object({ name: z.string() }),
-    outputSchema: z.string(),
+    name: 'recipeGeneratorFlow',
+    inputSchema: z.object({ ingredient: z.string() }),
+    outputSchema: RecipeSchema,
   },
   async (input) => {
-    const result = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
-      prompt: `Generate a friendly greeting for ${input.name}`,
+    const { output } = await ai.generate({
+      prompt: `Create a recipe using ${input.ingredient}`,
+      output: { schema: RecipeSchema },
     });
-    return result.text;
+    
+    if (!output) throw new Error('Failed to generate recipe');
+    return output;
   }
 );
-
-// Example usage:
-// const greeting = await greetingFlow({ name: "Alice" });
-// Output: "Hello Alice! It's wonderful to meet you today!"
 ```
+
+This code sample:
+
+- Defines reusable input and output schemas with [Zod](https://zod.dev/)
+- Configures the `gemini-2.5-flash` model as the default
+- Defines a Genkit flow to generate a structured recipe based on your input
+- Validates the output against the schema before returning it
 
 ### 5. **Cross-Language Alignment**
 
@@ -287,6 +307,96 @@ const ai = genkit({
 2. **Use string identifiers** (e.g., `'googleai/gemini-2.5-flash'`) when model reference functions aren't available or for simplicity
 3. **Keep examples up-to-date**: Always reference the latest recommended models in documentation
 4. **Check the source**: Refer to [`src/content/docs/docs/models.mdx`](src/content/docs/docs/models.mdx) for the most current model reference patterns
+
+## Flow Documentation Best Practices
+
+Flows are a core Genkit concept and will appear in most documentation. Follow these best practices when documenting flows:
+
+### 1. **Use Object-Based Schemas**
+
+Always wrap input and output schemas in objects, even for simple types. This is a best practice across all languages.
+
+**Why object-based schemas:**
+- **Better developer experience**: Provides labeled input fields in the Developer UI
+- **Future-proof API design**: Allows adding new fields without breaking existing clients
+- **Consistency**: Maintains uniform patterns across all documentation
+
+**✅ Correct:**
+```typescript
+// JavaScript
+export const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
+  },
+  async ({ theme }) => {
+    // ...
+  }
+);
+```
+
+```go
+// Go
+type MenuSuggestionInput struct {
+    Theme string `json:"theme"`
+}
+
+type MenuSuggestionOutput struct {
+    MenuItem string `json:"menuItem"`
+}
+```
+
+```python
+# Python
+class MenuSuggestionInput(BaseModel):
+    theme: str = Field(description='Restaurant theme')
+
+class MenuSuggestionOutput(BaseModel):
+    menu_item: str = Field(description='Generated menu item')
+```
+
+**❌ Incorrect:**
+```typescript
+// Don't use primitive types directly
+export const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+    inputSchema: z.string(),  // ❌ Not wrapped in object
+    outputSchema: z.string(), // ❌ Not wrapped in object
+  },
+  async (theme) => {
+    // ...
+  }
+);
+```
+
+### 2. **Use Descriptive Field Names with Descriptions**
+
+For Python and JavaScript, add descriptions to schema fields to help both developers and models understand the data:
+
+```python
+class MenuSuggestionInput(BaseModel):
+    theme: str = Field(description='Restaurant theme')
+
+class MenuItemSchema(BaseModel):
+    dishname: str = Field(description='Name of the dish')
+    description: str = Field(description='Description of the dish')
+```
+
+```typescript
+const MenuItemSchema = z.object({
+  dishname: z.string().describe('Name of the dish'),
+  description: z.string().describe('Description of the dish'),
+});
+```
+
+### 3. **Consistent Naming Conventions**
+
+Follow language-specific naming conventions:
+- **JavaScript**: camelCase for flow names (`menuSuggestionFlow`)
+- **Go**: PascalCase for types, camelCase for flow variables (`menuSuggestionFlow`)
+- **Python**: snake_case for flow names (`menu_suggestion_flow`)
 
 ## Multi-Language Documentation with LanguageContent
 
