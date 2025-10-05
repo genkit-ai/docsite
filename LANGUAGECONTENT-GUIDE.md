@@ -214,6 +214,93 @@ Content for JavaScript and Go
 
 **Note:** Never use `lang="js go python"` - this is equivalent to not wrapping the content at all.
 
+## Language Ordering Convention
+
+**Always order language-specific content blocks consistently throughout the documentation:**
+
+### Standard Order for All Three Languages
+
+When you have separate blocks for each language, always use this order:
+
+1. **JavaScript** (`lang="js"`)
+2. **Go** (`lang="go"`)
+3. **Python** (`lang="python"`)
+
+**✅ Correct ordering:**
+```mdx
+<LanguageContent lang="js">
+JavaScript code example
+</LanguageContent>
+
+<LanguageContent lang="go">
+Go code example
+</LanguageContent>
+
+<LanguageContent lang="python">
+Python code example
+</LanguageContent>
+```
+
+**❌ Incorrect ordering:**
+```mdx
+<LanguageContent lang="python">
+Python code example
+</LanguageContent>
+
+<LanguageContent lang="js">
+JavaScript code example
+</LanguageContent>
+
+<LanguageContent lang="go">
+Go code example
+</LanguageContent>
+```
+
+### Order for Two-Language Blocks
+
+When content applies to only 2 languages, follow these ordering rules:
+
+- **`js` always comes first** in multi-language blocks
+- **`go` comes second** when paired with `js`
+- **`python` comes last** when paired with either `js` or `go`
+
+**✅ Correct two-language ordering:**
+```mdx
+<LanguageContent lang="js python">
+Content for JavaScript and Python
+</LanguageContent>
+
+<LanguageContent lang="js go">
+Content for JavaScript and Go
+</LanguageContent>
+
+<LanguageContent lang="go python">
+Content for Go and Python
+</LanguageContent>
+```
+
+**❌ Incorrect two-language ordering:**
+```mdx
+<LanguageContent lang="python js">
+<!-- Wrong: js should come first -->
+</LanguageContent>
+
+<LanguageContent lang="go js">
+<!-- Wrong: js should come first -->
+</LanguageContent>
+
+<LanguageContent lang="python go">
+<!-- Wrong: go should come first -->
+</LanguageContent>
+```
+
+### Why Consistent Ordering Matters
+
+1. **Maintainability** - Developers can quickly scan documentation knowing where to find each language
+2. **Predictability** - Users switching between languages find content in expected locations
+3. **Code review** - Easier to spot missing or misplaced language blocks
+4. **Documentation quality** - Demonstrates attention to detail and professionalism
+
 ## Common Patterns
 
 ### Pattern 1: Code Examples with Shared Explanation
@@ -281,23 +368,25 @@ genkit flow:run myFlow '"value"'
 When refactoring existing documentation:
 
 1. ✅ Identify all content that's identical across all languages → Move outside blocks
-2. ✅ Find content shared by 2 languages → Use multi-language syntax
+2. ✅ Find content shared by 2 languages → Use multi-language syntax (with proper ordering)
 3. ✅ Look for minor differences that can be rewritten → Generalize the text
 4. ✅ Check for language-specific API references → Consider using generic terms
 5. ✅ Verify no `lang="js go python"` blocks exist → Remove the wrapper
 6. ✅ Ensure code examples remain in language-specific blocks → Keep them wrapped
 7. ✅ **Check bullet lists** → Either make them language-agnostic OR wrap entire lists per language
 8. ✅ **Avoid mixing** → Never mix LanguageContent tags within a single bullet list
+9. ✅ **Verify language ordering** → Ensure all blocks follow the standard order (JS, Go, Python)
 
 ## Quick Reference
 
 ### When in Doubt
 
 1. Does this content apply to all languages? → Don't wrap it
-2. Does this content apply to 2 languages? → Use multi-language syntax
+2. Does this content apply to 2 languages? → Use multi-language syntax (with proper ordering)
 3. Is the difference minor and inconsequential? → Consider rewriting to consolidate
 4. Is this a code example or API-specific? → Keep it language-specific
 5. Is this a bullet list with language-specific items? → Wrap the entire list per language OR rewrite to be language-agnostic
+6. Are language blocks in the right order? → Always use JS, Go, Python order
 
 ### Maintenance Tips
 
