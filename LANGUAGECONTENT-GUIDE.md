@@ -68,29 +68,7 @@ The argument must conform to the input schema.
 
 ### 3. **Rewrite Minor Differences**
 
-When differences between languages are minor and inconsequential, consider rewriting to create a single universal statement.
-
-**❌ Don't do this:**
-```mdx
-<LanguageContent lang="js python">
-
-The argument must conform to the input schema, if you defined one.
-
-</LanguageContent>
-
-<LanguageContent lang="go">
-
-The argument must conform to the input schema.
-
-</LanguageContent>
-```
-
-**✅ Do this:**
-```mdx
-The argument must conform to the input schema.
-```
-
-The phrase "if you defined one" is implied and doesn't add significant value, so removing it creates cleaner documentation.
+When differences between languages are minor and inconsequential, rewrite to create a single universal statement. For example, the phrase "if you defined one" is often implied and can be removed for cleaner documentation.
 
 ### 4. **Avoid Language-Specific References in Common Content**
 
@@ -175,45 +153,34 @@ The best solution is to rewrite bullet points to avoid language-specific content
 
 #### Option 2: Wrap Entire List in LanguageContent
 
-If language-specific bullets are unavoidable, wrap the **entire bullet list** in LanguageContent tags:
+If language-specific bullets are valuable, wrap the **entire bullet list** in LanguageContent tags:
 
 **✅ Do this:**
 ```mdx
 <LanguageContent lang="js">
+
 - **Type safety**: Input and output schemas defined using Zod
 - **Integration with developer UI**: Debug flows independently
 - **Simplified deployment**: Deploy as web API endpoints
+
 </LanguageContent>
 
 <LanguageContent lang="go">
+
 - **Type safety**: Input and output schemas with static type checking
 - **Integration with developer UI**: Debug flows independently
 - **Simplified deployment**: Deploy as web API endpoints
+
 </LanguageContent>
 
 <LanguageContent lang="python">
+
 - **Type safety**: Input and output schemas defined using Pydantic Models
 - **Streaming**: Support for streaming data
 - **Integration with developer UI**: Debug flows independently
 - **Simplified deployment**: Deploy as web API endpoints
+
 </LanguageContent>
-```
-
-#### Option 3: Use Paragraphs Instead of Bullets
-
-Convert the list to paragraphs with bold headings:
-
-**✅ Do this:**
-```mdx
-**Type safety**: Input and output schemas with runtime type checking.
-
-<LanguageContent lang="python">
-**Streaming**: Flows support streaming of data, such as partial LLM responses.
-</LanguageContent>
-
-**Integration with developer UI**: Debug flows independently of your application code.
-
-**Simplified deployment**: Deploy flows directly as web API endpoints.
 ```
 
 ### Best Practices for Lists
@@ -283,44 +250,9 @@ async def my_flow():
 This creates a flow that can be run from the CLI or developer UI.
 ```
 
-### Pattern 2: Bullet Lists with Language-Specific Content
+### Pattern 2: Handling Language-Specific List Items
 
-**Option A: Wrap entire list (recommended for lists with language differences)**
-
-```mdx
-<LanguageContent lang="js">
-- **Type safety**: Input and output schemas defined using Zod
-- **Integration with developer UI**: Debug flows independently
-- **Simplified deployment**: Deploy as web API endpoints
-</LanguageContent>
-
-<LanguageContent lang="go">
-- **Type safety**: Input and output schemas with static type checking
-- **Integration with developer UI**: Debug flows independently
-- **Simplified deployment**: Deploy as web API endpoints
-</LanguageContent>
-
-<LanguageContent lang="python">
-- **Type safety**: Input and output schemas defined using Pydantic Models
-- **Streaming**: Support for streaming data
-- **Integration with developer UI**: Debug flows independently
-- **Simplified deployment**: Deploy as web API endpoints
-</LanguageContent>
-```
-
-**Option B: Use paragraphs instead of bullets**
-
-```mdx
-**Type safety**: Input and output schemas with runtime type checking.
-
-<LanguageContent lang="python">
-**Streaming**: Flows support streaming of data, such as partial LLM responses.
-</LanguageContent>
-
-**Integration with developer UI**: Debug flows independently.
-
-**Simplified deployment**: Deploy as web API endpoints.
-```
+See the "Special Considerations for Bullet Lists" section above for detailed examples and best practices.
 
 ### Pattern 3: CLI Commands
 
@@ -357,26 +289,23 @@ When refactoring existing documentation:
 7. ✅ **Check bullet lists** → Either make them language-agnostic OR wrap entire lists per language
 8. ✅ **Avoid mixing** → Never mix LanguageContent tags within a single bullet list
 
-## Maintenance Tips
+## Quick Reference
 
-1. **Start with common content** - Write the shared explanation first, then add language-specific details
-2. **Review regularly** - As APIs converge, more content can be consolidated
-3. **Test all languages** - Use the language selector to verify content displays correctly
-4. **Keep it DRY** - If you're copying the same text to multiple blocks, consider consolidating
+### When in Doubt
 
-## Examples from Real Documentation
-
-See `src/content/docs/docs/flows.mdx` for a well-structured example that demonstrates:
-- Common content outside blocks
-- Multi-language blocks for shared content
-- Minimal use of language-specific wrappers
-- Generalized language where appropriate
-
-## Questions?
-
-When in doubt, ask:
 1. Does this content apply to all languages? → Don't wrap it
 2. Does this content apply to 2 languages? → Use multi-language syntax
 3. Is the difference minor and inconsequential? → Consider rewriting to consolidate
 4. Is this a code example or API-specific? → Keep it language-specific
 5. Is this a bullet list with language-specific items? → Wrap the entire list per language OR rewrite to be language-agnostic
+
+### Maintenance Tips
+
+- **Start with common content** - Write shared explanations first, then add language-specific details
+- **Review regularly** - As APIs converge, consolidate more content
+- **Test all languages** - Use the language selector to verify correct display
+- **Keep it DRY** - Consolidate duplicated text across multiple blocks
+
+### Example
+
+See [`src/content/docs/docs/flows.mdx`](src/content/docs/docs/flows.mdx) for a well-structured example demonstrating these principles.
