@@ -240,6 +240,8 @@ Dotprompt is not yet available for Python. For prompt management, consider using
 
 When writing code examples and documentation, use the **Google GenAI package** (`@genkit-ai/google-genai`) as the default provider unless there's a specific reason to use another provider.
 
+**Note:** This guidance applies to general documentation and examples. When writing documentation specifically for other model providers (such as the OpenAI, xAI, Anthropic, or Ollama integration pages), use the appropriate provider's package and models for that documentation.
+
 ### Recommended Models by Use Case
 
 Use these models in your documentation examples:
