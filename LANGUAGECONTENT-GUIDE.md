@@ -100,6 +100,135 @@ Just by wrapping your `generate()` calls like this...
 Just by wrapping your generate calls like this...
 ```
 
+## Pages Supporting Only 1 or 2 Languages
+
+When a documentation page describes features that are only available for a subset of languages (e.g., only JavaScript and Go, but not Python), you must follow a specific pattern to ensure proper display and user experience.
+
+### Required Components
+
+1. **LanguageSelector with supportedLanguages**: Specify which languages are supported
+2. **Unavailability notice**: Add a note for unsupported languages
+3. **Wrap all content**: Enclose all main content in a LanguageContent block for supported languages
+
+### Complete Pattern
+
+Here's the complete pattern for a page that only supports JavaScript and Go:
+
+```mdx
+---
+title: Your Page Title
+description: Your description mentioning supported languages
+---
+
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector supportedLanguages="js go" />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="python">
+  :::note[Feature unavailable for Python]
+The features described in this document are not yet available for Python.
+:::
+</LanguageContent>
+
+<LanguageContent lang="js go">
+
+All your main content goes here, wrapped in this LanguageContent block.
+
+You can still use nested LanguageContent blocks within this wrapper for
+language-specific variations:
+
+<LanguageContent lang="js">
+JavaScript-specific content
+</LanguageContent>
+
+<LanguageContent lang="go">
+Go-specific content
+</LanguageContent>
+
+</LanguageContent>
+```
+
+### Key Points
+
+1. **LanguageSelector supportedLanguages**: When only 1 or 2 languages are supported, you MUST specify them in the `supportedLanguages` attribute (e.g., `supportedLanguages="js go"`). If all three languages are supported, omit this attribute entirely.
+
+2. **Unavailability notice**: For each unsupported language, add a LanguageContent block with a clear note explaining that the features are not available. This should appear before the main content wrapper.
+
+3. **Main content wrapper**: ALL content describing the feature must be wrapped in a LanguageContent block specifying the supported languages (e.g., `<LanguageContent lang="js go">`).
+
+4. **Nested LanguageContent**: You can still use nested LanguageContent blocks within the main wrapper for language-specific variations between the supported languages.
+
+### Example: Two Languages Supported
+
+For a feature available only in JavaScript and Go:
+
+```mdx
+<LanguageSelector supportedLanguages="js go" />
+
+<LanguageContent lang="python">
+:::note[Feature unavailable for Python]
+The features described in this document are not yet available for Python.
+:::
+</LanguageContent>
+
+<LanguageContent lang="js go">
+
+## Feature Overview
+
+This feature allows you to...
+
+<LanguageContent lang="js">
+```ts
+// JavaScript example
+const result = ai.someFeature();
+```
+</LanguageContent>
+
+<LanguageContent lang="go">
+```go
+// Go example
+result := genkit.SomeFeature()
+```
+</LanguageContent>
+
+</LanguageContent>
+```
+
+### Example: Single Language Supported
+
+For a feature available only in JavaScript:
+
+```mdx
+<LanguageSelector supportedLanguages="js" />
+
+<LanguageContent lang="go">
+:::note[Feature unavailable for Go]
+The features described in this document are not yet available for Go.
+:::
+</LanguageContent>
+
+<LanguageContent lang="python">
+:::note[Feature unavailable for Python]
+The features described in this document are not yet available for Python.
+:::
+</LanguageContent>
+
+<LanguageContent lang="js">
+
+All JavaScript-specific content goes here...
+
+</LanguageContent>
+```
+
+### Reference Implementation
+
+See [`src/content/docs/docs/dotprompt.mdx`](src/content/docs/docs/dotprompt.mdx) for a complete example of a page that only supports JavaScript and Go.
+
 ## When to Use LanguageContent
 
 ### ✅ Always Use For:
@@ -367,26 +496,29 @@ genkit flow:run myFlow '"value"'
 
 When refactoring existing documentation:
 
-1. ✅ Identify all content that's identical across all languages → Move outside blocks
-2. ✅ Find content shared by 2 languages → Use multi-language syntax (with proper ordering)
-3. ✅ Look for minor differences that can be rewritten → Generalize the text
-4. ✅ Check for language-specific API references → Consider using generic terms
-5. ✅ Verify no `lang="js go python"` blocks exist → Remove the wrapper
-6. ✅ Ensure code examples remain in language-specific blocks → Keep them wrapped
-7. ✅ **Check bullet lists** → Either make them language-agnostic OR wrap entire lists per language
-8. ✅ **Avoid mixing** → Never mix LanguageContent tags within a single bullet list
-9. ✅ **Verify language ordering** → Ensure all blocks follow the standard order (JS, Go, Python)
+1. ✅ **Check language support** → Determine if the page supports all 3 languages or only a subset
+2. ✅ **For limited language support** → Add `supportedLanguages` to LanguageSelector, unavailability notices, and wrap all content
+3. ✅ Identify all content that's identical across all languages → Move outside blocks
+4. ✅ Find content shared by 2 languages → Use multi-language syntax (with proper ordering)
+5. ✅ Look for minor differences that can be rewritten → Generalize the text
+6. ✅ Check for language-specific API references → Consider using generic terms
+7. ✅ Verify no `lang="js go python"` blocks exist → Remove the wrapper
+8. ✅ Ensure code examples remain in language-specific blocks → Keep them wrapped
+9. ✅ **Check bullet lists** → Either make them language-agnostic OR wrap entire lists per language
+10. ✅ **Avoid mixing** → Never mix LanguageContent tags within a single bullet list
+11. ✅ **Verify language ordering** → Ensure all blocks follow the standard order (JS, Go, Python)
 
 ## Quick Reference
 
 ### When in Doubt
 
-1. Does this content apply to all languages? → Don't wrap it
-2. Does this content apply to 2 languages? → Use multi-language syntax (with proper ordering)
-3. Is the difference minor and inconsequential? → Consider rewriting to consolidate
-4. Is this a code example or API-specific? → Keep it language-specific
-5. Is this a bullet list with language-specific items? → Wrap the entire list per language OR rewrite to be language-agnostic
-6. Are language blocks in the right order? → Always use JS, Go, Python order
+1. Does this page support all 3 languages? → If not, use the limited language support pattern
+2. Does this content apply to all languages? → Don't wrap it (unless the page has limited language support)
+3. Does this content apply to 2 languages? → Use multi-language syntax (with proper ordering)
+4. Is the difference minor and inconsequential? → Consider rewriting to consolidate
+5. Is this a code example or API-specific? → Keep it language-specific
+6. Is this a bullet list with language-specific items? → Wrap the entire list per language OR rewrite to be language-agnostic
+7. Are language blocks in the right order? → Always use JS, Go, Python order
 
 ### Maintenance Tips
 
@@ -395,6 +527,7 @@ When refactoring existing documentation:
 - **Test all languages** - Use the language selector to verify correct display
 - **Keep it DRY** - Consolidate duplicated text across multiple blocks
 
-### Example
+### Examples
 
-See [`src/content/docs/docs/flows.mdx`](src/content/docs/docs/flows.mdx) for a well-structured example demonstrating these principles.
+- **All languages supported**: See [`src/content/docs/docs/flows.mdx`](src/content/docs/docs/flows.mdx) for a well-structured example demonstrating these principles.
+- **Limited language support**: See [`src/content/docs/docs/dotprompt.mdx`](src/content/docs/docs/dotprompt.mdx) for an example of a page supporting only JavaScript and Go.
