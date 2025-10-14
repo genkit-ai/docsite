@@ -133,6 +133,150 @@ Future<void> streamHelloFlow() async {
 </TabItem>
 </Tabs>
 
+### Custom Object Streaming
+
+You can also stream custom objects. For robust JSON serialization in Dart, it's recommended to use a code generation library like [`json_serializable`](https://pub.dev/packages/json_serializable). In TypeScript, you can use standard interfaces to define the shape of your data.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+// Define the shape of your data
+interface StreamChunk {
+  content: string;
+}
+
+interface MyOutput {
+  reply: string;
+}
+
+// In your streaming call, the client will handle JSON parsing
+async function streamCustomObjects() {
+  try {
+    const result = streamFlow<MyOutput, StreamChunk>({
+      url: 'http://localhost:3400/stream-process',
+      input: { message: 'Stream this data', count: 5 },
+    });
+
+    console.log('Streaming chunks:');
+    for await (const chunk of result.stream) {
+      console.log('Chunk:', chunk.content);
+    }
+
+    const finalResult = await result.output;
+    console.log('\nFinal Response:', finalResult.reply);
+  } catch (e) {
+    console.error('Error calling streaming flow:', e);
+  }
+}
+```
+</TabItem>
+<TabItem label="Dart">
+```dart
+class StreamChunk {
+  final String content;
+  
+  StreamChunk({required this.content});
+  
+  factory StreamChunk.fromJson(Map<String, dynamic> json) => StreamChunk(
+    content: json['content'] as String,
+  );
+}
+
+// Assumes MyOutput and MyInput classes are defined as in the non-streaming example
+final streamAction = defineRemoteAction(
+  url: 'http://localhost:3400/stream-process',
+  fromResponse: (data) => MyOutput.fromJson(data),
+  fromStreamChunk: (data) => StreamChunk.fromJson(data),
+);
+
+final input = MyInput(message: 'Stream this data', count: 5);
+
+try {
+  final stream = streamAction.stream(input: input);
+
+  print('Streaming chunks:');
+  await for (final chunk in stream) {
+    print('Chunk: ${chunk.content}');
+  }
+
+  final finalResult = await stream.onResult;
+  print('\nFinal Response: ${finalResult.reply}');
+} catch (e) {
+  print('Error calling streaming flow: $e');
+}
+```
+</TabItem>
+</Tabs>
+
+### Working with Genkit Data Objects
+
+When interacting with Genkit models, you'll often work with standardized data classes. The client libraries provide these classes for type-safe interaction.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+import { streamFlow } from 'genkit/beta/client';
+import type {
+  MessageData,
+  GenerateResponseChunkData,
+  GenerateResponseData,
+} from 'genkit/model';
+
+async function streamGenerate() {
+  try {
+    const result = streamFlow<GenerateResponseData, GenerateResponseChunkData>({
+      url: 'http://localhost:3400/generate',
+      input: {
+        role: 'user',
+        content: [{ text: 'hello' }],
+      } as MessageData,
+    });
+
+    console.log('Streaming chunks:');
+    for await (const chunk of result.stream) {
+      // Note: A chunk may have multiple parts, and not all parts are text.
+      console.log('Chunk:', chunk.content[0].text);
+    }
+
+    const finalResult = await result.output;
+    // Note: A response may have multiple candidates.
+    console.log(
+      '\nFinal Response:',
+      finalResult.message.content[0].text
+    );
+  } catch (e) {
+    console.error('Error calling streaming flow:', e);
+  }
+}
+```
+</TabItem>
+<TabItem label="Dart">
+```dart
+import 'package:genkit/client.dart';
+
+final generateFlow = defineRemoteAction(
+  url: 'http://localhost:3400/generate',
+  fromResponse: (json) => GenerateResponse.fromJson(json),
+  fromStreamChunk: (json) => GenerateResponseChunk.fromJson(json),
+);
+
+final stream = generateFlow.stream(
+  input: Message(role: Role.user, content: [TextPart(text: "hello")]),
+);
+
+print('Streaming chunks:');
+await for (final chunk in stream) {
+  // Use the .text getter to easily access the text content of the chunk
+  print('Chunk: ${chunk.text}');
+}
+
+final finalResult = await stream.onResult;
+// The .text getter also works on the final response
+print('Final Response: ${finalResult.text}');
+```
+</TabItem>
+</Tabs>
+
 ### Authentication
 
 If your deployed flow requires authentication, you can pass headers with your requests:
@@ -217,70 +361,3 @@ _response = result.data as String;
 </TabItem>
 </Tabs>
 
-## Advanced Dart Topics
-
-### Custom Object Streaming
-
-You can also stream custom objects. Make sure you have the necessary `fromJson` factories for your classes. For robust JSON serialization, it's recommended to use a code generation library like [`json_serializable`](https://pub.dev/packages/json_serializable).
-
-```dart
-class StreamChunk {
-  final String content;
-  
-  StreamChunk({required this.content});
-  
-  factory StreamChunk.fromJson(Map<String, dynamic> json) => StreamChunk(
-    content: json['content'] as String,
-  );
-}
-
-// Assumes MyOutput and MyInput classes are defined as in the non-streaming example
-final streamAction = defineRemoteAction(
-  url: 'http://localhost:3400/stream-process',
-  fromResponse: (data) => MyOutput.fromJson(data),
-  fromStreamChunk: (data) => StreamChunk.fromJson(data),
-);
-
-final input = MyInput(message: 'Stream this data', count: 5);
-
-try {
-  final stream = streamAction.stream(input: input);
-
-  print('Streaming chunks:');
-  await for (final chunk in stream) {
-    print('Chunk: ${chunk.content}');
-  }
-
-  final finalResult = await stream.onResult;
-  print('\nFinal Response: ${finalResult.reply}');
-} catch (e) {
-  print('Error calling streaming flow: $e');
-}
-```
-
-### Working with Genkit Data Objects
-
-When interacting with Genkit models, you'll often work with standardized data classes like `GenerateResponse` and `GenerateResponseChunk`. The client library provides these classes for type-safe interaction.
-
-```dart
-import 'package:genkit/client.dart';
-
-final generateFlow = defineRemoteAction(
-  url: 'http://localhost:3400/generate',
-  fromResponse: (json) => GenerateResponse.fromJson(json),
-  fromStreamChunk: (json) => GenerateResponseChunk.fromJson(json),
-);
-
-final stream = generateFlow.stream(
-  input: Message(role: Role.user, content: [TextPart(text: "hello")]),
-);
-
-print('Streaming chunks:');
-await for (final chunk in stream) {
-  // Use the .text getter to easily access the text content of the chunk
-  print('Chunk: ${chunk.text}');
-}
-
-final finalResult = await stream.onResult;
-// The .text getter also works on the final response
-print('Final Response: ${finalResult.text}');
