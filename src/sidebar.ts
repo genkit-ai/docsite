@@ -85,7 +85,7 @@ const DOCS_SIDEBAR = [
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "JS Client Integration", slug: "docs/client" },
+      { label: "Client App Integration", slug: "docs/client" },
     ],
   },
   {
