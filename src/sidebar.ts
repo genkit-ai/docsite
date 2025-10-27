@@ -19,6 +19,7 @@ const DOCS_SIDEBAR = [
       { label: "Generating content", slug: "docs/models" },
       { label: "Passing information through context", slug: "docs/context" },
       { label: "Creating flows", slug: "docs/flows" },
+      { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
       { label: "Creating persistent chat sessions", slug: "docs/chat" },
       { label: "Tool calling", slug: "docs/tool-calling" },
@@ -65,6 +66,8 @@ const DOCS_SIDEBAR = [
       { label: "AlloyDB for PostgreSQL", slug: "docs/integrations/alloydb" },
       { label: "Cloud SQL PostgreSQL", slug: "docs/integrations/cloud-sql-postgresql" },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
+      { label: "Vertex AI Vectosearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
+      { label: "Vertex AI Vectosearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
     ],
   },
   {
@@ -82,7 +85,7 @@ const DOCS_SIDEBAR = [
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
       { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "JS Client Integration", slug: "docs/client" },
+      { label: "Client App Integration", slug: "docs/client" },
     ],
   },
   {
@@ -120,6 +123,5 @@ const DOCS_SIDEBAR = [
 ];
 
 export const sidebar = [
-  { label: "Introduction", slug: "" },
   ...DOCS_SIDEBAR,
 ];
