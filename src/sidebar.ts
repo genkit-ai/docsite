@@ -16,20 +16,27 @@ const DOCS_SIDEBAR = [
   {
     label: "Building AI workflows",
     items: [
-      { label: "Generating content", slug: "docs/models" },
-      { label: "Passing information through context", slug: "docs/context" },
       { label: "Creating flows", slug: "docs/flows" },
+      { label: "Generating content", slug: "docs/models" },
+      { label: "Tool calling", slug: "docs/tool-calling" },
       { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
-      { label: "Creating persistent chat sessions", slug: "docs/chat" },
-      { label: "Tool calling", slug: "docs/tool-calling" },
-      { label: "Model Context Protocol (MCP)", slug: "docs/model-context-protocol" },
+      { label: "Passing information through context", slug: "docs/context" },
       { label: "Pause generation using interrupts", slug: "docs/interrupts" },
+      { label: "Creating persistent chat sessions", slug: "docs/chat" },
+      { label: "Model Context Protocol (MCP)", slug: "docs/model-context-protocol" },
       { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
       { label: "Building multi-agent systems", slug: "docs/multi-agent" },
       { label: "Error types", slug: "docs/error-types" },
       { label: "Evaluation", slug: "docs/evaluation" },
       { label: "Local observability and metrics", slug: "docs/local-observability" },
+    ],
+  },
+  {
+    label: "Build with AI",
+    items: [
+      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
+      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
     ],
   },
   {
