@@ -6,7 +6,7 @@ const DOCS_SIDEBAR = [
       { label: "Developer tools", slug: "docs/devtools" },
     ],
   },
-    {
+  {
     label: "Build with AI",
     items: [
       { label: "Genkit MCP Server", slug: "docs/mcp-server" },
@@ -66,8 +66,8 @@ const DOCS_SIDEBAR = [
       { label: "AlloyDB for PostgreSQL", slug: "docs/integrations/alloydb" },
       { label: "Cloud SQL PostgreSQL", slug: "docs/integrations/cloud-sql-postgresql" },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
-      { label: "Vertex AI Vectosearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
-      { label: "Vertex AI Vectosearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
+      { label: "Vertex AI VectorSearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
+      { label: "Vertex AI VectorSearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
     ],
   },
   {
