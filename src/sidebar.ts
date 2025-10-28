@@ -7,13 +7,6 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Build with AI",
-    items: [
-      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
-      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
-    ],
-  },
-  {
     label: "Building AI workflows",
     items: [
       { label: "Creating flows", slug: "docs/flows" },
