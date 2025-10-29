@@ -79,7 +79,7 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 					return content;
 				}
 				return '';
-			}
+			},
 		);
 
 		// --- Check for <LLMs> tag ---
