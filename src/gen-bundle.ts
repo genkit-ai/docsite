@@ -21,9 +21,9 @@ import { parse } from 'yaml';
 export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
 
 async function main() {
-	const allDocs = await indexDocs('src/content/docs/docs');
 	const documents: Record<string, Doc> = {};
 	for (const lang of ['js', 'go', 'python']) {
+		const allDocs = await indexDocs('src/content/docs/docs', lang);
 		for (const doc of Object.keys(allDocs)) {
 			documents[`${lang}/${doc}`] = {
 				...allDocs[doc],
@@ -43,7 +43,7 @@ interface Doc {
 	lang: string;
 }
 
-async function indexDocs(dir: string) {
+async function indexDocs(dir: string, lang: string) {
 	const allFiles = await readdir(dir, { recursive: true });
 	const docFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
 	const documents: Record<string, Omit<Doc, 'lang'>> = {};
@@ -55,7 +55,7 @@ async function indexDocs(dir: string) {
 		const normalizedFileName = file.endsWith('.mdx') ? file.substring(0, file.length - 1) : file;
 
 		documents[normalizedFileName] = {
-			text: renderContent(file, body, frontmatter.title || normalizedFileName),
+			text: renderContent(file, body, frontmatter.title || normalizedFileName, lang),
 			url:
 				'https://genkit.dev/docs/' + normalizedFileName.substring(0, normalizedFileName.lastIndexOf('.')) + '/',
 			title: frontmatter.title || normalizedFileName,
@@ -69,8 +69,19 @@ async function indexDocs(dir: string) {
 const LLM_SUMMARY_REGEX = /<LLMSummary>([\s\S]*?)<\/LLMSummary>/;
 const FRONTMATTER_REGEX = /^---\s*[\s\S]*?---/;
 
-function renderContent(file: string, rawContent: string, title: string) {
+function renderContent(file: string, rawContent: string, title: string, lang: string) {
 	if (file.endsWith('.mdx')) {
+		// Strip out content for other languages
+		rawContent = rawContent.replace(
+			/<LanguageContent\s+lang="([^"]+)"[^>]*>([\s\S]*?)<\/LanguageContent>/g,
+			(match, blockLang, content) => {
+				if (blockLang === lang) {
+					return content;
+				}
+				return '';
+			}
+		);
+
 		// --- Check for <LLMs> tag ---
 		const llmMatch = rawContent.match(LLM_SUMMARY_REGEX);
 
