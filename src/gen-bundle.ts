@@ -38,6 +38,7 @@ interface Doc {
 	title: string;
 	description?: string;
 	text: string;
+	url: string;
 	headers: string;
 	lang: string;
 }
@@ -55,6 +56,8 @@ async function indexDocs(dir: string) {
 
 		documents[normalizedFileName] = {
 			text: renderContent(file, body, frontmatter.title || normalizedFileName),
+			url:
+				'https://genkit.dev/docs/' + normalizedFileName.substring(0, normalizedFileName.lastIndexOf('.')) + '/',
 			title: frontmatter.title || normalizedFileName,
 			description: frontmatter.description,
 			headers,
