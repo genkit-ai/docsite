@@ -617,37 +617,90 @@ const response = await ai.generate({
 For detailed information about grounding metadata structure, widget rendering, and usage requirements, see the [Google AI Maps Grounding documentation](https://ai.google.dev/gemini-api/docs/grounding#maps).
 :::
 
-### Additional Tools via Pass-through
+### URL Context
 
-The Google GenAI plugin supports additional tools through the config's pass-through capability. You can provide custom tools in the `config.tools` array:
+The URL Context tool lets you provide additional context to the model in the form of URLs. By including URLs in your request, the model will access the content from those pages to inform and enhance its response.
+
+The URL Context tool is useful for tasks like:
+
+- **Extract Data**: Pull specific information like prices, names, or key findings from multiple URLs
+- **Compare Documents**: Analyze multiple reports, articles, or PDFs to identify differences and track trends
+- **Synthesize & Create Content**: Combine information from several source URLs to generate accurate summaries, blog posts, or reports
+- **Analyze Code & Docs**: Point to a GitHub repository or technical documentation to explain code, generate setup instructions, or answer questions
+
+#### Basic Usage
 
 ```typescript
-// URL Context tool example
+const url1 = 'https://www.foodnetwork.com/recipes/ina-garten/perfect-roast-chicken-recipe-1940592';
+const url2 = 'https://www.allrecipes.com/recipe/21151/simple-whole-roast-chicken/';
+
 const response = await ai.generate({
   model: googleAI.model('gemini-2.5-flash'),
-  prompt: 'Based on https://example.com/article, summarize the key points.',
+  prompt: `Compare the ingredients and cooking times from the recipes at ${url1} and ${url2}`,
   config: {
     tools: [
       {
-        urlContext: {
-          // URL context configuration
-        },
+        urlContext: {},
       },
     ],
   },
 });
+
+console.log(response.text);
+
+// For verification, you can inspect the metadata to see which URLs the model retrieved
+const urlMetadata = (response.custom as any)?.candidates?.[0]?.urlContextMetadata;
+console.log(urlMetadata);
 ```
 
-:::note
-You can add up to 20 URLs per request when using URL context. This feature is supported for Gemini 2.5 and Gemini 2.0 Flash models.
-:::
+#### How It Works
 
-You can combine multiple tools:
+The URL Context tool uses a two-step retrieval process to balance speed, cost, and access to fresh data:
+
+1. **Index Cache Lookup**: First attempts to fetch content from an internal index cache (highly optimized)
+2. **Live Fetch Fallback**: If the URL is not in the index (e.g., very new pages), automatically performs a live fetch to retrieve content in real-time
+
+#### Accessing URL Context Metadata
+
+When the model uses the URL Context tool, the response includes a `urlContextMetadata` object that lists the URLs retrieved and their retrieval status:
 
 ```typescript
 const response = await ai.generate({
   model: googleAI.model('gemini-2.5-flash'),
-  prompt: 'Based on https://example.com, tell me about this topic. Also provide latest news.',
+  prompt: 'Summarize the content from https://example.com/article',
+  config: {
+    tools: [
+      {
+        urlContext: {},
+      },
+    ],
+  },
+});
+
+const urlMetadata = (response.custom as any)?.candidates?.[0]?.urlContextMetadata;
+
+if (urlMetadata?.urlMetadata) {
+  urlMetadata.urlMetadata.forEach((url: any) => {
+    console.log('URL:', url.retrievedUrl);
+    console.log('Status:', url.urlRetrievalStatus);
+  });
+}
+```
+
+**Metadata Structure:**
+
+- **`urlMetadata`**: Array of URL retrieval information
+  - `retrievedUrl`: The URL that was accessed
+  - `urlRetrievalStatus`: Status of the retrieval (e.g., `URL_RETRIEVAL_STATUS_SUCCESS`, `URL_RETRIEVAL_STATUS_UNSAFE`)
+
+#### Combining with Other Tools
+
+You can combine URL Context with other tools like Google Search grounding or Google Maps to create more powerful workflows:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Give me a three day events schedule based on https://example.com/events. Also let me know what needs to be taken care of considering weather and commute.',
   config: {
     googleSearchRetrieval: true,
     tools: [
@@ -657,7 +710,59 @@ const response = await ai.generate({
     ],
   },
 });
+
+console.log(response.text);
+
+// Get URLs retrieved for context
+const urlMetadata = (response.custom as any)?.candidates?.[0]?.urlContextMetadata;
+console.log(urlMetadata);
 ```
+
+When both URL Context and Google Search grounding are enabled, the model can use its search capabilities to find relevant information online and then use the URL Context tool to get a more in-depth understanding of the pages it finds.
+
+#### Token Count and Pricing
+
+The content retrieved from URLs counts as input tokens. You can see the token count in the `usageMetadata` object:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Analyze https://example.com',
+  config: {
+    tools: [{ urlContext: {} }],
+  },
+});
+
+console.log('Usage:', response.usage);
+// toolUsePromptTokenCount will include tokens from URL content
+```
+
+#### Best Practices
+
+- **Provide specific URLs**: For best results, provide direct URLs to the content you want the model to analyze. The model will only retrieve content from the URLs you provide, not from nested links
+- **Check for accessibility**: Verify that URLs don't lead to pages requiring login or behind paywalls
+- **Use complete URLs**: Provide the full URL including the protocol (e.g., `https://www.example.com` instead of just `example.com`)
+
+#### Limitations
+
+- **Request limit**: Up to 20 URLs per request
+- **URL content size**: Maximum 34MB per URL
+- **Safety checks**: URLs are checked for content moderation. Unsafe URLs will have status `URL_RETRIEVAL_STATUS_UNSAFE`
+
+**Supported content types:**
+- Text (HTML, JSON, plain text, XML, CSS, JavaScript, CSV, RTF)
+- Images (PNG, JPEG, BMP, WebP)
+- PDF documents
+
+**Unsupported content types:**
+- Paywalled content
+- YouTube videos (use video understanding feature instead)
+- Google Workspace files (Docs, Sheets, etc.)
+- Video and audio files
+
+:::note
+This feature is supported for Gemini 2.5 Pro, Gemini 2.5 Flash, and Gemini 2.5 Flash Lite models. For more details, see the [Google AI URL Context documentation](https://ai.google.dev/gemini-api/docs/url-context).
+:::
 
 ### Image Generation Outputs
 
