@@ -8,17 +8,11 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js go" />
+  <LanguageSelector supportedLanguages="js go python" />
   <CopyMarkdownButton />
 </div>
 
-<LanguageContent lang="python">
-  :::note[Unavailable for Python]
-Guidance for writing custom evaluator plugins is not yet available for Python.
-:::
-</LanguageContent>
-
-<LanguageContent lang="js go">
+<LanguageContent lang="js go python">
 
 You can extend Genkit to support custom evaluation, using either
 an LLM as a judge, or by programmatic (heuristic) evaluation.
@@ -47,6 +41,15 @@ The `ai.DefineEvaluator` function, which you use to define an
 evaluator action in Genkit, supports either approach. This
 document explores a couple of examples of how to use this
 function for heuristic and LLM-based evaluations.
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+The `define_evaluator` method, which you use to define an
+evaluator action in Genkit, supports either approach. This
+document explores a couple of examples of how to use this
+method for heuristic and LLM-based evaluations.
 
 </LanguageContent>
 
@@ -143,6 +146,37 @@ Response: { "reason": "Metaphorically 'tasty' but not food.", "verdict": "maybe"
 New Output: %s
 Response:
 `
+```
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+In Python, you'll define the prompt directly. Here, we define
+the response structure for the LLM to follow:
+
+```python
+from pydantic import BaseModel
+
+class DeliciousnessResponse(BaseModel):
+    reason: str
+    verdict: str
+
+DELICIOUSNESS_PROMPT = """You are a food critic. Assess whether the provided output sounds delicious, giving only "yes" (delicious), "no" (not delicious), or "maybe" (undecided) as the verdict.
+
+Examples:
+Output: Chicken parm sandwich
+Response: { "reason": "A classic and beloved dish.", "verdict": "yes" }
+
+Output: Boston Logan Airport tarmac
+Response: { "reason": "Not edible.", "verdict": "no" }
+
+Output: A juicy piece of gossip
+Response: { "reason": "Metaphorically 'tasty' but not food.", "verdict": "maybe" }
+
+New Output: {response_to_test}
+Response:
+"""
 ```
 
 </LanguageContent>
@@ -256,6 +290,45 @@ func deliciousnessScore(
         Details: map[string]any{"reasoning": result.Reason},
     }, nil
 }
+```
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+```python
+import json
+from typing import Any
+from genkit import ai
+from genkit.types import BaseEvalDataPoint, Score
+
+# Assumes DeliciousnessResponse and DELICIOUSNESS_PROMPT are defined as in the previous step.
+
+async def deliciousness_score(
+    judge_llm: ai.Model,
+    data_point: BaseEvalDataPoint,
+) -> Score:
+    """Score an individual test case for delciousness."""
+    if not data_point.output:
+        raise ValueError("Output is required for Deliciousness detection")
+
+    prompt = DELICIOUSNESS_PROMPT.format(response_to_test=data_point.output)
+    
+    response = await ai.generate(
+        model=judge_llm,
+        prompt=prompt,
+        output_format=ai.OutputFormat.JSON,
+    )
+
+    try:
+        parsed_response = DeliciousnessResponse.model_validate_json(response.text)
+    except Exception as e:
+        raise ValueError(f"Unable to parse evaluator response: {response.text}") from e
+
+    return Score(
+        score=parsed_response.verdict,
+        details={'reasoning': parsed_response.reason},
+    )
 ```
 
 </LanguageContent>
@@ -417,6 +490,82 @@ type Score struct {
 
 </LanguageContent>
 
+<LanguageContent lang="python">
+
+```python
+from genkit import GenkitRegistry, ai
+from genkit.types import BaseEvalDataPoint, EvalFnResponse, Score
+from typing import Any
+
+# Assumes deliciousness_score is defined as in the previous step.
+
+def create_deliciousness_evaluator(
+    registry: GenkitRegistry,
+    judge_llm: ai.Model,
+):
+    async def eval_fn(datapoint: BaseEvalDataPoint, options: Any | None) -> EvalFnResponse:
+        score = await deliciousness_score(judge_llm, datapoint)
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id,
+            evaluation=score,
+        )
+
+    return registry.define_evaluator(
+        name="myCustomEvals/deliciousnessEvaluator",
+        display_name="Deliciousness",
+        definition="Determines if output is considered delicous.",
+        is_billed=True,
+        fn=eval_fn,
+    )
+```
+
+The `define_evaluator` method is similar to other Genkit constructors like
+`define_flow`. This method requires an `EvaluatorFn`
+to be provided as a callback. The `EvaluatorFn` method accepts a
+`BaseEvalDataPoint` object, which corresponds to a single entry in a
+dataset under evaluation, along with an optional custom-options
+parameter if specified. The function processes the datapoint and
+returns an `EvalFnResponse` object.
+
+The Pydantic models for `BaseEvalDataPoint` and `EvalFnResponse` are
+as follows.
+
+##### `BaseEvalDataPoint`
+
+```python
+class BaseEvalDataPoint(BaseModel):
+    input: Any | None = None
+    output: Any | None = None
+    context: list | None = None
+    reference: Any | None = None
+    test_case_id: str | None = Field(None, alias='testCaseId')
+    trace_ids: list[str] | None = Field(None, alias='traceIds')
+```
+
+##### `EvalFnResponse`
+
+```python
+class EvalFnResponse(BaseModel):
+    sample_index: float | None = Field(None, alias='sampleIndex')
+    test_case_id: str = Field(..., alias='testCaseId')
+    trace_id: str | None = Field(None, alias='traceId')
+    span_id: str | None = Field(None, alias='spanId')
+    evaluation: Score | list[Score]
+```
+
+##### `Score`
+
+```python
+class Score(BaseModel):
+    id: str | None = Field(None, description='Optional ID to differentiate different scores')
+    score: float | str | bool | None = None
+    status: EvalStatusEnum | None = None
+    error: str | None = None
+    details: Details | None = None
+```
+
+</LanguageContent>
+
 The evaluator definition lets you provide a name, a user-readable
 display name, and a definition for the evaluator. The display name and
 definition are displayed along with evaluation results in the Dev UI.
@@ -511,6 +660,32 @@ func usPhoneRegexScore(example *ai.Example) (*ai.Score, error) {
 
 </LanguageContent>
 
+<LanguageContent lang="python">
+
+```python
+import re
+from genkit.types import BaseEvalDataPoint, Score, EvalStatusEnum
+
+US_PHONE_REGEX = re.compile(r'[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4}')
+
+async def us_phone_regex_score(data_point: BaseEvalDataPoint) -> Score:
+    """Scores whether a datapoint output contains a US Phone number."""
+    if not data_point.output or not isinstance(data_point.output, str):
+        raise ValueError('String output is required for regex matching')
+    
+    matches = bool(US_PHONE_REGEX.search(data_point.output))
+    reasoning = "Output matched US_PHONE_REGEX" if matches else "Output did not match US_PHONE_REGEX"
+    status = EvalStatusEnum.PASS_ if matches else EvalStatusEnum.FAIL
+    
+    return Score(
+        score=matches,
+        status=status,
+        details={'reasoning': reasoning},
+    )
+```
+
+</LanguageContent>
+
 #### Define the evaluator action
 
 <LanguageContent lang="js">
@@ -567,6 +742,34 @@ func createUSPhoneRegexEvaluator(r api.Registry) ai.Evaluator {
         },
     )
 }
+```
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+```python
+from genkit import GenkitRegistry
+from genkit.types import BaseEvalDataPoint, EvalFnResponse
+from typing import Any
+
+# Assumes us_phone_regex_score is defined as in the previous step.
+
+def create_us_phone_regex_evaluator(registry: GenkitRegistry):
+    async def eval_fn(datapoint: BaseEvalDataPoint, options: Any | None) -> EvalFnResponse:
+        score = await us_phone_regex_score(datapoint)
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id,
+            evaluation=score,
+        )
+
+    return registry.define_evaluator(
+        name="myCustomEvals/usPhoneRegexEvaluator",
+        display_name="Regex Match for US PHONE NUMBER",
+        definition="Uses Regex to check if output matches a US phone number",
+        is_billed=False,
+        fn=eval_fn,
+    )
 ```
 
 </LanguageContent>
@@ -665,6 +868,34 @@ func (m *MyCustomEvals) Init(ctx context.Context) []api.Action {
 
 </LanguageContent>
 
+<LanguageContent lang="python">
+
+To define a new plugin in Python, create a class that inherits from `Plugin`
+and implements an `initialize` method that registers your evaluators.
+
+This code sample shows a plugin with both the LLM-based deliciousness evaluator
+and the regex-based US phone number evaluator:
+
+```python
+from genkit import GenkitRegistry, Plugin, ai
+
+# Assumes create_deliciousness_evaluator and create_us_phone_regex_evaluator are defined.
+
+class MyCustomEvals(Plugin):
+    def __init__(self, judge_llm: ai.Model):
+        self.judge_llm = judge_llm
+
+    def initialize(self, registry: GenkitRegistry):
+        create_deliciousness_evaluator(registry, self.judge_llm)
+        create_us_phone_regex_evaluator(registry)
+
+    @property
+    def name(self) -> str:
+        return "myCustomEvals"
+```
+
+</LanguageContent>
+
 ### Configure Genkit
 
 Add the `myCustomEvals` plugin to your Genkit configuration.
@@ -718,6 +949,25 @@ func main() {
         // ... other plugins
     )
 }
+```
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+```python
+from genkit import genkit
+from genkit.plugins import google_genai
+from my_custom_evals_plugin import MyCustomEvals # Your plugin file
+
+ai = genkit.Genkit(
+    plugins=[
+        google_genai.GoogleAI(),
+        # ... other plugins
+        MyCustomEvals(judge_llm=google_genai.Model("gemini-1.5-flash")),
+    ],
+    # ...
+)
 ```
 
 </LanguageContent>
