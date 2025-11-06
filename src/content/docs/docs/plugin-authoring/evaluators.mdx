@@ -8,7 +8,7 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js" />
+  <LanguageSelector supportedLanguages="js go" />
   <CopyMarkdownButton />
 </div>
 
@@ -18,13 +18,7 @@ Guidance for writing custom evaluator plugins is not yet available for Python.
 :::
 </LanguageContent>
 
-<LanguageContent lang="go">
-  :::note[Unavailable for Go]
-Guidance for writing custom evaluator plugins is not yet available for Go.
-:::
-</LanguageContent>
-
-<LanguageContent lang="js">
+<LanguageContent lang="js go">
 
 You can extend Genkit to support custom evaluation, using either
 an LLM as a judge, or by programmatic (heuristic) evaluation.
@@ -38,10 +32,23 @@ By contrast, in an LLM-based assessment, the content is fed back to an LLM,
 and the LLM is asked to score the output according to criteria set in a
 prompt.
 
+<LanguageContent lang="js">
+
 The `ai.defineEvaluator` method, which you use to define an
 evaluator action in Genkit, supports either approach. This
 document explores a couple of examples of how to use this
 method for heuristic and LLM-based evaluations.
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+The `ai.DefineEvaluator` function, which you use to define an
+evaluator action in Genkit, supports either approach. This
+document explores a couple of examples of how to use this
+function for heuristic and LLM-based evaluations.
+
+</LanguageContent>
 
 ### LLM-based Evaluators
 
@@ -62,7 +69,9 @@ food (the `output`) is delicious or not. First, provide context to the LLM,
 then describe what you want it to do, and finally, give it a few examples
 to base its response on.
 
-Genkit’s `definePrompt` utility provides an easy way to define prompts with
+<LanguageContent lang="js">
+
+Genkit's `definePrompt` utility provides an easy way to define prompts with
 input and output validation. The following code is an example of
 setting up an evaluation prompt with `definePrompt`.
 
@@ -106,6 +115,38 @@ function getDeliciousnessPrompt(ai: Genkit) {
 }
 ```
 
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+In Go, you'll define the prompt directly in the scoring function. Here, we define
+the response structure for the LLM to follow:
+
+```go
+type DeliciousnessResponse struct {
+    Reason  string `json:"reason"`
+    Verdict string `json:"verdict"`
+}
+
+const deliciousnessPrompt = `You are a food critic. Assess whether the provided output sounds delicious, giving only "yes" (delicious), "no" (not delicious), or "maybe" (undecided) as the verdict.
+
+Examples:
+Output: Chicken parm sandwich
+Response: { "reason": "A classic and beloved dish.", "verdict": "yes" }
+
+Output: Boston Logan Airport tarmac
+Response: { "reason": "Not edible.", "verdict": "no" }
+
+Output: A juicy piece of gossip
+Response: { "reason": "Metaphorically 'tasty' but not food.", "verdict": "maybe" }
+
+New Output: %s
+Response:
+`
+```
+
+</LanguageContent>
+
 #### Define the scoring function
 
 Define a function that takes an example that includes `output` as
@@ -113,6 +154,8 @@ required by the prompt, and scores the result. Genkit testcases include
 `input` as a required field, with `output` and `context` as optional fields.
 It is the responsibility of the evaluator to validate that all fields
 required for evaluation are present.
+
+<LanguageContent lang="js">
 
 ```ts
 import { ModelArgument } from 'genkit';
@@ -159,9 +202,69 @@ export async function deliciousnessScore<CustomModelOptions extends z.ZodTypeAny
 }
 ```
 
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+```go
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    
+    "github.com/firebase/genkit/go/ai"
+)
+
+// Score an individual test case for deliciousness
+func deliciousnessScore(
+    ctx context.Context,
+    judgeLLM ai.Model,
+    example *ai.Example,
+) (*ai.Score, error) {
+    // Validate the input has required fields
+    if example.Output == nil {
+        return nil, errors.New("output is required for deliciousness detection")
+    }
+    
+    outputStr, ok := example.Output.(string)
+    if !ok {
+        return nil, errors.New("output must be a string")
+    }
+    
+    // Generate the prompt with the output to test
+    prompt := fmt.Sprintf(deliciousnessPrompt, outputStr)
+    
+    // Call the judge LLM
+    resp, err := ai.Generate(ctx, judgeLLM,
+        ai.WithPrompt(prompt),
+        ai.WithOutputFormat(ai.OutputFormatJSON),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to generate evaluation: %w", err)
+    }
+    
+    // Parse the response
+    var result DeliciousnessResponse
+    if err := json.Unmarshal([]byte(resp.Text), &result); err != nil {
+        return nil, fmt.Errorf("failed to parse evaluator response: %w", err)
+    }
+    
+    // Return a scored response
+    return &ai.Score{
+        Score:   result.Verdict,
+        Details: map[string]any{"reasoning": result.Reason},
+    }, nil
+}
+```
+
+</LanguageContent>
+
 #### Define the evaluator action
 
-The final step is to write a function that defines the `EvaluatorAction`.
+The final step is to write a function that defines the evaluator action.
+
+<LanguageContent lang="js">
 
 ```ts
 import { EvaluatorAction } from 'genkit/evaluator';
@@ -241,9 +344,82 @@ const ScoreSchema = z.object({
 });
 ```
 
-The `defineEvaluator` object lets the user provide a name, a user-readable
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/api"
+)
+
+// Create the Deliciousness evaluator action
+func createDeliciousnessEvaluator(
+    r api.Registry,
+    judgeLLM ai.Model,
+) ai.Evaluator {
+    return ai.DefineEvaluator(r, "myCustomEvals", "deliciousnessEvaluator",
+        &ai.EvaluatorOptions{
+            DisplayName: "Deliciousness",
+            Definition:  "Determines if output is considered delicious",
+            IsBilled:    true,
+        },
+        func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+            // Score the example
+            score, err := deliciousnessScore(ctx, judgeLLM, &req.Input)
+            if err != nil {
+                return nil, err
+            }
+            
+            return &ai.EvaluatorCallbackResponse{
+                TestCaseId: req.Input.TestCaseId,
+                Evaluation: []ai.Score{*score},
+            }, nil
+        },
+    )
+}
+```
+
+The `DefineEvaluator` function is similar to other Genkit constructors like
+`DefineFlow` and `DefineRetriever`. This function requires an `EvaluatorFunc`
+to be provided as a callback. The `EvaluatorFunc` accepts an
+`EvaluatorCallbackRequest` object containing an `Example` (a single entry in a
+dataset under evaluation) and optional configuration. The function processes the
+example and returns an `EvaluatorCallbackResponse` object.
+
+The Go type definitions for the evaluator components are:
+
+##### `Example`
+
+```go
+type Example struct {
+    TestCaseId string   `json:"testCaseId,omitempty"`
+    Input      any      `json:"input"`
+    Output     any      `json:"output,omitempty"`
+    Context    []any    `json:"context,omitempty"`
+    Reference  any      `json:"reference,omitempty"`
+    TraceIds   []string `json:"traceIds,omitempty"`
+}
+```
+
+##### `Score`
+
+```go
+type Score struct {
+    Id      string         `json:"id,omitempty"`
+    Score   any            `json:"score,omitempty"`
+    Status  string         `json:"status,omitempty"` // "UNKNOWN", "FAIL", or "PASS"
+    Error   string         `json:"error,omitempty"`
+    Details map[string]any `json:"details,omitempty"`
+}
+```
+
+</LanguageContent>
+
+The evaluator definition lets you provide a name, a user-readable
 display name, and a definition for the evaluator. The display name and
-definiton are displayed along with evaluation results in the Dev UI.
+definition are displayed along with evaluation results in the Dev UI.
 It also has an optional `isBilled` field that marks whether this evaluator
 can result in billing (e.g., it uses a billed LLM or API). If an evaluator
 is billed, the UI prompts the user for a confirmation in the CLI before
@@ -264,6 +440,8 @@ Heuristic evaluators in Genkit are made up of 2 components:
 
 As with the LLM-based evaluator, define the scoring function. In this case,
 the scoring function does not need a judge LLM.
+
+<LanguageContent lang="js">
 
 ```ts
 import { BaseEvalDataPoint, Score } from 'genkit/evaluator';
@@ -287,7 +465,55 @@ export async function usPhoneRegexScore(dataPoint: BaseEvalDataPoint): Promise<S
 }
 ```
 
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+```go
+import (
+    "errors"
+    "regexp"
+    
+    "github.com/firebase/genkit/go/ai"
+)
+
+var usPhoneRegex = regexp.MustCompile(`[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4}`)
+
+// Scores whether a datapoint output contains a US Phone number
+func usPhoneRegexScore(example *ai.Example) (*ai.Score, error) {
+    if example.Output == nil {
+        return nil, errors.New("output was not provided")
+    }
+    
+    outputStr, ok := example.Output.(string)
+    if !ok {
+        return nil, errors.New("output must be a string")
+    }
+    
+    matches := usPhoneRegex.MatchString(outputStr)
+    status := ai.ScoreStatusFail
+    if matches {
+        status = ai.ScoreStatusPass
+    }
+    
+    reasoning := "Output did not match US_PHONE_REGEX"
+    if matches {
+        reasoning = "Output matched US_PHONE_REGEX"
+    }
+    
+    return &ai.Score{
+        Score:  matches,
+        Status: status.String(),
+        Details: map[string]any{"reasoning": reasoning},
+    }, nil
+}
+```
+
+</LanguageContent>
+
 #### Define the evaluator action
+
+<LanguageContent lang="js">
 
 ```ts
 import { Genkit } from 'genkit';
@@ -315,12 +541,46 @@ export function createUSPhoneRegexEvaluator(ai: Genkit): EvaluatorAction {
 }
 ```
 
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+```go
+// Configures a regex evaluator to match a US phone number
+func createUSPhoneRegexEvaluator(r api.Registry) ai.Evaluator {
+    return ai.DefineEvaluator(r, "myCustomEvals", "usPhoneRegexEvaluator",
+        &ai.EvaluatorOptions{
+            DisplayName: "Regex Match for US PHONE NUMBER",
+            Definition:  "Uses Regex to check if output matches a US phone number",
+            IsBilled:    false,
+        },
+        func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+            score, err := usPhoneRegexScore(&req.Input)
+            if err != nil {
+                return nil, err
+            }
+            
+            return &ai.EvaluatorCallbackResponse{
+                TestCaseId: req.Input.TestCaseId,
+                Evaluation: []ai.Score{*score},
+            }, nil
+        },
+    )
+}
+```
+
+</LanguageContent>
+
 ## Putting it together
 
 ### Plugin definition
 
 Plugins are registered with the framework by installing them at the time of
-initializing Genkit. To define a new plugin, use the `genkitPlugin` helper
+initializing Genkit.
+
+<LanguageContent lang="js">
+
+To define a new plugin in JavaScript, use the `genkitPlugin` helper
 method to instantiate all Genkit actions within the plugin context.
 
 This code sample shows two evaluators: the LLM-based deliciousness evaluator,
@@ -348,9 +608,68 @@ export function myCustomEvals<ModelCustomOptions extends z.ZodTypeAny>(options: 
 export default myCustomEvals;
 ```
 
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+To define a new plugin in Go, create a struct that implements the `Plugin` interface
+with an `Init` method that registers your evaluators.
+
+This code sample shows a plugin with both the LLM-based deliciousness evaluator
+and the regex-based US phone number evaluator:
+
+```go
+import (
+    "context"
+    "sync"
+    
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/api"
+)
+
+// MyCustomEvals is a Genkit plugin that provides custom evaluators
+type MyCustomEvals struct {
+    JudgeLLM ai.Model // The LLM to use for evaluation
+    mu       sync.Mutex
+    initted  bool
+}
+
+func (m *MyCustomEvals) Name() string {
+    return "myCustomEvals"
+}
+
+// Init initializes the plugin and registers evaluators
+func (m *MyCustomEvals) Init(ctx context.Context) []api.Action {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    
+    if m.initted {
+        panic("myCustomEvals.Init already called")
+    }
+    if m.JudgeLLM == nil {
+        panic("myCustomEvals: judge LLM must be provided")
+    }
+    m.initted = true
+    
+    r := api.LookupRegistry()
+    
+    var actions []api.Action
+    // Register the deliciousness evaluator
+    actions = append(actions, createDeliciousnessEvaluator(r, m.JudgeLLM).(api.Action))
+    // Register the US phone regex evaluator
+    actions = append(actions, createUSPhoneRegexEvaluator(r).(api.Action))
+    
+    return actions
+}
+```
+
+</LanguageContent>
+
 ### Configure Genkit
 
 Add the `myCustomEvals` plugin to your Genkit configuration.
+
+<LanguageContent lang="js">
 
 For evaluation with Gemini, disable safety settings so that the evaluator can
 accept, detect, and score potentially harmful content.
@@ -369,6 +688,39 @@ const ai = genkit({
   ...
 });
 ```
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+```go
+import (
+    "context"
+    
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/plugins/googleai"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    // Initialize the Google AI plugin
+    googleai.Init(ctx, &googleai.Config{
+        APIKey: "your-api-key", // Or use environment variable
+    })
+    
+    // Get the judge LLM
+    judgeLLM := googleai.Model("gemini-2.0-flash-latest")
+    
+    // Initialize Genkit with the custom evaluator plugin
+    genkit.Init(ctx,
+        &MyCustomEvals{JudgeLLM: judgeLLM},
+        // ... other plugins
+    )
+}
+```
+
+</LanguageContent>
 
 ## Using your custom evaluators
 
