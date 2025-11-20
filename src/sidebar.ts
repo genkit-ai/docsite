@@ -2,6 +2,7 @@ const DOCS_SIDEBAR = [
   {
     label: "Get started",
     items: [
+      { label: "Overview", slug: "docs/overview" },
       { label: "Get started", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
     ],
