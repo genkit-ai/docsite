@@ -110,6 +110,7 @@ const DOCS_SIDEBAR = [
       { label: "Telemetry Collection", slug: "docs/observability/telemetry-collection" },
       { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
+      { label: "Google Cloud Plugin", slug: "docs/integrations/google-cloud" },
     ],
   },
   {
