@@ -101,6 +101,9 @@ export default defineConfig({
       ],
       sidebar,
       customCss: ['./src/tailwind.css'],
+      editLink: {
+        baseUrl: 'https://github.com/genkit-ai/docsite/edit/main/',
+      },
     }),
     sitemap(),
   ],
