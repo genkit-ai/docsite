@@ -1,6 +1,6 @@
 ---
-title: Google AI plugin
-description: Learn how to use Google's Gemini models with Genkit across JavaScript, Go, and Python through the Google AI Studio API, including text generation, embeddings, image generation, video generation, and text-to-speech.
+title: Google Generative AI plugin
+description: Learn how to use Google's Generative AI models across JavaScript, Go, and Python through the Gemini Developer API, including text generation, embeddings, image generation, video generation, and text-to-speech.
 ---
 
 import LanguageSelector from '../../../../components/LanguageSelector.astro';
@@ -14,19 +14,24 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <LanguageContent lang="js">
 
-The Google GenAI plugin provides a unified interface to connect with Google's generative AI models through the **Gemini Developer API** using API key authentication. It is a replacement for the previous `googleAI` plugin.
+The Google AI plugin provides a unified interface to connect with Google's generative AI models through the **Gemini Developer API** using API key authentication. The `@genkit-ai/google-genai` package is a drop-in replacement for the previous `@genkit-ai/googleai` package.
 
-:::tip[Enterprise Users]
-For enterprise features like grounding, context caching, Vector Search, and Model Garden access, see the [Vertex AI plugin](/docs/integrations/vertex-ai).
-:::
+The plugin supports a wide range of capabilities:
+- **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks
+- **Embedding Models**: Text and multimodal embeddings
+- **Image Models**: Imagen for generation and Gemini for image analysis
+- **Video Models**: Veo for video generation and Gemini for video understanding
+- **Speech Models**: Polyglot text-to-speech generation
 
-## Installation
+## Setup
+
+### Installation
 
 ```bash
 npm i --save @genkit-ai/google-genai
 ```
 
-## Configuration
+### Configuration
 
 ```typescript
 import { genkit } from 'genkit';
@@ -41,11 +46,55 @@ const ai = genkit({
 });
 ```
 
-**Authentication:** Requires a Google AI API Key, which you can get from [Google AI Studio](https://aistudio.google.com/apikey). You can provide this key by setting the `GEMINI_API_KEY` or `GOOGLE_API_KEY` environment variables, or by passing it in the plugin configuration.
+### Authentication
 
-## Usage Examples
+Requires a Gemini API Key, which you can get from [Google AI Studio](https://aistudio.google.com/apikey). You can provide this key in several ways:
 
-### Text Generation (Gemini)
+1. **Environment variables**: Set `GEMINI_API_KEY`
+2. **Plugin configuration**: Pass `apiKey` when initializing the plugin (shown above)
+3. **Per-request**: Override the API key for specific requests in the config:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Your prompt here',
+  config: {
+    apiKey: 'different-api-key', // Use a different API key for this request
+  },
+});
+```
+
+This per-request API key option is useful for routing specific requests to different API keys, such as for multi-tenant applications or cost tracking.
+
+## Language Models
+
+You can create models that call the Google Generative AI API. The models support tool calls and some have multi-modal capabilities.
+
+### Available Models
+
+**Gemini 3 Series** - Latest experimental models with state-of-the-art reasoning:
+- `gemini-3-pro-preview` - Preview of the most capable model for complex tasks
+- `gemini-3-flash-preview` - Fast and intelligent model for high-volume tasks
+- `gemini-3-pro-image-preview` - Supports image generation outputs
+
+**Gemini 2.5 Series** - Latest stable models with advanced reasoning and multimodal capabilities:
+- `gemini-2.5-pro` - Most capable stable model for complex tasks
+- `gemini-2.5-flash` - Fast and efficient for most use cases
+- `gemini-2.5-flash-lite` - Lightweight version for simple tasks
+- `gemini-2.5-flash-image` - Supports image generation outputs
+
+**Gemma 3 Series** - Open models for various use cases:
+- `gemma-3-27b-it` - Large instruction-tuned model
+- `gemma-3-12b-it` - Medium instruction-tuned model
+- `gemma-3-4b-it` - Small instruction-tuned model
+- `gemma-3-1b-it` - Tiny instruction-tuned model
+- `gemma-3n-e4b-it` - Efficient 4-bit model
+
+:::note
+See the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models) for a complete list of available models and their capabilities.
+:::
+
+### Basic Usage
 
 ```typescript
 import { genkit } from 'genkit';
@@ -57,35 +106,59 @@ const ai = genkit({
 
 const response = await ai.generate({
   model: googleAI.model('gemini-2.5-flash'),
-  prompt: 'Tell me something interesting about Google AI.',
+  prompt: 'Explain how neural networks learn in simple terms.',
 });
 
-console.log(response.text());
+console.log(response.text);
 ```
 
-### Text Embedding
+### Structured Output
+
+Gemini models support structured output generation, which guarantees that the model output will conform to a specified JSON schema.
 
 ```typescript
-const embeddings = await ai.embed({
-  embedder: googleAI.embedder('text-embedding-004'),
-  content: 'Embed this text.',
-});
-```
+import { z } from 'genkit';
 
-### Image Generation (Imagen)
-
-```typescript
 const response = await ai.generate({
-  model: googleAI.model('imagen-3.0-generate-002'),
-  prompt: 'A beautiful watercolor painting of a castle in the mountains.',
+  model: googleAI.model('gemini-2.5-flash'),
+  output: {
+    schema: z.object({
+      name: z.string(),
+      bio: z.string(),
+      age: z.number(),
+    }),
+  },
+  prompt: 'Generate a profile for a fictional character',
 });
 
-const generatedImage = response.media();
+console.log(response.output);
 ```
 
-### Thinking Config
+#### Schema Limitations
 
-#### Thinking Level (Gemini 3.0)
+The Gemini API relies on a specific subset of the OpenAPI 3.0 standard. When defining Zod schemas for structured output, keep the following limitations in mind:
+
+**Supported Features**
+- **Objects & Arrays**: Standard object properties and array items.
+- **Enums**: Fully supported (`z.enum`).
+- **Nullable**: Supported via `z.nullable()` (mapped to `nullable: true`).
+
+**Critical Limitations**
+- **Unions (`z.union`)**: Complex unions are often problematic. The API has specific handling for `anyOf` but may reject ambiguous or complex `oneOf` structures. Prefer using a single object with optional fields or distinct tool definitions over complex unions.
+- **Validation Keywords**: Keywords like `pattern`, `minLength`, `maxLength`, `minItems`, and `maxItems` are **not supported** by the Gemini API's constrained decoding. Including them may result in `400 InvalidArgument` errors or them being ignored.
+- **Recursion**: Recursive schemas are generally not supported.
+- **Complexity**: Deeply nested schemas or schemas with hundreds of properties may trigger complexity limits.
+
+**Best Practices**
+- Keep schemas simple and flat where possible.
+- Use property descriptions (`.describe()`) to guide the model instead of complex validation rules (e.g., "String must be an email" instead of a regex pattern).
+- If you need strict validation (e.g., regex), perform it in your application code *after* receiving the structured response.
+
+### Thinking and Reasoning
+
+Gemini 2.5 and newer models use an internal thinking process that improves reasoning for complex tasks.
+
+**Thinking Level (Gemini 3.0):**
 
 ```typescript
 const response = await ai.generate({
@@ -99,72 +172,510 @@ const response = await ai.generate({
 });
 ```
 
-#### Thinking Budget (Gemini 2.5)
+**Thinking Budget (Gemini 2.5):**
 
 ```typescript
-const { message } = await ai.generate({
+const response = await ai.generate({
   model: googleAI.model('gemini-2.5-pro'),
   prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
   config: {
     thinkingConfig: {
-      thinkingBudget: 1024,
-      includeThoughts: true,
+      thinkingBudget: 8192, // Number of thinking tokens
+      includeThoughts: true, // Include thought summaries
     },
+  },
+});
+
+if (response.reasoning) {
+  console.log('Reasoning:', response.reasoning);
+}
+```
+
+### Context Caching
+
+Gemini 2.5 and newer models automatically cache common content prefixes (min 1024 tokens for Flash, 2048 for Pro), providing a 75% token discount on cached tokens.
+
+```typescript
+// Structure prompts with consistent content at the beginning
+const baseContext = `You are a helpful cook... (large context) ...`.repeat(50);
+
+// First request - content will be cached
+await ai.generate({
+  model: googleAI.model('gemini-2.5-pro'),
+  prompt: `${baseContext}\n\nTask 1...`,
+});
+
+// Second request with same prefix - eligible for cache hit
+await ai.generate({
+  model: googleAI.model('gemini-2.5-pro'),
+  prompt: `${baseContext}\n\nTask 2...`,
+});
+```
+
+### Safety Settings
+
+You can configure safety settings to control content filtering for different harm categories:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Your prompt here',
+  config: {
+    safetySettings: [
+      {
+        category: 'HARM_CATEGORY_HATE_SPEECH',
+        threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+      },
+      {
+        category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+        threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+      },
+    ],
   },
 });
 ```
 
-## Gemini API Features
+Available harm categories:
+- `HARM_CATEGORY_HATE_SPEECH`
+- `HARM_CATEGORY_DANGEROUS_CONTENT`
+- `HARM_CATEGORY_HARASSMENT`
+- `HARM_CATEGORY_SEXUALLY_EXPLICIT`
 
-The following features are available through the `googleAI` plugin.
+Available thresholds:
+- `HARM_BLOCK_THRESHOLD_UNSPECIFIED`
+- `BLOCK_LOW_AND_ABOVE`
+- `BLOCK_MEDIUM_AND_ABOVE`
+- `BLOCK_ONLY_HIGH`
+- `BLOCK_NONE`
 
-### Gemini Files API
+**Accessing Safety Ratings:**
 
-You can use files uploaded to the Gemini Files API with Genkit:
+Safety ratings are typically only included when content is flagged. You can access them from the response custom metadata:
 
-```ts
-import { GoogleAIFileManager } from '@google/generative-ai/server';
-import { genkit } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
+```typescript
+const geminiResponse = response.custom as any;
+const candidateSafetyRatings = geminiResponse?.candidates?.[0]?.safetyRatings;
+const promptSafetyRatings = geminiResponse?.promptFeedback?.safetyRatings;
+```
 
-const ai = genkit({
-  plugins: [googleAI()],
+### Google Search Grounding
+
+Enable Google Search to provide answers with current information and verifiable sources.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'What are the top tech news stories this week?',
+  config: {
+    googleSearchRetrieval: true,
+  },
 });
 
-const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-const uploadResult = await fileManager.uploadFile('path/to/file.jpg', {
-  mimeType: 'image/jpeg',
-  displayName: 'Your Image',
+// Access grounding metadata
+const groundingMetadata = (response.custom as any)?.candidates?.[0]?.groundingMetadata;
+if (groundingMetadata) {
+  console.log('Sources:', groundingMetadata.groundingChunks);
+}
+```
+
+The following configuration options are available for Google Search grounding:
+
+- **googleSearchRetrieval** _object | boolean_
+
+  Enables Google Search grounding. Can be a boolean (`true`) or a configuration object.
+  Example: `{ dynamicRetrievalConfig: { mode: 'MODE_DYNAMIC', dynamicThreshold: 0.7 } }`
+
+  - **dynamicRetrievalConfig** _object_
+    - **mode** _string_
+      The retrieval mode (e.g., `'MODE_DYNAMIC'`).
+    - **dynamicThreshold** _number_
+      The threshold for dynamic retrieval (e.g., `0.7`).
+
+**Response Metadata:**
+
+- **webSearchQueries** _string[]_
+
+  Array of search queries used to retrieve information.
+  Example: `["What's the weather in Chicago this weekend?"]`
+
+- **searchEntryPoint** _object_
+
+  Contains the main search result content formatted for display.
+
+  - **renderedContent** _string_
+    The HTML content of the search result.
+
+- **groundingSupports** _object[]_
+
+  Links specific response segments to supporting search result chunks.
+
+  - **segment** _object_
+    - **text** _string_
+      The text of the segment.
+  - **groundingChunkIndices** _number[]_
+    Indices of the chunks that support this segment.
+  - **confidenceScores** _number[]_
+    Confidence scores for each supporting chunk.
+
+### Google Maps Grounding
+
+Enable Google Maps to provide location-aware responses.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Find coffee shops near Times Square',
+  config: {
+    tools: [{ googleMaps: {} }],
+  },
+});
+```
+
+You can also request a widget token to render an interactive map:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Show me a map of San Francisco',
+  config: {
+    tools: [{ googleMaps: { enableWidget: true } }],
+  },
+});
+```
+
+The following configuration options are available for Google Maps grounding:
+
+- **googleMaps** _object_
+
+  Enables Google Maps grounding.
+  Example: `{ enableWidget: true }`
+
+  - **enableWidget** _boolean_
+    Whether to include a widget token in the response.
+
+- **toolConfig** _object_
+
+  Additional configuration for provider tools. Can improve relevance by providing location context for Google Maps.
+  Example: `{ retrievalConfig: { latLng: { latitude: 37.7749, longitude: -122.4194 } } }`
+
+  - **retrievalConfig** _object_
+    - **latLng** _object_
+      - **latitude** _number_
+        The latitude in degrees.
+      - **longitude** _number_
+        The longitude in degrees.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Find coffee shops near my current location.',
+  config: {
+    tools: [{ googleMaps: {} }],
+    toolConfig: {
+      retrievalConfig: {
+        latLng: {
+          latitude: 37.7749,
+          longitude: -122.4194,
+        },
+      },
+    }
+  },
+});
+```
+
+### URL Context
+
+Provide specific URLs for the model to analyze:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'Summarize this page',
+  config: {
+    tools: [{ urlContext: {} }],
+  },
+});
+```
+
+When using `urlContext`, the model will fetch content from URLs found in your prompt.
+
+### Code Execution
+
+Enable the model to write and execute Python code for calculations and logic.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-pro'),
+  prompt: 'Calculate the 20th Fibonacci number',
+  config: {
+    codeExecution: true,
+  },
+});
+```
+
+The following configuration options are available for code execution:
+
+- **codeExecution** _boolean_
+
+  Enables code execution for reasoning and calculations.
+  Example: `true`
+
+### Generating Text and Images (Nano Banana)
+
+Some Gemini models (like `gemini-2.5-flash-image`) can output images natively alongside text:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-image'),
+  prompt: 'Create a picture of a futuristic city and describe it',
+  config: {
+    responseModalities: ['IMAGE', 'TEXT'],
+  },
 });
 
+// Extract image
+if (response.image) {
+  console.log('Image:', response.image);
+}
+
+// Extract text
+if (response.text) {
+  console.log('Text:', response.text);
+}
+
+// Extract all messages including text and images
+if (response.messages) {
+  console.log('Messages:', response.messages);
+}
+```
+
+The following configuration options are available for Gemini image generation:
+
+- **responseModalities** _string[]_
+
+  Specifies the output modalities.
+  Options: `['TEXT', 'IMAGE']`, `['IMAGE']`
+  Default: `['TEXT', 'IMAGE']`
+
+- **imageConfig** _object_
+
+  - **aspectRatio** _string_
+
+    Aspect ratio of the generated images.
+    Options: `'1:1'`, `'3:2'`, `'2:3'`, `'3:4'`, `'4:3'`, `'4:5'`, `'5:4'`, `'9:16'`, `'16:9'`, `'21:9'`
+    Default: `'1:1'`
+
+  - **imageSize** _string_
+
+    Resolution of the generated image.
+    Supported by `gemini-3-pro-image-preview` only.
+    Options: `'1K'`, `'2K'`, `'4K'`
+    Default: `'1K'`
+
+### Multimodal Input Capabilities
+
+#### Video Understanding
+
+Gemini models can process videos to describe content, answer questions, and refer to timestamps (in `MM:SS` format).
+
+```typescript
 const response = await ai.generate({
   model: googleAI.model('gemini-2.5-flash'),
   prompt: [
-    { text: 'Describe this image:' },
+    { text: 'What happens at 00:05?' },
+    { media: { contentType: 'video/mp4', url: 'https://youtube.com/watch?v=...' } },
+  ],
+});
+```
+
+**Video Processing Details:**
+- **Sampling**: 1 frame per second (default)
+- **Context**: 2M context models can handle up to 2 hours of video.
+- **Inputs**: Up to 10 videos per request (Gemini 2.5+).
+
+#### Image Understanding
+
+Gemini models can reason about images passed as inline data or URLs.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: [
+    { text: 'Describe what is in this image' },
+    { media: { url: 'https://example.com/image.jpg' } },
+  ],
+});
+```
+
+#### Audio Understanding
+
+Gemini models can process audio files to transcribe speech text, answer questions about the audio content, or summarize recordings.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: [
+    { text: 'Transcribe this audio clip' },
+    { media: { contentType: 'audio/mp3', url: 'https://example.com/audio.mp3' } },
+  ],
+});
+```
+
+#### PDF Support
+
+Gemini models can process PDF documents to extract information, summarize content, or answer questions based on the visual layout and text.
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: [
+    { text: 'Summarize this document' },
+    { media: { contentType: 'application/pdf', url: 'https://example.com/doc.pdf' } },
+  ],
+});
+```
+
+#### File Inputs and Gemini Files API
+
+Gemini models support various file types. For small files, you can use inline data. For larger files (up to 2GB), use the Gemini Files API.
+
+**Using Files API:**
+
+To use large files, you must upload them using the [Google GenAI SDK](https://ai.google.dev/gemini-api/docs/files) or other supported methods. Genkit does not provide file management helpers, but you can pass the file URI to Genkit for generation:
+
+```typescript
+import { GoogleGenAI } from '@google/genai';
+// ... init genaiClient ...
+
+// Upload file
+const uploadedFile = await genaiClient.files.upload({
+  file: 'path/to/video.mp4',
+  config: { mimeType: 'video/mp4' },
+});
+
+// Use in generation
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: [
+    { text: 'Describe this video' },
     {
       media: {
-        contentType: uploadResult.file.mimeType,
-        url: uploadResult.file.uri,
+        contentType: uploadedFile.mimeType,
+        url: uploadedFile.uri,
       },
     },
   ],
 });
 ```
 
-### Video Generation (Veo) Models
+## Embedding Models
 
-The Google Generative AI plugin provides access to video generation capabilities through the Veo models. These models can generate videos from text prompts or manipulate existing images to create dynamic video content.
+### Available Models
 
-#### Basic Usage: Text-to-Video Generation
+- `gemini-embedding-001` - Latest Gemini embedding model (3072 dimensions, customizable)
+- `text-embedding-004` - Text embedding model (768 dimensions, customizable)
+
+### Usage
+
+```typescript
+const embeddings = await ai.embed({
+  embedder: googleAI.embedder('gemini-embedding-001'),
+  content: 'Machine learning models process data to make predictions.',
+});
+
+console.log(embeddings);
+```
+
+## Image Models
+
+### Available Models
+
+**Imagen 4 Series** - Latest generation with improved quality:
+- `imagen-4.0-generate-001` - Standard quality
+- `imagen-4.0-ultra-generate-001` - Ultra-high quality
+- `imagen-4.0-fast-generate-001` - Fast generation
+
+**Imagen 3 Series**:
+- `imagen-3.0-generate-002`
+
+### Usage
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('imagen-4.0-generate-001'),
+  prompt: 'A serene Japanese garden with cherry blossoms and a koi pond.',
+  config: {
+    numberOfImages: 4,
+    aspectRatio: '16:9',
+    personGeneration: 'allow_adult',
+    addWatermark: true,
+  },
+});
+
+const generatedImage = response.media;
+```
+
+**Configuration Options:**
+
+- **numberOfImages** _number_
+
+  Number of images to generate.
+  Default: `4`
+
+- **aspectRatio** _string_
+
+  Aspect ratio of the generated images.
+  Options: `'1:1'`, `'3:4'`, `'4:3'`, `'9:16'`, `'16:9'`
+  Default: `'1:1'`
+
+- **personGeneration** _string_
+
+  Policy for generating people.
+  Options: `'dont_allow'`, `'allow_adult'`, `'allow_all'`
+
+- **addWatermark** _boolean_
+
+  Adds invisible SynthID watermark.
+  Default: `true`
+
+- **enhancePrompt** _boolean_
+
+  Enables LLM-based rewrite for better prompt adherence.
+  Default: `true`
+
+- **negativePrompt** _string_
+
+  Text to exclude from the generated image.
+
+
+## Video Models
+
+The Google AI plugin provides access to video generation capabilities through the Veo models. These models can generate videos from text prompts or manipulate existing images to create dynamic video content.
+
+### Available Models
+
+**Veo 3.1 Series** - Latest generation with native audio and high fidelity:
+- `veo-3.1-generate-preview` - High-quality video and audio generation
+- `veo-3.1-fast-generate-preview` - Fast generation with high quality
+
+**Veo 3.0 Series**:
+- `veo-3.0-generate-001`
+- `veo-3.0-fast-generate-001`
+
+**Veo 2.0 Series**:
+- `veo-2.0-generate-001`
+
+### Usage
+
+#### Text-to-Video
 
 To generate a video from a text prompt using the Veo model:
 
-```ts
+```typescript
 import { googleAI } from '@genkit-ai/google-genai';
 import * as fs from 'fs';
 import { Readable } from 'stream';
-import { MediaPart } from 'genkit';
-import { genkit } from 'genkit';
+import { genkit, MediaPart } from 'genkit';
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -172,10 +683,9 @@ const ai = genkit({
 
 ai.defineFlow('text-to-video-veo', async () => {
   let { operation } = await ai.generate({
-    model: googleAI.model('veo-2.0-generate-001'),
+    model: googleAI.model('veo-3.0-fast-generate-001'),
     prompt: 'A majestic dragon soaring over a mystical forest at dawn.',
     config: {
-      durationSeconds: 5,
       aspectRatio: '16:9',
     },
   });
@@ -214,22 +724,11 @@ async function downloadVideo(video: MediaPart, path: string) {
 }
 ```
 
-Veo 3 uses the exact same API, just make sure you only use supported config options (see below).
-
-To use the Veo 3 model, reference `veo-3.0-generate-preview`:
-
-```ts
-let { operation } = await ai.generate({
-  model: googleAI.model('veo-3.0-generate-preview'),
-  prompt: 'A cinematic shot of a an old car driving down a deserted road at sunset.',
-});
-```
-
 #### Video Generation from Photo Reference
 
 To use a photo as reference for the video using the Veo model (e.g. to make a static photo move), you can provide an image as part of the prompt.
 
-```ts
+```typescript
 const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
 let { operation } = await ai.generate({
@@ -253,50 +752,94 @@ let { operation } = await ai.generate({
 });
 ```
 
-#### Configuration Options
+The Veo models support various configuration options:
 
-The Veo models support various configuration options.
+- **negativePrompt** _string_
 
-##### Veo Model Parameters
+  Text that describes anything you want to discourage the model from generating.
 
-Full list of options can be found at https://ai.google.dev/gemini-api/docs/video#veo-model-parameters
+- **aspectRatio** _string_
 
-- `negativePrompt`: Text string that describes anything you want to discourage the model from generating
-- `aspectRatio`: Changes the aspect ratio of the generated video.
-  - `"16:9"`: Supported in Veo 3 and Veo 2.
-  - `"9:16"`: Supported in Veo 2 only (defaults to "16:9").
-- `personGeneration`: Allow the model to generate videos of people. The following values are supported:
+  Changes the aspect ratio of the generated video.
+  - `"16:9"`
+  - `"9:16"`
+
+- **personGeneration** _string_
+
+  Allow the model to generate videos of people.
   - **Text-to-video generation**:
-    - `"allow_all"`: Generate videos that include adults and children. Currently the only available `personGeneration` value for Veo 3.
-    - `"dont_allow"`: Veo 2 only. Don't allow the inclusion of people or faces.
-    - `"allow_adult"`: Veo 2 only. Generate videos that include adults, but not children.
-  - **Image-to-video generation**: Veo 2 only
-    - `"dont_allow"`: Don't allow the inclusion of people or faces.
-    - `"allow_adult"`: Generate videos that include adults, but not children.
-- `numberOfVideos`: Output videos requested
-  - `1`: Supported in Veo 3 and Veo 2
+    - `"allow_all"`: Generate videos that include adults and children. Currently the only available value for Veo 3.
+    - `"dont_allow"` (Veo 2 only): Don't allow people or faces.
+    - `"allow_adult"` (Veo 2 only): Generate videos with adults, but not children.
+  - **Image-to-video generation** (Veo 2 only):
+    - `"dont_allow"`: Don't allow people or faces.
+    - `"allow_adult"`: Generate videos with adults, but not children.
+
+- **numberOfVideos** _number_
+
+  Output videos requested.
+  - `1`: Supported in Veo 3 and Veo 2.
   - `2`: Supported in Veo 2 only.
-- `durationSeconds`: Veo 2 only. Length of each output video in seconds, between 5 and 8. Not configurable for Veo 3, default setting is 8 seconds.
-- `enhancePrompt`: Veo 2 only. Enable or disable the prompt rewriter. Enabled by default. Not configurable for Veo 3, default prompt enhancer is always on.
 
-### Text-to-Speech (TTS) Models
+- **durationSeconds** _number_ (Veo 2 only)
 
-The Google Genai plugin provides access to text-to-speech capabilities through Gemini TTS models. These models can convert text into natural-sounding speech for various applications.
+  Length of each output video in seconds (5 to 8). Not configurable for Veo 3.1/3.0 (defaults to 8 seconds).
 
-#### Basic Usage
+- **resolution** _string_ (Veo 3.1 only)
 
-To generate audio using a TTS model:
+  Resolution of the generated video.
+  - `"720p"` (default)
+  - `"1080p"` (Available for 16:9 aspect ratio)
 
-```ts
-import { googleAI } from '@genkit-ai/google-genai';
-import { writeFile } from 'node:fs/promises';
-import wav from 'wav'; // npm install wav && npm install -D @types/wav
+- **seed** _number_ (Veo 3.1/3.0 only)
 
-const ai = genkit({
-  plugins: [googleAI()],
-});
+  Sets the random seed for generation. Doesn't guarantee determinism but improves consistency.
 
-const { media } = await ai.generate({
+- **referenceImages** _object[]_ (Veo 3.1 only)
+
+  Provides up to 3 reference images to guide the video's content or style.
+
+- **enhancePrompt** _boolean_ (Veo 2 only)
+
+  Enable or disable the prompt rewriter. Enabled by default. For Veo 3.1/3.0, the prompt enhancer is always on.
+
+
+## Speech Models
+
+The Google GenAI plugin provides access to text-to-speech capabilities through Gemini TTS models. These models can convert text into natural-sounding speech for various applications.
+
+### Available Models
+
+- `gemini-2.5-flash-preview-tts` - Flash model with TTS
+- `gemini-2.5-pro-preview-tts` - Pro model with TTS
+
+### Usage
+
+**Basic Usage**
+
+To convert text to single-speaker audio, set the response modality to "AUDIO", and pass a `speechConfig` object with `voiceConfig` set. You'll need to choose a voice name from the prebuilt [output voices](https://ai.google.dev/gemini-api/docs/speech-generation#voices).
+
+The plugin returns raw PCM data, which can then be converted to a standard format like WAV.
+
+```typescript
+import wav from 'wav';
+import { Buffer } from 'node:buffer';
+
+async function saveWavFile(filename: string, pcmData: Buffer, sampleRate = 24000) {
+  return new Promise((resolve, reject) => {
+    const writer = new wav.FileWriter(filename, {
+      channels: 1,
+      sampleRate,
+      bitDepth: 16,
+    });
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+    writer.write(pcmData);
+    writer.end();
+  });
+}
+
+const response = await ai.generate({
   model: googleAI.model('gemini-2.5-flash-preview-tts'),
   config: {
     responseModalities: ['AUDIO'],
@@ -306,135 +849,104 @@ const { media } = await ai.generate({
       },
     },
   },
-  prompt: 'Say that Genkit is an amazing Gen AI library',
+  prompt: 'Say that Genkit is an amazing AI framework',
 });
 
-if (!media) {
-  throw new Error('no media returned');
-}
-const audioBuffer = Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64');
-// The googleAI plugin returns raw PCM data, which we convert to WAV format.
-await writeFile('output.wav', await toWav(audioBuffer));
-
-async function toWav(pcmData: Buffer, channels = 1, rate = 24000, sampleWidth = 2): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // This code depends on `wav` npm library.
-    const writer = new wav.Writer({
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
-    });
-
-    let bufs = [] as any[];
-    writer.on('error', reject);
-    writer.on('data', function (d) {
-      bufs.push(d);
-    });
-    writer.on('end', function () {
-      resolve(Buffer.concat(bufs).toString('base64'));
-    });
-
-    writer.write(pcmData);
-    writer.end();
-  });
+if (response.media?.url) {
+  const data = response.media.url.split(',')[1];
+  if (data) {
+    const pcmData = Buffer.from(data, 'base64');
+    await saveWavFile('output.wav', pcmData);
+  }
 }
 ```
 
-#### Multi-speaker Audio Generation
+**Multi-Speaker**
 
-You can generate audio with multiple speakers, each with their own voice:
+You can generate audio with multiple speakers, each with their own voice. The model automatically detects speaker labels in the text (like "Speaker1:" and "Speaker2:") and applies the corresponding voice to each speaker's lines.
 
-```ts
-const response = await ai.generate({
+```typescript
+const { media } = await ai.generate({
   model: googleAI.model('gemini-2.5-flash-preview-tts'),
+  prompt: `
+    Speaker A: Hello, how are you today?
+    Speaker B: I am doing great, thanks for asking!
+  `,
   config: {
     responseModalities: ['AUDIO'],
     speechConfig: {
       multiSpeakerVoiceConfig: {
         speakerVoiceConfigs: [
           {
-            speaker: 'Speaker1',
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Algenib' },
-            },
+            speaker: 'Speaker A',
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
           },
           {
-            speaker: 'Speaker2',
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Achernar' },
-            },
+            speaker: 'Speaker B',
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
           },
         ],
       },
     },
   },
-  prompt: `Here's the dialog:
-    Speaker1: "Genkit is an amazing Gen AI library!"
-    Speaker2: "I thought it was a framework."`,
 });
 ```
 
-When using multi-speaker configuration, the model automatically detects speaker labels in the text (like "Speaker1:" and "Speaker2:") and applies the corresponding voice to each speaker's lines.
+The following configuration options are available for speech generation:
 
-#### Configuration Options
+- **speechConfig** _object_
 
-The Gemini TTS models support various configuration options:
+  - **voiceConfig** _object_
 
-##### Voice Selection
+    Defines the voice configuration for a single speaker.
 
-You can choose from different pre-built voices with unique characteristics:
+    - **prebuiltVoiceConfig** _object_
 
-```ts
-speechConfig: {
-  voiceConfig: {
-    prebuiltVoiceConfig: {
-      voiceName: 'Algenib' // Other options: 'Achernar', 'Ankaa', etc.
-    },
-  },
-}
-```
+      - **voiceName** _string_
 
-##### Speech Emphasis
+        The name of the voice to use.
+        Options: `Puck`, `Charon`, `Kore`, `Fenrir`, `Aoede` (and [others](https://ai.google.dev/gemini-api/docs/speech-generation#voices)).
+
+      - **speakingRate** _number_
+
+        Controls the speed of speech. Range: `0.25` to `4.0`, default is `1.0`.
+
+      - **pitch** _number_
+
+        Adjusts the pitch of the voice. Range: `-20.0` to `20.0`, default is `0.0`.
+
+      - **volumeGainDb** _number_
+
+        Controls the volume. Range: `-96.0` to `16.0`, default is `0.0`.
+
+  - **multiSpeakerVoiceConfig** _object_
+
+    Defines the voice configuration for multiple speakers.
+
+    - **speakerVoiceConfigs** _array_
+
+      A list of voice configurations for each speaker.
+
+      - **speaker** _string_
+
+        The name of the speaker (e.g., "Speaker A") as used in the prompt.
+
+      - **voiceConfig** _object_
+
+        The voice configuration for this speaker. See `voiceConfig` above.
+
+**Speech Emphasis**
 
 You can use markdown-style formatting in your prompt to add emphasis:
 
-- Bold text (`**like this**`) for stronger emphasis
-- Italic text (`*like this*`) for moderate emphasis
+- **Bold text** (`**like this**`) for stronger emphasis.
+- _Italic text_ (`*like this*`) for moderate emphasis.
 
-Example:
-
-```ts
+```typescript
 prompt: 'Genkit is an **amazing** Gen AI *library*!';
 ```
 
-##### Advanced Speech Parameters
-
-For more control over the generated speech:
-
-```ts
-speechConfig: {
-  voiceConfig: {
-    prebuiltVoiceConfig: {
-      voiceName: 'Algenib',
-      speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
-      pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
-      volumeGainDb: 0.0,  // Range: -96.0 to 16.0, default is 0.0
-    },
-  },
-}
-```
-
-- `speakingRate`: Controls the speed of speech (higher values = faster speech)
-- `pitch`: Adjusts the pitch of the voice (higher values = higher pitch)
-- `volumeGainDb`: Controls the volume (higher values = louder)
-
-For more detailed information about the Gemini TTS models and their configuration options, see the [Google AI Speech Generation documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-## Next Steps
-
-- Learn about [generating content](/docs/models) to understand how to use these models effectively
-- Explore [creating flows](/docs/flows) to build structured AI workflows
-- To use the Gemini API at enterprise scale or leverage Vertex vector search and Model Garden, see the [Vertex AI plugin](/docs/integrations/vertex-ai)
+TTS models automatically detect the input language. Supported languages include `en-US`, `fr-FR`, `de-DE`, `es-US`, `ja-JP`, `ko-KR`, `pt-BR`, `zh-CN`, and [more](https://ai.google.dev/gemini-api/docs/speech-generation#languages).
 
 </LanguageContent>
 
@@ -528,6 +1040,7 @@ See [Retrieval-augmented generation (RAG)](/docs/rag) for more information.
 - Learn about [generating content](/docs/models) to understand how to use these models effectively
 - Explore [creating flows](/docs/flows) to build structured AI workflows
 - To use the Gemini API at enterprise scale see the [Vertex AI plugin](/docs/integrations/vertex-ai)
+
 
 </LanguageContent>
 
