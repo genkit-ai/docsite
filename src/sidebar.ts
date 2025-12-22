@@ -1,322 +1,128 @@
-const JS_SIDEBAR = [
-  { label: "Get started", slug: "docs/get-started" },
-  { label: "Developer tools", slug: "docs/devtools" },
-  { label: "MCP Server", slug: "docs/mcp-server" },
+const DOCS_SIDEBAR = [
+  {
+    label: "Get started",
+    items: [
+      { label: "Overview", slug: "docs/overview" },
+      { label: "Get started", slug: "docs/get-started" },
+      { label: "Developer tools", slug: "docs/devtools" },
+    ],
+  },
+  {
+    label: "Building AI workflows",
+    items: [
+      { label: "Creating flows", slug: "docs/flows" },
+      { label: "Generating content", slug: "docs/models" },
+      { label: "Tool calling", slug: "docs/tool-calling" },
+      { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
+      { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
+      { label: "Passing information through context", slug: "docs/context" },
+      { label: "Pause generation using interrupts", slug: "docs/interrupts" },
+      { label: "Creating persistent chat sessions", slug: "docs/chat" },
+      { label: "Model Context Protocol (MCP)", slug: "docs/model-context-protocol" },
+      { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
+      { label: "Building multi-agent systems", slug: "docs/multi-agent" },
+      { label: "Error types", slug: "docs/error-types" },
+      { label: "Evaluation", slug: "docs/evaluation" },
+      { label: "Local observability and metrics", slug: "docs/local-observability" },
+    ],
+  },
+  {
+    label: "Build with AI",
+    items: [
+      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
+      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
+    ],
+  },
   {
     label: "Tutorials",
     items: [
-      {
-        label: "Chat with a PDF",
-        slug: "docs/tutorials/tutorial-chat-with-a-pdf",
-      },
-      {
-        label: "Summarize YouTube videos",
-        slug: "docs/tutorials/tutorial-summarize-youtube-videos",
-      },
-      {
-        label: "Agentic barista Angular app",
-        link: "https://developers.google.com/solutions/learn/agentic-barista",
-        attrs: {
-          "data-external": true,
-          target: "_blank",
-          class: "external-icon",
-          rel: "noopener",
-        },
-      },
+      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
+      { label: "Summarize YouTube videos", slug: "docs/tutorials/summarize-youtube-videos" },
     ],
   },
   {
-    label: "Building AI workflows",
+    label: "Model Providers",
     items: [
-      { label: "Generating content", slug: "docs/models" },
-      {
-        label: "Passing information through context",
-        slug: "docs/context",
-      },
-      { label: "Creating flows", slug: "docs/flows" },
-      {
-        label: "Managing prompts with Dotprompt",
-        slug: "docs/dotprompt",
-      },
-      { label: "Persistent chat sessions", slug: "docs/chat" },
-      { label: "Tool calling", slug: "docs/tool-calling" },
-      {
-        label: "Pause generation using interrupts",
-        slug: "docs/interrupts",
-      },
-      {
-        label: "Retrieval-augmented generation (RAG)",
-        slug: "docs/rag",
-      },
-      { label: "Multi-agent systems", slug: "docs/multi-agent" },
-      { label: "Evaluation", slug: "docs/evaluation" },
-      {
-        label: "Observe local metrics",
-        slug: "docs/local-observability",
-      },
-      { label: "Error Types", slug: "docs/errors/types" },
+      { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
+      { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
+      { label: "OpenAI", slug: "docs/integrations/openai" },
+      { label: "OpenAI-Compatible APIs", slug: "docs/integrations/openai-compatible" },
+      { label: "Anthropic (Claude)", slug: "docs/integrations/anthropic" },
+      { label: "xAI (Grok)", slug: "docs/integrations/xai" },
+      { label: "DeepSeek", slug: "docs/integrations/deepseek" },
+      { label: "Ollama", slug: "docs/integrations/ollama" },
     ],
   },
   {
-    label: "Deploying AI workflows",
+    label: "Database Providers",
     items: [
-      { label: "Deploy with Firebase", slug: "docs/firebase" },
-      { label: "Deploy with Cloud Run", slug: "docs/cloud-run" },
-      {
-        label: "Deploy to any Node.js platform",
-        slug: "docs/deploy-node",
-      },
-      { label: "Authorization and integrity", slug: "docs/auth" },
-      { label: "Accessing flows from the client", slug: "docs/client" },
+      { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
+      { label: "Dev Local Vector Store", slug: "docs/integrations/dev-local-vectorstore" },
+      { label: "Pinecone", slug: "docs/integrations/pinecone" },
+      { label: "Chroma", slug: "docs/integrations/chroma" },
+      { label: "pgvector", slug: "docs/integrations/pgvector" },
+      { label: "LanceDB", slug: "docs/integrations/lancedb" },
+      { label: "Astra DB", slug: "docs/integrations/astra-db" },
+      { label: "Neo4j", slug: "docs/integrations/neo4j" },
+      { label: "AlloyDB for PostgreSQL", slug: "docs/integrations/alloydb" },
+      { label: "Cloud SQL PostgreSQL", slug: "docs/integrations/cloud-sql-postgresql" },
+      { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
+      { label: "Vertex AI VectorSearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
+      { label: "Vertex AI VectorSearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
     ],
   },
   {
-    label: "Observing AI workflows",
+    label: "Web Framework Integrations",
     items: [
-      {
-        label: "Getting Started",
-        slug: "docs/observability/getting-started",
-      },
-      {
-        label: "Authentication",
-        slug: "docs/observability/authentication",
-      },
-      {
-        label: "Advanced Configuration",
-        slug: "docs/observability/advanced-configuration",
-      },
-      {
-        label: "Telemetry Collection",
-        slug: "docs/observability/telemetry-collection",
-      },
-      {
-        label: "Troubleshooting",
-        slug: "docs/observability/troubleshooting",
-      },
+      { label: "Express.js", slug: "docs/frameworks/express" },
+      { label: "Next.js", slug: "docs/frameworks/nextjs" },
+      { label: "Angular", slug: "docs/frameworks/angular" },
+      { label: "Flask", slug: "docs/frameworks/flask" },
     ],
   },
   {
-    label: "Plugins",
+    label: "Deployment",
     items: [
-      { label: "Google AI", slug: "docs/plugins/google-genai" },
-      { label: "Vertex AI", slug: "docs/plugins/vertex-ai" },
-      { label: "Firebase", slug: "docs/plugins/firebase" },
-      { label: "OpenAI", slug: "docs/plugins/openai" },
-      { label: "xAI", slug: "docs/plugins/xai" },
-      { label: "DeepSeek", slug: "docs/plugins/deepseek" },
-      { label: "OpenAI-Compatible", slug: "docs/plugins/compat-oai" },
-      { label: "Ollama", slug: "docs/plugins/ollama" },
-      { label: "MCP", slug: "docs/plugins/mcp" },
-      { label: "Express", slug: "docs/plugins/express" },
-      { label: "LanceDB", slug: "docs/plugins/lancedb" },
-      { label: "Astra DB", slug: "docs/plugins/astra-db" },
-      { label: "Auth0 AI", slug: "docs/plugins/auth0" },
-      { label: "ChromaDB", slug: "docs/plugins/chroma" },
-      { label: "Neo4j", slug: "docs/plugins/neo4j" },
-      { label: "pgvector", slug: "docs/plugins/pgvector" },
-      { label: "Cloud SQL for PostgreSQL", slug: "docs/plugins/cloud-sql-pg" },
-      { label: "Pinecone", slug: "docs/plugins/pinecone" },
-      { label: "MCP Toolbox", slug: "docs/plugins/toolbox" },
+      { label: "Firebase", slug: "docs/deployment/firebase" },
+      { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
+      { label: "Any Platform", slug: "docs/deployment/any-platform" },
+      { label: "Client App Integration", slug: "docs/client" },
     ],
   },
   {
-    label: "Templates",
+    label: "Authorization",
     items: [
-      {
-        label: "pgvector Retriever",
-        slug: "docs/templates/pgvector",
-      },
+      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
+      { label: "Auth0 AI", slug: "docs/integrations/auth0" },
     ],
   },
   {
-    label: "Framework Integrations",
+    label: "Writing Plugins",
     items: [
-      { label: "Using Genkit with Next.js", slug: "docs/nextjs" },
-      { label: "Using Genkit with Angular", slug: "docs/angular" },
+      { label: "Overview", slug: "docs/plugin-authoring/overview" },
     ],
   },
   {
-    label: "Writing plugins",
+    label: "Observability and Monitoring",
     items: [
-      // NOTE: Deployment links were incorrectly placed here before, removed them.
-      { label: "Overview", slug: "docs/plugin-authoring" },
-      {
-        label: "Writing an Evaluator Plugin",
-        slug: "docs/plugin-authoring-evaluator",
-      },
-    ],
-  },
-  // {
-  //   label: "Migration Guides",
-  //   items: [
-  //     // Added 0.9->1.0 link to main Genkit section previously
-  //     {
-  //       label: "Migrate from 0.5 to 0.9",
-  //       slug: "docs/migrating-from-0.5",
-  //     },
-  //   ],
-  // },
-  {
-    label: "Community",
-    items: [{ label: "Connect with us", slug: "docs/feedback" }],
-  },
-  {
-    label: "Reference",
-    items: [
-      {
-        label: "API reference",
-        link: "https://js.api.genkit.dev/",
-        attrs: {
-          "data-external": true,
-          target: "_blank",
-          class: "external-icon",
-          rel: "noopener",
-          // style: "font-weight: 600; font-size: var(--sl-text-base); color: var(--sl-color-white);",
-        },
-      },
-      { label: "API stability channels", slug: "docs/api-stability" },
-    ],
-  },
-];
-
-const GO_SIDEBAR = [
-  { label: "Get started", slug: "go/docs/get-started-go" },
-  {
-    label: "Building AI workflows",
-    items: [
-      { label: "Generating content", slug: "go/docs/models" },
-      { label: "Creating flows", slug: "go/docs/flows" },
-      { label: "Managing prompts with Dotprompt", slug: "go/docs/dotprompt" },
-      { label: "Tool calling", slug: "go/docs/tool-calling" },
-      { label: "Retrieval-augmented generation (RAG)", slug: "go/docs/rag" },
-      { label: "Evaluation", slug: "go/docs/evaluation" },
-      { label: "Observability & monitoring", slug: "go/docs/monitoring" },
-    ],
-  },
-  {
-    label: "Deploying AI workflows",
-    items: [
-      { label: "Deploy with Cloud Run", slug: "go/docs/cloud-run" },
-      { label: "Deploy with any hosting service", slug: "go/docs/deploy" },
-    ],
-  },
-  {
-    label: "Writing plugins",
-    items: [
-      { label: "Overview", slug: "go/docs/plugin-authoring" },
-      {
-        label: "Writing a model plugin",
-        slug: "go/docs/plugin-authoring-models",
-      },
-      {
-        label: "Writing a telemetry plugin",
-        slug: "go/docs/plugin-authoring-telemetry",
-      },
-    ],
-  },
-  {
-    label: "Plugins",
-    items: [
-      { label: "Google Generative AI", slug: "go/docs/plugins/google-genai" },
-      { label: "Google Cloud", slug: "go/docs/plugins/google-cloud" },
-      { label: "Firebase", slug: "go/docs/plugins/firebase" },
-      { label: "MCP (Model Context Protocol)", slug: "go/docs/plugins/mcp" },
-      { label: "Ollama", slug: "go/docs/plugins/ollama" },
-      { label: "OpenAI-Compatible APIs", slug: "go/docs/plugins/openai" },
-      { label: "pgvector", slug: "go/docs/plugins/pgvector" },
-      { label: "AlloyDB for PostgreSQL", slug: "go/docs/plugins/alloydb" },
-      { label: "Cloud SQl for PostgreSQL", slug: "go/docs/plugins/cloud-sql-pg" },
-      { label: "Pinecone", slug: "go/docs/plugins/pinecone" },
-      { label: "MCP Toolbox", slug: "go/docs/plugins/toolbox" },
-      {
-        label: "Partner & 3P Plugins",
-        items: [
-          { label: "Overview", slug: "go/docs/plugins/third-party-plugins" },
-        ],
-      },
+      { label: "Getting started", slug: "docs/observability/getting-started" },
+      { label: "Authentication", slug: "docs/observability/authentication" },
+      { label: "Telemetry Collection", slug: "docs/observability/telemetry-collection" },
+      { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
+      { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
+      { label: "Google Cloud Plugin", slug: "docs/integrations/google-cloud" },
     ],
   },
   {
     label: "Reference",
     items: [
-      {
-        label: "API Reference",
-        link: "https://pkg.go.dev/github.com/firebase/genkit/go",
-        attrs: {
-          "data-external": true,
-          target: "_blank",
-          class: "external-icon",
-          rel: "noopener",
-        },
-      },
-    ],
-  },
-];
-const PYTHON_SIDEBAR = [
-  { label: "Get started", slug: "python/docs/get-started" },
-  { label: "Deploy with Cloud Run", slug: "python/docs/cloud-run" },
-  { label: "Deploy with Flask", slug: "python/docs/flask" },
-  {
-    label: "Generating content with AI models",
-    slug: "python/docs/reference/models",
-  },
-  { label: "Defining AI workflows", slug: "python/docs/reference/flows" },
-  { label: "Tool (function) calling", slug: "python/docs/reference/tools" },
-  { label: "Tool interrupts", slug: "python/docs/reference/interrupts" },
-  {
-    label: "Retrieval-augmented generation (RAG)",
-    slug: "python/docs/reference/rag",
-  },
-  {
-    label: "Plugins",
-    items: [
-      {
-        label: "Google GenAI",
-        slug: "python/docs/reference/plugins/google-genai",
-      },
-      {
-        label: "Firestore Vector Store",
-        slug: "python/docs/reference/plugins/firestore",
-      },
-      { label: "Ollama", slug: "python/docs/reference/plugins/ollama" },
-      {
-        label: "Dev Local Vector Store",
-        slug: "python/docs/reference/plugins/dev-local-vectorstore",
-      },
-    ],
-  },
-  {
-    label: "Reference",
-    items: [
-      {
-        label: "API Reference",
-        link: "https://python.api.genkit.dev",
-        attrs: {
-          "data-external": true,
-          target: "_blank",
-          class: "external-icon",
-          rel: "noopener",
-        },
-      },
+      { label: "API References", slug: "docs/api-references" },
+      { label: "API Stability", slug: "docs/api-stability" },
+      { label: "Feedback", slug: "docs/feedback" },
     ],
   },
 ];
 
 export const sidebar = [
-  { label: "Introduction", slug: "" },
-  {
-    label: "Genkit JS",
-    items: JS_SIDEBAR,
-    collapsed: false,
-  },
-  {
-    label: "Genkit Go",
-    items: GO_SIDEBAR,
-    collapsed: true,
-  },
-  {
-    label: "Genkit Python",
-    items: PYTHON_SIDEBAR,
-    collapsed: true,
-  },
+  ...DOCS_SIDEBAR,
 ];

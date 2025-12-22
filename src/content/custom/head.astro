@@ -1,20 +1,282 @@
 ---
-import Default from '@astrojs/starlight/components/Head.astro';
-
-const { title } = Astro.locals.starlightRoute.entry.data;
-const id = Astro.locals.starlightRoute.entry["id"];
 const { head } = Astro.locals.starlightRoute;
-
-let finalTitle = title;
-if (id.startsWith('go/')) {
-    finalTitle = title + ' - Go - Genkit';
-}
-if (id.startsWith('python/')) {
-    finalTitle = title + ' - Python - Genkit' ;
-}
-if (id.startsWith('docs/')) {
-    finalTitle = title + ' - JS - Genkit';
-}
 ---
-<title>{finalTitle}</title>
-{head.filter(({ tag }) => tag !== 'title').map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+
+<script is:inline>
+// Inline the unified page manager to ensure it loads immediately
+/**
+ * Unified Page Manager for Genkit Documentation
+ * 
+ * This script coordinates:
+ * 1. Scroll restoration without flashing
+ * 2. Language preference management
+ * 3. Smooth page transitions
+ * 4. Font loading optimization
+ */
+
+class UnifiedPageManager {
+  constructor() {
+    this.storageKeys = {
+      scroll: 'genkit-scroll-',
+      globalPreference: 'genkit-global-language-preference',
+      currentLanguage: 'genkit-current-language'
+    };
+    this.languages = ['js', 'go', 'python'];
+    this.defaultLanguage = 'js';
+    this.isInitialized = false;
+    this.isRestoring = false;
+    
+    // Initialize immediately
+    this.init();
+  }
+
+  init() {
+    if (this.isInitialized) return;
+    
+    // Disable browser's automatic scroll restoration
+    if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+    }
+    
+    // Check for scroll restoration needs
+    const scrollKey = this.storageKeys.scroll + window.location.pathname;
+    const savedScroll = sessionStorage.getItem(scrollKey);
+    const storedScrollPosition = savedScroll ? parseInt(savedScroll, 10) : null;
+    
+    if (storedScrollPosition && storedScrollPosition > 0) {
+      this.isRestoring = true;
+      // Only hide the main content area, not the entire page
+      document.documentElement.classList.add('scroll-restoring');
+      sessionStorage.removeItem(scrollKey);
+    }
+    
+    // Set up language immediately
+    this.setupLanguage();
+    
+    // Set up scroll restoration
+    if (this.isRestoring) {
+      this.restoreScrollPosition(storedScrollPosition);
+    }
+    
+    // Set up event listeners
+    this.setupEventListeners();
+    
+    this.isInitialized = true;
+  }
+
+  setupLanguage() {
+    // Get language from URL or storage
+    const params = new URLSearchParams(window.location.search);
+    const urlLang = params.get('lang');
+    const globalPreference = localStorage.getItem(this.storageKeys.globalPreference);
+    const currentLanguage = localStorage.getItem(this.storageKeys.currentLanguage);
+    
+    // Determine the current language
+    const selectedLang = urlLang ? this.normalizeLanguage(urlLang) :
+                        globalPreference || currentLanguage || 'js';
+    
+    // Update URL to reflect the selected language
+    const currentUrl = new URL(window.location);
+    const currentUrlLang = currentUrl.searchParams.get('lang');
+    // Don't redirect if lang is js, standard behaviour with other languages
+    const shouldUpdateUrl = selectedLang !== 'js' && currentUrlLang !== selectedLang;
+    
+    if (shouldUpdateUrl) {
+      if (selectedLang === 'js') {
+        currentUrl.searchParams.delete('lang');
+      } else {
+        currentUrl.searchParams.set('lang', selectedLang);
+      }
+      window.history.replaceState({}, '', currentUrl);
+    }
+    
+    // Store preferences
+    localStorage.setItem(this.storageKeys.currentLanguage, selectedLang);
+    if (urlLang) {
+      localStorage.setItem(this.storageKeys.globalPreference, selectedLang);
+    }
+    
+    // Set HTML attribute
+    document.documentElement.setAttribute('data-genkit-lang', selectedLang);
+  }
+
+
+  normalizeLanguage(lang) {
+    const langMap = {
+      'js': 'js',
+      'javascript': 'js',
+      'go': 'go',
+      'golang': 'go',
+      'python': 'python',
+      'py': 'python'
+    };
+    return langMap[lang.toLowerCase()] || 'js';
+  }
+
+  restoreScrollPosition(position) {
+    const restore = () => {
+      // Restore scroll immediately
+      window.scrollTo(0, position);
+      
+      // Show content quickly after scroll
+      requestAnimationFrame(() => {
+        document.documentElement.classList.remove('scroll-restoring');
+        this.isRestoring = false;
+      });
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', restore);
+    } else {
+      restore();
+    }
+
+    // Fallback to ensure content is always visible
+    setTimeout(() => {
+      if (this.isRestoring) {
+        document.documentElement.classList.remove('scroll-restoring');
+        this.isRestoring = false;
+      }
+    }, 100);
+  }
+
+  setupEventListeners() {
+    // Store scroll position before page unload
+    const storeScrollPosition = () => {
+      const scrollY = window.scrollY || window.pageYOffset;
+      if (scrollY > 0) {
+        const scrollKey = this.storageKeys.scroll + window.location.pathname;
+        sessionStorage.setItem(scrollKey, scrollY.toString());
+      }
+    };
+
+    window.addEventListener('beforeunload', storeScrollPosition);
+    window.addEventListener('pagehide', storeScrollPosition);
+
+    // Handle language selector clicks
+    document.addEventListener('click', (event) => {
+      const langButton = event.target.closest('[data-lang]');
+      if (langButton && langButton.classList.contains('lang-pill')) {
+        event.preventDefault();
+        this.setLanguage(langButton.dataset.lang);
+      }
+    });
+
+    // Handle browser back/forward
+    window.addEventListener('popstate', () => {
+      this.setupLanguage();
+      this.updateLanguageUI();
+    });
+
+    // Update language UI when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => this.updateLanguageUI());
+    } else {
+      this.updateLanguageUI();
+    }
+  }
+
+  setLanguage(lang, isUserChoice = true) {
+    const normalizedLang = this.normalizeLanguage(lang);
+    
+    // Update URL
+    const url = new URL(window.location);
+    if (normalizedLang === 'js') {
+      url.searchParams.delete('lang');
+    } else {
+      url.searchParams.set('lang', normalizedLang);
+    }
+    
+    window.history.replaceState({}, '', url);
+    
+    // Store current page language
+    localStorage.setItem(this.storageKeys.currentLanguage, normalizedLang);
+    
+    // Only update global preference if user explicitly chose this
+    if (isUserChoice) {
+      localStorage.setItem(this.storageKeys.globalPreference, normalizedLang);
+    }
+    
+    // Update HTML attribute
+    document.documentElement.setAttribute('data-genkit-lang', normalizedLang);
+    
+    // Update UI
+    this.updateLanguageUI();
+  }
+
+  updateLanguageUI() {
+    const currentLang = document.documentElement.getAttribute('data-genkit-lang') || 'js';
+    
+    // Update language selector pills
+    document.querySelectorAll('.lang-pill').forEach(pill => {
+      const isActive = pill.dataset.lang === currentLang;
+      pill.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+  }
+
+  // Public method to get current language
+  getCurrentLanguage() {
+    return document.documentElement.getAttribute('data-genkit-lang') || 'js';
+  }
+
+  // Public method to manually set language
+  setLanguagePublic(language) {
+    this.setLanguage(language);
+  }
+
+}
+
+// Initialize the unified page manager
+const unifiedPageManager = new UnifiedPageManager();
+
+// Make it globally available for debugging and compatibility
+window.unifiedPageManager = unifiedPageManager;
+
+// Legacy compatibility for existing language preference enhancer
+window.languagePreferenceEnhancer = {
+  getCurrentLanguage: () => unifiedPageManager.getCurrentLanguage(),
+  setLanguage: (lang) => unifiedPageManager.setLanguagePublic(lang)
+};
+</script>
+
+<!-- Critical CSS to prevent FOUC and scroll flash -->
+<style is:inline>
+/* Selective hiding during scroll restoration - only hide main content */
+html.scroll-restoring main,
+html.scroll-restoring .sl-markdown-content {
+  opacity: 0;
+  transition: opacity 0.05s ease-out;
+}
+
+/* Keep header, sidebar, and other navigation visible */
+html.scroll-restoring .header,
+html.scroll-restoring .sidebar-pane,
+html.scroll-restoring .right-sidebar {
+  opacity: 1 !important;
+}
+
+/* Hide ALL language content by default */
+.lang-content {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Show content for the current language (single or multi-language blocks) */
+/* Using ~= selector to match space-separated values in data-lang attribute */
+html[data-genkit-lang="js"] .lang-content[data-lang~="js"] {
+  display: block !important;
+  visibility: visible !important;
+}
+
+html[data-genkit-lang="go"] .lang-content[data-lang~="go"] {
+  display: block !important;
+  visibility: visible !important;
+}
+
+html[data-genkit-lang="python"] .lang-content[data-lang~="python"] {
+  display: block !important;
+  visibility: visible !important;
+}
+
+</style>

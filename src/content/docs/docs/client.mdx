@@ -1,20 +1,33 @@
 ---
 title: Accessing flows from the client
-description: Learn how to access Genkit flows from client-side applications.
+description: Learn how to access Genkit flows from client-side applications (JavaScript web apps, Dart or Flutter).
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 There are two primary ways to access Genkit flows from client-side applications:
- - Using the Genkit client library
- - Cloud Functions for Firebase callable function client SDK
+
+- Using a Genkit client library
+- Using the client SDK for your server platform (e.g., the Cloud Functions for Firebase callable function client SDK)
+
+This guide covers the Genkit client libraries.
 
 ## Using the Genkit client library
 
-You can call your deployed flows using the Genkit client library. This library provides functions for both non-streaming and streaming flow calls. See "Call your flows from the client" in [Deploy flows to any Node.js platform](/docs/deploy-node) for more details.
+You can call your deployed flows using a Genkit client library. The libraries provide a type-safe way to interact with both non-streaming and streaming flows.
+
+Learn about flows in "[Defining AI workflows](/docs/flows/)".
+
+:::note
+You will see the term "action" being used. Genkit's core framework is built on the "action" primitive, which enables observability/tracing, streaming and Dev UI interation. In theory, any action can be made remotely accessible with Genkit, so the client is not limited to flows, but any action that the server makes available.
+:::
 
 ### Non-streaming Flow Calls
 
-For a non-streaming response, use the `runFlow` function. This is suitable for flows that return a single, complete output.
+For a non-streaming response, use the `runFlow` function (in JS) or `await` the action (in Dart). This is suitable for flows that return a single, complete output.
 
+<Tabs>
+<TabItem label="JavaScript">
 ```typescript
 import { runFlow } from 'genkit/beta/client';
 
@@ -32,11 +45,36 @@ async function callHelloFlow() {
 
 callHelloFlow();
 ```
+</TabItem>
+<TabItem label="Dart">
+```dart
+// main.dart
+import 'package:genkit/client.dart';
+
+// Define the action (as shown above)
+final helloFlow = defineRemoteAction(
+  url: 'http://127.0.0.1:3400/helloFlow',
+  fromResponse: (data) => data['greeting'] as String,
+);
+
+Future<void> callHelloFlow() async {
+  try {
+    final result = await helloFlow(input: {'name': 'Genkit User'});
+    print('Non-streaming result: $result');
+  } catch (e) {
+    print('Error calling helloFlow: $e');
+  }
+}
+```
+</TabItem>
+</Tabs>
 
 ### Streaming Flow Calls
 
-For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function.
+For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function (in JS) or the `.stream()` method (in Dart).
 
+<Tabs>
+<TabItem label="JavaScript">
 ```typescript
 import { streamFlow } from 'genkit/beta/client';
 
@@ -62,11 +100,189 @@ async function streamHelloFlow() {
 
 streamHelloFlow();
 ```
+</TabItem>
+<TabItem label="Dart">
+```dart
+// main.dart
+import 'package:genkit/client.dart';
 
-### Authentication (Optional)
+// Define the action with a chunk decoder
+final helloFlow = defineRemoteAction(
+  url: 'http://127.0.0.1:3400/helloFlow',
+  fromResponse: (data) => data['greeting'] as String,
+  fromStreamChunk: (chunk) => chunk as String,
+);
+
+Future<void> streamHelloFlow() async {
+  try {
+    final result = helloFlow.stream(input: {'name': 'Streaming User'});
+
+    // Process the stream chunks as they arrive
+    await for (final chunk in result) {
+      print('Stream chunk: $chunk');
+    }
+
+    // Get the final complete response
+    final finalOutput = await result.onResult;
+    print('Final streaming output: $finalOutput');
+  } catch (e) {
+    print('Error streaming helloFlow: $e');
+  }
+}
+```
+</TabItem>
+</Tabs>
+
+### Custom Object Streaming
+
+You can also stream custom objects. For robust JSON serialization in Dart, it's recommended to use a code generation library like [`json_serializable`](https://pub.dev/packages/json_serializable). In TypeScript, you can use standard interfaces to define the shape of your data.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+// Define the shape of your data
+interface StreamChunk {
+  content: string;
+}
+
+interface MyOutput {
+  reply: string;
+}
+
+// In your streaming call, the client will handle JSON parsing
+async function streamCustomObjects() {
+  try {
+    const result = streamFlow<MyOutput, StreamChunk>({
+      url: 'http://localhost:3400/stream-process',
+      input: { message: 'Stream this data', count: 5 },
+    });
+
+    console.log('Streaming chunks:');
+    for await (const chunk of result.stream) {
+      console.log('Chunk:', chunk.content);
+    }
+
+    const finalResult = await result.output;
+    console.log('\nFinal Response:', finalResult.reply);
+  } catch (e) {
+    console.error('Error calling streaming flow:', e);
+  }
+}
+```
+</TabItem>
+<TabItem label="Dart">
+```dart
+class StreamChunk {
+  final String content;
+  
+  StreamChunk({required this.content});
+  
+  factory StreamChunk.fromJson(Map<String, dynamic> json) => StreamChunk(
+    content: json['content'] as String,
+  );
+}
+
+// Assumes MyOutput and MyInput classes are defined as in the non-streaming example
+final streamAction = defineRemoteAction(
+  url: 'http://localhost:3400/stream-process',
+  fromResponse: (data) => MyOutput.fromJson(data),
+  fromStreamChunk: (data) => StreamChunk.fromJson(data),
+);
+
+final input = MyInput(message: 'Stream this data', count: 5);
+
+try {
+  final stream = streamAction.stream(input: input);
+
+  print('Streaming chunks:');
+  await for (final chunk in stream) {
+    print('Chunk: ${chunk.content}');
+  }
+
+  final finalResult = await stream.onResult;
+  print('\nFinal Response: ${finalResult.reply}');
+} catch (e) {
+  print('Error calling streaming flow: $e');
+}
+```
+</TabItem>
+</Tabs>
+
+### Working with Genkit Data Objects
+
+When interacting with Genkit models, you'll often work with standardized data classes. The client libraries provide these classes for type-safe interaction.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+import { streamFlow } from 'genkit/beta/client';
+import type {
+  MessageData,
+  GenerateResponseChunkData,
+  GenerateResponseData,
+} from 'genkit/model';
+
+async function streamGenerate() {
+  try {
+    const result = streamFlow<GenerateResponseData, GenerateResponseChunkData>({
+      url: 'http://localhost:3400/generate',
+      input: {
+        role: 'user',
+        content: [{ text: 'hello' }],
+      } as MessageData,
+    });
+
+    console.log('Streaming chunks:');
+    for await (const chunk of result.stream) {
+      // Note: A chunk may have multiple parts, and not all parts are text.
+      console.log('Chunk:', chunk.content[0].text);
+    }
+
+    const finalResult = await result.output;
+    // Note: A response may have multiple candidates.
+    console.log(
+      '\nFinal Response:',
+      finalResult.message.content[0].text
+    );
+  } catch (e) {
+    console.error('Error calling streaming flow:', e);
+  }
+}
+```
+</TabItem>
+<TabItem label="Dart">
+```dart
+import 'package:genkit/client.dart';
+
+final generateFlow = defineRemoteAction(
+  url: 'http://localhost:3400/generate',
+  fromResponse: (json) => GenerateResponse.fromJson(json),
+  fromStreamChunk: (json) => GenerateResponseChunk.fromJson(json),
+);
+
+final stream = generateFlow.stream(
+  input: Message(role: Role.user, content: [TextPart(text: "hello")]),
+);
+
+print('Streaming chunks:');
+await for (final chunk in stream) {
+  // Use the .text getter to easily access the text content of the chunk
+  print('Chunk: ${chunk.text}');
+}
+
+final finalResult = await stream.onResult;
+// The .text getter also works on the final response
+print('Final Response: ${finalResult.text}');
+```
+</TabItem>
+</Tabs>
+
+### Authentication
 
 If your deployed flow requires authentication, you can pass headers with your requests:
 
+<Tabs>
+<TabItem label="JavaScript">
 ```typescript
 const result = await runFlow({
   url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
@@ -76,18 +292,37 @@ const result = await runFlow({
   input: { name: 'Authenticated User' },
 });
 ```
+</TabItem>
+<TabItem label="Dart">
+```dart
+// For non-streaming calls
+final result = await helloFlow(
+  input: {'name': 'Authenticated User'},
+  headers: {'Authorization': 'Bearer your-token-here'},
+);
+
+// For streaming calls
+final streamResult = helloFlow.stream(
+  input: {'name': 'Authenticated User'},
+  headers: {'Authorization': 'Bearer your-token-here'},
+);
+```
+</TabItem>
+</Tabs>
 
 ## When deploying to Cloud Functions for Firebase
 
-When deploying to [Cloud Functions for Firebase](/docs/firebase), use the Firebase callable functions client library.
+When deploying to [Cloud Functions for Firebase](/docs/deployment/firebase), use the Firebase callable functions client library.
 
 Detailed documentation can be found at https://firebase.google.com/docs/functions/callable?gen=2nd
 
+<Tabs>
+<TabItem label="JavaScript">
 Here's a sample for the web:
 
 ```typescript
 // Get the callable by passing an initialized functions SDK.
-const getForecast = httpsCallable(functions, "getForecast");
+const getForecast = httpsCallable(functions, 'getForecast');
 
 // Call the function with the `.stream()` method to start streaming.
 const { stream, data } = await getForecast.stream({
@@ -110,3 +345,19 @@ finalizeUi(allWeatherForecasts);
 ```
 
 [source](https://github.com/firebase/functions-samples/blob/c4fde45b65fab584715e786ce3264a6932d996ec/Node/quickstarts/callable-functions-streaming/website/index.html#L58-L78)
+</TabItem>
+<TabItem label="Dart">
+An official Dart client for callable functions is available in the [`cloud_functions` package](https://pub.dev/packages/cloud_functions).
+
+```dart
+final result = await FirebaseFunctions.instance.httpsCallable('addMessage').call(
+  {
+    "text": text,
+    "push": true,
+  },
+);
+_response = result.data as String;
+```
+</TabItem>
+</Tabs>
+

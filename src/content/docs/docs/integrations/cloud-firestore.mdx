@@ -1,0 +1,883 @@
+---
+title: Cloud Firestore Vector Search
+description: Learn how to use Google Cloud Firestore as a vector database for RAG applications across JavaScript, Go, and Python with Genkit.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+The Firebase plugin provides vector search integration with Cloud Firestore, enabling you to build intelligent RAG (Retrieval-Augmented Generation) applications with scalable document indexing and retrieval.
+
+## Installation
+
+Install the Firebase plugin with npm:
+
+```bash
+npm install @genkit-ai/firebase
+```
+
+## Prerequisites
+
+### Firebase Project Setup
+
+1. All Firebase products require a Firebase project. You can create a new project or enable Firebase in an existing Google Cloud project using the [Firebase console](https://console.firebase.google.com/).
+
+2. If deploying flows with Cloud Functions, [upgrade your Firebase project](https://console.firebase.google.com/project/_/overview?purchaseBillingPlan=metered) to the Blaze plan.
+
+### Firebase Admin SDK Initialization
+
+You must initialize the Firebase Admin SDK in your application. This is not handled automatically by the plugin.
+
+```js
+import { initializeApp } from 'firebase-admin/app';
+
+initializeApp({
+  projectId: 'your-project-id',
+});
+```
+
+The plugin requires you to specify your Firebase project ID. You can specify your Firebase project ID in either of the following ways:
+
+- Set `projectId` in the `initializeApp()` configuration object as shown in the snippet above.
+
+- Set the `GCLOUD_PROJECT` environment variable. If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), `GCLOUD_PROJECT` is automatically set to the project ID of the environment.
+
+  If you set `GCLOUD_PROJECT`, you can omit the configuration parameter in `initializeApp()`.
+
+### Credentials
+
+To provide Firebase credentials, you also need to set up Google Cloud Application Default Credentials. To specify your credentials:
+
+- If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), this is set automatically.
+
+- For other environments:
+
+  1. Generate service account credentials for your Firebase project and download the JSON key file. You can do so on the [Service account](https://console.firebase.google.com/project/_/settings/serviceaccounts/adminsdk) page of the Firebase console.
+  2. Set the environment variable `GOOGLE_APPLICATION_CREDENTIALS` to the file path of the JSON file that contains your service account key, or you can set the environment variable `GCLOUD_SERVICE_ACCOUNT_CREDS` to the content of the JSON file.
+
+## Cloud Firestore vector search
+
+You can use Cloud Firestore as a vector store for RAG indexing and retrieval.
+
+This section contains information specific to the `firebase` plugin and Cloud Firestore's vector search feature. See the [Retrieval-augmented generation](/docs/rag) page for a more detailed discussion on implementing RAG using Genkit.
+
+### Using `GCLOUD_SERVICE_ACCOUNT_CREDS` and Firestore
+
+If you are using service account credentials by passing credentials directly via `GCLOUD_SERVICE_ACCOUNT_CREDS` and are also using Firestore as a vector store, you need to pass credentials directly to the Firestore instance during initialization or the singleton may be initialized with application default credentials depending on plugin initialization order.
+
+```js
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+
+const app = initializeApp();
+let firestore = getFirestore(app);
+
+if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
+  const serviceAccountCreds = JSON.parse(process.env.GCLOUD_SERVICE_ACCOUNT_CREDS);
+  const authOptions = { credentials: serviceAccountCreds };
+  firestore.settings(authOptions);
+}
+```
+
+### Define a Firestore retriever
+
+Use `defineFirestoreRetriever()` to create a retriever for Firestore vector-based queries.
+
+```js
+import { defineFirestoreRetriever } from '@genkit-ai/firebase';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+
+const app = initializeApp();
+const firestore = getFirestore(app);
+
+const retriever = defineFirestoreRetriever(ai, {
+  name: 'exampleRetriever',
+  firestore,
+  collection: 'documents',
+  contentField: 'text', // Field containing document content
+  vectorField: 'embedding', // Field containing vector embeddings
+  embedder: yourEmbedderInstance, // Embedder to generate embeddings
+  distanceMeasure: 'COSINE', // Default is 'COSINE'; other options: 'EUCLIDEAN', 'DOT_PRODUCT'
+});
+```
+
+### Retrieve documents
+
+To retrieve documents using the defined retriever, pass the retriever instance and query options to `ai.retrieve`.
+
+```js
+const docs = await ai.retrieve({
+  retriever,
+  query: 'search query',
+  options: {
+    limit: 5, // Options: Return up to 5 documents
+    where: { category: 'example' }, // Optional: Filter by field-value pairs
+    collection: 'alternativeCollection', // Optional: Override default collection
+  },
+});
+```
+
+### Available Retrieval Options
+
+The following options can be passed to the `options` field in `ai.retrieve`:
+
+- **`limit`**: _(number)_
+  Specify the maximum number of documents to retrieve. Default is `10`.
+
+- **`where`**: _(Record\<string, any\>)_
+  Add additional filters based on Firestore fields. Example:
+
+  ```js
+  where: { category: 'news', status: 'published' }
+  ```
+
+- **`collection`**: _(string)_
+  Override the default collection specified in the retriever configuration. This is useful for querying subcollections or dynamically switching between collections.
+
+### Populate Firestore with Embeddings
+
+To populate your Firestore collection, use an embedding generator along with the Admin SDK. For example, the menu ingestion script from the [Retrieval-augmented generation](/docs/rag) page could be adapted for Firestore in the following way:
+
+```js
+import { genkit } from 'genkit';
+import { vertexAI } from "@genkit-ai/vertexai";
+
+import { applicationDefault, initializeApp } from "firebase-admin/app";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
+
+import { chunk } from "llm-chunk";
+import pdf from "pdf-parse";
+
+import { readFile } from "fs/promises";
+import path from "path";
+
+// Change these values to match your Firestore config/schema
+const indexConfig = {
+  collection: "menuInfo",
+  contentField: "text",
+  vectorField: "embedding",
+  embedder: vertexAI.embedder('gemini-embedding-001'),
+};
+
+const ai = genkit({
+  plugins: [vertexAI({ location: "us-central1" })],
+});
+
+const app = initializeApp({ credential: applicationDefault() });
+const firestore = getFirestore(app);
+
+export async function indexMenu(filePath: string) {
+  filePath = path.resolve(filePath);
+
+  // Read the PDF.
+  const pdfTxt = await extractTextFromPdf(filePath);
+
+  // Divide the PDF text into segments.
+  const chunks = await chunk(pdfTxt);
+
+  // Add chunks to the index.
+  await indexToFirestore(chunks);
+}
+
+async function indexToFirestore(data: string[]) {
+  for (const text of data) {
+    const embedding = (await ai.embed({
+      embedder: indexConfig.embedder,
+      content: text,
+    }))[0].embedding;
+    await firestore.collection(indexConfig.collection).add({
+      [indexConfig.vectorField]: FieldValue.vector(embedding),
+      [indexConfig.contentField]: text,
+    });
+  }
+}
+
+async function extractTextFromPdf(filePath: string) {
+  const pdfFile = path.resolve(filePath);
+  const dataBuffer = await readFile(pdfFile);
+  const data = await pdf(dataBuffer);
+  return data.text;
+}
+```
+
+Firestore depends on indexes to provide fast and efficient querying on collections. (Note that "index" here refers to database indexes, and not Genkit's indexer and retriever abstractions.)
+
+The prior example requires the `embedding` field to be indexed to work. To create the index:
+
+- Run the `gcloud` command described in the [Create a single-field vector index](https://firebase.google.com/docs/firestore/vector-search?authuser=0#create_and_manage_vector_indexes) section of the Firestore docs.
+
+  The command looks like the following:
+
+  ```bash
+  gcloud alpha firestore indexes composite create --project=your-project-id \
+    --collection-group=yourCollectionName --query-scope=COLLECTION \
+    --field-config=vector-config='{"dimension":"768","flat": "{}"}',field-path=yourEmbeddingField
+  ```
+
+  However, the correct indexing configuration depends on the queries you make and the embedding model you're using.
+
+- Alternatively, call `ai.retrieve()` and Firestore will throw an error with the correct command to create the index.
+
+### Deploy flows as Cloud Functions
+
+To deploy a flow with Cloud Functions, use the Firebase Functions library's built-in support for genkit. The `onCallGenkit` method lets you create a [callable function](https://firebase.google.com/docs/functions/callable?gen=2nd) from a flow. It automatically supports streaming and JSON requests. You can use the [Cloud Functions client SDKs](https://firebase.google.com/docs/functions/callable?gen=2nd#call_the_function) to call them.
+
+```js
+import { onCallGenkit } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
+
+export const exampleFlow = ai.defineFlow(
+  {
+    name: 'exampleFlow',
+  },
+  async (prompt) => {
+    // Flow logic goes here.
+
+    return response;
+  },
+);
+
+// WARNING: This has no authentication or app check protections.
+// See genkit.dev/js/auth for more information.
+export const example = onCallGenkit({ secrets: [apiKey] }, exampleFlow);
+```
+
+Deploy your flow using the Firebase CLI:
+
+```bash
+firebase deploy --only functions
+```
+
+## Learn more
+
+- See the [Retrieval-augmented generation](/docs/rag) page for a general discussion on indexers and retrievers in Genkit.
+- See [Search with vector embeddings](https://firebase.google.com/docs/firestore/vector-search) in the Cloud Firestore docs for more on the vector search feature.
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+The Firebase plugin provides integration with Firebase services for Genkit applications. It enables you to use Firebase Firestore as a vector database for retrieval-augmented generation (RAG) applications by defining retrievers.
+
+## Prerequisites
+
+This plugin requires:
+
+- A Firebase project - Create one at the [Firebase Console](https://console.firebase.google.com/)
+- Firestore database enabled in your Firebase project
+- Firebase credentials configured for your application
+
+### Firebase Setup
+
+1. **Create a Firebase project** at [Firebase Console](https://console.firebase.google.com/)
+2. **Enable Firestore** in your project:
+   - Go to Firestore Database in the Firebase console
+   - Click "Create database"
+   - Choose your security rules and location
+3. **Set up authentication** using one of these methods:
+   - For local development: `firebase login` and `firebase use <project-id>`
+   - For production: Service account key or Application Default Credentials
+
+## Configuration
+
+### Basic Configuration
+
+To use this plugin, import the `firebase` package and initialize it with your project:
+
+```go
+import "github.com/firebase/genkit/go/plugins/firebase"
+```
+
+```go
+// Option 1: Using project ID (recommended)
+firebasePlugin := &firebase.Firebase{
+	ProjectId: "your-firebase-project-id",
+}
+
+g := genkit.Init(context.Background(), genkit.WithPlugins(firebasePlugin))
+```
+
+### Environment Variable Configuration
+
+You can also configure the project ID using environment variables:
+
+```bash
+export FIREBASE_PROJECT_ID=your-firebase-project-id
+```
+
+```go
+// Plugin will automatically use FIREBASE_PROJECT_ID environment variable
+firebasePlugin := &firebase.Firebase{}
+g := genkit.Init(context.Background(), genkit.WithPlugins(firebasePlugin))
+```
+
+### Advanced Configuration
+
+For advanced use cases, you can provide a pre-configured Firebase app:
+
+```go
+import firebasev4 "firebase.google.com/go/v4"
+
+// Create Firebase app with custom configuration
+app, err := firebasev4.NewApp(ctx, &firebasev4.Config{
+	ProjectID: "your-project-id",
+	// Additional Firebase configuration options
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+firebasePlugin := &firebase.Firebase{
+	App: app,
+}
+```
+
+## Usage
+
+### Defining Firestore Retrievers
+
+The primary use case for the Firebase plugin is creating retrievers for RAG applications:
+
+```go
+// Define a Firestore retriever
+retrieverOptions := firebase.RetrieverOptions{
+	Name:           "my-documents",
+	Collection:     "documents",
+	VectorField:    "embedding",
+	EmbedderName:   "text-embedding-3-small",
+	TopK:           10,
+}
+
+retriever, err := firebase.DefineRetriever(ctx, g, retrieverOptions)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+### Using Retrievers in RAG Workflows
+
+Once defined, you can use the retriever in your RAG workflows:
+
+```go
+// Retrieve relevant documents
+results, err := ai.Retrieve(ctx, retriever, ai.WithDocs("What is machine learning?"))
+if err != nil {
+	log.Fatal(err)
+}
+
+// Use retrieved documents in generation
+var contextDocs []string
+for _, doc := range results.Documents {
+	contextDocs = append(contextDocs, doc.Content[0].Text)
+}
+
+context := strings.Join(contextDocs, "\n\n")
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt(fmt.Sprintf("Context: %s\n\nQuestion: %s", context, "What is machine learning?")),
+)
+```
+
+### Complete RAG Example
+
+Here's a complete example showing how to set up a RAG system with Firebase:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/firebase"
+	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Initialize plugins
+	firebasePlugin := &firebase.Firebase{
+		ProjectId: "my-firebase-project",
+	}
+
+	openaiPlugin := &openai.OpenAI{
+		APIKey: "your-openai-api-key",
+	}
+
+	g := genkit.Init(ctx, genkit.WithPlugins(firebasePlugin, openaiPlugin))
+
+	// Define retriever for knowledge base
+	retriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+		Name:         "knowledge-base",
+		Collection:   "documents",
+		VectorField:  "embedding",
+		EmbedderName: "text-embedding-3-small",
+		TopK:         5,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// RAG query function
+	query := "How does machine learning work?"
+
+	// Step 1: Retrieve relevant documents
+	retrievalResults, err := ai.Retrieve(ctx, retriever, ai.WithDocs(query))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Step 2: Prepare context from retrieved documents
+	var contextParts []string
+	for _, doc := range retrievalResults.Documents {
+		contextParts = append(contextParts, doc.Content[0].Text)
+	}
+	context := strings.Join(contextParts, "\n\n")
+
+	// Step 3: Generate answer with context
+	model := openaiPlugin.Model(g, "gpt-4o")
+	response, err := genkit.Generate(ctx, g,
+		ai.WithModel(model),
+		ai.WithPrompt(fmt.Sprintf(`
+Based on the following context, answer the question:
+
+Context:
+%s
+
+Question: %s
+
+Answer:`, context, query)),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Answer: %s\n", response.Text())
+}
+```
+
+## Firestore Data Structure
+
+### Document Storage Format
+
+Your Firestore documents should follow this structure for optimal retrieval:
+
+```json
+{
+  "content": "Your document text content here...",
+  "embedding": [0.1, -0.2, 0.3, ...],
+  "metadata": {
+    "title": "Document Title",
+    "author": "Author Name",
+    "category": "Technology",
+    "timestamp": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Indexing Documents
+
+To add documents to your Firestore collection with embeddings:
+
+```go
+// Example of adding documents with embeddings
+embedder := openaiPlugin.Embedder(g, "text-embedding-3-small")
+
+documents := []struct {
+    Content  string
+    Metadata map[string]interface{}
+}{
+    {
+        Content: "Machine learning is a subset of artificial intelligence...",
+        Metadata: map[string]interface{}{
+            "title":    "Introduction to ML",
+            "category": "Technology",
+        },
+    },
+    // More documents...
+}
+
+for _, doc := range documents {
+    // Generate embedding
+    embeddingResp, err := ai.Embed(ctx, embedder, ai.WithDocs(doc.Content))
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Store in Firestore
+    firestoreClient, _ := firebasePlugin.App.Firestore(ctx)
+    _, err = firestoreClient.Collection("documents").Doc().Set(ctx, map[string]interface{}{
+        "content":   doc.Content,
+        "embedding": embeddingResp.Embeddings[0].Embedding,
+        "metadata":  doc.Metadata,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+## Configuration Options
+
+### Firebase struct
+
+```go
+type Firebase struct {
+    // ProjectId is your Firebase project ID
+    // If empty, uses FIREBASE_PROJECT_ID environment variable
+    ProjectId string
+
+    // App is a pre-configured Firebase app instance
+    // Use either ProjectId or App, not both
+    App *firebasev4.App
+}
+```
+
+### RetrieverOptions
+
+```go
+type RetrieverOptions struct {
+    // Name is a unique identifier for the retriever
+    Name string
+
+    // Collection is the Firestore collection name containing documents
+    Collection string
+
+    // VectorField is the field name containing the embedding vectors
+    VectorField string
+
+    // EmbedderName is the name of the embedder to use for query vectorization
+    EmbedderName string
+
+    // TopK is the number of top similar documents to retrieve
+    TopK int
+
+    // Additional filtering and configuration options
+}
+```
+
+## Authentication
+
+### Local Development
+
+For local development, use the Firebase CLI:
+
+```bash
+# Install Firebase CLI
+npm install -g firebase-tools
+
+# Login and set project
+firebase login
+firebase use your-project-id
+```
+
+### Production Deployment
+
+For production, use one of these authentication methods:
+
+#### Service Account Key
+
+```go
+import "google.golang.org/api/option"
+
+app, err := firebasev4.NewApp(ctx, &firebasev4.Config{
+    ProjectID: "your-project-id",
+}, option.WithCredentialsFile("path/to/serviceAccountKey.json"))
+```
+
+#### Application Default Credentials
+
+Set the environment variable:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="path/to/serviceAccountKey.json"
+```
+
+Or use the metadata server on Google Cloud Platform.
+
+## Error Handling
+
+Handle Firebase-specific errors appropriately:
+
+```go
+retriever, err := firebase.DefineRetriever(ctx, g, options)
+if err != nil {
+    if strings.Contains(err.Error(), "plugin not found") {
+        log.Fatal("Firebase plugin not initialized. Make sure to include it in genkit.Init()")
+    }
+    log.Fatalf("Failed to create retriever: %v", err)
+}
+
+// Handle retrieval errors
+results, err := ai.Retrieve(ctx, retriever, ai.WithDocs(query))
+if err != nil {
+    log.Printf("Retrieval failed: %v", err)
+    // Implement fallback logic
+}
+```
+
+## Best Practices
+
+### Performance Optimization
+
+- **Batch Operations**: Use Firestore batch writes when adding multiple documents
+- **Index Configuration**: Set up appropriate Firestore indexes for your queries
+- **Caching**: Implement caching for frequently accessed documents
+- **Pagination**: Use pagination for large result sets
+
+### Security
+
+- **Firestore Rules**: Configure proper security rules for your collections
+- **API Keys**: Never expose Firebase configuration in client-side code
+- **Authentication**: Implement proper user authentication for sensitive data
+
+### Cost Management
+
+- **Document Size**: Keep documents reasonably sized to minimize read costs
+- **Query Optimization**: Design efficient queries to reduce operation costs
+- **Storage Management**: Regularly clean up unused documents and embeddings
+
+## Integration Examples
+
+### With Multiple Embedders
+
+```go
+// Use different embedders for different types of content
+technicalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+    Name:         "technical-docs",
+    Collection:   "technical_documents",
+    VectorField:  "embedding",
+    EmbedderName: "text-embedding-3-large", // More accurate for technical content
+    TopK:         5,
+})
+
+generalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+    Name:         "general-knowledge",
+    Collection:   "general_documents",
+    VectorField:  "embedding",
+    EmbedderName: "text-embedding-3-small", // Faster for general content
+    TopK:         10,
+})
+```
+
+### With Flows
+
+```go
+ragFlow := genkit.DefineFlow(g, "rag-qa", func(ctx context.Context, query string) (string, error) {
+    // Retrieve context
+    results, err := ai.Retrieve(ctx, retriever, ai.WithDocs(query))
+    if err != nil {
+        return "", err
+    }
+
+    // Generate response
+    response, err := genkit.Generate(ctx, g,
+        ai.WithPrompt(buildPromptWithContext(query, results)),
+    )
+    if err != nil {
+        return "", err
+    }
+
+    return response.Text(), nil
+})
+```
+
+</LanguageContent>
+
+<LanguageContent lang="python">
+
+# Firestore Vector Store
+
+The Firestore plugin provides retriever implementations that use Google Cloud
+Firestore as a vector store.
+
+## Installation
+
+```bash
+pip3 install genkit-plugin-firebase
+```
+
+## Prerequisites
+
+- A Firebase project with Cloud Firestore enabled.
+- The `genkit` package installed.
+- `gcloud` CLI for managing credentials and Firestore indexes.
+
+## Configuration
+
+To use this plugin, specify it when you initialize Genkit:
+
+```python
+from genkit.ai import Genkit
+from genkit.plugins.firebase.firestore import FirestoreVectorStore
+from genkit.plugins.google_genai import VertexAI # Assuming VertexAI provides the embedder
+from google.cloud import firestore
+
+# Ensure you have authenticated with gcloud and set the project
+firestore_client = firestore.Client()
+
+ai = Genkit(
+    plugins=[
+        VertexAI(), # Ensure the embedder's plugin is loaded
+        FirestoreVectorStore(
+            name='my_firestore_retriever',
+            collection='my_collection', # Replace with your collection name
+            vector_field='embedding',
+            content_field='text',
+            embedder='vertexai/text-embedding-004', # Example embedder
+            firestore_client=firestore_client,
+        ),
+    ]
+    # Define a default model if needed
+    # model='vertexai/gemini-1.5-flash',
+)
+```
+
+### Configuration Options
+
+- **name** (str): A unique name for this retriever instance.
+- **collection** (str): The name of the Firestore collection to query.
+- **vector_field** (str): The name of the field in the Firestore documents that contains the vector embedding.
+- **content_field** (str): The name of the field in the Firestore documents that contains the text content.
+- **embedder** (str): The name of the embedding model to use. Must match a configured embedder in your Genkit project.
+- **firestore_client**: A `google.cloud.firestore.Client` object that will be used for all queries to the vectorstore.
+
+## Usage
+
+1.  **Create a Firestore Client**:
+
+    ```python
+    from google.cloud import firestore
+    # Ensure you have authenticated with gcloud and set the project
+    firestore_client = firestore.Client()
+    ```
+
+2.  **Define a Firestore Retriever**:
+
+    ```python
+    from genkit.ai import Genkit
+    from genkit.plugins.firebase.firestore import FirestoreVectorStore
+    from genkit.plugins.google_genai import VertexAI # Assuming VertexAI provides the embedder
+    from google.cloud import firestore
+
+    # Assuming firestore_client is already created
+    # firestore_client = firestore.Client()
+
+    ai = Genkit(
+        plugins=[
+            VertexAI(), # Ensure the embedder's plugin is loaded
+            FirestoreVectorStore(
+                name='my_firestore_retriever',
+                collection='my_collection', # Replace with your collection name
+                vector_field='embedding',
+                content_field='text',
+                embedder='vertexai/text-embedding-004', # Example embedder
+                firestore_client=firestore_client,
+            ),
+        ]
+        # Define a default model if needed
+        # model='vertexai/gemini-1.5-flash',
+    )
+    ```
+
+3.  **Retrieve Documents**:
+
+    ```python
+    from genkit.ai import Document # Import Document
+    # Assuming 'ai' is configured as above
+
+    async def retrieve_documents():
+        # Note: ai.retrieve expects a Document object for the query
+        query_doc = Document.from_text("What are the main topics?")
+        return await ai.retrieve(
+            query=query_doc,
+            retriever='my_firestore_retriever', # Matches the 'name' in FirestoreVectorStore config
+        )
+
+    # Example of calling the async function
+    # import asyncio
+    # retrieved_docs = asyncio.run(retrieve_documents())
+    # print(retrieved_docs)
+    ```
+
+## Populating the Index
+
+Before you can retrieve documents, you need to populate your Firestore collection with data and their corresponding vector embeddings. Here's how you can do it:
+
+1.  **Prepare your Data**: Organize your data into documents. Each document should have at least two fields: a `text` field containing the content you want to retrieve, and an `embedding` field that holds the vector embedding of the content. You can add any other metadata as well.
+
+2.  **Generate Embeddings**: Use the same embedding model configured in your `FirestoreVectorStore` to generate vector embeddings for your text content. The `ai.embed()` method can be used.
+
+3.  **Upload Documents to Firestore**: Use the Firestore client to upload the documents with their embeddings to the specified collection.
+
+Here's an example of how to index data:
+
+```python
+from genkit.ai import Document, Genkit # Import Genkit and Document
+from genkit.types import TextPart
+from google.cloud import firestore # Import firestore
+
+# Assuming 'ai' is configured with VertexAI and FirestoreVectorStore plugins
+# Assuming 'firestore_client' is an initialized firestore.Client() instance
+
+async def index_documents(documents: list[str], collection_name: str):
+    """Indexes the documents in Firestore."""
+    genkit_documents = [Document(content=[TextPart(text=doc)]) for doc in documents]
+    # Ensure the embedder name matches the one configured in Genkit
+    embed_response = await ai.embed(embedder='vertexai/text-embedding-004', content=genkit_documents) # Use 'content' parameter
+    embeddings = [emb.embedding for emb in embed_response.embeddings]
+
+    for i, document_text in enumerate(documents):
+        doc_id = f'doc-{i + 1}'
+        embedding = embeddings[i]
+
+        doc_ref = firestore_client.collection(collection_name).document(doc_id)
+        result = doc_ref.set({
+            'text': document_text,
+            'embedding': embedding, # Ensure this field name matches 'vector_field' in config
+            'metadata': f'metadata for doc {i + 1}',
+        })
+        print(f"Indexed document {doc_id}") # Optional: print progress
+
+# Example Usage
+# documents = [
+#     "This is document one.",
+#     "This is document two.",
+#     "This is document three.",
+# ]
+# import asyncio
+# asyncio.run(index_documents(documents, 'my_collection')) # Replace 'my_collection' with your actual collection name
+```
+
+## Creating a Firestore Index
+
+To enable vector similarity search you will need to configure the index in your Firestore database. Use the following command:
+
+```bash
+gcloud firestore indexes composite create \
+  --project=<YOUR_FIREBASE_PROJECT_ID> \
+  --collection-group=<YOUR_COLLECTION_NAME> \
+  --query-scope=COLLECTION \
+  --field-config=vector-config='{"dimension":<YOUR_DIMENSION_COUNT>,"flat": {}}',field-path=<YOUR_VECTOR_FIELD>
+```
+
+- Replace `<YOUR_FIREBASE_PROJECT_ID>` with the ID of your Firebase project.
+- Replace `<YOUR_COLLECTION_NAME>` with the name of your Firestore collection (e.g., `my_collection`).
+- Replace `<YOUR_DIMENSION_COUNT>` with the correct dimension for your embedding model. Common values are:
+  - `768` for `text-embedding-004` (Vertex AI)
+- Replace `<YOUR_VECTOR_FIELD>` with the name of the field containing vector embeddings (e.g., `embedding`).
+
+</LanguageContent>

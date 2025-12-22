@@ -1,0 +1,249 @@
+---
+title: pgvector (PostgreSQL Vector Extension)
+description: Learn how to use pgvector with Genkit for vector storage, semantic search, and RAG applications using PostgreSQL.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="python">
+
+:::note[Feature unavailable for Python]
+pgvector integration is not currently available for Python. Please use JavaScript or Go for pgvector vector database functionality.
+:::
+
+</LanguageContent>
+
+<LanguageContent lang="js">
+
+You can use PostgreSQL and `pgvector` as your retriever implementation. Use the
+following examples as a starting point and modify it to work with your database
+schema.
+
+pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
+
+## Installation and Setup
+
+Install the required dependencies:
+
+```bash
+npm install postgres pgvector
+```
+
+Set up your PostgreSQL database with pgvector:
+
+```sql
+-- Enable the pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create a table for storing documents with embeddings
+CREATE TABLE documents (
+  id SERIAL PRIMARY KEY,
+  content TEXT NOT NULL,
+  embedding vector(768), -- Adjust dimension based on your embedding model
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create an index for efficient vector similarity search
+CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+```
+
+## Usage
+
+Here's a complete example of creating a pgvector retriever:
+
+```ts
+import { genkit, z, Document } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+import { toSql } from 'pgvector';
+import postgres from 'postgres';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+const sql = postgres({ ssl: false, database: 'recaps' });
+
+const QueryOptions = z.object({
+  show: z.string(),
+  k: z.number().optional(),
+});
+
+const sqlRetriever = ai.defineRetriever(
+  {
+    name: 'pgvector-myTable',
+    configSchema: QueryOptions,
+  },
+  async (input, options) => {
+    const embedding = (
+      await ai.embed({
+        embedder: googleAI.embedder('gemini-embedding-001'),
+        content: input,
+      })
+    )[0].embedding;
+    const results = await sql`
+      SELECT episode_id, season_number, chunk as content
+        FROM embeddings
+        WHERE show_id = ${options.show}
+        ORDER BY embedding <#> ${toSql(embedding)} LIMIT ${options.k ?? 3}
+      `;
+    return {
+      documents: results.map((row) => {
+        const { content, ...metadata } = row;
+        return Document.fromText(content, metadata);
+      }),
+    };
+  },
+);
+```
+
+And here's how to use the retriever in a flow:
+
+```ts
+// Simple flow to use the sqlRetriever
+export const askQuestionsOnGoT = ai.defineFlow(
+  {
+    name: 'askQuestionsOnGoT',
+    inputSchema: z.object({ question: z.string() }),
+    outputSchema: z.object({ answer: z.string() }),
+  },
+  async ({ question }) => {
+    const docs = await ai.retrieve({
+      retriever: sqlRetriever,
+      query: question,
+      options: {
+        show: 'Game of Thrones',
+      },
+    });
+    console.log(docs);
+
+    // Continue with using retrieved docs
+    // in RAG prompts.
+    //...
+
+    // Return an answer (placeholder for actual implementation)
+    return { answer: 'Answer would be generated here based on retrieved documents' };
+  },
+);
+```
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+You can use PostgreSQL and `pgvector` as your retriever implementation. Use the
+following examples as a starting point and modify it to work with your database
+schema.
+
+pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
+
+## Installation and Setup
+
+Install the required dependencies:
+
+```bash
+go get github.com/lib/pq
+go get github.com/pgvector/pgvector-go
+```
+
+Set up your PostgreSQL database with pgvector:
+
+```sql
+-- Enable the pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create a table for storing documents with embeddings
+CREATE TABLE documents (
+  id SERIAL PRIMARY KEY,
+  content TEXT NOT NULL,
+  embedding vector(768), -- Adjust dimension based on your embedding model
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create an index for efficient vector similarity search
+CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+```
+
+## Usage
+
+We use [database/sql](https://pkg.go.dev/database/sql) to connect to the Postgres server, but you may use another client library of your choice.
+
+```go
+func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder) ai.Retriever {
+	f := func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
+		eres, err := ai.Embed(ctx, embedder, ai.WithDocs(req.Query))
+		if err != nil {
+			return nil, err
+		}
+		rows, err := db.QueryContext(ctx, `
+			SELECT episode_id, season_number, chunk as content
+			FROM embeddings
+			WHERE show_id = $1
+		  	ORDER BY embedding <#> $2
+		  	LIMIT 2`,
+			req.Options, pgv.NewVector(eres.Embeddings[0].Embedding))
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		res := &ai.RetrieverResponse{}
+		for rows.Next() {
+			var eid, sn int
+			var content string
+			if err := rows.Scan(&eid, &sn, &content); err != nil {
+				return nil, err
+			}
+			meta := map[string]any{
+				"episode_id":    eid,
+				"season_number": sn,
+			}
+			doc := &ai.Document{
+				Content:  []*ai.Part{ai.NewTextPart(content)},
+				Metadata: meta,
+			}
+			res.Documents = append(res.Documents, doc)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return res, nil
+	}
+	return genkit.DefineRetriever(g, provider, "shows", f)
+}
+```
+
+And here's how to use the retriever in a flow:
+
+```go
+retriever := defineRetriever(g, db, embedder)
+
+type input struct {
+	Question string
+	Show     string
+}
+
+genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in input) (string, error) {
+	res, err := ai.Retrieve(ctx, retriever,
+		ai.WithConfig(in.Show),
+		ai.WithTextDocs(in.Question))
+	if err != nil {
+		return "", err
+	}
+	for _, doc := range res.Documents {
+		fmt.Printf("%+v %q\n", doc.Metadata, doc.Content[0].Text)
+	}
+	// Use documents in RAG prompts.
+	return "", nil
+})
+```
+
+</LanguageContent>
