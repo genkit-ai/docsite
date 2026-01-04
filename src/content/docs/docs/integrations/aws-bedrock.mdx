@@ -1,0 +1,572 @@
+---
+title: AWS Bedrock Plugin
+description: Learn how to configure and use the AWS Bedrock plugin for Genkit to interact with AWS Bedrock and embedding models across JavaScript, Go, and Python.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+	<LanguageSelector supportedLanguages="js go" />
+	<CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+This Genkit plugin allows to use [AWS Bedrock](https://aws.amazon.com/bedrock/) through their official APIs.
+
+## Installation
+
+Install the plugin in your project with your favourite package manager
+
+```bash
+npm install genkitx-aws-bedrock
+```
+
+### Versions
+
+if you are using Genkit version `<v0.9.0`, please use the plugin version `v1.9.0`. If you are using Genkit `>=v0.9.0`, please use the plugin version `>=v1.10.0`.
+
+## Usage
+
+### Configuration
+
+To use the plugin, you need to configure it with your AWS credentials. There are several approaches depending on your environment.
+
+#### Standard Initialization
+
+You can configure the plugin by calling the `genkit` function with your AWS region and model:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock, amazonNovaProV1 } from 'genkitx-aws-bedrock';
+
+const ai = genkit({
+	plugins: [awsBedrock({ region: '<my-region>' })],
+	model: amazonNovaProV1,
+});
+```
+
+If you have set the `AWS_` environment variables, you can initialize it like this:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock, amazonNovaProV1 } from 'genkitx-aws-bedrock';
+
+const ai = genkit({
+	plugins: [awsBedrock()],
+	model: amazonNovaProV1,
+});
+```
+
+#### Production Environment Authentication
+
+In production environments, it is often necessary to install an additional library to handle authentication. One approach is to use the `@aws-sdk/credential-providers` package:
+
+```typescript
+import { fromEnv } from '@aws-sdk/credential-providers';
+const ai = genkit({
+	plugins: [
+		awsBedrock({
+			region: 'us-east-1',
+			credentials: fromEnv(),
+		}),
+	],
+});
+```
+
+Ensure you have a `.env` file with the necessary AWS credentials. Remember that the .env file must be added to your .gitignore to prevent sensitive credentials from being exposed.
+
+```
+AWS_ACCESS_KEY_ID =
+AWS_SECRET_ACCESS_KEY =
+```
+
+#### Local Environment Authentication
+
+For local development, you can directly supply the credentials:
+
+```typescript
+const ai = genkit({
+	plugins: [
+		awsBedrock({
+			region: 'us-east-1',
+			credentials: {
+				accessKeyId: awsAccessKeyId.value(),
+				secretAccessKey: awsSecretAccessKey.value(),
+			},
+		}),
+	],
+});
+```
+
+Each approach allows you to manage authentication effectively based on your environment needs.
+
+### Configuration with Inference Endpoint
+
+If you want to use a model that uses [Cross-region Inference Endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html), you can specify the region in the model configuration. Cross-region inference uses inference profiles to increase throughput and improve resiliency by routing your requests across multiple AWS Regions during peak utilization bursts:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock, amazonNovaProV1, anthropicClaude35SonnetV2 } from 'genkitx-aws-bedrock';
+
+const ai = genkit({
+	plugins: [awsBedrock()],
+	model: anthropicClaude35SonnetV2('us'),
+});
+```
+
+You can check more information about the available models in the [AWS Bedrock PLugin documentation](https://xavidop.github.io/genkitx-aws-bedrock/).
+
+### Basic examples
+
+The simplest way to call the text generation model is by using the helper function `generate`:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock, amazonNovaProV1 } from 'genkitx-aws-bedrock';
+
+// Basic usage of an LLM
+const response = await ai.generate({
+	prompt: 'Tell me a joke.',
+});
+
+console.log(await response.text);
+```
+
+### Within a flow
+
+```typescript
+// ...configure Genkit (as shown above)...
+
+export const myFlow = ai.defineFlow(
+	{
+		name: 'menuSuggestionFlow',
+		inputSchema: z.string(),
+		outputSchema: z.string(),
+	},
+	async (subject) => {
+		const llmResponse = await ai.generate({
+			prompt: `Suggest an item for the menu of a ${subject} themed restaurant`,
+		});
+
+		return llmResponse.text;
+	},
+);
+```
+
+### Tool use
+
+```typescript
+// ...configure Genkit (as shown above)...
+
+const specialToolInputSchema = z.object({ meal: z.enum(['breakfast', 'lunch', 'dinner']) });
+const specialTool = ai.defineTool(
+	{
+		name: 'specialTool',
+		description: "Retrieves today's special for the given meal",
+		inputSchema: specialToolInputSchema,
+		outputSchema: z.string(),
+	},
+	async ({ meal }): Promise<string> => {
+		// Retrieve up-to-date information and return it. Here, we just return a
+		// fixed value.
+		return 'Baked beans on toast';
+	},
+);
+
+const result = ai.generate({
+	tools: [specialTool],
+	prompt: "What's for breakfast?",
+});
+
+console.log(result.then((res) => res.text));
+```
+
+For more detailed examples and the explanation of other functionalities, refer to the [official Genkit documentation](https://firebase.google.com/docs/genkit/get-started).
+
+## Using Custom Models
+
+If you want to use a model that is not exported by this plugin, you can register it using the `customModels` option when initializing the plugin:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock } from 'genkitx-aws-bedrock';
+
+const ai = genkit({
+	plugins: [
+		awsBedrock({
+			region: 'us-east-1',
+			customModels: ['openai.gpt-oss-20b-1:0'], // Register custom models
+		}),
+	],
+});
+
+// Use the custom model by specifying its name as a string
+export const customModelFlow = ai.defineFlow(
+	{
+		name: 'customModelFlow',
+		inputSchema: z.string(),
+		outputSchema: z.string(),
+	},
+	async (subject) => {
+		const llmResponse = await ai.generate({
+			model: 'aws-bedrock/openai.gpt-oss-20b-1:0', // Use any registered custom model
+			prompt: `Tell me about ${subject}`,
+		});
+		return llmResponse.text;
+	},
+);
+```
+
+Alternatively, you can define a custom model outside of the plugin initialization:
+
+```typescript
+import { defineAwsBedrockModel } from 'genkitx-aws-bedrock';
+
+const customModel = defineAwsBedrockModel('openai.gpt-oss-20b-1:0', {
+	region: 'us-east-1',
+});
+
+const response = await ai.generate({
+	model: customModel,
+	prompt: 'Hello!',
+});
+```
+
+## Supported models
+
+This plugin supports all currently available **Chat/Completion** and **Embeddings** models from AWS Bedrock. This plugin supports image input and multimodal models.
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+An [AWS Bedrock](https://aws.amazon.com/bedrock/) plugin for Genkit Go that provides text generation, image generation, and embedding capabilities using AWS Bedrock foundation models via the Converse API.
+
+## Installation
+
+```bash
+go get github.com/xavidop/genkit-aws-bedrock-go
+```
+
+## Features
+
+- **Text Generation**: Support for multiple foundation models via AWS Bedrock Converse API
+- **Image Generation**: Support for image generation models like Amazon Titan Image Generator
+- **Embeddings**: Support for text embedding models from Amazon Titan and Cohere
+- **Streaming**: Full streaming support for real-time responses
+- **Tool Calling**: Complete function calling capabilities with schema validation and type conversion
+- **Multimodal Support**: Support for text + image inputs (vision models)
+- **Schema Management**: Automatic conversion between Genkit and AWS Bedrock schemas
+- **Type Safety**: Robust type conversion for tool parameters (handles AWS document.Number types)
+
+## Quick Start
+
+## Initialize the Plugin
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	bedrock "github.com/xavidop/genkit-aws-bedrock-go"
+)
+
+func main() {
+	ctx := context.Background()
+	bedrockPlugin := &bedrock.Bedrock{
+		Region: "us-east-1",
+	}
+
+	// Initialize Genkit
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(bedrockPlugin),
+		genkit.WithDefaultModel("bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0"), // Set default model
+	)
+
+    bedrock.DefineCommonModels(bedrockPlugin, g) // Optional: Define common models for easy access
+
+	log.Println("Starting basic Bedrock example...")
+
+	// Example: Generate text (basic usage)
+	response, err := genkit.Generate(ctx, g,
+		ai.WithPrompt("What are the key benefits of using AWS Bedrock for AI applications?"),
+	)
+	if err != nil {
+		log.Printf("Error generating text: %v", err)
+	} else {
+		log.Printf("Generated response: %s", response.Text())
+	}
+
+	log.Println("Basic Bedrock example completed")
+}
+
+```
+
+## Define Models and Generate Text
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    bedrock "github.com/xavidop/genkit-aws-bedrock-go"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Initialize Bedrock plugin
+    bedrockPlugin := &bedrock.Bedrock{
+        Region: "us-east-1", // Optional, defaults to AWS_REGION or us-east-1
+    }
+
+    // Initialize Genkit
+    g := genkit.Init(ctx,
+        genkit.WithPlugins(bedrockPlugin),
+    )
+
+    // Define a Claude 3 model
+    claudeModel := bedrockPlugin.DefineModel(g, bedrock.ModelDefinition{
+        Name: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        Type: "text",
+    }, nil)
+
+    // Generate text
+    response, err := genkit.Generate(ctx, g,
+        ai.WithModel(claudeModel),
+        ai.WithMessages(ai.NewUserMessage(
+            ai.NewTextPart("Hello! How are you?"),
+        )),
+    )
+
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.Println(response.Text())
+}
+```
+
+## Tool Calling
+
+```go
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	bedrock "github.com/xavidop/genkit-aws-bedrock-go"
+)
+
+// Example tool for getting current weather
+func getCurrentWeather(location string, unit string) (string, error) {
+	// Mock weather data - in a real implementation, you'd call a weather API
+	switch strings.ToLower(location) {
+	case "san francisco", "san francisco, ca":
+		if unit == "fahrenheit" {
+			return "Sunny, 72°F (22°C) with light breeze", nil
+		}
+		return "Sunny, 22°C (72°F) with light breeze", nil
+	case "new york", "new york, ny":
+		if unit == "fahrenheit" {
+			return "Partly cloudy, 68°F (20°C) with high humidity", nil
+		}
+		return "Partly cloudy, 20°C (68°F) with high humidity", nil
+	case "london", "london, uk":
+		if unit == "fahrenheit" {
+			return "Overcast, 59°F (15°C) with occasional drizzle", nil
+		}
+		return "Overcast, 15°C (59°F) with occasional drizzle", nil
+	default:
+		if unit == "fahrenheit" {
+			return fmt.Sprintf("Weather data for %s: Partly cloudy, 70°F", location), nil
+		}
+		return fmt.Sprintf("Weather data for %s: Partly cloudy, 21°C", location), nil
+	}
+}
+
+func main() {
+	ctx := context.Background()
+
+	bedrockPlugin := &bedrock.Bedrock{
+		Region: "us-east-1",
+	}
+
+	// Initialize Genkit
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(bedrockPlugin),
+	)
+
+	log.Println("Starting tool calling example...")
+
+	// Define Claude 3 model that supports tool calling
+	claudeModel := bedrockPlugin.DefineModel(g, bedrock.ModelDefinition{
+		Name: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Type: "chat",
+	}, nil)
+
+	// Define weather tool
+	weatherTool := genkit.DefineTool(g, "get_current_weather",
+		"Get current weather information",
+		func(ctx *ai.ToolContext, input struct {
+			Location string `json:"location" jsonschema:"description=The city and state, e.g. San Francisco, CA"`
+			Unit     string `json:"unit,omitempty" jsonschema:"description=The temperature unit (celsius or fahrenheit),enum=celsius,enum=fahrenheit"`
+		}) (string, error) {
+			unit := input.Unit
+			if unit == "" {
+				unit = "celsius"
+			}
+			return getCurrentWeather(input.Location, unit)
+		})
+
+	response, err := genkit.Generate(ctx, g,
+		ai.WithModel(claudeModel),
+		ai.WithMessages(ai.NewUserMessage(
+			ai.NewTextPart("What's the weather like in San Francisco?"),
+		)),
+		ai.WithTools(weatherTool),
+		ai.WithConfig(map[string]interface{}{
+			"temperature":     0.1, // Lower temperature for more consistent tool usage
+			"maxOutputTokens": 1000,
+		}),
+	)
+
+	if err != nil {
+		log.Printf("Error: %v", err)
+
+	}
+
+	log.Printf("Response: %s", response.Text())
+}
+```
+
+## Define a model with custom configuration
+
+The AWS Bedrock plugin allows you to define models with custom configurations that a are not defined in the plugin. You can also specify model parameters like temperature and max output tokens.
+
+```go
+bedrockPlugin := &bedrock.Bedrock{
+  Region: "us-east-1",
+}
+
+// Initialize Genkit
+g := genkit.Init(ctx,
+  genkit.WithPlugins(bedrockPlugin),
+)
+
+claudeModel := bedrockPlugin.DefineModel(g, bedrock.ModelDefinition{
+  Name: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  Type: "chat",
+}, nil)
+
+response, err := genkit.Generate(ctx, g,
+  ai.WithModel(claudeModel),
+  ai.WithMessages(ai.NewUserMessage(
+    ai.NewTextPart("Hi! How are you?"),
+  )),
+  ai.WithConfig(map[string]interface{}{
+    "temperature":     0.1, // Lower temperature for more consistent tool usage
+    "maxOutputTokens": 1000,
+  }),
+)
+```
+
+## Configuration Options
+
+The plugin supports various configuration options:
+
+```go
+bedrockPlugin := &bedrock.Bedrock{
+    Region:         "us-west-2",           // AWS region
+    MaxRetries:     3,                     // Max retry attempts
+    RequestTimeout: 30 * time.Second,     // Request timeout
+    AWSConfig:      customAWSConfig,      // Custom AWS config (optional)
+}
+```
+
+### Available Configuration
+
+| Option           | Type            | Default       | Description              |
+| ---------------- | --------------- | ------------- | ------------------------ |
+| `Region`         | `string`        | `"us-east-1"` | AWS region for Bedrock   |
+| `MaxRetries`     | `int`           | `3`           | Maximum retry attempts   |
+| `RequestTimeout` | `time.Duration` | `30s`         | Request timeout          |
+| `AWSConfig`      | `*aws.Config`   | `nil`         | Custom AWS configuration |
+
+## AWS Setup and Authentication
+
+The plugin uses the standard AWS SDK v2 configuration methods:
+
+### Authentication Methods
+
+1. **Environment Variables**:
+
+    ```bash
+    export AWS_ACCESS_KEY_ID="your-access-key"
+    export AWS_SECRET_ACCESS_KEY="your-secret-key"
+    export AWS_REGION="us-east-1"
+    ```
+
+2. **AWS Credentials File** (`~/.aws/credentials`):
+
+    ```ini
+    [default]
+    aws_access_key_id = your-access-key
+    aws_secret_access_key = your-secret-key
+    region = us-east-1
+    ```
+
+3. **IAM Roles** (when running on AWS services like EC2, ECS, Lambda)
+
+4. **AWS SSO/CLI** (`aws configure sso`)
+
+### Required IAM Permissions
+
+Create an IAM policy with these permissions:
+
+```json
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Effect": "Allow",
+			"Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+			"Resource": ["arn:aws:bedrock:*::foundation-model/*"]
+		}
+	]
+}
+```
+
+### Prompt Caching
+
+```go
+// Prompt caching helps to save input token costs and reduce latency for repeated contexts.
+// The first cache point must be defined after 1,024 tokens for most models.
+// More about prompt caching: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+response, err := genkit.Generate(ctx, g,
+    ai.WithMessages(
+        ai.NewSystemMessage(
+            ai.NewTextPart(sysprompt), // A big system prompt that is reused
+            bedrock.NewCachePointPart(), // A cache point after the system prompt
+
+        ),
+        ai.NewUserTextMessage(input),
+    ),
+)
+```
+
+</LanguageContent>
