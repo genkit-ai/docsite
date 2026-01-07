@@ -8,15 +8,29 @@ import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
 import LanguageContent from '../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js"/>
+  <LanguageSelector supportedLanguages="js,go"/>
   <CopyMarkdownButton />
 </div>
+
+<LanguageContent lang="js">
 
 :::note[Beta]
 Durable streaming is currently in Beta. APIs and functionality may change.
 
 Report issues and feedback on [Github](https://github.com/firebase/genkit/issues)
 :::
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+:::note[Experimental]
+Durable streaming for Go is an experimental feature hosted in "x" packages (`core/x/streaming` and `plugins/firebase/x`). This means the API may receive breaking changes in a minor release, or may be elevated to stable and moved to the root package in the future.
+
+Report issues and feedback on [Github](https://github.com/firebase/genkit/issues)
+:::
+
+</LanguageContent>
 
 Genkit supports durable streaming, which allows flow state to be persisted. This enables clients to disconnect and reconnect to a stream and replay the full result. This is particularly useful for long-running operations or unreliable network connections.
 
@@ -26,7 +40,17 @@ When durable streaming is enabled, Genkit uses a `StreamManager` to store the ch
 
 ## Configuration
 
+<LanguageContent lang="js">
+
 To enable durable streaming, you need to configure a `StreamManager` in your flow server (Express or Next.js).
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+To enable durable streaming, you need to configure a `StreamManager` and pass it to `genkit.Handler()`.
+
+</LanguageContent>
 
 ### Development
 
@@ -42,11 +66,28 @@ import { InMemoryStreamManager } from 'genkit/beta';
 
 </LanguageContent>
 
+<LanguageContent lang="go">
+
+```go
+import "github.com/firebase/genkit/go/core/x/streaming"
+
+// Create an in-memory stream manager with optional TTL for completed streams
+sm := streaming.NewInMemoryStreamManager(
+    streaming.WithTTL(10 * time.Minute),  // Optional: how long to retain completed streams
+)
+```
+
+Note that `InMemoryStreamManager` stores streams in memory, so they will be lost if the server restarts. For production use cases where persistence across restarts is required, use `FirestoreStreamManager`.
+
+</LanguageContent>
+
 ### Production
 
-For production, you should use a durable storage solution. For example, `@genkit-ai/firebase` plugin provides implementations for Firestore and Realtime Database.
+For production, you should use a durable storage solution.
 
 <LanguageContent lang="js">
+
+The `@genkit-ai/firebase` plugin provides implementations for Firestore and Realtime Database.
 
 ```bash
 npm i @genkit-ai/firebase
@@ -73,11 +114,57 @@ const rtdb = new RtdbStreamManager({
 
 </LanguageContent>
 
+<LanguageContent lang="go">
+
+The `firebase` plugin provides `FirestoreStreamManager` for durable stream storage.
+
+```go
+import (
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/firebase"
+    firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+)
+
+// Initialize Genkit with the Firebase plugin
+g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+
+// Create a Firestore stream manager
+sm, err := firebasex.NewFirestoreStreamManager(ctx, g,
+    firebasex.WithCollection("genkit-streams"),  // Required: Firestore collection for stream documents
+    firebasex.WithTimeout(2 * time.Minute),      // Optional: how long subscribers wait for new events
+    firebasex.WithTTL(10 * time.Minute),         // Optional: how long completed streams are retained
+)
+if err != nil {
+    log.Fatalf("Failed to create Firestore stream manager: %v", err)
+}
+```
+
+`FirestoreStreamManager` provides:
+
+- **Persistence across restarts**: Clients can reconnect to streams after server restarts
+- **Multi-instance support**: Multiple server instances can serve the same stream
+- **Automatic cleanup**: Completed streams are automatically deleted via Firestore TTL policies
+
+#### Firestore TTL setup
+
+For automatic cleanup of old streams, configure a TTL policy on your Firestore collection:
+
+```bash
+gcloud firestore fields ttls update expiresAt \
+  --collection-group=genkit-streams \
+  --enable-ttl \
+  --project=YOUR_PROJECT_ID
+```
+
+See [Firestore TTL documentation](https://firebase.google.com/docs/firestore/ttl) for more details.
+
+</LanguageContent>
+
 ## Framework Integration
 
-### Express
-
 <LanguageContent lang="js">
+
+### Express
 
 To enable durable streaming in Express, pass the `streamManager` to `expressHandler`:
 
@@ -90,11 +177,7 @@ app.post('/myDurableFlow', expressHandler(myFlow, {
 }));
 ```
 
-</LanguageContent>
-
 ### Next.js
-
-<LanguageContent lang="js">
 
 To enable durable streaming in Next.js, pass the `streamManager` to `appRoute`:
 
@@ -105,6 +188,101 @@ import { InMemoryStreamManager } from 'genkit/beta';
 export const POST = appRoute(myFlow, {
   streamManager: new InMemoryStreamManager(), // or firestore/rtdb
 });
+```
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+### net/http Server
+
+To enable durable streaming with Go's standard `net/http` server, pass the `StreamManager` to `genkit.Handler()` using the `WithStreamManager` option:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/firebase/genkit/go/core/x/streaming"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/server"
+)
+
+func main() {
+    ctx := context.Background()
+    g := genkit.Init(ctx)
+
+    // Define a streaming flow
+    myFlow := genkit.DefineStreamingFlow(g, "myFlow",
+        func(ctx context.Context, input string, sendChunk func(context.Context, string) error) (string, error) {
+            // Your streaming logic here
+            for i := 0; i < 5; i++ {
+                if err := sendChunk(ctx, fmt.Sprintf("Chunk %d", i)); err != nil {
+                    return "", err
+                }
+                time.Sleep(1 * time.Second)
+            }
+            return "Done!", nil
+        })
+
+    // Set up HTTP server with durable streaming
+    mux := http.NewServeMux()
+    mux.HandleFunc("POST /myFlow", genkit.Handler(myFlow,
+        genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
+            streaming.WithTTL(10 * time.Minute),
+        )),
+    ))
+    log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+}
+```
+
+### Firestore-backed durable streaming
+
+For production deployments with persistence across restarts:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/firebase"
+    firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+    "github.com/firebase/genkit/go/plugins/server"
+)
+
+func main() {
+    ctx := context.Background()
+
+    g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+
+    myFlow := genkit.DefineStreamingFlow(g, "myFlow",
+        func(ctx context.Context, input string, sendChunk func(context.Context, string) error) (string, error) {
+            // Your streaming logic here
+            return "Done!", nil
+        })
+
+    sm, err := firebasex.NewFirestoreStreamManager(ctx, g,
+        firebasex.WithCollection("genkit-streams"),
+        firebasex.WithTimeout(2 * time.Minute),
+        firebasex.WithTTL(10 * time.Minute),
+    )
+    if err != nil {
+        log.Fatalf("Failed to create Firestore stream manager: %v", err)
+    }
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("POST /myFlow", genkit.Handler(myFlow, genkit.WithStreamManager(sm)))
+    log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+}
 ```
 
 </LanguageContent>
@@ -140,7 +318,70 @@ for await (const chunk of reconnectedResult.stream) {
 
 </LanguageContent>
 
+<LanguageContent lang="go">
+
+When durable streaming is enabled, the server returns a `X-Genkit-Stream-Id` header with the stream ID. Clients can use this ID to reconnect to the stream.
+
+### Starting a new stream
+
+```bash
+curl -N -i -H "Accept: text/event-stream" \
+     -d '{"data": "your input"}' \
+     http://localhost:8080/myFlow
+```
+
+The response headers will include `X-Genkit-Stream-Id: <stream-id>`. Save this ID to reconnect later.
+
+### Reconnecting to an existing stream
+
+To reconnect to an in-progress or completed stream, pass the stream ID in the `X-Genkit-Stream-Id` header:
+
+```bash
+curl -N -H "Accept: text/event-stream" \
+     -H "X-Genkit-Stream-Id: <stream-id-from-above>" \
+     -d '{"data": "your input"}' \
+     http://localhost:8080/myFlow
+```
+
+The subscription will:
+- Replay any buffered chunks that were already sent
+- Continue with live updates if the stream is still in progress
+- Return all chunks plus the final result if the stream has already completed
+
+</LanguageContent>
+
 ## Limitations
+
+<LanguageContent lang="js">
 
 - **Firestore**: The entire stream history (chunks and final result) is stored in a single document. Firestore has a strict [1MB limitation on document size](https://firebase.google.com/docs/firestore/quotas). If your stream output exceeds this limit, the flow will fail.
 - **Realtime Database**: While RTDB does not have the same 1MB limit, storing very large streams may impact performance or hit other quotas.
+
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+- **Firestore**: The entire stream history (chunks and final result) is stored in a single document. Firestore has a strict [1MB limitation on document size](https://firebase.google.com/docs/firestore/quotas). If your stream output exceeds this limit, the flow will fail.
+- **InMemoryStreamManager**: Streams are stored in memory and will be lost if the server restarts. Not suitable for production use cases where persistence is required.
+
+</LanguageContent>
+
+## Configuration Options
+
+<LanguageContent lang="go">
+
+### InMemoryStreamManager Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `streaming.WithTTL(duration)` | 5 minutes | How long completed streams are retained in memory before cleanup |
+
+### FirestoreStreamManager Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `firebasex.WithCollection(name)` | (required) | Firestore collection for stream documents |
+| `firebasex.WithTimeout(duration)` | 60 seconds | How long subscribers wait for new events before timeout |
+| `firebasex.WithTTL(duration)` | 5 minutes | How long completed streams are retained before auto-deletion |
+
+</LanguageContent>
