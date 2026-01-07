@@ -498,6 +498,78 @@ the callback as often as is useful for your flow.
 
 <LanguageContent lang="go">
 
+#### Using iterator-based streaming
+
+The recommended approach for streaming within flows is to use `genkit.GenerateStream()`
+or `genkit.GenerateDataStream[T]()`, which return iterators that integrate naturally
+with Go's range syntax:
+
+```go
+type MenuItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+	func(ctx context.Context, theme string, sendChunk core.StreamCallback[string]) (string, error) {
+		stream := genkit.GenerateStream(ctx, g,
+			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+		)
+
+		for result, err := range stream {
+			if err != nil {
+				return "", err
+			}
+			if result.Done {
+				return result.Response.Text(), nil
+			}
+			// Pass each chunk to the flow's output stream
+			sendChunk(ctx, result.Chunk.Text())
+		}
+
+		return "", nil
+	})
+```
+
+For structured output with strong typing, use `genkit.GenerateDataStream[T]()`:
+
+```go
+type MenuItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+	func(ctx context.Context, theme string, sendChunk core.StreamCallback[*MenuItem]) (*MenuItem, error) {
+		stream := genkit.GenerateDataStream[*MenuItem](ctx, g,
+			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
+		)
+
+		for result, err := range stream {
+			if err != nil {
+				return nil, err
+			}
+			if result.Done {
+				// result.Output is strongly typed as *MenuItem
+				return result.Output, nil
+			}
+			// result.Chunk is also strongly typed as *MenuItem
+			sendChunk(ctx, result.Chunk)
+		}
+
+		return nil, nil
+	})
+```
+
+The iterator pattern makes the streaming logic clear and linear, avoiding nested
+callbacks and making error handling straightforward with Go's standard patterns.
+
+#### Using callback-based streaming
+
+Alternatively, you can use the callback-based approach with `ai.WithStreaming()`.
+This is useful when you need to combine streaming with other `Generate` options
+or when integrating with existing callback-based code:
+
 ```go
 type MenuSuggestionInput struct {
 	Theme string `json:"theme"`
@@ -518,9 +590,7 @@ menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
 		item, _, err := genkit.GenerateData[MenuItem](ctx, g,
 			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-				// Here, you could process the chunk in some way before sending it to
-				// the output stream using StreamCallback. In this example, we output
-				// the text of the chunk, unmodified.
+				// Process the chunk and send it to the flow's output stream
 				return callback(ctx, chunk.Text())
 			}),
 		)
@@ -540,8 +610,8 @@ values your flow streams. This does not necessarily need to be the same
 type as the return type, which is the type of the flow's complete output
 (`Menu` in this example).
 
-In this example, the values streamed by the flow are directly coupled to
-the values streamed by the `genkit.Generate()` call inside the flow.
+In both examples, the values streamed by the flow are directly coupled to
+the values streamed by the generation call inside the flow.
 Although this is often the case, it doesn't have to be: you can output values
 to the stream using the callback as often as is useful for your flow.
 
