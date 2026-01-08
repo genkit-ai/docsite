@@ -1117,6 +1117,17 @@ func main() {
 }
 ```
 
+:::tip[Convenience function]
+For simple text generation, you can use `genkit.GenerateText()` which returns
+just the text string directly:
+
+```go
+text, err := genkit.GenerateText(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+)
+```
+:::
+
 When you run this brief example, it will print out some debugging information
 followed by the output of the `genkit.Generate()` call, which will usually be
 Markdown text as in the following example:
@@ -1406,6 +1417,27 @@ This function requires the output type parameter but automatically sets the
 `ai.WithOutputType()` option and calls `ModelResponse.Output()` before returning
 the value.
 
+#### Using registered schemas
+
+For schemas that are shared across your application (such as those used in
+`.prompt` files), you can register them with `genkit.DefineSchemaFor[T]()` and
+reference them by name:
+
+```go
+// Register the schema once at startup
+genkit.DefineSchemaFor[MenuItem](g)
+
+// Reference by name in generate calls
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithOutputSchemaName("MenuItem"),
+)
+```
+
+This is particularly useful when working with [Dotprompt](/docs/dotprompt), as
+you can define your types once in Go and reference them in `.prompt` files by
+name, avoiding duplicate schema definitions.
+
 #### Handling errors
 
 Note in the prior example that the `genkit.Generate()` call can result in an
@@ -1438,13 +1470,80 @@ can read the model's response to their message as it's being generated, which
 improves the perceived responsiveness of the application and enhances the
 illusion of chatting with an intelligent counterpart.
 
-In Genkit, you can stream output using the `ai.WithStreaming()` option:
+#### Iterator-based streaming
+
+The recommended way to stream output in Go is using `genkit.GenerateStream()`,
+which returns an iterator that you can range over. This approach uses Go's
+native iterator pattern, making the code more idiomatic and easier to follow:
+
+```go
+stream := genkit.GenerateStream(ctx, g,
+	ai.WithPrompt("Suggest a complete menu for a pirate themed restaurant."),
+)
+
+for result, err := range stream {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if result.Done {
+		// Final response is available
+		log.Println("Complete response:", result.Response.Text())
+		break
+	}
+	// Process each chunk as it arrives
+	log.Println(result.Chunk.Text())
+}
+```
+
+The iterator yields `*ai.ModelStreamValue` values, where:
+- `result.Chunk` contains the streamed chunk data
+- `result.Done` indicates whether this is the final result
+- `result.Response` contains the complete response (only available when `Done` is true)
+
+#### Streaming structured output
+
+For streaming structured output with strong typing, use `genkit.GenerateDataStream[T]()`:
+
+```go
+type MenuItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+stream := genkit.GenerateDataStream[MenuItem](ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+)
+
+for result, err := range stream {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if result.Done {
+		// result.Output is strongly typed as MenuItem
+		log.Printf("Final: %s - %s\n", result.Output.Name, result.Output.Description)
+		break
+	}
+	// result.Chunk is also strongly typed as MenuItem (partial data)
+	if result.Chunk.Name != "" {
+		log.Printf("Got name: %s\n", result.Chunk.Name)
+	}
+}
+```
+
+With `GenerateDataStream[T]`, both the streamed chunks and the final output are
+strongly typed, making your code safer and more predictable.
+
+#### Callback-based streaming
+
+Alternatively, you can stream output using the `ai.WithStreaming()` callback
+option with `genkit.Generate()`. This approach is useful when you want to
+process chunks inline or integrate with existing callback-based code:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithPrompt("Suggest a complete menu for a pirate themed restaurant."),
 	ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-		// Do something with the chunk...
+		// Process each chunk as it arrives
 		log.Println(chunk.Text())
 		return nil
 	}),

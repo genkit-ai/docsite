@@ -342,6 +342,89 @@ To use a prompt, first load it using the `genkit.LookupPrompt()` function:
     )
     ```
 
+    #### Streaming prompt execution
+
+    You can stream prompt output using `ExecuteStream()`, which returns an iterator:
+
+    ```go
+    helloPrompt := genkit.LookupPrompt(g, "hello")
+    stream := helloPrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"name": "John"}))
+
+    for result, err := range stream {
+    	if err != nil {
+    		return "", err
+    	}
+    	if result.Done {
+    		return result.Response.Text(), nil
+    	}
+    	// Process each chunk
+    	fmt.Print(result.Chunk.Text())
+    }
+    ```
+
+    #### Typed prompts with DataPrompt
+
+    For strongly-typed input and output, use `genkit.LookupDataPrompt[In, Out]()` to
+    wrap your prompt with Go type information. This provides compile-time type safety
+    and a more idiomatic Go experience:
+
+    ```go
+    type GreetingInput struct {
+    	Name string `json:"name"`
+    }
+
+    type Greeting struct {
+    	Message string `json:"message"`
+    	Tone    string `json:"tone"`
+    }
+
+    // Look up a .prompt file with type information
+    helloPrompt := genkit.LookupDataPrompt[GreetingInput, *Greeting](g, "hello")
+
+    // Execute with strongly-typed input, get strongly-typed output
+    greeting, resp, err := helloPrompt.Execute(ctx, GreetingInput{Name: "John"})
+    if err != nil {
+    	log.Fatal(err)
+    }
+    log.Printf("Message: %s, Tone: %s\n", greeting.Message, greeting.Tone)
+    ```
+
+    The `.prompt` file should define an output schema that matches your Go type:
+
+    ```dotprompt
+    ---
+    model: googleai/gemini-2.5-flash
+    input:
+      schema:
+        name: string
+    output:
+      schema:
+        message: string
+        tone: string
+    ---
+    Greet {{name}} warmly.
+    ```
+
+    For streaming with typed prompts, use `ExecuteStream()` which provides typed chunks:
+
+    ```go
+    helloPrompt := genkit.LookupDataPrompt[GreetingInput, *Greeting](g, "hello")
+
+    for result, err := range helloPrompt.ExecuteStream(ctx, GreetingInput{Name: "John"}) {
+    	if err != nil {
+    		return nil, err
+    	}
+    	if result.Done {
+    		// result.Output is *Greeting
+    		return result.Output, nil
+    	}
+    	// result.Chunk is also *Greeting (partial data as it streams)
+    	if result.Chunk.Message != "" {
+    		fmt.Println("Partial message:", result.Chunk.Message)
+    	}
+    }
+    ```
+
     Any parameters you pass to the prompt call will override the same parameters
     specified in the prompt file.
 
@@ -675,7 +758,80 @@ In addition to directly defining schemas in the `.prompt` file, you can
 </LanguageContent>
 
 <LanguageContent lang="go">
-  Schema references in Go are not yet implemented. Use Picoschema or JSON Schema directly in your `.prompt` files.
+In addition to directly defining schemas in the `.prompt` file, you can
+    reference a schema registered with `genkit.DefineSchemaFor[T]()` by name. This
+    approach lets you define your types once in Go and reference them in prompt
+    files, giving you compile-time type safety without duplicating schema definitions.
+
+    To register a schema from a Go type:
+
+    ```go
+    type MenuItem struct {
+    	Dishname    string   `json:"dishname" jsonschema:"description=The name of the menu item"`
+    	Description string   `json:"description" jsonschema:"description=A description of the menu item"`
+    	Calories    int      `json:"calories" jsonschema:"description=The estimated number of calories"`
+    	Allergens   []string `json:"allergens" jsonschema:"description=Any known allergens in the menu item"`
+    }
+
+    // Register the schema - the name is inferred from the type name ("MenuItem")
+    genkit.DefineSchemaFor[MenuItem](g)
+    ```
+
+    Within your prompt, reference the registered schema by name:
+
+    ```dotprompt
+    ---
+    model: googleai/gemini-2.5-flash
+    output:
+      schema: MenuItem
+    ---
+    Invent a menu item for a pirate themed restaurant.
+    ```
+
+    The Dotprompt library will automatically resolve the name to the underlying
+    registered schema. You can then use `LookupDataPrompt` to get strongly-typed
+    access to the prompt:
+
+    ```go
+    // Input can be any type; here we use a simple struct
+    type MenuRequest struct {
+    	Theme string `json:"theme"`
+    }
+
+    // Register the input schema too
+    genkit.DefineSchemaFor[MenuRequest](g)
+
+    // Look up the prompt with type information
+    menuPrompt := genkit.LookupDataPrompt[MenuRequest, *MenuItem](g, "menu")
+
+    // Execute returns strongly-typed output
+    item, resp, err := menuPrompt.Execute(ctx, MenuRequest{Theme: "pirate"})
+    if err != nil {
+    	log.Fatal(err)
+    }
+
+    // item is *MenuItem - fully typed
+    log.Printf("Dish: %s, Calories: %d", item.Dishname, item.Calories)
+    ```
+
+    You can also reference registered schemas programmatically using `ai.WithOutputSchemaName()`:
+
+    ```go
+    genkit.DefineSchemaFor[MenuItem](g)
+
+    resp, err := genkit.Generate(ctx, g,
+    	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+    	ai.WithOutputSchemaName("MenuItem"),
+    )
+    ```
+
+    :::tip[Avoiding duplicate definitions]
+    Registering schemas with `DefineSchemaFor` solves the common pain point of
+    defining schemas twice—once in your `.prompt` file and again in your Go code
+    for type safety. Define your types once in Go, register them, and reference
+    them by name in your prompts.
+    :::
+
 </LanguageContent>
 
 
@@ -1104,18 +1260,63 @@ Use the `definePrompt()` function. The first parameter is analogous to the front
 </LanguageContent>
 
 <LanguageContent lang="go">
-Use the `genkit.DefinePrompt()` function:
+For strongly-typed prompts defined in code, use `genkit.DefineDataPrompt[In, Out]()`.
+    This is the recommended approach as it provides compile-time type safety for both
+    input and output, making your code more idiomatic and less error-prone:
 
     ```go
     type GeoQuery struct {
-        CountryCount int `json:"countryCount"`
+        CountryCount int `json:"countryCount" jsonschema:"default=10"`
     }
 
     type CountryList struct {
-        Countries []string `json:"countries"`
+        Countries []string `json:"countries" jsonschema:"description=List of country names"`
     }
 
-    geographyPrompt, err := genkit.DefinePrompt(
+    geographyPrompt := genkit.DefineDataPrompt[GeoQuery, *CountryList](
+        g, "GeographyPrompt",
+        ai.WithModel(googlegenai.GoogleAIModelRef("gemini-2.5-flash", nil)),
+        ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
+        ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
+    )
+
+    // Execute returns strongly-typed output directly
+    list, resp, err := geographyPrompt.Execute(ctx, GeoQuery{CountryCount: 15})
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.Printf("Countries: %v", list.Countries)
+    ```
+
+    With `DefineDataPrompt`, the input and output schemas are automatically inferred
+    from the Go type parameters, and the output is returned directly as the typed value.
+
+    For streaming with typed prompts, use `ExecuteStream()`:
+
+    ```go
+    for result, err := range geographyPrompt.ExecuteStream(ctx, GeoQuery{CountryCount: 15}) {
+        if err != nil {
+            log.Fatal(err)
+        }
+        if result.Done {
+            log.Printf("Final countries: %v", result.Output.Countries)
+            break
+        }
+        // Stream partial results as they arrive
+        if len(result.Chunk.Countries) > 0 {
+            log.Printf("Got %d countries so far...", len(result.Chunk.Countries))
+        }
+    }
+    ```
+
+    #### Using DefinePrompt (untyped)
+
+    For cases where you need more flexibility or dynamic typing, you can use the
+    untyped `genkit.DefinePrompt()` function:
+
+    ```go
+    geographyPrompt := genkit.DefinePrompt(
         g, "GeographyPrompt",
         ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
         ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
@@ -1123,9 +1324,6 @@ Use the `genkit.DefinePrompt()` function:
         ai.WithInputType(GeoQuery{CountryCount: 10}), // Defaults to 10.
         ai.WithOutputType(CountryList{}),
     )
-    if err != nil {
-        log.Fatal(err)
-    }
 
     resp, err := geographyPrompt.Execute(context.Background(), ai.WithInput(GeoQuery{CountryCount: 15}))
     if err != nil {
@@ -1137,14 +1335,16 @@ Use the `genkit.DefinePrompt()` function:
         log.Fatal(err)
     }
 
-    log.Printf("Countries: %s", list.Countries)
+    log.Printf("Countries: %v", list.Countries)
     ```
+
+    #### Rendering prompts
 
     Prompts may also be rendered into a `GenerateActionOptions` which may then be
     processed and passed into `genkit.GenerateWithRequest()`:
 
     ```go
-    actionOpts, err := geographyPrompt.Render(ctx, ai.WithInput(GeoQuery{CountryCount: 15}))
+    actionOpts, err := geographyPrompt.Render(ctx, GeoQuery{CountryCount: 15})
     if err != nil {
         log.Fatal(err)
     }
