@@ -320,13 +320,20 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
+	// Create a store to persist sessions across requests
+	store := session.NewInMemoryStore[ChatState]()
+
 	genkit.DefineFlow(g, "chat", func(ctx context.Context, input string) (string, error) {
 		sessionID := "user-123" // In practice, get this from the request
 
 		// Load existing session or create new one
 		sess, err := session.Load(ctx, store, sessionID)
 		if err != nil {
-			sess, err = session.New(ctx, session.WithInitialState(ChatState{UserName: "Guest"}))
+			sess, err = session.New(ctx,
+				session.WithID[ChatState](sessionID),
+				session.WithStore(store),
+				session.WithInitialState(ChatState{UserName: "Guest"}),
+			)
 			if err != nil {
 				return "", err
 			}
@@ -453,9 +460,10 @@ a session to the context using `session.NewContext()`.
 
 ## Session persistence
 
-By default, sessions are stored in memory and are lost when the application
-restarts. For production deployments, you'll want to persist sessions to
-a database or other durable storage.
+By default, sessions created without a store exist only in memory for the
+current request. To persist sessions across requests (even within the same
+process), you must provide a store. For production deployments, you'll want
+to persist sessions to a database or other durable storage.
 
 ### Implementing a custom store
 
@@ -550,7 +558,7 @@ The Firestore store automatically handles:
 ### Creating sessions
 
 ```go
-// Create a new session with default settings (generates UUID, uses in-memory store)
+// Create an ephemeral session (not persisted, lives only for current request)
 sess, err := session.New[MyState](ctx)
 
 // Create with custom ID
@@ -559,10 +567,10 @@ sess, err := session.New(ctx, session.WithID[MyState]("my-session-id"))
 // Create with initial state
 sess, err := session.New(ctx, session.WithInitialState(MyState{Field: "value"}))
 
-// Create with a custom store
+// Create with a store for persistence (required to load sessions later)
 sess, err := session.New(ctx, session.WithStore(myStore))
 
-// Combine options
+// Combine options for a persistent session
 sess, err := session.New(ctx,
 	session.WithID[MyState]("my-session-id"),
 	session.WithStore(myStore),
