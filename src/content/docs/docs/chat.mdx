@@ -302,53 +302,40 @@ to survive between interactions.
 Here's a simple example that creates a session and uses it within a flow:
 
 ```go
-import (
-	"context"
-
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/x/session"
-	"github.com/firebase/genkit/go/genkit"
-)
-
 // Define your session state type
 type ChatState struct {
 	UserName string   `json:"userName"`
 	History  []string `json:"history"`
 }
 
-func main() {
-	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+// Create a store to persist sessions across requests
+store := session.NewInMemoryStore[ChatState]()
 
-	// Create a store to persist sessions across requests
-	store := session.NewInMemoryStore[ChatState]()
+genkit.DefineFlow(g, "chat", func(ctx context.Context, input string) (string, error) {
+	sessionID := "user-123" // In practice, get this from the request
 
-	genkit.DefineFlow(g, "chat", func(ctx context.Context, input string) (string, error) {
-		sessionID := "user-123" // In practice, get this from the request
-
-		// Load existing session or create new one
-		sess, err := session.Load(ctx, store, sessionID)
-		if err != nil {
-			sess, err = session.New(ctx,
-				session.WithID[ChatState](sessionID),
-				session.WithStore(store),
-				session.WithInitialState(ChatState{UserName: "Guest"}),
-			)
-			if err != nil {
-				return "", err
-			}
-		}
-
-		// Attach session to context for use in tools and prompts
-		ctx = session.NewContext(ctx, sess)
-
-		// Generate with the session-aware context
-		return genkit.GenerateText(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
-			ai.WithPrompt(input),
+	// Load existing session or create new one
+	sess, err := session.Load(ctx, store, sessionID)
+	if err != nil {
+		sess, err = session.New(ctx,
+			session.WithID[ChatState](sessionID),
+			session.WithStore(store),
+			session.WithInitialState(ChatState{UserName: "Guest"}),
 		)
-	})
-}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	// Attach session to context for use in tools and prompts
+	ctx = session.NewContext(ctx, sess)
+
+	// Generate with the session-aware context
+	return genkit.GenerateText(ctx, g,
+		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithPrompt(input),
+	)
+})
 ```
 
 ## Stateful sessions with tools
@@ -365,65 +352,60 @@ type CartState struct {
 	Items []string `json:"items"`
 }
 
-func main() {
-	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+store := session.NewInMemoryStore[CartState]()
+const sessionID = "shopping-session"
 
-	store := session.NewInMemoryStore[CartState]()
-	const sessionID = "shopping-session"
-
-	// Define a tool that adds items to the cart
-	addToCartTool := genkit.DefineTool(g, "addToCart",
-		"Adds items to the shopping cart",
-		func(ctx *ai.ToolContext, input struct{ Items []string }) ([]string, error) {
-			sess := session.FromContext[CartState](ctx.Context)
-			if sess == nil {
-				return nil, fmt.Errorf("no session in context")
-			}
-			state := sess.State()
-			state.Items = append(state.Items, input.Items...)
-			if err := sess.UpdateState(ctx.Context, state); err != nil {
-				return nil, err
-			}
-			return state.Items, nil
-		},
-	)
-
-	// Define a tool that retrieves cart contents
-	getCartTool := genkit.DefineTool(g, "getCart",
-		"Returns all items currently in the shopping cart",
-		func(ctx *ai.ToolContext, input struct{}) ([]string, error) {
-			sess := session.FromContext[CartState](ctx.Context)
-			if sess == nil {
-				return nil, fmt.Errorf("no session in context")
-			}
-			return sess.State().Items, nil
-		},
-	)
-
-	genkit.DefineFlow(g, "manageCart", func(ctx context.Context, input string) (string, error) {
-		sess, err := session.Load(ctx, store, sessionID)
-		if err != nil {
-			sess, err = session.New(ctx,
-				session.WithID[CartState](sessionID),
-				session.WithStore(store),
-				session.WithInitialState(CartState{Items: []string{}}),
-			)
-			if err != nil {
-				return "", err
-			}
+// Define a tool that adds items to the cart
+addToCartTool := genkit.DefineTool(g, "addToCart",
+	"Adds items to the shopping cart",
+	func(ctx *ai.ToolContext, input struct{ Items []string }) ([]string, error) {
+		sess := session.FromContext[CartState](ctx.Context)
+		if sess == nil {
+			return nil, fmt.Errorf("no session in context")
 		}
+		state := sess.State()
+		state.Items = append(state.Items, input.Items...)
+		if err := sess.UpdateState(ctx.Context, state); err != nil {
+			return nil, err
+		}
+		return state.Items, nil
+	},
+)
 
-		ctx = session.NewContext(ctx, sess)
+// Define a tool that retrieves cart contents
+getCartTool := genkit.DefineTool(g, "getCart",
+	"Returns all items currently in the shopping cart",
+	func(ctx *ai.ToolContext, input struct{}) ([]string, error) {
+		sess := session.FromContext[CartState](ctx.Context)
+		if sess == nil {
+			return nil, fmt.Errorf("no session in context")
+		}
+		return sess.State().Items, nil
+	},
+)
 
-		return genkit.GenerateText(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
-			ai.WithSystem("You are a helpful shopping assistant. Use the provided tools to manage the user's cart."),
-			ai.WithTools(addToCartTool, getCartTool),
-			ai.WithPrompt(input),
+genkit.DefineFlow(g, "manageCart", func(ctx context.Context, input string) (string, error) {
+	sess, err := session.Load(ctx, store, sessionID)
+	if err != nil {
+		sess, err = session.New(ctx,
+			session.WithID[CartState](sessionID),
+			session.WithStore(store),
+			session.WithInitialState(CartState{Items: []string{}}),
 		)
-	})
-}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	ctx = session.NewContext(ctx, sess)
+
+	return genkit.GenerateText(ctx, g,
+		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithSystem("You are a helpful shopping assistant. Use the provided tools to manage the user's cart."),
+		ai.WithTools(addToCartTool, getCartTool),
+		ai.WithPrompt(input),
+	)
+})
 ```
 
 ## Using session state in prompts
@@ -522,30 +504,22 @@ For production deployments, you can use the Firebase Firestore session store
 provided in the Firebase plugin:
 
 ```go
-import (
-	"github.com/firebase/genkit/go/plugins/firebase"
-	firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+import firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+
+// Create a Firestore-backed session store
+store, err := firebasex.NewFirestoreSessionStore[CartState](ctx, g,
+	firebasex.WithCollection("sessions"),
+	firebasex.WithTTL(24*time.Hour), // Sessions expire after 24 hours
 )
-
-func main() {
-	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectID: "your-project"}))
-
-	// Create a Firestore-backed session store
-	store, err := firebasex.NewFirestoreSessionStore[CartState](ctx, g,
-		firebasex.WithCollection("sessions"),
-		firebasex.WithTTL(24*time.Hour), // Sessions expire after 24 hours
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Use the store when creating sessions
-	sess, err := session.New(ctx,
-		session.WithStore(store),
-		session.WithInitialState(CartState{Items: []string{}}),
-	)
+if err != nil {
+	log.Fatal(err)
 }
+
+// Use the store when creating sessions
+sess, err := session.New(ctx,
+	session.WithStore(store),
+	session.WithInitialState(CartState{Items: []string{}}),
+)
 ```
 
 The Firestore store automatically handles:
