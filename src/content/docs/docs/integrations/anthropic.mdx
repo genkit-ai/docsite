@@ -8,20 +8,476 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="go" />
-  <CopyMarkdownButton />
+	<LanguageSelector supportedLanguages="js go" />
+	<CopyMarkdownButton />
 </div>
 
 <LanguageContent lang="js">
-  :::note[Feature unavailable for JavaScript]
-The Anthropic plugin has not yet been made available for JavaScript.
+
+The Anthropic plugin provides a unified interface to connect with Anthropic's Claude models through the **Anthropic API** using API key authentication. The `@genkit-ai/anthropic` package is the official Anthropic plugin for Genkit.
+
+The plugin supports a wide range of capabilities:
+
+- **Language Models**: Claude models for text generation, reasoning, and multimodal tasks
+- **Structured Output**: JSON schema-based output generation (via beta API)
+- **Thinking and Reasoning**: Extended thinking for Claude 4.x models
+- **Multimodal**: Image understanding and PDF processing
+- **Tool Calling**: Function calling and tool use
+- **Documents and Citations**: Document-based RAG with citation support
+
+## Setup
+
+### Installation
+
+```bash
+npm i --save @genkit-ai/anthropic
+```
+
+### Configuration
+
+```typescript
+import { genkit } from 'genkit';
+import { anthropic } from '@genkit-ai/anthropic';
+
+const ai = genkit({
+	plugins: [
+		anthropic(),
+		// Or with an explicit API key:
+		// anthropic({ apiKey: 'your-api-key' }),
+	],
+});
+```
+
+### Authentication
+
+Requires an Anthropic API Key, which you can get from the [Anthropic Console](https://console.anthropic.com/). You can provide this key in several ways:
+
+1. **Environment variables**: Set `ANTHROPIC_API_KEY`
+2. **Plugin configuration**: Pass `apiKey` when initializing the plugin (shown above)
+
+### Optional Configuration
+
+The plugin supports additional configuration options:
+
+```typescript
+const ai = genkit({
+	plugins: [
+		anthropic({
+			apiKey: 'your-api-key',
+			// TODO: document prompt caching configuration
+			cacheSystemPrompt: true, // Enable prompt caching (beta feature)
+			apiVersion: 'beta', // Use beta API by default ('stable' or 'beta')
+		}),
+	],
+});
+```
+
+- **apiVersion**: Sets the default API version to use. Can be overridden per-request. The beta API provides access to structured outputs and other experimental features.
+
+## Language Models
+
+You can create models that call the Anthropic API. The models support tool calls, multimodal capabilities, and structured output.
+
+### Available Models
+
+**Claude 4.5 Series** - Latest models with advanced reasoning and structured output:
+
+- `claude-haiku-4-5` - Fast and efficient model with structured output support
+- `claude-sonnet-4-5` - Balanced model with structured output support
+- `claude-opus-4-5` - Most capable model with structured output support
+- `claude-opus-4-1` - High-performance model with structured output support
+
+**Claude 4 Series** - Advanced reasoning models:
+
+- `claude-sonnet-4` - Balanced model for complex tasks
+- `claude-opus-4` - Most capable Claude 4 model
+
+**Claude 3.5 Series**:
+
+- `claude-3-5-haiku` - Fast and efficient Claude 3.5 model
+
+**Claude 3 Series**:
+
+- `claude-3-haiku` - Fastest Claude 3 model
+
+:::note
+See the [Anthropic models documentation](https://platform.claude.com/docs/en/about-claude/model-deprecations#model-status) for a complete list of available models and their deprecation status.
 :::
+
+### Basic Usage
+
+```typescript
+import { genkit } from 'genkit';
+import { anthropic } from '@genkit-ai/anthropic';
+
+const ai = genkit({
+	plugins: [anthropic()],
+});
+
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: 'Explain how neural networks learn in simple terms.',
+});
+
+console.log(response.text);
+```
+
+You can also pass configuration when creating a model reference:
+
+```typescript
+// Create a model with beta API version
+const betaModel = anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' });
+
+const response = await ai.generate({
+	model: betaModel,
+	prompt: 'Your prompt here',
+});
+```
+
+### Structured Output
+
+Claude 4.5 models support structured output generation via the beta API, which guarantees that the model output will conform to a specified JSON schema.
+
+```typescript
+import { z } from 'genkit';
+
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' }),
+	output: {
+		schema: z.object({
+			name: z.string(),
+			bio: z.string(),
+			age: z.number(),
+		}),
+		format: 'json',
+		constrained: true,
+	},
+	prompt: 'Generate a profile for a fictional character',
+});
+
+console.log(response.output);
+```
+
+**Output Configuration:**
+
+- **schema** _ZodSchema_ - The JSON schema that defines the expected output structure
+- **format** _'json'_ - Specifies JSON output format (required for structured output)
+- **constrained** _boolean_ - When `true`, enforces strict adherence to the schema
+
+#### Schema Limitations
+
+The Anthropic API has specific requirements for JSON schemas used in structured output:
+
+**Required Features**
+
+- **Objects**: Must have `additionalProperties: false` (automatically added by the plugin)
+- **Arrays**: Standard array items are supported
+- **Enums**: Fully supported (`z.enum`)
+
+**Limitations**
+
+- **Unions (`z.union`)**: Complex unions may be problematic. Prefer using a single object with optional fields.
+- **Validation Keywords**: Keywords like `pattern`, `minLength`, `maxLength`, `minItems`, and `maxItems` are **not enforced** by the API's constrained decoding. They may be included but won't be validated.
+- **Recursion**: Recursive schemas are generally not supported.
+- **Complexity**: Deeply nested schemas or schemas with hundreds of properties may trigger complexity limits.
+
+**Best Practices**
+
+- Keep schemas simple and flat where possible
+- Use property descriptions (`.describe()`) to guide the model
+- If you need strict validation (e.g., regex), perform it in your application code _after_ receiving the structured response
+
+### Thinking and Reasoning
+
+Claude 4.x models can expose their internal reasoning process, which improves transparency for complex tasks.
+
+```typescript
+const response = await ai.generate({
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'Walk me through your reasoning for Fermat's little theorem.',
+  config: {
+    thinking: {
+      enabled: true,
+      budgetTokens: 4096, // Must be >= 1024 and less than max_tokens
+    },
+  },
+});
+
+console.log(response.text);       // Final assistant answer
+console.log(response.reasoning);  // Summarized thinking steps
+```
+
+**Thinking Configuration:**
+
+- **enabled**: `boolean` - Enable thinking for this request
+- **budgetTokens**: `number` - Number of thinking tokens to allocate (must be >= 1024 and less than max_tokens)
+
+When thinking is enabled, streamed responses deliver `reasoning` parts as they arrive so you can render the chain-of-thought incrementally.
+
+### Streaming
+
+Claude models support streaming responses using `generateStream()`:
+
+```typescript
+const { stream } = ai.generateStream({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: 'Write a long explanation about quantum computing.',
+});
+
+for await (const chunk of stream) {
+	if (chunk.text) {
+		process.stdout.write(chunk.text);
+	}
+	if (chunk.reasoning) {
+		// Handle thinking/reasoning chunks
+		console.log('\n[Thinking]', chunk.reasoning);
+	}
+}
+```
+
+### Multimodal Input Capabilities
+
+#### Image Understanding
+
+Claude models can reason about images passed as inline data or URLs. Supported formats include JPEG, PNG, GIF, and WebP.
+
+```typescript
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: [{ text: 'Describe what is in this image' }, { media: { url: 'https://example.com/image.jpg' } }],
+});
+```
+
+#### PDF Support
+
+Claude models can process PDF documents to extract information, summarize content, or answer questions based on the visual layout and text.
+
+```typescript
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: [
+		{ text: 'Summarize this document' },
+		{ media: { contentType: 'application/pdf', url: 'https://example.com/doc.pdf' } },
+	],
+});
+```
+
+### Tool Calling
+
+Claude models support function calling and tool use. Define tools using `ai.defineTool()` and pass them to the model:
+
+```typescript
+import { z } from 'genkit';
+
+const getWeather = ai.defineTool(
+	{
+		name: 'getWeather',
+		description: 'Gets the current weather in a given location',
+		inputSchema: z.object({
+			location: z.string().describe('The location to get the current weather for'),
+		}),
+		outputSchema: z.string(),
+	},
+	async (input) => {
+		// Execute the tool logic here
+		return `The current weather in ${input.location} is 63°F and sunny.`;
+	},
+);
+
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: "What's the weather like in San Francisco?",
+	tools: [getWeather],
+});
+
+// The response will contain the tool output if the model decided to call it
+console.log(response.text);
+```
+
+**Tool Choice Configuration:**
+
+You can control tool usage with the `tool_choice` configuration:
+
+```typescript
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: 'Get the weather for San Francisco',
+	tools: [getWeather],
+	config: {
+		tool_choice: {
+			type: 'tool',
+			name: 'getWeather', // Force use of a specific tool
+		},
+		// Or use 'auto' to let the model decide
+		// tool_choice: { type: 'auto' },
+		// Or use 'any' to require at least one tool call
+		// tool_choice: { type: 'any' },
+	},
+});
+```
+
+### Documents and Citations
+
+Claude models support document-based RAG with citation support. Use the `anthropicDocument()` helper to provide documents that can be cited in responses.
+
+```typescript
+import { anthropic, anthropicDocument } from '@genkit-ai/anthropic';
+
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	messages: [
+		{
+			role: 'user',
+			content: [
+				anthropicDocument({
+					source: { type: 'text', data: 'The grass is green. The sky is blue.' },
+					title: 'Nature Facts',
+					citations: { enabled: true },
+				}),
+				{ text: 'What color is the grass?' },
+			],
+		},
+	],
+});
+
+// Access citations from the response
+if (response.messages) {
+	for (const message of response.messages) {
+		for (const part of message.content) {
+			if (part.metadata?.citations) {
+				console.log('Citations:', part.metadata.citations);
+			}
+		}
+	}
+}
+```
+
+**Document Sources:**
+
+The `anthropicDocument()` helper supports multiple source types:
+
+- **Text**: `{ type: 'text', data: string, mediaType?: string }`
+- **Base64**: `{ type: 'base64', data: string, mediaType: string }`
+- **File**: `{ type: 'file', fileId: string }` (from Anthropic Files API)
+- **URL**: `{ type: 'url', url: string }` (for PDFs)
+- **Content**: `{ type: 'content', content: Array<...> }` (custom content blocks)
+
+**Citation Types:**
+
+Citations can reference:
+
+- **Character locations** (`char_location`) for text documents
+- **Page numbers** (`page_location`) for PDF documents
+- **Content block indices** (`content_block_location`) for custom content
+
+:::note
+Citations must be enabled on all or none of the documents in a request. You cannot mix documents with and without citations.
+:::
+
+### System Role
+
+Claude models support system messages to set the model's behavior:
+
+```typescript
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	messages: [
+		{
+			role: 'system',
+			content: [{ text: 'You are a helpful assistant that explains concepts clearly.' }],
+		},
+		{
+			role: 'user',
+			content: [{ text: 'Explain quantum computing.' }],
+		},
+	],
+});
+```
+
+### Configuration Options
+
+Anthropic models support various configuration options:
+
+```typescript
+const response = await ai.generate({
+	model: anthropic.model('claude-sonnet-4-5'),
+	prompt: 'Your prompt here',
+	config: {
+		temperature: 0.7, // Controls randomness (0.0 to 1.0)
+		maxOutputTokens: 4096, // Maximum tokens to generate
+		topP: 0.9, // Nucleus sampling parameter
+		tool_choice: { type: 'auto' }, // Tool usage control
+		metadata: {
+			user_id: 'user-123', // User identifier for tracking
+		},
+		apiVersion: 'beta', // Override default API version
+	},
+});
+```
+
+**Configuration Options:**
+
+- **temperature** _number_ - Controls randomness (0.0 to 1.0). Higher values make output more random.
+- **maxOutputTokens** _number_ - Maximum number of tokens to generate in the response.
+- **topP** _number_ - Nucleus sampling parameter (0.0 to 1.0).
+- **tool_choice** _object_ - Controls tool usage:
+    - `{ type: 'auto' }` - Let the model decide
+    - `{ type: 'any' }` - Require at least one tool call
+    - `{ type: 'tool', name: string }` - Force use of a specific tool
+- **metadata** _object_ - Metadata to include in the request:
+    - `user_id` _string_ - User identifier for tracking and abuse prevention
+- **apiVersion** _'stable' | 'beta'_ - Override the default API version for this request
+- **thinking** _object_ - Thinking configuration (Claude 4.x only):
+    - `enabled` _boolean_ - Enable thinking
+    - `budgetTokens` _number_ - Thinking token budget (>= 1024)
+
+### Direct Model Usage
+
+The plugin supports Genkit Plugin API v2, which allows you to use models directly without initializing the full Genkit framework:
+
+```typescript
+import { anthropic } from '@genkit-ai/anthropic';
+
+// Create a model reference directly
+const claude = anthropic.model('claude-sonnet-4-5');
+
+// Use the model directly
+const response = await claude({
+	messages: [
+		{
+			role: 'user',
+			content: [{ text: 'Tell me a joke.' }],
+		},
+	],
+});
+
+console.log(response);
+```
+
+This approach is useful for:
+
+- Framework developers who need raw model access
+- Testing models in isolation
+- Using Genkit models in non-Genkit applications
+
+### Beta API Limitations
+
+The beta API surface provides access to experimental features, but some server-managed tool blocks are not yet supported by this plugin. The following beta API features will cause an error if encountered:
+
+- `web_fetch_tool_result`
+- `code_execution_tool_result`
+- `bash_code_execution_tool_result`
+- `text_editor_code_execution_tool_result`
+- `mcp_tool_result`
+- `mcp_tool_use`
+- `container_upload`
+
+Note that `server_tool_use` and `web_search_tool_result` ARE supported and work with both stable and beta APIs.
+
 </LanguageContent>
 
 <LanguageContent lang="python">
-  :::note[Feature unavailable for Python]
-The Anthropic plugin has not yet been made available for Python.
-:::
+	:::note[Feature unavailable for Python] The Anthropic plugin has not yet been made available for Python. :::
 </LanguageContent>
 
 <LanguageContent lang="go">
