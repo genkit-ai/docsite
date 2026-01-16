@@ -48,6 +48,8 @@ const DOCS_SIDEBAR = [
       { label: "OpenAI", slug: "docs/integrations/openai" },
       { label: "OpenAI-Compatible APIs", slug: "docs/integrations/openai-compatible" },
       { label: "Anthropic (Claude)", slug: "docs/integrations/anthropic" },
+      { label: "AWS Bedrock", slug: "docs/integrations/aws-bedrock" },
+      { label: "Azure AI Foundry", slug: "docs/integrations/azure-foundry" },
       { label: "xAI (Grok)", slug: "docs/integrations/xai" },
       { label: "DeepSeek", slug: "docs/integrations/deepseek" },
       { label: "Ollama", slug: "docs/integrations/ollama" },
