@@ -654,7 +654,7 @@ The Google AI plugin provides access to video generation capabilities through th
 
 ### Available Models
 
-**Veo 3.1 Series** - Latest generation with native audio and high fidelity:
+**Veo 3.1 Series** - Latest generation with native audio and high fidelity. Supports 4K resolution, landscape/portrait aspect ratios, video extension, and interpolation.
 - `veo-3.1-generate-preview` - High-quality video and audio generation
 - `veo-3.1-fast-generate-preview` - Fast generation with high quality
 
@@ -724,9 +724,11 @@ async function downloadVideo(video: MediaPart, path: string) {
 }
 ```
 
-#### Video Generation from Photo Reference
+#### Image-to-Video and Interpolation
 
-To use a photo as reference for the video using the Veo model (e.g. to make a static photo move), you can provide an image as part of the prompt.
+Veo models can use a photo as a reference to generate video (image-to-video), or transition between two photos (interpolation).
+
+**Image-to-Video:**
 
 ```typescript
 const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
@@ -748,6 +750,84 @@ let { operation } = await ai.generate({
     durationSeconds: 5,
     aspectRatio: '9:16',
     personGeneration: 'allow_adult',
+  },
+});
+```
+
+**Interpolation:**
+
+To generate a video that transitions between a starting image and an ending image, use the `image` parameter for the first frame and the `lastFrame` config for the final frame.
+
+```typescript
+const firstImage = fs.readFileSync('first.jpg', { encoding: 'base64' });
+const lastImage = fs.readFileSync('last.jpg', { encoding: 'base64' });
+
+let { operation } = await ai.generate({
+  model: googleAI.model('veo-3.1-generate-preview'),
+  prompt: [
+    { text: 'A ghostly woman swinging gently on a rope swing beneath a massive tree fades away, vanishing completely.' },
+    {
+      media: {
+        contentType: 'image/jpeg',
+        url: `data:image/jpeg;base64,${firstImage}`,
+      },
+    },
+  ],
+  config: {
+    lastFrame: {
+      contentType: 'image/jpeg',
+      url: `data:image/jpeg;base64,${lastImage}`,
+    },
+  },
+});
+```
+
+#### Extending Veo Videos
+
+Veo 3.1 can extend videos that were previously generated with Veo by 7 seconds. Provide the `video` object from a previous generation to the `video` configuration parameter.
+
+```typescript
+// Assume 'previousOperation' is an operation from a previous Veo generation
+const previousVideo = previousOperation.output?.message?.content.find((p) => !!p.media);
+
+let { operation } = await ai.generate({
+  model: googleAI.model('veo-3.1-generate-preview'),
+  prompt: 'Track the butterfly into the garden as it lands on an orange origami flower.',
+  config: {
+    video: previousVideo.media,
+    resolution: '720p',
+  },
+});
+```
+
+#### Using Reference Images
+
+Veo 3.1 can use up to 3 reference images to guide the appearance of a person, character, or product in the generated video.
+
+```typescript
+const personImage = fs.readFileSync('person.jpg', { encoding: 'base64' });
+const dressImage = fs.readFileSync('dress.jpg', { encoding: 'base64' });
+
+let { operation } = await ai.generate({
+  model: googleAI.model('veo-3.1-generate-preview'),
+  prompt: 'A woman in a magnificent flamingo dress walks through a sun-drenched lagoon.',
+  config: {
+    referenceImages: [
+      {
+        media: {
+          contentType: 'image/jpeg',
+          url: `data:image/jpeg;base64,${personImage}`,
+        },
+        referenceType: 'asset',
+      },
+      {
+        media: {
+          contentType: 'image/jpeg',
+          url: `data:image/jpeg;base64,${dressImage}`,
+        },
+        referenceType: 'asset',
+      },
+    ],
   },
 });
 ```
@@ -782,14 +862,25 @@ The Veo models support various configuration options:
   - `2`: Supported in Veo 2 only.
 
 - **durationSeconds** _number_ (Veo 2 only)
-
-  Length of each output video in seconds (5 to 8). Not configurable for Veo 3.1/3.0 (defaults to 8 seconds).
+- **durationSeconds** _number_
+  Length of each output video in seconds.
+  - **Veo 3.1 / 3.0**: Defaults to `8` seconds. Must be `8` when using extension, reference images, 1080p, or 4k resolutions.
+  - **Veo 2.0**: `5` to `8` seconds.
 
 - **resolution** _string_ (Veo 3.1 only)
 
   Resolution of the generated video.
   - `"720p"` (default)
-  - `"1080p"` (Available for 16:9 aspect ratio)
+  - `"1080p"` (Available for 8s duration)
+  - `"4k"` (Available for 8s duration)
+
+- **video** _object_ (Veo 3.1 only)
+
+  A video object from a previous generation to be extended.
+
+- **lastFrame** _object_ (Veo 3.1 only)
+
+  An image object to use as the final frame for interpolation.
 
 - **seed** _number_ (Veo 3.1/3.0 only)
 
@@ -798,6 +889,8 @@ The Veo models support various configuration options:
 - **referenceImages** _object[]_ (Veo 3.1 only)
 
   Provides up to 3 reference images to guide the video's content or style.
+  - **media** _object_: The image to use as reference.
+  - **referenceType** _string_: The type of reference (e.g., `'asset'`).
 
 - **enhancePrompt** _boolean_ (Veo 2 only)
 
