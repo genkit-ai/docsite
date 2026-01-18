@@ -625,6 +625,57 @@ the values streamed by the generation call inside the flow.
 Although this is often the case, it doesn't have to be: you can output values
 to the stream using the callback as often as is useful for your flow.
 
+#### Using channel-based streaming (experimental)
+
+:::caution[Experimental API]
+The channel-based streaming API is experimental and may change in future releases.
+Import it from the `genkit/x` package.
+:::
+
+For a more idiomatic Go approach, you can use the experimental channel-based
+streaming API. Instead of a callback, your flow function receives a channel
+to which it writes stream chunks:
+
+```go
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	x "github.com/firebase/genkit/go/genkit/x"
+)
+
+jokeFlow := x.DefineStreamingFlow(g, "jokeFlow",
+	func(ctx context.Context, topic string, streamCh chan<- string) (string, error) {
+		for chunk, err := range genkit.GenerateStream(ctx, g,
+			ai.WithPrompt("Tell me a joke about %s.", topic),
+		) {
+			if err != nil {
+				return "", err
+			}
+			if chunk.Done {
+				return chunk.Response.Text(), nil
+			}
+			select {
+			case streamCh <- chunk.Chunk.Text():
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		return "", nil
+	})
+```
+
+The channel-based API:
+
+- Passes a send-only channel (`chan<- Stream`) to your function instead of a callback
+- The channel is managed by the framework and closed automatically after your function returns
+- Your function should NOT close the channel
+- Use a `select` statement with `ctx.Done()` to handle cancellation gracefully
+
+The returned flow works identically to callback-based flows and can be run
+with either `Run()` or `Stream()`.
+
 </LanguageContent>
 
 <LanguageContent lang="python">
