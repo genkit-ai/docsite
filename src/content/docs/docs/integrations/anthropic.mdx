@@ -1,6 +1,6 @@
 ---
 title: Anthropic Plugin
-description: Learn how to configure and use Genkit Anthropic plugin to access Claude models in Go.
+description: Learn how to configure and use Genkit Anthropic plugin to access Claude models in JavaScript and Go.
 ---
 
 import LanguageSelector from '../../../../components/LanguageSelector.astro';
@@ -8,8 +8,8 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-	<LanguageSelector supportedLanguages="js go" />
-	<CopyMarkdownButton />
+  <LanguageSelector supportedLanguages="js go" />
+  <CopyMarkdownButton />
 </div>
 
 <LanguageContent lang="js">
@@ -23,6 +23,8 @@ The plugin supports a wide range of capabilities:
 - **Thinking and Reasoning**: Extended thinking for Claude 4.x models
 - **Multimodal**: Image understanding and PDF processing
 - **Tool Calling**: Function calling and tool use
+- **Web Search**: Real-time web search through server-side tools
+- **Prompt Caching**: Reduce costs and latency by caching repeated prompts
 - **Documents and Citations**: Document-based RAG with citation support
 
 ## Setup
@@ -40,11 +42,11 @@ import { genkit } from 'genkit';
 import { anthropic } from '@genkit-ai/anthropic';
 
 const ai = genkit({
-	plugins: [
-		anthropic(),
-		// Or with an explicit API key:
-		// anthropic({ apiKey: 'your-api-key' }),
-	],
+  plugins: [
+    anthropic(),
+    // Or with an explicit API key:
+    // anthropic({ apiKey: 'your-api-key' }),
+  ],
 });
 ```
 
@@ -55,24 +57,118 @@ Requires an Anthropic API Key, which you can get from the [Anthropic Console](ht
 1. **Environment variables**: Set `ANTHROPIC_API_KEY`
 2. **Plugin configuration**: Pass `apiKey` when initializing the plugin (shown above)
 
-### Optional Configuration
+### Configuration Options
 
-The plugin supports additional configuration options:
+The plugin accepts the following configuration options:
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `apiKey` | `string` | Yes* | Your Anthropic API key. Can also be set via `ANTHROPIC_API_KEY` environment variable |
+| `cacheSystemPrompt` | `boolean` | No | Enable prompt caching to reduce costs and latency for repeated system prompts (default: `false`) |
+| `apiVersion` | `'stable' \| 'beta'` | No | Default API surface for all requests. Can be overridden per-request (default: `'stable'`) |
+
+*The API key is required but can be provided via the environment variable `ANTHROPIC_API_KEY` instead of the config option.
 
 ```typescript
 const ai = genkit({
-	plugins: [
-		anthropic({
-			apiKey: 'your-api-key',
-			// TODO: document prompt caching configuration
-			cacheSystemPrompt: true, // Enable prompt caching (beta feature)
-			apiVersion: 'beta', // Use beta API by default ('stable' or 'beta')
-		}),
-	],
+  plugins: [
+    anthropic({
+      apiKey: 'your-api-key',
+      cacheSystemPrompt: true, // Enable prompt caching (beta feature)
+      apiVersion: 'beta', // Use beta API by default ('stable' or 'beta')
+    }),
+  ],
 });
 ```
 
-- **apiVersion**: Sets the default API version to use. Can be overridden per-request. The beta API provides access to structured outputs and other experimental features.
+#### Request-level Configuration
+
+You can override properties, such as the `apiVersion`, on a request-level basis.
+
+```typescript
+const response = await ai.generate({
+  model: anthropic.model('claude-opus-4-5'),
+  prompt: 'Generate a creative story.',
+  config: {
+    apiVersion: 'beta',
+    betas: ['effort-2025-11-24'], // Enable specific beta features
+    output_config: {
+      effort: 'medium',
+    },
+  },
+});
+```
+
+### Prompt Caching
+
+Anthropic's prompt caching feature allows you to cache large portions of your prompts (such as system prompts, documents, or images) to reduce costs and latency for repeated requests. Cached content can be reused across multiple API calls, providing significant performance and cost benefits.
+
+**Key Benefits:**
+
+- **Cost Reduction**: Cached tokens are significantly cheaper than regular input tokens
+- **Lower Latency**: Cached prompts load faster, reducing response time
+- **Efficient for Repetitive Content**: Ideal for system prompts, large context documents, or few-shot examples
+
+**How It Works:**
+
+Anthropic automatically caches content based on the `cache_control` metadata. You can cache system prompts, user messages, images, documents, etc.
+
+#### Basic Usage
+
+Enable prompt caching in a system prompt:
+
+```typescript
+const response = await ai.generate({
+  model: anthropic.model('claude-sonnet-4-5'),
+  messages: [
+    {
+      role: 'system',
+      content: [
+        {
+          text: 'You are a helpful assistant with expertise in quantum physics. [Large system prompt...]'.repeat(100),
+          metadata: {
+            cache_control: {
+              type: 'ephemeral',
+              ttl: '5m',
+            },
+          },
+        }
+      ],
+    },
+    {
+      role: 'user',
+      content: [{ text: 'Explain quantum entanglement.' }],
+    },
+  ],
+});
+```
+
+#### Cache Visibility
+
+You can monitor cache usage through the response metadata. Check the `usage` field in the response to see cache read and creation metrics.
+
+```typescript
+console.log(response.metadata.usage);
+```
+
+It will look like this:
+
+```typescript
+{
+  "inputTokens": 3,
+  "outputTokens": 217,
+  "custom": {
+    "cache_creation_input_tokens": 3639,
+    "cache_read_input_tokens": 0,
+    "ephemeral_5m_input_tokens": 3639,
+    "ephemeral_1h_input_tokens": 0
+  }
+}
+```
+
+:::note[Cache Visibility]
+You may want to read into the limitations of prompt caching in the [Anthropic documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#cache-limitations).
+:::
 
 ## Language Models
 
@@ -111,12 +207,12 @@ import { genkit } from 'genkit';
 import { anthropic } from '@genkit-ai/anthropic';
 
 const ai = genkit({
-	plugins: [anthropic()],
+  plugins: [anthropic()],
 });
 
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: 'Explain how neural networks learn in simple terms.',
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'Explain how neural networks learn in simple terms.',
 });
 
 console.log(response.text);
@@ -129,8 +225,8 @@ You can also pass configuration when creating a model reference:
 const betaModel = anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' });
 
 const response = await ai.generate({
-	model: betaModel,
-	prompt: 'Your prompt here',
+  model: betaModel,
+  prompt: 'Your prompt here',
 });
 ```
 
@@ -142,17 +238,17 @@ Claude 4.5 models support structured output generation via the beta API, which g
 import { z } from 'genkit';
 
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' }),
-	output: {
-		schema: z.object({
-			name: z.string(),
-			bio: z.string(),
-			age: z.number(),
-		}),
-		format: 'json',
-		constrained: true,
-	},
-	prompt: 'Generate a profile for a fictional character',
+  model: anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' }),
+  output: {
+    schema: z.object({
+      name: z.string(),
+      bio: z.string(),
+      age: z.number(),
+    }),
+    format: 'json',
+    constrained: true,
+  },
+  prompt: 'Generate a profile for a fictional character',
 });
 
 console.log(response.output);
@@ -220,18 +316,18 @@ Claude models support streaming responses using `generateStream()`:
 
 ```typescript
 const { stream } = ai.generateStream({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: 'Write a long explanation about quantum computing.',
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'Write a long explanation about quantum computing.',
 });
 
 for await (const chunk of stream) {
-	if (chunk.text) {
-		process.stdout.write(chunk.text);
-	}
-	if (chunk.reasoning) {
-		// Handle thinking/reasoning chunks
-		console.log('\n[Thinking]', chunk.reasoning);
-	}
+  if (chunk.text) {
+    process.stdout.write(chunk.text);
+  }
+  if (chunk.reasoning) {
+    // Handle thinking/reasoning chunks
+    console.log('\n[Thinking]', chunk.reasoning);
+  }
 }
 ```
 
@@ -243,8 +339,8 @@ Claude models can reason about images passed as inline data or URLs. Supported f
 
 ```typescript
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: [{ text: 'Describe what is in this image' }, { media: { url: 'https://example.com/image.jpg' } }],
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: [{ text: 'Describe what is in this image' }, { media: { url: 'https://example.com/image.jpg' } }],
 });
 ```
 
@@ -254,11 +350,11 @@ Claude models can process PDF documents to extract information, summarize conten
 
 ```typescript
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: [
-		{ text: 'Summarize this document' },
-		{ media: { contentType: 'application/pdf', url: 'https://example.com/doc.pdf' } },
-	],
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: [
+    { text: 'Summarize this document' },
+    { media: { contentType: 'application/pdf', url: 'https://example.com/doc.pdf' } },
+  ],
 });
 ```
 
@@ -270,24 +366,24 @@ Claude models support function calling and tool use. Define tools using `ai.defi
 import { z } from 'genkit';
 
 const getWeather = ai.defineTool(
-	{
-		name: 'getWeather',
-		description: 'Gets the current weather in a given location',
-		inputSchema: z.object({
-			location: z.string().describe('The location to get the current weather for'),
-		}),
-		outputSchema: z.string(),
-	},
-	async (input) => {
-		// Execute the tool logic here
-		return `The current weather in ${input.location} is 63°F and sunny.`;
-	},
+  {
+    name: 'getWeather',
+    description: 'Gets the current weather in a given location',
+    inputSchema: z.object({
+      location: z.string().describe('The location to get the current weather for'),
+    }),
+    outputSchema: z.string(),
+  },
+  async (input) => {
+    // Execute the tool logic here
+    return `The current weather in ${input.location} is 63°F and sunny.`;
+  },
 );
 
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: "What's the weather like in San Francisco?",
-	tools: [getWeather],
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: "What's the weather like in San Francisco?",
+  tools: [getWeather],
 });
 
 // The response will contain the tool output if the model decided to call it
@@ -300,20 +396,53 @@ You can control tool usage with the `tool_choice` configuration:
 
 ```typescript
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: 'Get the weather for San Francisco',
-	tools: [getWeather],
-	config: {
-		tool_choice: {
-			type: 'tool',
-			name: 'getWeather', // Force use of a specific tool
-		},
-		// Or use 'auto' to let the model decide
-		// tool_choice: { type: 'auto' },
-		// Or use 'any' to require at least one tool call
-		// tool_choice: { type: 'any' },
-	},
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'Get the weather for San Francisco',
+  tools: [getWeather],
+  config: {
+    tool_choice: {
+      type: 'tool',
+      name: 'getWeather', // Force use of a specific tool
+    },
+    // Or use 'auto' to let the model decide
+    // tool_choice: { type: 'auto' },
+    // Or use 'any' to require at least one tool call
+    // tool_choice: { type: 'any' },
+  },
 });
+```
+
+### Web Search
+
+Claude models support web search capabilities through Anthropic's server-side tool integration. When enabled, the model can search the web to find current information and include it in responses.
+
+**Key Features:**
+
+- **Real-time Information**: Access current web data beyond the model's training cutoff
+- **Automatic Search**: Model decides when to search based on the query
+- **Source Attribution**: Results include source information for transparency
+
+#### Basic Usage
+
+Web search is available through Anthropic's server tools. The model will use web search when it determines that current information would improve the response:
+
+```typescript
+import { anthropic } from '@genkit-ai/anthropic';
+
+const response = await ai.generate({
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'What are the latest developments in quantum computing this week?',
+  config: {
+    tools: [
+      {
+        type: 'web_search_20250305',
+        name: 'web_search',
+      },
+    ],
+  },
+});
+
+console.log(response.text);
 ```
 
 ### Documents and Citations
@@ -324,31 +453,31 @@ Claude models support document-based RAG with citation support. Use the `anthrop
 import { anthropic, anthropicDocument } from '@genkit-ai/anthropic';
 
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	messages: [
-		{
-			role: 'user',
-			content: [
-				anthropicDocument({
-					source: { type: 'text', data: 'The grass is green. The sky is blue.' },
-					title: 'Nature Facts',
-					citations: { enabled: true },
-				}),
-				{ text: 'What color is the grass?' },
-			],
-		},
-	],
+  model: anthropic.model('claude-sonnet-4-5'),
+  messages: [
+    {
+      role: 'user',
+      content: [
+        anthropicDocument({
+          source: { type: 'text', data: 'The grass is green. The sky is blue.' },
+          title: 'Nature Facts',
+          citations: { enabled: true },
+        }),
+        { text: 'What color is the grass?' },
+      ],
+    },
+  ],
 });
 
 // Access citations from the response
 if (response.messages) {
-	for (const message of response.messages) {
-		for (const part of message.content) {
-			if (part.metadata?.citations) {
-				console.log('Citations:', part.metadata.citations);
-			}
-		}
-	}
+  for (const message of response.messages) {
+    for (const part of message.content) {
+      if (part.metadata?.citations) {
+        console.log('Citations:', part.metadata.citations);
+      }
+    }
+  }
 }
 ```
 
@@ -380,17 +509,17 @@ Claude models support system messages to set the model's behavior:
 
 ```typescript
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	messages: [
-		{
-			role: 'system',
-			content: [{ text: 'You are a helpful assistant that explains concepts clearly.' }],
-		},
-		{
-			role: 'user',
-			content: [{ text: 'Explain quantum computing.' }],
-		},
-	],
+  model: anthropic.model('claude-sonnet-4-5'),
+  messages: [
+    {
+      role: 'system',
+      content: [{ text: 'You are a helpful assistant that explains concepts clearly.' }],
+    },
+    {
+      role: 'user',
+      content: [{ text: 'Explain quantum computing.' }],
+    },
+  ],
 });
 ```
 
@@ -400,18 +529,18 @@ Anthropic models support various configuration options:
 
 ```typescript
 const response = await ai.generate({
-	model: anthropic.model('claude-sonnet-4-5'),
-	prompt: 'Your prompt here',
-	config: {
-		temperature: 0.7, // Controls randomness (0.0 to 1.0)
-		maxOutputTokens: 4096, // Maximum tokens to generate
-		topP: 0.9, // Nucleus sampling parameter
-		tool_choice: { type: 'auto' }, // Tool usage control
-		metadata: {
-			user_id: 'user-123', // User identifier for tracking
-		},
-		apiVersion: 'beta', // Override default API version
-	},
+  model: anthropic.model('claude-sonnet-4-5'),
+  prompt: 'Your prompt here',
+  config: {
+    temperature: 0.7, // Controls randomness (0.0 to 1.0)
+    maxOutputTokens: 4096, // Maximum tokens to generate
+    topP: 0.9, // Nucleus sampling parameter
+    tool_choice: { type: 'auto' }, // Tool usage control
+    metadata: {
+      user_id: 'user-123', // User identifier for tracking
+    },
+    apiVersion: 'beta', // Override default API version
+  },
 });
 ```
 
@@ -443,12 +572,12 @@ const claude = anthropic.model('claude-sonnet-4-5');
 
 // Use the model directly
 const response = await claude({
-	messages: [
-		{
-			role: 'user',
-			content: [{ text: 'Tell me a joke.' }],
-		},
-	],
+  messages: [
+    {
+      role: 'user',
+      content: [{ text: 'Tell me a joke.' }],
+    },
+  ],
 });
 
 console.log(response);
@@ -474,10 +603,23 @@ The beta API surface provides access to experimental features, but some server-m
 
 Note that `server_tool_use` and `web_search_tool_result` ARE supported and work with both stable and beta APIs.
 
+## Examples
+
+For comprehensive examples demonstrating all plugin features, see the [Genkit Anthropic testapp](https://github.com/firebase/genkit/tree/main/js/testapps/anthropic).
+
+## Learn More
+
+- [Generating content with AI models](/docs/models) - Learn more about model configuration and generation options
+- [Tool calling](/docs/tool-calling) - Deep dive into defining and using tools with AI models
+- [Retrieval-augmented generation (RAG)](/docs/rag) - Build RAG applications with document retrieval and citations
+- [Structured output](/docs/models#structured-output) - Generate validated JSON output from models
+- [Deployment options](/docs/deployment/any-platform) - Deploy your Anthropic-powered applications
+- [Evaluation](/docs/evaluation) - Test and evaluate your AI workflows
+
 </LanguageContent>
 
 <LanguageContent lang="python">
-	:::note[Feature unavailable for Python] The Anthropic plugin has not yet been made available for Python. :::
+  :::note[Feature unavailable for Python] The Anthropic plugin has not yet been made available for Python. :::
 </LanguageContent>
 
 <LanguageContent lang="go">
