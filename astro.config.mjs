@@ -98,6 +98,16 @@ export default defineConfig({
           label: 'Discord',
           href: 'https://discord.gg/qXt5zzQKpc',
         },
+        {
+          icon: 'x.com',
+          label: 'X',
+          href: 'https://x.com/GenkitFramework',
+        },
+        {
+          icon: 'linkedin',
+          label: 'LinkedIn',
+          href: 'https://www.linkedin.com/company/genkit',
+        },
       ],
       sidebar,
       customCss: ['./src/tailwind.css'],
