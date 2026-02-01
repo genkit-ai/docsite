@@ -8,9 +8,97 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js"/>
+  <LanguageSelector supportedLanguages="js dart"/>
   <CopyMarkdownButton />
 </div>
+
+
+<LanguageContent lang="dart">
+
+## Authorize within a Flow
+
+Flows can check authorization by inspecting the `context` property passed to the flow function. It is up to the framework integration (like `genkit_shelf`) to populate this context.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:schemantic/schemantic.dart';
+
+final selfSummaryFlow = ai.defineFlow(
+  name: 'selfSummaryFlow',
+  inputSchema: z.object({'uid': z.string()}),
+  outputSchema: z.object({'profileSummary': z.string()}),
+  fn: (input, context) async {
+    final auth = context.context?['auth'];
+    if (auth == null) {
+      throw GenkitException('Unauthenticated', status: StatusCodes.UNAUTHENTICATED);
+    }
+    if (input['uid'] != auth['uid']) {
+      throw GenkitException('You may only summarize your own profile data.', status: StatusCodes.PERMISSION_DENIED);
+    }
+    // Flow logic here...
+    return {'profileSummary': 'User profile summary would go here'};
+  },
+);
+```
+
+You can verify this logic by manually passing context during execution:
+
+```dart
+// Error: Unauthenticated
+await selfSummaryFlow({'uid': 'abc-def'});
+
+// Error: Permission denied
+await selfSummaryFlow(
+  {'uid': 'abc-def'},
+  context: {'auth': {'uid': 'hij-klm'}},
+);
+
+// Success
+await selfSummaryFlow(
+  {'uid': 'abc-def'},
+  context: {'auth': {'uid': 'abc-def'}},
+);
+```
+
+## Context Providers (Shelf)
+
+When deploying with `genkit_shelf` (running as a server), you can use a `ContextProvider` to verify incoming requests and populate the context.
+
+```dart
+import 'dart:async';
+import 'package:genkit/genkit.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as io;
+
+FutureOr<Map<String, dynamic>> apiKeyContextProvider(Request request) {
+  final authHeader = request.headers['Authorization'];
+  if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+     // Throwing here will result in a 403 Forbidden response
+     throw GenkitException('Missing API Key', status: StatusCodes.UNAUTHENTICATED);
+  }
+  final token = authHeader.substring(7);
+  if (token != 'REQUIRED_API_KEY') {
+    throw GenkitException('Invalid API Key', status: StatusCodes.PERMISSION_DENIED);
+  }
+  return {
+    'auth': {'uid': 'admin', 'key': token}
+  };
+}
+
+void main() async {
+  final ai = Genkit(plugins: []);
+  // ... define flow ...
+
+  final handler = const Pipeline()
+      .addMiddleware(logRequests())
+      .addHandler(shelfHandler(selfSummaryFlow, contextProvider: apiKeyContextProvider));
+
+  await io.serve(handler, 'localhost', 3400);
+}
+```
+
+</LanguageContent>
 
 <LanguageContent lang="go">
 

@@ -478,3 +478,130 @@ if __name__ == "__main__":
 Then proceeed with Cloud Run [deployment](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#deploy) instructions.
 
 </LanguageContent>
+
+<LanguageContent lang="dart">
+
+You can easy deploy your Genkit Dart flows to Cloud Run as a containerized service. This guide shows you how to deploy a Genkit server using the `genkit_shelf` package.
+
+## Before you begin
+
+- Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+- Ensure you have a Genkit Dart project set up. If not, follow the [Get Started](/docs/get-started) guide.
+
+## 1. Set up a Google Cloud project
+
+1.  Create a new Google Cloud project in the [Cloud console](https://console.cloud.google.com).
+2.  Link the project to a billing account.
+3.  Configure the Google Cloud CLI:
+
+    ```bash
+    gcloud init
+    ```
+
+## 2. Prepare your Dart project
+
+Ensure your project is configured to listen on the port defined by the `PORT` environment variable, which Cloud Run uses.
+
+### Update `bin/server.dart`
+
+If you are using `startFlowServer` or `shelfHandler` manually, make sure to parse the port from the environment.
+
+```dart title="bin/server.dart"
+import 'dart:io';
+import 'package:genkit/genkit.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+// import 'package:your_app/flows.dart'; // Import your flows
+
+void main() async {
+  final ai = Genkit();
+  
+  // Define or import your flows here
+  final myFlow = ai.defineFlow(
+    name: 'myFlow',
+    fn: (String input, _) async => 'Processed $input',
+    inputSchema: stringSchema(),
+    outputSchema: stringSchema(),
+  );
+
+  await startFlowServer(
+    flows: [myFlow],
+    // Cloud Run sets the PORT environment variable
+    port: int.parse(Platform.environment['PORT'] ?? '3400'),
+    cors: {
+      'origin': '*', 
+    },
+  );
+}
+```
+
+### Create a Dockerfile
+
+Create a `Dockerfile` in the root of your project. This multi-stage build compiles your Dart application into a minimal executable.
+
+```dockerfile title="Dockerfile"
+# Specify the Dart SDK base image version using dart:<version> (ex: dart:2.12)
+FROM dart:stable AS build
+
+# Resolve app dependencies.
+WORKDIR /app
+COPY pubspec.* ./
+RUN dart pub get
+
+# Copy app source code and AOT compile it.
+COPY . .
+# Ensure generated files are built
+RUN dart run build_runner build -d
+RUN dart compile exe bin/server.dart -o bin/server
+
+# Build minimal serving image from AOT-compiled `/server` and required system
+# libraries and configuration files stored in `/runtime/` from the build stage.
+FROM scratch
+COPY --from=build /runtime/ /
+COPY --from=build /app/bin/server /app/bin/
+
+# Start server.
+CMD ["/app/bin/server"]
+```
+
+## 3. Deploy to Cloud Run
+
+Deploy your application using the `gcloud` tool.
+
+### Make API credentials available
+
+Most flows require API keys (like `GOOGLE_API_KEY` for Gemini). You should use [Secret Manager](https://cloud.google.com/secret-manager) to securely store these and expose them to your service.
+
+1.  Create a secret for your API key:
+    ```bash
+    gcloud secrets create google-api-key --data-file=-
+    # (Press Enter, paste your API key, then press Ctrl+D)
+    ```
+
+2.  Deploy the service, referencing the secret:
+
+    ```bash
+    gcloud run deploy genkit-server \
+      --source . \
+      --port 3400 \
+      --allow-unauthenticated \
+      --region us-central1 \
+      --set-secrets GOOGLE_API_KEY=google-api-key:latest
+    ```
+
+    *Note: Replace `3400` with your default port if different, but Cloud Run defaults to passing 8080 as `PORT` env var, which your code should respect.*
+
+    *Actually, if you use `--port` flag in gcloud, it tells Cloud Run which port the container is listening on. If your code defaults to 3400, strictly speaking you should set the PORT env var or tell Cloud Run to listen on 3400.*
+    
+    *Correction*: Cloud Run injects a `PORT` environment variable (default 8080) and expects your container to listen on it. Your code above uses `Platform.environment['PORT']`. So you don't strictly *need* `--port` if your code honors the env var, but it's good practice to match.
+
+## 4. Test your deployment
+
+After successful deployment, `gcloud` will print the URL of your service.
+
+```bash
+curl -X POST https://<your-service-url>/myFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data": "Dart on Cloud Run"}'
+```
+
+</LanguageContent>
