@@ -10,9 +10,168 @@ import LanguageContent from '../../../components/LanguageContent.astro';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js go python" />
+  <LanguageSelector supportedLanguages="js go python dart" />
   <CopyMarkdownButton />
 </div>
+
+<LanguageContent lang="dart">
+
+_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
+LLM generation-and-tool-calling loop to return control back to you. When
+you're ready, you can then _resume_ generation by sending _replies_ that the LLM
+processes for further generation.
+
+The most common uses for interrupts fall into a few categories:
+
+- **Human-in-the-Loop:** Enabling the user of an interactive AI
+  to clarify needed information or confirm the LLM's action
+  before it is completed, providing a measure of safety and confidence.
+- **Async Processing:** Starting an asynchronous task that can only be
+  completed out-of-band, such as sending an approval notification to
+  a human reviewer or kicking off a long-running background process.
+- **Exit from an Autonomous Task:** Providing the model a way
+  to mark a task as complete, in a workflow that might iterate through
+  a long series of tool calls.
+
+## Before you begin
+
+All of the examples documented here assume that you have already set up a
+project with Genkit dependencies installed. If you want to run the code
+examples on this page, first complete the steps in the
+[Get started](/docs/get-started/) guide.
+
+Before diving too deeply, you should also be familiar with the following
+concepts:
+
+- [Generating content](/docs/models/) with AI models.
+- Genkit's system for [defining input and output schemas](/docs/flows/).
+- General methods of [tool-calling](/docs/tool-calling/).
+
+## Overview of interrupts
+
+At a high level, this is what an interrupt looks like when
+interacting with an LLM:
+
+1.  The calling application prompts the LLM with a request. The prompt includes
+    a list of tools, including at least one for an interrupt that the LLM
+    can use to generate a response.
+2.  The LLM generates either a complete response or a tool call request
+    in a specific format. To the LLM, an interrupt call looks like any
+    other tool call.
+3.  If the LLM calls an interrupting tool,
+    the Genkit library automatically pauses generation rather than immediately
+    passing responses back to the model for additional processing.
+4.  The developer checks whether an interrupt call is made, and performs whatever
+    task is needed to collect the information needed for the interrupt response.
+5.  The developer resumes generation by passing an interrupt response to the
+    model. This action triggers a return to Step 2.
+
+## Define manual-response interrupts
+
+The most common kind of interrupt allows the LLM to request clarification from
+the user, for example by asking a multiple-choice question.
+
+For this use case, use the `ai.defineTool()` method and call `ctx.interrupt()`:
+
+```dart
+import 'package:genkit/genkit.dart';
+
+// Input schema for the interrupt tool
+@Schematic()
+class QuestionInput {
+  final List<String> choices;
+  final bool? allowOther;
+  
+  QuestionInput({required this.choices, this.allowOther});
+}
+
+final askQuestion = ai.defineTool(
+  name: 'askQuestion',
+  description: 'Use this to ask the user a clarifying question',
+  inputSchema: QuestionInput.$schema,
+  outputSchema: stringSchema, // The expected user answer type
+  fn: (input, ctx) {
+    // Trigger an interrupt with the input data as metadata
+    ctx.interrupt(input);
+  },
+);
+```
+
+Note that the `outputSchema` of an interrupt tool corresponds to the response data
+you will provide (the user's answer) as opposed to something that will be automatically populated
+by a tool function.
+
+### Use interrupts
+
+Interrupts are passed into the `tools` list when generating content, just like
+other types of tools. You can pass both normal tools and interrupts to the
+same `generate` call:
+
+```dart
+final response = await ai.generate(
+  prompt: 'Ask me a movie trivia question.',
+  tools: [askQuestion],
+);
+```
+
+Genkit immediately returns a response on receipt of an interrupt tool call.
+
+### Respond to interrupts
+
+If you've passed one or more interrupts to your generate call, you
+need to check the response for interrupts so that you can handle them:
+
+```dart
+// Check if the generation stopped due to an interrupt
+if (response.finishReason == FinishReason.interrupted) {
+  print('Generation interrupted.');
+}
+
+// Access the interrupt requests
+if (response.interrupts.isNotEmpty) {
+  print('Found ${response.interrupts.length} interrupts');
+}
+```
+
+Responding to an interrupt is done using the `resume` parameter on a subsequent
+`generate` call, making sure to pass in the existing message history.
+
+Once resumed, the model re-enters the generation loop, including tool
+execution, until either it completes or another interrupt is triggered:
+
+```dart
+var response = await ai.generate(
+  prompt: 'Help me plan a backyard BBQ.',
+  config: GeminiOptions(
+    systemInstruction: 'Ask clarifying questions until you have a complete solution.',
+  ),
+  tools: [askQuestion],
+);
+
+while (response.finishReason == FinishReason.interrupted) {
+  final resumeResponses = <InterruptResponse>[];
+
+  // Handle all interrupts (multiple can occur)
+  for (final part in response.interrupts) {
+    // In a real app, this would involve UI interaction
+    final input = part.toolRequest.input as QuestionInput;
+    final userAnswer = await askUser(input); 
+
+    resumeResponses.add(InterruptResponse(part, userAnswer));
+  }
+
+  // Resume generation
+  response = await ai.generate(
+    messages: response.messages, // Pass history
+    tools: [askQuestion],
+    resume: resumeResponses,
+  );
+}
+
+print(response.text);
+```
+
+</LanguageContent>
 
 <LanguageContent lang="go">
 

@@ -1,0 +1,215 @@
+---
+title: Shelf Integration
+description: Learn how to integrate Genkit with Shelf applications for Dart, including manual route handling, authentication, and deployment.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector supportedLanguages="dart" />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+  :::note[Unapplicable for JavaScript]
+  Shelf is a Dart web server middleware ecosystem. For JavaScript applications, consider [Express.js](/docs/frameworks/express) or [Next.js](/docs/frameworks/nextjs).
+  :::
+</LanguageContent>
+
+<LanguageContent lang="go">
+  :::note[Unapplicable for Go]
+  Shelf is a Dart web server middleware ecosystem and is not applicable to Go.
+  :::
+</LanguageContent>
+
+<LanguageContent lang="python">
+  :::note[Unapplicable for Python]
+  Shelf is a Dart web server middleware ecosystem. For Python applications, consider [Flask](/docs/frameworks/flask).
+  :::
+</LanguageContent>
+
+<LanguageContent lang="dart">
+
+Shelf is a modular and flexible web server middleware ecosystem for Dart, perfect for building REST APIs with Genkit. The `genkit_shelf` package provides the `shelfHandler` function to easily expose individual Genkit flows as Shelf handlers.
+
+## Installation
+
+Add the `genkit_shelf`, `shelf`, and `shelf_router` packages to your project:
+
+```bash
+dart pub add genkit_shelf shelf shelf_router
+```
+
+## Basic Setup (Manual Routing)
+
+The primary way to use Genkit with Shelf is to mount flow handlers onto a `shelf_router`. This gives you full control over your server's routing, middleware, and configuration.
+
+```dart
+import 'dart:io';
+import 'package:genkit/genkit.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as io;
+import 'package:shelf_router/shelf_router.dart';
+import 'package:schemantic/schemantic.dart';
+
+// part 'server.g.dart';
+
+void main() async {
+  final ai = Genkit();
+
+  // 1. Define your flow
+  final helloFlow = ai.defineFlow(
+    name: 'hello',
+    fn: (String name, _) async => 'Hello, $name!',
+    inputSchema: stringSchema(),
+    outputSchema: stringSchema(),
+  );
+
+  // 2. Create a Shelf Router
+  final router = Router();
+
+  // 3. Mount the flow handler at a specific path
+  // 'shelfHandler' converts the Flow into a Shelf Handler
+  router.post('/hello', shelfHandler(helloFlow));
+
+  // 4. Add other application routes
+  router.get('/health', (_) => Response.ok('OK'));
+
+  // 5. Create a handler pipeline (e.g., adding logging)
+  final handler = const Pipeline()
+      .addMiddleware(logRequests())
+      .addHandler(router.call);
+
+  // 6. Start the server
+  final server = await io.serve(handler, InternetAddress.anyIPv4, 8080);
+  print('Server running on http://localhost:${server.port}');
+}
+```
+
+## Running Your Application
+
+Run your server using the Dart CLI:
+
+```bash
+dart run bin/server.dart
+```
+
+## Testing Your Endpoints
+
+You can test your endpoints using `curl` or any HTTP client.
+
+### Unary Request
+
+```bash
+curl -X POST http://localhost:8080/hello \
+  -H "Content-Type: application/json" \
+  -d '{"data": "World"}'
+```
+
+### Streaming Request
+
+If your flow supports streaming (defines a `streamSchema`), `shelfHandler` automatically handles streaming responses when requested.
+
+```bash
+curl -X POST "http://localhost:8080/count?stream=true" \
+  -H "Content-Type: application/json" \
+  -d '{"data": 5}'
+```
+
+## Advanced Features
+
+### Authentication and Context
+
+You can use standard Shelf middleware to handle authentication, or communicating with Genkit's context system using `FlowWithContextProvider`.
+
+#### Using Genkit Context Provider
+
+The `shelfHandler` function accepts an optional `contextProvider` argument. This function allows you to inspect the incoming Shelf `Request` and populate the Genkit flow context.
+
+```dart
+import 'package:shelf/shelf.dart';
+
+// ...
+
+final secureFlow = ai.defineFlow(
+  name: 'secure',
+  fn: (String input, ctx) async {
+    final user = ctx.context?['user'];
+    if (user == null) {
+      throw GenkitException(
+        'Unauthorized access',
+        status: StatusCodes.permissionDenied,
+      );
+    }
+    return 'Secure data for $user: $input';
+  },
+  inputSchema: stringSchema(),
+  outputSchema: stringSchema(),
+);
+
+// Directly pass the context provider to shelfHandler
+final authenticatedHandler = shelfHandler(
+  secureFlow,
+  contextProvider: (Request request) {
+    final authHeader = request.headers['Authorization'];
+    if (authHeader == 'Bearer secret') {
+      return {'user': 'Admin'};
+    }
+    return {};
+  },
+);
+
+router.post('/secure', authenticatedHandler);
+```
+
+#### Using Shelf Middleware
+
+You can also use standard Shelf middleware (like `shelf_auth`) to validate credentials before the request reaches the Genkit handler. However, if you need to pass user information into the flow (e.g., user ID), using `contextProvider` is the recommended bridge.
+
+## Alternative: Simplified Server
+
+For quick prototypes or simple services where you don't need custom routing control, you can use `startFlowServer`. This helper function creates a Shelf server, sets up routing for all provided flows, and handles CORS automatically.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+
+void main() async {
+  final ai = Genkit();
+  final myFlow = ai.defineFlow(...);
+
+  await startFlowServer(
+    flows: [myFlow],
+    port: 3400,
+    cors: {
+      'origin': '*',
+    },
+  );
+}
+```
+
+## Deployment
+
+Since a Genkit Shelf application is just a standard Dart HTTP server, you can deploy it to any platform that supports Dart or Docker containers, such as **Google Cloud Run**.
+
+1.  **Create a Dockerfile**:
+    ```dockerfile
+    FROM dart:stable AS build
+    WORKDIR /app
+    COPY pubspec.* ./
+    RUN dart pub get
+    COPY . .
+    RUN dart compile exe bin/server.dart -o bin/server
+
+    FROM scratch
+    COPY --from=build /runtime/ /
+    COPY --from=build /app/bin/server /app/bin/
+    CMD ["/app/bin/server"]
+    ```
+
+2.  **Build and Deploy** (e.g., using Cloud Build and Cloud Run).
+
+</LanguageContent>
