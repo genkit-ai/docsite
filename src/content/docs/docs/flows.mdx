@@ -259,6 +259,7 @@ menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
 
 ```python
 from pydantic import BaseModel, Field
+from genkit import Output
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -271,7 +272,7 @@ class MenuItemSchema(BaseModel):
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuItemSchema:
     response = await ai.generate(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output_schema=MenuItemSchema,
+      output=Output(schema=MenuItemSchema),
     )
     return response.output
 ```
@@ -349,6 +350,7 @@ menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
 
 ```python
 from pydantic import BaseModel, Field
+from genkit import Output
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -364,7 +366,7 @@ class FormattedMenuOutput(BaseModel):
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> FormattedMenuOutput:
     response = await ai.generate(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output_schema=MenuItemSchema,
+      output=Output(schema=MenuItemSchema),
     )
     output: MenuItemSchema = response.output
     return FormattedMenuOutput(
@@ -833,10 +835,10 @@ genkit start -- go run .
 <LanguageContent lang="python">
 
 ```bash
-genkit start -- python app.py
+genkit start -- uv run app.py
 ```
 
-Update `python app.py` to match the way you normally run your app.
+Update `uv run app.py` to match the way you normally run your app.
 
 </LanguageContent>
 
@@ -1023,6 +1025,64 @@ either clicking **View trace** or looking on the **Inspect** tab.
 
 In the trace viewer, you can see details about the execution of the entire flow,
 as well as details for each of the individual steps within the flow.
+
+### Flow steps
+
+Each of Genkit's fundamental actions show up as separate steps in the trace viewer:
+
+- `ai.generate()`
+- `Chat.send()`
+- `ai.embed()`
+- `ai.index()`
+- `ai.retrieve()`
+
+If you want to include code other than the above in your traces, you can do so
+by wrapping the code in an `ai.run()` call. You might do this for calls to
+third-party libraries that are not Genkit-aware, or for any critical section of
+code.
+
+For example, here's a flow with two steps: the first step retrieves a menu using
+some unspecified method, and the second step includes the menu in a `generate()`
+call.
+
+```python
+from genkit.ai import Genkit
+from genkit.plugins.google_genai import GoogleAI
+from pydantic import BaseModel, Field
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+)
+
+class MenuQuestionInput(BaseModel):
+    question: str = Field(description="User's question about today's menu")
+
+class MenuQuestionOutput(BaseModel):
+    answer: str = Field(description="Answer to the user's question")
+
+@ai.flow()
+async def menu_question_flow(input: MenuQuestionInput) -> MenuQuestionOutput:
+    async def retrieve_daily_menu() -> str:
+        # Retrieve today's menu. (This could be a database access or simply
+        # fetching the menu from your website.)
+        #
+        # ...
+        #
+        return "Soup: tomato bisque\nMain: roast chicken\nDessert: panna cotta"
+
+    menu = await ai.run("retrieve-daily-menu", retrieve_daily_menu)
+
+    response = await ai.generate(
+        system="Help the user answer questions about today's menu.",
+        prompt=f"Today's menu:\n{menu}\n\nQuestion:\n{input.question}",
+    )
+    return MenuQuestionOutput(answer=response.text)
+```
+
+Because the retrieval step is wrapped in an `ai.run()` call, it's included as a
+step in the trace viewer:
+
+![Genkit DevUI flows](../../../assets/devui-runstep.png)
 
 </LanguageContent>
 
@@ -1222,17 +1282,18 @@ log.Fatal(router.Run(":3400"))
 
 <LanguageContent lang="python">
 
-### Flask
+### FastAPI
 
-To deploy flows using Flask, you can use the `genkit_flask_handler` decorator to expose your flows as HTTP endpoints:
+To deploy flows using FastAPI, create a FastAPI app and expose routes that call your flows:
 
 ```python
 import os
-from flask import Flask
-from genkit.ai import Genkit
-from genkit.plugins.flask import genkit_flask_handler
-from genkit.plugins.google_genai import GoogleAI
+
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
+
+from genkit.ai import Genkit
+from genkit.plugins.google_genai import GoogleAI
 
 # Initialize Genkit
 ai = Genkit(
@@ -1240,8 +1301,7 @@ ai = Genkit(
     model='googleai/gemini-2.5-flash',
 )
 
-# Create Flask app
-app = Flask(__name__)
+app = FastAPI()
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -1249,34 +1309,31 @@ class MenuSuggestionInput(BaseModel):
 class MenuSuggestionOutput(BaseModel):
     menu_item: str = Field(description='Generated menu item')
 
-@app.post('/menuSuggestionFlow')
-@genkit_flask_handler(ai)
 @ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput, ctx) -> MenuSuggestionOutput:
+async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
     response = await ai.generate(
         prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-        on_chunk=ctx.send_chunk,
     )
     return MenuSuggestionOutput(menu_item=response.text)
 
-if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=int(os.environ.get('PORT', 3400)),
-        debug=False
+@app.post("/menuSuggestionFlow")
+async def menu_suggestion_endpoint(input: MenuSuggestionInput) -> MenuSuggestionOutput:
+    return await menu_suggestion_flow(input)
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 3400)),
     )
 ```
 
-The `genkit_flask_handler` decorator automatically handles:
-- Request parsing and validation
-- Streaming responses via Server-Sent Events
-- Error handling and response formatting
-- Integration with Genkit's flow system
-
-For production deployment, you can use a WSGI server like Gunicorn:
+For production, run your app with a production ASGI server (for example, Uvicorn with Gunicorn workers):
 
 ```bash
-gunicorn --bind 0.0.0.0:3400 --workers 4 main:app
+gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:3400 main:app
 ```
 
 </LanguageContent>
@@ -1317,6 +1374,6 @@ For detailed deployment instructions and platform-specific guides, see:
 
 <LanguageContent lang="python">
 
-- [Deploy with Flask](/docs/frameworks/flask)
+- [Deploy with FastAPI](/docs/frameworks/fastapi)
 
 </LanguageContent>

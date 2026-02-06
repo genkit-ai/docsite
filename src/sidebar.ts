@@ -79,7 +79,7 @@ const DOCS_SIDEBAR = [
       { label: "Express.js", slug: "docs/frameworks/express" },
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
       { label: "Angular", slug: "docs/frameworks/angular" },
-      { label: "Flask", slug: "docs/frameworks/flask" },
+      { label: "FastAPI", slug: "docs/frameworks/fastapi" },
     ],
   },
   {
