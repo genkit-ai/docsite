@@ -540,7 +540,7 @@ data.
 To create a retriever, you can use one of the provided implementations or
 create your own.
 
-## Supported retrievers, and embedders
+## Supported retrievers and embedders
 
 Genkit provides retriever support through its plugin system. The
 following plugins are officially supported:
@@ -594,6 +594,40 @@ splitter := textsplitter.NewRecursiveCharacter(
 More chunking options for this library can be found in the
 [`langchaingo` documentation](https://pkg.go.dev/github.com/tmc/langchaingo/textsplitter#Option).
 
+### Initialize Genkit and Vector Store
+
+Before defining the flows, initialize the Genkit instance and the vector store.
+This prepares the `menuDocStore` for indexing and the `menuPdfRetriever` for retrieval.
+```go
+ctx := context.Background()
+
+
+// Initialize Genkit with the Vertex AI plugin
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+
+
+// Initialize the Local Vector Store plugin
+if err := localvec.Init(); err != nil {
+    log.Fatal(err)
+}
+
+
+// Define the Retriever and Document Store.
+// We capture 'menuDocStore' to use in the Indexer Flow,
+// and 'menuPdfRetriever' to use in the Retrieval Flow.
+menuDocStore, menuPdfRetriever, err := localvec.DefineRetriever(
+    g,
+    "menuQA",
+    localvec.Config{
+        Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004"),
+    },
+    nil,
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
 #### Define your indexer flow
 
 ```go
@@ -627,7 +661,11 @@ genkit.DefineFlow(
             return nil, err
         }
 
-        // Add chunks to the index using custom index function
+        // Add chunks to the index using the vector store
+        if err := localvec.Index(ctx, docs, menuDocStore); err != nil {
+            return nil, err
+        }
+
         return map[string]interface{}{
             "success": true,
             "documentsIndexed": len(docs),
@@ -677,30 +715,11 @@ The following example shows how you might use a retriever in a RAG flow. This
 example uses Genkit's file-based vector retriever, which you should not use in production.
 
 ```go
-ctx := context.Background()
-
-g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
-
-if err := localvec.Init(); err != nil {
-	log.Fatal(err)
-}
-
-model := googlegenai.VertexAIModel(g, "gemini-1.5-flash")
-
-_, menuPdfRetriever, err := localvec.DefineRetriever(
-	g, "menuQA", localvec.Config{Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004")},
-)
-if err != nil {
-	log.Fatal(err)
-}
-
 genkit.DefineFlow(
   g, "menuQA",
   func(ctx context.Context, question string) (string, error) {
     // Retrieve text relevant to the user's question.
-    resp, err := ai.Retrieve(ctx, menuPdfRetriever, ai.WithTextDocs(question))
-
-
+    resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(menuPdfRetriever), ai.WithTextDocs(question))
     if err != nil {
         return "", err
     }
@@ -708,12 +727,12 @@ genkit.DefineFlow(
     // Call Generate, including the menu information in your prompt.
     return genkit.GenerateText(ctx, g,
         ai.WithModelName("googleai/gemini-2.5-flash"),
-        ai.WithDocs(resp.Documents),
+        ai.WithDocs(resp.Documents...),
         ai.WithSystem(`
 You are acting as a helpful AI assistant that can answer questions about the
 food available on the menu at Genkit Grub Pub.
 Use only the context provided to answer the question. If you don't know, do not
-make up an answer. Do not add or change items on the menu.`)
+make up an answer. Do not add or change items on the menu.`),
         ai.WithPrompt(question))
   })
 ```
@@ -740,7 +759,7 @@ type CustomMenuRetrieverOptions struct {
 }
 
 advancedMenuRetriever := genkit.DefineRetriever(
-    g, "custom", "advancedMenuRetriever",
+    g, "custom/advancedMenuRetriever", nil,
     func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
         // Handle options passed using our custom type.
         opts, _ := req.Options.(CustomMenuRetrieverOptions)
@@ -754,22 +773,27 @@ advancedMenuRetriever := genkit.DefineRetriever(
         }
 
         // Call the retriever as in the simple case.
-        resp, err := ai.Retrieve(ctx, menuPDFRetriever,
+        resp, err := genkit.Retrieve(ctx, g,
+            ai.WithRetriever(menuPdfRetriever),
             ai.WithDocs(req.Query),
-            ai.WithConfig(ocalvec.RetrieverOptions{K: opts.PreRerankK}),
+            ai.WithConfig(&localvec.RetrieverOptions{K: opts.PreRerankK}),
         )
         if err != nil {
             return nil, err
         }
 
         // Re-rank the returned documents using your custom function.
-        rerankedDocs := rerank(response.Documents)
-        response.Documents = rerankedDocs[:opts.K]
+        // Note: Genkit does not currently provide a built-in reranker;
+        // you would implement this logic yourself
+        rerankedDocs := rerank(resp.Documents)
+        resp.Documents = rerankedDocs[:opts.K]
 
-        return response, nil
+        return resp, nil
     },
 )
 ```
+
+_Note_: The `rerank` function is a placeholder for your own logic and is not provided by the Genkit framework.
 
 </LanguageContent>
 
