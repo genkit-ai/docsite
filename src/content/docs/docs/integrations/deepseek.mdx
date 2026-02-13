@@ -1,6 +1,6 @@
 ---
 title: DeepSeek Plugin
-description: Learn how to configure and use Genkit DeepSeek plugin to access DeepSeek models in JavaScript.
+description: Learn how to configure and use Genkit DeepSeek plugin to access DeepSeek models in JavaScript and Python.
 ---
 
 import LanguageSelector from '../../../../components/LanguageSelector.astro';
@@ -8,7 +8,7 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js" />
+  <LanguageSelector supportedLanguages="js python" />
   <CopyMarkdownButton />
 </div>
 
@@ -19,9 +19,279 @@ The DeepSeek plugin has not yet been made available for Go.
 </LanguageContent>
 
 <LanguageContent lang="python">
-  :::note[Feature unavailable for Python]
-The DeepSeek plugin has not yet been made available for Python.
+
+The `genkit-plugin-deepseek` package includes a pre-configured plugin for [DeepSeek](https://www.deepseek.com/) models, including the powerful R1 reasoning model and the efficient V3 chat model.
+
+:::note
+The DeepSeek plugin is built on top of the OpenAI-compatible plugin architecture. It is pre-configured for DeepSeek's API endpoints.
 :::
+
+## Installation
+
+```bash
+uv add genkit-plugin-deepseek
+```
+
+## Configuration
+
+To use this plugin, import `DeepSeek` and specify it when you initialize Genkit:
+
+```python
+from genkit import Genkit
+from genkit.plugins.deepseek import DeepSeek
+
+ai = Genkit(
+    plugins=[DeepSeek()],
+)
+```
+
+You must provide an API key from DeepSeek. You can get an API key from your [DeepSeek account settings](https://platform.deepseek.com/).
+
+Configure the plugin to use your API key by doing one of the following:
+
+- Set the `DEEPSEEK_API_KEY` environment variable to your API key.
+- Specify the API key when you initialize the plugin:
+
+  ```python
+  DeepSeek(api_key='YOUR_API_KEY')
+  ```
+
+As always, avoid embedding API keys directly in your code.
+
+## Usage
+
+Use the `deepseek_name()` helper to reference a DeepSeek model.
+
+```python
+from genkit import Genkit
+from genkit.plugins.deepseek import DeepSeek, deepseek_name
+
+ai = Genkit(
+    plugins=[DeepSeek()],
+)
+
+@ai.flow()
+async def deepseek_flow(subject: str) -> str:
+    """Generate information about a subject using DeepSeek.
+
+    Args:
+        subject: The subject to generate information about.
+
+    Returns:
+        Information about the subject.
+    """
+    response = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        prompt=f'Tell me something about {subject}.',
+    )
+    return response.text
+```
+
+**Available Models:**
+
+The DeepSeek plugin provides access to several models:
+
+- **`deepseek-chat`**: Standard chat model for most conversational tasks
+- **`deepseek-reasoner`**: R1 reasoning model with chain-of-thought capabilities
+- **`deepseek-v3`**: Latest V3 model with improved performance
+- **`deepseek-r1`**: Advanced R1 reasoning model
+
+## Advanced usage
+
+### Reasoning Model
+
+The `deepseek-reasoner` model shows step-by-step reasoning, making it ideal for complex logic, math, and coding problems:
+
+```python
+@ai.flow()
+async def reasoning_flow(problem: str) -> str:
+    """Solve a problem using DeepSeek's reasoning model.
+
+    Args:
+        problem: The problem to solve.
+
+    Returns:
+        The solution with reasoning steps.
+    """
+    response = await ai.generate(
+        model=deepseek_name('deepseek-reasoner'),
+        prompt=f'Solve this problem step by step: {problem}',
+    )
+    return response.text
+```
+
+Example with a classic reasoning problem:
+
+```python
+response = await ai.generate(
+    model=deepseek_name('deepseek-reasoner'),
+    prompt='What is heavier, one kilo of steel or one kilo of feathers?',
+)
+print(response.text)  # Shows reasoning steps before the answer
+```
+
+### Tool Calling
+
+DeepSeek models support tool calling, allowing them to use functions you define:
+
+```python
+from pydantic import BaseModel, Field
+
+class WeatherInput(BaseModel):
+    """Input for weather tool."""
+    location: str = Field(description='City name')
+
+@ai.tool(description='Get current weather for a location')
+def get_weather(input: WeatherInput) -> str:
+    """Get the current weather for a location."""
+    # In a real implementation, call a weather API
+    return f'22°C and sunny in {input.location}'
+
+@ai.flow()
+async def weather_flow(location: str) -> str:
+    """Get weather information using DeepSeek with tool calling.
+
+    Args:
+        location: The location to get weather for.
+
+    Returns:
+        Weather information for the location.
+    """
+    response = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        prompt=f'What is the weather in {location}?',
+        tools=['get_weather'],
+    )
+    return response.text
+```
+
+### Streaming
+
+The plugin supports streaming responses for real-time output:
+
+```python
+from genkit import ActionRunContext
+
+@ai.flow()
+async def streaming_flow(topic: str, ctx: ActionRunContext | None = None) -> str:
+    """Generate content with streaming output.
+
+    Args:
+        topic: Topic to generate content about.
+        ctx: Action context for streaming chunks.
+
+    Returns:
+        The complete generated content.
+    """
+    response = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        prompt=f'Tell me about {topic}',
+        on_chunk=ctx.send_chunk if ctx else None,
+    )
+    return response.text
+```
+
+### Multi-turn Chat
+
+Maintain conversation context across multiple turns:
+
+```python
+from genkit import Message, Part, Role, TextPart
+
+@ai.flow()
+async def chat_flow() -> str:
+    """Example of multi-turn conversation with context.
+
+    Returns:
+        The final response.
+    """
+    history = []
+
+    # First message
+    response1 = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        prompt='I love Japanese food, especially ramen.',
+        system='You are a helpful assistant.',
+    )
+    
+    # Build conversation history
+    history.append(Message(
+        role=Role.USER,
+        content=[Part(root=TextPart(text='I love Japanese food, especially ramen.'))]
+    ))
+    if response1.message:
+        history.append(response1.message)
+
+    # Follow-up using context
+    response2 = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        messages=[
+            *history,
+            Message(
+                role=Role.USER,
+                content=[Part(root=TextPart(text='What food did I mention?'))]
+            ),
+        ],
+        system='You are a helpful assistant.',
+    )
+    return response2.text
+```
+
+### Structured Output
+
+Generate structured data using Pydantic models:
+
+```python
+from pydantic import BaseModel, Field
+from genkit import Output
+
+class BookRecommendation(BaseModel):
+    """A book recommendation."""
+    title: str = Field(description='Book title')
+    author: str = Field(description='Book author')
+    genre: str = Field(description='Primary genre')
+    summary: str = Field(description='Brief summary')
+    why_recommended: str = Field(description='Why this book is recommended')
+
+@ai.flow()
+async def recommend_book(preferences: str) -> BookRecommendation:
+    """Get a book recommendation with structured output.
+
+    Args:
+        preferences: User's reading preferences.
+
+    Returns:
+        A structured book recommendation.
+    """
+    response = await ai.generate(
+        model=deepseek_name('deepseek-chat'),
+        prompt=f'Recommend a book for someone who likes: {preferences}',
+        output=Output(schema=BookRecommendation),
+    )
+    return response.output
+```
+
+### Passthrough configuration
+
+You can pass configuration options that are not defined in the plugin's custom configuration schema. This permits you to access new models and features without having to update your Genkit version.
+
+```python
+from genkit import Genkit
+from genkit.plugins.deepseek import DeepSeek, deepseek_name
+
+ai = Genkit(plugins=[DeepSeek()])
+
+response = await ai.generate(
+    prompt='Tell me a cool story',
+    model=deepseek_name('deepseek-new'),  # hypothetical new model
+    config={
+        'new_feature_parameter': ...,  # hypothetical config needed for new model
+    },
+)
+```
+
+Genkit passes this configuration as-is to the DeepSeek API giving you access to the new model features. Note that the field name and types are not validated by Genkit and should match the DeepSeek API specification to work.
+
 </LanguageContent>
 
 <LanguageContent lang="js">

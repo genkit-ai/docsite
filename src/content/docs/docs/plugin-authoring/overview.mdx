@@ -8,14 +8,303 @@ import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro'
 import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js go" />
+  <LanguageSelector supportedLanguages="js go python" />
   <CopyMarkdownButton />
 </div>
 
 <LanguageContent lang="python">
-  :::note[Unavailable for Python]
-Guidance for writing custom plugins is not yet available for Python.
-:::
+
+Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
+configurable modules that can provide models, retrievers, indexers, embedders,
+evaluators, and more. You've already seen plugins in action just by using Genkit:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+)
+```
+
+The Google GenAI plugin takes configuration (such as the user's API key) and
+registers a variety of new models, embedders, and more with the Genkit registry.
+The registry powers Genkit's local UI for running and inspecting models,
+prompts, and more as well as serves as a lookup service for named actions at
+runtime.
+
+## Creating a Plugin
+
+Python plugins follow a simple pattern. A plugin is a class that:
+
+1. Inherits from `Plugin` base class
+2. Has a `name` class attribute for the plugin identifier
+3. Implements three async methods: `init()`, `resolve()`, and `list_actions()`
+
+### Basic Plugin Structure
+
+```python
+from os import environ
+from genkit import Plugin, ActionKind
+from genkit.core.action import Action, ActionMetadata
+
+
+class MyPlugin(Plugin):
+    """A custom Genkit plugin."""
+
+    name = 'my-plugin'  # Plugin namespace
+
+    def __init__(self, api_key: str | None = None):
+        """Initialize plugin with configuration.
+
+        Args:
+            api_key: API key for the service. Can also use
+                MY_PLUGIN_API_KEY environment variable.
+        """
+        self.api_key = api_key or environ.get('MY_PLUGIN_API_KEY')
+        if not self.api_key:
+            raise ValueError(
+                'API key required. Set MY_PLUGIN_API_KEY or pass api_key parameter.'
+            )
+
+    async def init(self) -> list[Action]:
+        """One-time initialization called lazily on first use.
+
+        Returns:
+            List of Action instances to pre-register (optional).
+        """
+        # Return empty list for lazy loading, or pre-register actions
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolve an action by type and name.
+
+        Args:
+            action_type: The kind of action (MODEL, EMBEDDER, etc.).
+            name: The fully namespaced name (e.g., 'my-plugin/my-model').
+
+        Returns:
+            Action instance if found, None otherwise.
+        """
+        if action_type == ActionKind.MODEL:
+            return self._create_model_action(name)
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List available actions for dev UI discovery.
+
+        Returns:
+            List of ActionMetadata describing available actions.
+        """
+        return [
+            ActionMetadata(kind=ActionKind.MODEL, name='my-plugin/my-model'),
+        ]
+
+    def _create_model_action(self, name: str) -> Action:
+        """Create and return a model action."""
+        # Model implementation
+        pass
+```
+
+### Plugin Options Guidance
+
+For any plugin option that requires a secret value, such as API keys, you should
+offer both an option and a default environment variable to configure it. This
+lets your plugin take advantage of the secret-management features offered by
+many hosting providers.
+
+## Building Plugin Features
+
+A single plugin can activate many new things within Genkit. For example, the
+Google GenAI plugin activates several new models as well as embedders.
+
+### Model Plugins
+
+Genkit model plugins add one or more generative AI models to the Genkit
+registry. A model represents any generative model that is capable of receiving a
+prompt as input and generating text, media, or data as output.
+
+#### Defining a Model
+
+```python
+from os import environ
+from genkit import Plugin, ActionKind, ActionRunContext
+from genkit.core.action import Action, ActionMetadata
+from genkit.blocks.model import model_action_metadata
+from genkit.core.typing import (
+    GenerateRequest,
+    GenerateResponse,
+    GenerateResponseChunk,
+)
+from genkit.core.schema import to_json_schema
+from genkit.types import GenerationCommonConfig
+from collections.abc import AsyncIterator
+
+
+class MyModelPlugin(Plugin):
+    """Plugin that provides a custom model."""
+
+    name = 'my-provider'
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or environ.get('MY_API_KEY')
+        if not self.api_key:
+            raise ValueError('API key required')
+
+    async def init(self) -> list[Action]:
+        """Initialize plugin.
+        
+        Returns:
+            Empty list for lazy loading via resolve().
+        """
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolve an action by type and name.
+        
+        Args:
+            action_type: The kind of action to resolve.
+            name: The fully namespaced name (e.g., 'my-provider/my-model').
+            
+        Returns:
+            Action instance if found, None otherwise.
+        """
+        if action_type != ActionKind.MODEL:
+            return None
+            
+        return self._create_model_action(name)
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List available models for dev UI.
+        
+        Returns:
+            List of ActionMetadata for available models.
+        """
+        return [
+            model_action_metadata(
+                name=f'{self.name}/my-model',
+                info={
+                    'label': 'My Custom Model',
+                    'supports': {
+                        'multiturn': True,
+                        'media': False,
+                        'tools': False,
+                        'systemRole': True,
+                        'output': ['text'],
+                    },
+                },
+                config_schema=GenerationCommonConfig,
+            )
+        ]
+
+    def _create_model_action(self, name: str) -> Action:
+        """Create an Action object for the model.
+        
+        Args:
+            name: The fully namespaced model name.
+            
+        Returns:
+            Action object for the model.
+        """
+        async def generate(
+            request: GenerateRequest,
+            ctx: ActionRunContext,
+        ) -> GenerateResponse:
+            """Generate a response from the model.
+
+            Args:
+                request: The generation request containing messages and config.
+                ctx: The action run context.
+
+            Returns:
+                A GenerateResponse with the model's output.
+            """
+            # Transform Genkit request to your API format
+            api_request = self._to_api_request(request)
+
+            # Call your model API
+            api_response = await self._call_api(api_request)
+
+            # Transform API response to Genkit format
+            return self._to_genkit_response(api_response)
+
+        return Action(
+            kind=ActionKind.MODEL,
+            name=name,
+            fn=generate,
+            metadata={
+                'model': {
+                    'supports': {
+                        'multiturn': True,
+                        'media': False,
+                        'tools': False,
+                        'systemRole': True,
+                        'output': ['text'],
+                    },
+                    'customOptions': to_json_schema(GenerationCommonConfig),
+                },
+            },
+        )
+
+    def _to_api_request(self, request: GenerateRequest) -> dict:
+        """Convert Genkit request to API format."""
+        # Implementation depends on your API
+        pass
+
+    async def _call_api(self, request: dict) -> dict:
+        """Call your model's API."""
+        # Implementation depends on your API
+        pass
+
+    def _to_genkit_response(self, response: dict) -> GenerateResponse:
+        """Convert API response to Genkit format."""
+        # Implementation depends on your API
+        pass
+```
+
+#### Model Capabilities
+
+The `supports` dict declares what features the model supports:
+
+| Capability | Description |
+|------------|-------------|
+| `multiturn` | Supports multi-turn conversations |
+| `media` | Accepts media input (images, audio, etc.) |
+| `tools` | Supports function/tool calling |
+| `systemRole` | Supports system messages |
+| `output` | List of output types: 'text', 'media', 'json' |
+
+## Publishing a Plugin
+
+Genkit plugins can be published as normal Python packages on PyPI. To increase
+discoverability, your package should be named `genkit-plugin-{name}` to indicate
+it is a Genkit plugin. Include relevant keywords in your `pyproject.toml`:
+
+```toml
+[project]
+name = "genkit-plugin-my-service"
+description = "Genkit plugin for My Service"
+keywords = [
+    "genkit",
+    "genkit-plugin",
+    "ai",
+    "llm",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourorg/genkit-plugin-my-service"
+```
+
+### Recommended Keywords
+
+- `genkit-plugin`: Always include this to indicate it's a Genkit plugin
+- `genkit-model`: If your package provides models
+- `genkit-embedder`: If your package provides embedders
+- `genkit-retriever`: If your package provides retrievers
+- `genkit-indexer`: If your package provides indexers
+- `genkit-evaluator`: If your package provides evaluators
+- `genkit-telemetry`: If your package provides telemetry export
+
 </LanguageContent>
 
 <LanguageContent lang="go">

@@ -375,34 +375,48 @@ interacting with an LLM:
 The most common kind of interrupt allows the LLM to request clarification from
 the user, for example by asking a multiple-choice question.
 
-For this use case, use the Genkit instance's `tool()` decorator:
+For this use case, use the Genkit instance's `tool()` decorator with `ctx.interrupt()`:
 
 ```python
+from genkit import Genkit, ToolRunContext, tool_response
+from genkit.plugins.google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-class Questions(BaseModel):
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
+)
+
+class QuestionInput(BaseModel):
+    """Input schema for the question tool."""
+    question: str = Field(description='the question to ask')
     choices: list[str] = Field(description='the choices to display to the user')
-    allow_other: bool = Field(description='when true, allow write-ins')
+    allow_other: bool = Field(default=False, description='when true, allow write-ins')
 
 
 @ai.tool()
-def ask_question(input: Questions, ctx) -> str:
-    """Use this to ask the user a clarifying question"""
-    ctx.interrupt()
+def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
+    """Use this to ask the user a clarifying question."""
+    # Interrupt with metadata that the caller can use.
+    ctx.interrupt({
+        'question': input.question,
+        'choices': input.choices,
+        'allow_other': input.allow_other,
+    })
 ```
 
-Note that the `outputSchema` of an interrupt corresponds to the response data
-you will provide as opposed to something that will be automatically populated
-by a tool function.
+Note that the output type of an interrupt tool corresponds to the response data
+you will provide when resuming, as opposed to something that will be automatically
+populated by the tool function.
 
 ### Use interrupts
 
-Interrupts are passed into the `tools` array when generating content, just like
+Interrupts are passed into the `tools` list when generating content, just like
 other types of tools. You can pass both normal tools and interrupts to the
 same `generate` call:
 
 ```python
-interrupted_response = await ai.generate(
+response = await ai.generate(
     prompt='Ask me a movie trivia question.',
     tools=['ask_question'],
 )
@@ -417,29 +431,188 @@ need to check the response for interrupts so that you can handle them:
 
 ```python
 # You can check the 'finish_reason' attribute of the response
-if interrupted_response.finish_reason == 'interrupted':
+if response.finish_reason == 'interrupted':
     print("Generation interrupted.")
 
 # Or you can check if any interrupt requests are on the response
-if interrupted_response.interrupts and len(interrupted_response.interrupts) > 0:
-    print(f"Interrupts found: {len(interrupted_response.interrupts)}")
+if response.interrupts:
+    print(f"Interrupts found: {len(response.interrupts)}")
+    for interrupt in response.interrupts:
+        # Access the interrupt metadata
+        tool_input = interrupt.tool_request.input
+        print(f"Question: {tool_input.get('question')}")
+        print(f"Choices: {tool_input.get('choices')}")
 ```
 
 Responding to an interrupt is done using the `tool_responses` option on a subsequent
-`generate` call, making sure to pass in the existing history. There's a `tool_response`
-helper function to help you construct the response.
-
-Once resumed, the model re-enters the generation loop, including tool
-execution, until either it completes or another interrupt is triggered:
+`generate` call, making sure to pass in the existing message history. Use the
+`tool_response` helper function to construct the response:
 
 ```python
-from genkit.ai import tool_response # Assuming tool_response is imported
+from genkit import tool_response
 
+# Get the user's answer (e.g., from user input)
+user_answer = 'b'  # User selected option b
+
+# Resume generation with the tool response
 response = await ai.generate(
-    messages=interrupted_response.messages,
-    tool_responses=[tool_response(interrupted_response.interrupts[0], 'b')],
+    messages=response.messages,
+    tool_responses=[tool_response(response.interrupts[0], user_answer)],
     tools=['ask_question'],
 )
+```
+
+### Handle multiple interrupts in a loop
+
+For interactive applications, you'll often need to handle multiple interrupts
+in a loop until the model completes its task:
+
+```python
+async def interactive_session():
+    response = await ai.generate(
+        prompt='Help me plan a backyard BBQ.',
+        system='Ask clarifying questions until you have a complete solution.',
+        tools=['ask_question'],
+    )
+
+    # Continue until no more interrupts
+    while response.interrupts:
+        answers = []
+
+        # Handle all interrupts (multiple can occur at once)
+        for interrupt in response.interrupts:
+            tool_input = interrupt.tool_request.input
+            question = tool_input.get('question', 'Unknown question')
+            choices = tool_input.get('choices', [])
+
+            # Display to user and get their answer
+            print(f"\nQuestion: {question}")
+            for i, choice in enumerate(choices):
+                print(f"  {i + 1}. {choice}")
+
+            user_input = input("Your answer: ")
+            answers.append(tool_response(interrupt, user_input))
+
+        # Resume generation with all answers
+        response = await ai.generate(
+            messages=response.messages,
+            tool_responses=answers,
+            tools=['ask_question'],
+        )
+
+    # No more interrupts - print final response
+    print(f"\nFinal response: {response.text}")
+```
+
+## Tools with confirmation interrupts
+
+Another common pattern is the need to _confirm_ an action that the LLM suggests
+before actually performing it. For example, a payments app might want the user
+to confirm certain kinds of transfers.
+
+```python
+class TransferInput(BaseModel):
+    """Input for money transfer."""
+    to_account: str = Field(description='destination account ID')
+    amount: float = Field(description='amount to transfer')
+
+
+class TransferOutput(BaseModel):
+    """Output from money transfer."""
+    status: str
+    message: str
+
+
+@ai.tool()
+def transfer_money(input: TransferInput, ctx: ToolRunContext) -> TransferOutput:
+    """Transfers money to another account."""
+    # Require confirmation for large transfers
+    if input.amount > 100:
+        ctx.interrupt({
+            'confirm': f'Please confirm transfer of ${input.amount:.2f} to {input.to_account}',
+            'amount': input.amount,
+            'to_account': input.to_account,
+        })
+        # Not reached on first call
+
+    # Execute the transfer (only reached after confirmation or for small amounts)
+    return TransferOutput(
+        status='completed',
+        message=f'Transferred ${input.amount:.2f} to {input.to_account}',
+    )
+```
+
+To handle the confirmation:
+
+```python
+response = await ai.generate(
+    prompt='Transfer $500 to account ABC123',
+    tools=['transfer_money'],
+)
+
+if response.interrupts:
+    interrupt = response.interrupts[0]
+    confirm_msg = interrupt.tool_request.input.get('confirm')
+    print(confirm_msg)
+
+    if input("Confirm? (y/n): ").lower() == 'y':
+        # Provide confirmation response
+        response = await ai.generate(
+            messages=response.messages,
+            tool_responses=[tool_response(interrupt, {'confirmed': True})],
+            tools=['transfer_money'],
+        )
+    else:
+        # Provide rejection response
+        response = await ai.generate(
+            messages=response.messages,
+            tool_responses=[tool_response(interrupt, {'status': 'cancelled', 'message': 'User rejected'})],
+            tools=['transfer_money'],
+        )
+
+print(response.text)
+```
+
+## Using interrupts with flows
+
+You can also use interrupts within flows for more structured applications:
+
+```python
+from genkit import Genkit, ToolRunContext, tool_response
+from genkit.plugins.google_genai import GoogleAI
+from pydantic import BaseModel, Field
+
+ai = Genkit(plugins=[GoogleAI()])
+
+
+class TriviaQuestion(BaseModel):
+    """A trivia question with multiple choice answers."""
+    question: str = Field(description='the trivia question')
+    answers: list[str] = Field(description='multiple choice answers')
+
+
+@ai.tool()
+def present_question(input: TriviaQuestion, ctx: ToolRunContext) -> None:
+    """Presents a trivia question to the user."""
+    ctx.interrupt(input.model_dump())
+
+
+@ai.flow()
+async def play_trivia(theme: str) -> str:
+    """Plays a trivia game on the given theme."""
+    response = await ai.generate(
+        prompt=f'Ask me a trivia question about {theme}.',
+        tools=['present_question'],
+    )
+
+    if response.interrupts:
+        interrupt = response.interrupts[0]
+        question_data = interrupt.tool_request.input
+
+        # In a real app, you'd get this from user input
+        return f"Question: {question_data.get('question')}\nAnswers: {question_data.get('answers')}"
+
+    return response.text
 ```
 
 </LanguageContent>

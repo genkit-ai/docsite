@@ -313,83 +313,6 @@ const response = await ai.generate({
 
 When the limit is reached, Genkit stops the tool-calling loop and throws a [`GenkitError`](/docs/error-types). You can handle this error in your application to define specific behavior for this scenario.
 
-### Dynamically defining tools at runtime
-
-As most things in Genkit tools need to be predefined during your app's
-initialization. This is necessary so that you would be able interact with your
-tools from the Genkit Dev UI. This is typically the recommended way. However
-there are scenarios when the tool must be defined dynamically per user request.
-
-You can dynamically define tools using `tool` function. It is very
-similar to `ai.defineTool` method, however dynamic tools are not tracked by
-Genkit runtime, so cannot be interacted with from Genkit Dev UI and must be
-passed to the `ai.generate` call by reference (for regular tools you can also
-use a string tool name).
-
-```ts
-import { genkit, z, tool } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
-
-const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
-});
-
-ai.defineFlow('weatherFlow', async () => {
-  const getWeather = tool(
-    {
-      name: 'getWeather',
-      description: 'Gets the current weather in a given location',
-      inputSchema: z.object({
-        location: z.string().describe('The location to get the current weather for'),
-      }),
-      outputSchema: z.string(),
-    },
-    async (input) => {
-      return `The current weather in ${input.location} is 63°F and sunny.`;
-    },
-  );
-
-  const { text } = await ai.generate({
-    prompt: 'What is the weather in Baltimore?',
-    tools: [getWeather],
-  });
-
-  return text;
-});
-```
-
-When defining dynamic tools, to specify input and output schemas you can either
-use Zod as shown in the previous example, or you can pass in manually
-constructed JSON Schema.
-
-```ts
-const getWeather = tool(
-  {
-    name: 'getWeather',
-    description: 'Gets the current weather in a given location',
-    inputJsonSchema: myInputJsonSchema,
-    outputJsonSchema: myOutputJsonSchema,
-  },
-  async (input) => {
-    /* ... */
-  },
-);
-```
-
-Dynamic tools don't require the implementation function. If you don't pass in
-the function the tool will behave like an [interrupt](/docs/interrupts) and you can
-do manual tool call handling:
-
-```ts
-const getWeather = tool({
-  name: 'getWeather',
-  description: 'Gets the current weather in a given location',
-  inputJsonSchema: myInputJsonSchema,
-  outputJsonSchema: myOutputJsonSchema,
-});
-```
-
 ### Pause the tool loop by using interrupts
 
 By default, Genkit repeatedly calls the LLM until every tool call has been
@@ -743,7 +666,7 @@ The use cases of tool calling generally fall into a few themes:
 - Information specific to your app domain, such as product information or user
   profiles.
 
-Note the overlap with retrieval augmented generation (RAG), which is also
+Note the overlap with [retrieval augmented generation](/docs/rag) (RAG), which is also
 a way to let an LLM integrate factual information into its generations. RAG is a
 heavier solution that is most suited when you have a large amount of information
 or the information that's most relevant to a prompt is ambiguous. On the other
@@ -764,7 +687,7 @@ database lookup, tool calling is more appropriate.
 ## Before you begin
 
 If you want to run the code examples on this page, first complete the steps in
-the [Get started](/docs/get-started) guide. All of the examples assume that you
+the [Getting started](/docs/get-started) guide. All of the examples assume that you
 have already set up a project with Genkit dependencies installed.
 
 This page discusses one of the advanced features of Genkit model abstraction, so
@@ -774,6 +697,12 @@ with Genkit's system for defining input and output schemas, which is discussed
 on the [Flows](/docs/flows) page.
 
 ## Overview of tool calling
+
+<ExampleLink
+  title="Tool Calling"
+  description="See how Genkit can enable rich UI for tool calling in a live demo."
+  example="tool-calling"
+/>
 
 At a high level, this is what a typical tool-calling interaction with an LLM
 looks like:
@@ -824,44 +753,178 @@ supported. In addition:
 Use the Genkit instance's `tool()` decorator to write tool definitions:
 
 ```python
-from pydantic import BaseModel, Field
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
+from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
     model='googleai/gemini-2.5-flash',
 )
 
-class WeatherInput(BaseModel):
+class GetWeatherInput(BaseModel):
     location: str = Field(description='The location to get the current weather for')
 
 
-@ai.tool()
-def get_weather(input: WeatherInput) -> str:
-    """Gets the current weather in a given location"""
-    # Replace with actual weather fetching logic
+@ai.tool(name='getWeather', description='Gets the current weather in a given location')
+def get_weather(input: GetWeatherInput) -> str:
+    # Here, we would typically make an API call or database query. For this
+    # example, we just return a fixed value.
     return f'The current weather in {input.location} is 63°F and sunny.'
 ```
 
-The syntax here looks just like the `flow()` syntax; however `description`
-parameter is required. When writing a tool definition, take special care
-with the wording and descriptiveness of these parameters. They are vital
-for the LLM to make effective use of the available tools.
+The syntax here looks just like the `flow()` syntax; however, a tool `name`,
+`description`, and input schema are required. When writing a tool definition,
+take special care with the wording and descriptiveness of these parameters. They
+are vital for the LLM to make effective use of the available tools.
 
 ### Using tools
 
 Include defined tools in your prompts to generate content.
 
+**Using `generate()`:**
+
 ```python
-result = await ai.generate(
+response = await ai.generate(
     prompt='What is the weather in Baltimore?',
-    tools=['get_weather'],
+    tools=['getWeather'],
 )
 ```
 
-Genkit will automatically handle the tool call if the LLM needs to use the
-`get_weather` tool to answer the prompt.
+**Using `definePrompt()`:**
+
+```python
+weather_prompt = ai.define_prompt(
+    name='weatherPrompt',
+    tools=['getWeather'],
+    prompt='What is the weather in {{location}}?',
+)
+
+response = await weather_prompt({'location': 'Baltimore'})
+```
+
+**Using Prompt files:**
+
+```dotprompt
+---
+tools: [getWeather]
+input:
+  schema:
+    location: string
+---
+
+What is the weather in {{location}}?
+```
+
+Then you can execute the prompt in your code as follows:
+
+```python
+# assuming prompt file is named weatherPrompt.prompt
+weather_prompt = ai.prompt('weatherPrompt')
+
+response = await weather_prompt({'location': 'Baltimore'})
+```
+
+### Streaming and Tool Calling
+
+When combining tool calling with streaming responses, you will receive `toolRequest` and `toolResponse` content parts in the chunks of the stream. For example, the following code:
+
+```python
+stream, response_future = ai.generate_stream(
+    prompt='What is the weather in Baltimore?',
+    tools=['getWeather'],
+)
+
+async for chunk in stream:
+    print(chunk)
+
+response = await response_future
+```
+
+Might produce a sequence of chunks similar to:
+
+```ts
+{index: 0, role: "model", content: [{text: "Okay, I'll check the weather"}]}
+{index: 0, role: "model", content: [{text: "for Baltimore."}]}
+// toolRequests will be emitted as a single chunk by most models
+{index: 0, role: "model", content: [{toolRequest: {name: "getWeather", input: {location: "Baltimore"}}}]}
+// when streaming multiple messages, Genkit increments the index and indicates the new role
+{index: 1, role: "tool", content: [{toolResponse: {name: "getWeather", output: "Temperature: 68 degrees\nStatus: Cloudy."}}]}
+{index: 2, role: "model", content: [{text: "The weather in Baltimore is 68 degrees and cloudy."}]}
+```
+
+You can use these chunks to dynamically construct the full generated message sequence.
+
+### Limiting Tool Call Iterations with `max_turns`
+
+When working with tools that might trigger multiple sequential calls, you can control resource usage and prevent runaway execution using the `max_turns` parameter. This sets a hard limit on how many back-and-forth interactions the model can have with your tools in a single generation cycle.
+
+**Why use `max_turns`?**
+
+- **Cost Control**: Prevents unexpected API usage charges from excessive tool calls
+- **Performance**: Ensures responses complete within reasonable timeframes
+- **Safety**: Guards against infinite loops in complex tool interactions
+- **Predictability**: Makes your application behavior more deterministic
+
+The default value is 5 turns, which works well for most scenarios. Each "turn" represents one complete cycle where the model can make tool calls and receive responses.
+
+**Example: Web Research Agent**
+
+Consider a research agent that might need to search multiple times to find comprehensive information:
+
+```python
+from pydantic import BaseModel, Field
+
+
+class WebSearchInput(BaseModel):
+    query: str = Field(description='Search query')
+
+
+@ai.tool(name='webSearch', description='Search the web for current information')
+def web_search(input: WebSearchInput) -> str:
+    # Simulate web search API call
+    return f'Search results for "{input.query}": [relevant information here]'
+
+
+response = await ai.generate(
+    prompt=(
+        'Research the latest developments in quantum computing, including recent breakthroughs, '
+        'key companies, and future applications.'
+    ),
+    tools=['webSearch'],
+    max_turns=8,  # Allow up to 8 research iterations
+)
+```
+
+**Example: Financial Calculator**
+
+```python
+from pydantic import BaseModel, Field
+
+
+class CalculatorInput(BaseModel):
+    expression: str = Field(description='Mathematical expression to evaluate')
+
+
+@ai.tool(name='calculator', description='Perform mathematical calculations')
+def calculator(input: CalculatorInput) -> float:
+    # Safe evaluation of mathematical expressions
+    return eval(input.expression)  # In production, use a safe math parser
+
+
+response = await ai.generate(
+    prompt=(
+        'Calculate the total value of my portfolio: 100 shares of AAPL, 50 shares of GOOGL, and '
+        '200 shares of MSFT. Also calculate what percentage each holding represents.'
+    ),
+    tools=['calculator'],
+    max_turns=12,  # Multiple calculation steps needed
+)
+```
+
+**What happens when `max_turns` is reached?**
+
+When the limit is reached, Genkit stops the tool-calling loop and raises a [`GenkitError`](/docs/error-types). You can handle this error in your application to define specific behavior for this scenario.
 
 ### Pause the tool loop by using interrupts
 
@@ -884,19 +947,62 @@ apply more complicated logic, set the `return_tool_requests` parameter to `True`
 Now it's your responsibility to ensure all of the tool requests are fulfilled:
 
 ```python
-llm_response = await ai.generate(
-    prompt='What is the weather in Baltimore?',
-    tools=['get_weather'],
+from genkit import tool_response
+
+
+generate_options = dict(
+    prompt="What's the weather like in Baltimore?",
+    tools=['getWeather'],
     return_tool_requests=True,
 )
 
-tool_request_parts = llm_response.tool_requests
+llm_response = None
+tool_responses = None
+messages = None
 
-if len(tool_request_parts) == 0:
-    print(llm_response.text)
-else:
-    for part in tool_request_parts:
-        await handle_tool(part.name, part.input)
+while True:
+    llm_response = await ai.generate(
+        **generate_options,
+        messages=messages,
+        tool_responses=tool_responses,
+    )
+
+    tool_requests = llm_response.tool_requests
+    if len(tool_requests) < 1:
+        break
+
+    tool_responses = []
+    for req in tool_requests:
+        match req.tool_request.name:
+            case 'getWeather':
+                output = get_weather(GetWeatherInput(**req.tool_request.input))
+                tool_responses.append(tool_response(req, output))
+            case _:
+                raise ValueError('Tool not found')
+
+    # Continue the loop from the updated message history
+    messages = llm_response.messages
+    # Only include the initial prompt on the first turn
+    generate_options.pop('prompt', None)
 ```
+
+## Extending Tool Capabilities with MCP
+
+The [Model Context Protocol (MCP)](/docs/model-context-protocol) provides a powerful way to extend your tool-calling capabilities by connecting to external MCP servers. With MCP, you can:
+
+- **Access pre-built tools** from the MCP ecosystem without implementing them yourself
+- **Connect to external services** like databases, APIs, and file systems
+- **Share tools** between different AI applications
+- **Build extensible workflows** that leverage community-maintained tools
+
+MCP tools work seamlessly with Genkit's tool-calling system, allowing you to mix custom tools with external MCP tools in the same generation request.
+
+## Next steps
+
+- Learn about [Model Context Protocol (MCP)](/docs/model-context-protocol) to extend your tool capabilities with external servers
+- Explore [interrupts](/docs/interrupts) to pause tool execution for user interaction
+- See [retrieval-augmented generation (RAG)](/docs/rag) for handling large amounts of contextual information
+- Check out [multi-agent systems](/docs/multi-agent) for coordinating multiple AI agents with tools
+- Browse the [tool calling example](https://github.com/firebase/genkit/tree/main/js/testapps/tool-calling) for a complete implementation
 
 </LanguageContent>

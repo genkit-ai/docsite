@@ -461,107 +461,114 @@ provider-specific actions.
 
 <LanguageContent lang="python">
 
-Prerequisites: make sure you have everything installed from the [Get Started](/docs/get-started) guide.
+Prerequisites: make sure you've completed the [Get Started](/docs/get-started) guide.
 
-1.  Install Genkit Flask plugin
+This page shows one way to deploy a Python Genkit app to *any* platform: run a
+FastAPI server that calls your flows. (FastAPI is ASGI and works well on most
+Python hosting providers.)
 
-    ```bash
-    pip install git+https://github.com/firebase/genkit#subdirectory=py/plugins/flask
-    ```
+## 1. Set up your project (uv)
 
-    Or create a `requirements.txt` file
+```bash
+mkdir -p ~/tmp/genkit-fastapi-project
+cd ~/tmp/genkit-fastapi-project
 
-    ```text title="requirements.txt"
-    genkit-plugin-flask @ git+https://github.com/firebase/genkit#subdirectory=py/plugins/google-genai
-    ```
-
-2.  Create `main.py` file:
-
-    ```python title="main.py"
-    from flask import Flask
-
-    from genkit.ai import Genkit
-    from genkit.plugins.flask import genkit_flask_handler
-    from genkit.plugins.google_genai import (
-        GoogleGenai,
-        google_genai_name,
-    )
-
-    ai = Genkit(
-        plugins=[GoogleGenai()],
-        model=google_genai_name('gemini-2.5-flash'),
-    )
-
-    app = Flask(__name__)
-
-
-    @app.post('/joke')
-    @genkit_flask_handler(ai)
-    @ai.flow()
-    async def joke(name: str, ctx):
-        return await ai.generate(
-            on_chunk=ctx.send_chunk,
-            prompt=f'tell a medium sized joke about {name}',
-        )
-    ```
-
-3.  Run the app:
-
-    ```bash
-    flask --app main.py run
-    ```
-
-    Or with Dev UI:
-
-    ```bash
-    genkit start -- flask --app main.py run
-    ```
-
-    You can invoke the flow via HTTP:
-
-    ```bash
-    curl -X POST http://127.0.0.1:5000/joke -d '{"data": "banana"}' -H 'content-Type: application/json' -H 'Accept: text/event-stream'
-    ```
-
-    or you can use [Genkit client library](https://js.api.genkit.dev/modules/genkit.beta_client.html).
-
-## Authorization and custom context
-
-You can do custom authorization and custom context parsing by passing a `ContextProvider` implementation.
-
-```python
-from genkit.types import GenkitError
-
-# Assume parse_request_header is defined elsewhere
-# def parse_request_header(auth_header):
-#     # Example implementation: Replace with your actual logic
-#     if auth_header and auth_header.startswith('Bearer '):
-#         token = auth_header.split(' ')[1]
-#         # Validate token and return username, or None/raise error
-#         if token == "valid-token":
-#             return "testuser"
-#     return None
-
-async def my_context_provider(request):
-    # This function needs access to the request object from Flask
-    # The exact way to get headers might depend on how genkit_flask_handler passes the request
-    auth_header = request.headers.get('authorization')
-    username = parse_request_header(auth_header) # Call the (assumed) function
-    return {'username': username}
-
-@app.post('/say_hi')
-@genkit_flask_handler(ai, context_provider=my_context_provider)
-@ai.flow()
-async def say_hi(name: str, ctx):
-    if not ctx.context.get('username'):
-        raise GenkitError(status='UNAUTHENTICATED', message='user not provided')
-
-    return await ai.generate(
-        on_chunk=ctx.send_chunk,
-        prompt=f'say hi to {ctx.context.get("username")}',
-    )
+uv init
+uv add genkit genkit-plugin-google-genai fastapi uvicorn
 ```
 
-`parse_request_header` can be your custom authorization header parsing/validation.
+## 2. Define a flow
+
+Create `flows.py`:
+
+```python title="flows.py"
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
+)
+
+
+@ai.flow()
+async def joke_flow(topic: str) -> str:
+    response = await ai.generate(
+        prompt=f'Tell a medium-sized joke about {topic}',
+    )
+    return response.text
+```
+
+## 3. Create a web server
+
+Create `main.py`:
+
+```python title="main.py"
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
+from flows import joke_flow
+
+app = FastAPI()
+security = HTTPBearer(auto_error=False)
+
+
+class JokeRequest(BaseModel):
+    topic: str
+
+
+async def require_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> None:
+    # Optional: replace with real auth logic, or delete this dependency entirely.
+    if credentials is None or credentials.credentials != 'open-sesame':
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='not authorized',
+        )
+
+
+@app.get('/health')
+async def health() -> dict[str, str]:
+    return {'status': 'ok'}
+
+
+@app.post('/joke')
+async def joke(request: JokeRequest, _auth: None = Depends(require_auth)) -> dict[str, str]:
+    text = await joke_flow(request.topic)
+    return {'joke': text}
+```
+
+## 4. Run the app
+
+```bash
+export GEMINI_API_KEY=<your API key>
+uv run uvicorn main:app --reload --port 8000
+```
+
+Or with the Developer UI:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+genkit start -- uv run uvicorn main:app --reload --port 8000
+```
+
+Invoke the endpoint:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/joke" \
+  -H "Authorization: Bearer open-sesame" \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"bananas"}'
+```
+
+## 5. Deploy the project
+
+Deployment steps vary by provider, but generally you configure:
+
+- **runtime**: Python 3.11+ (or your provider's recommended version)
+- **start command**: `uv run uvicorn main:app --host 0.0.0.0 --port $PORT`
+- **environment variables**: set `GEMINI_API_KEY` (and any other secrets)
 
 </LanguageContent>

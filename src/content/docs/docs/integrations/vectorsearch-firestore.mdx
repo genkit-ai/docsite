@@ -14,9 +14,224 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <LanguageContent lang="python">
 
-:::note[Feature unavailable for Python]
-Vertex AI Vector Search with Firestore database integration is not currently available for Python.
-:::
+Vertex AI Vector Search allows you to index and retrieve documents. The documents are stored in Firestore and the corresponding document IDs are indexed using the vector search index provided by Vertex AI. These are suitable for production use cases.
+
+## Installation
+
+```bash
+uv add genkit-plugin-vertex-ai
+```
+
+## Prerequisites
+
+1. Create a vector search index in Vertex AI. Details on creating vector search index can be found at [Create your Vector Search Index](https://cloud.google.com/vertex-ai/docs/vector-search/create-manage-index#create-index)
+2. Create a Firestore Database and a Collection within that database to store the documents that will be indexed. More information to create Firestore databases is available [here](https://firebase.google.com/docs/firestore/quickstart#create)
+
+## Configuration
+
+To use Vertex AI Vector Search with Firestore, use the `define_vertex_vector_search_firestore()` helper function:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from genkit.plugins.vertex_ai import define_vertex_vector_search_firestore
+from google.cloud import firestore
+
+# Initialize plugins
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+# Create Firestore client
+firestore_client = firestore.AsyncClient()
+
+# Define the retriever
+retriever_name = define_vertex_vector_search_firestore(
+    ai,
+    name='my_vertex_firestore_retriever',
+    embedder='vertexai/text-embedding-004',
+    firestore_client=firestore_client,
+    collection_name='documents',
+)
+```
+
+### Configuration Options
+
+- **name** (str): A unique name for this retriever instance.
+- **embedder** (str): The embedding model to use (e.g., `'vertexai/text-embedding-004'`).
+- **firestore_client**: A `google.cloud.firestore.AsyncClient` object for database queries.
+- **collection_name** (str): The name of the Firestore collection containing documents.
+- **embedder_options** (optional): Configuration to pass to the embedder.
+- **match_service_client_generator** (optional): Custom generator for the Vertex AI Match Service client.
+
+## Usage
+
+### Indexing Documents
+
+To populate your Firestore collection with documents and vector search index:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from google.cloud import firestore
+from google.cloud.firestore_v1.vector import Vector
+
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+firestore_client = firestore.AsyncClient()
+
+async def index_documents_to_vertex_search(documents: list[str], collection: str):
+    """Index documents in Firestore with Vertex AI Vector Search.
+
+    Args:
+        documents: List of text documents to index.
+        collection: Firestore collection name.
+    """
+    for i, text in enumerate(documents):
+        # Generate embedding
+        embedding_result = await ai.embed(
+            embedder='vertexai/text-embedding-004',
+            content=text,
+        )
+        embedding = embedding_result[0].embedding
+        
+        # Create unique document ID for vector search
+        doc_id = f'doc-{i}'
+        
+        # Store in Firestore
+        doc_ref = firestore_client.collection(collection).document(doc_id)
+        await doc_ref.set({
+            'id': doc_id,  # Required for vector search
+            'content': text,
+            'embedding': Vector(embedding),
+        })
+        
+        print(f"Indexed document {doc_id}")
+
+# Example usage
+# documents = [
+#     "Machine learning is a subset of artificial intelligence.",
+#     "Deep learning uses neural networks with multiple layers.",
+#     "Natural language processing enables computers to understand text.",
+# ]
+# import asyncio
+# asyncio.run(index_documents_to_vertex_search(documents, 'documents'))
+```
+
+### Retrieving Documents
+
+Use the retriever you defined to search for relevant documents:
+
+```python
+@ai.flow()
+async def vector_search_flow(query: str) -> str:
+    """Search using Vertex AI Vector Search with Firestore.
+
+    Args:
+        query: The search query.
+
+    Returns:
+        Generated response based on retrieved documents.
+    """
+    # Retrieve relevant documents
+    results = await ai.retrieve(
+        retriever='my_vertex_firestore_retriever',
+        query=query,
+        options={'limit': 5},
+    )
+
+    # Use retrieved documents for generation
+    context = '\n\n'.join([
+        doc.text()
+        for doc in results.documents
+    ])
+    
+    response = await ai.generate(
+        prompt=f"""Based on the following context, answer the question:
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:""",
+    )
+    
+    return response.text
+```
+
+### Complete RAG Example
+
+Here's a complete example showing the full workflow:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from genkit.plugins.vertex_ai import define_vertex_vector_search_firestore
+from google.cloud import firestore
+from google.cloud.firestore_v1.vector import Vector
+
+# Initialize
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+firestore_client = firestore.AsyncClient()
+
+# Define retriever
+retriever_name = define_vertex_vector_search_firestore(
+    ai,
+    name='knowledge_base',
+    embedder='vertexai/text-embedding-004',
+    firestore_client=firestore_client,
+    collection_name='knowledge_base',
+)
+
+@ai.flow()
+async def rag_qa_flow(question: str) -> str:
+    """Answer questions using RAG with Vertex AI Vector Search.
+
+    Args:
+        question: The question to answer.
+
+    Returns:
+        The answer based on retrieved context.
+    """
+    # Step 1: Retrieve relevant documents
+    results = await ai.retrieve(
+        retriever='knowledge_base',
+        query=question,
+        options={'limit': 3},
+    )
+    
+    # Step 2: Prepare context from retrieved documents
+    context = '\n\n'.join([
+        f"Document {i+1}: {doc.text()}"
+        for i, doc in enumerate(results.documents)
+    ])
+    
+    # Step 3: Generate answer with context
+    response = await ai.generate(
+        model='vertexai/gemini-2.0-flash',
+        prompt=f"""Use the following context to answer the question. If the answer cannot be found in the context, say so.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:""",
+    )
+    
+    return response.text
+```
+
+## Learn More
+
+- See the [Retrieval-augmented generation](/docs/rag) page for a general discussion on indexers and retrievers in Genkit.
+- See [Vertex AI Vector Search documentation](https://cloud.google.com/vertex-ai/docs/vector-search/overview) for more details on the service.
 
 </LanguageContent>
 
