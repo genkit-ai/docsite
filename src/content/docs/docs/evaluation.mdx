@@ -1231,7 +1231,7 @@ This section explains how to perform inference-based evaluation using Genkit.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
     ```python
-    from genkit.ai import Genkit
+    from genkit import Genkit
     from genkit.plugins.google_genai import GoogleAI
     from pydantic import BaseModel
 
@@ -1239,13 +1239,17 @@ This section explains how to perform inference-based evaluation using Genkit.
     ai = Genkit(plugins=[GoogleAI()])
 
     # Dummy retriever that always returns the same docs
-    @ai.retriever()
-    async def dummy_retriever(query: str) -> list[str]:
+    async def dummy_retriever_fn(query, options):
         facts = [
             "Dog is man's best friend",
             "Dogs have evolved and were domesticated from wolves",
         ]
         return facts
+
+    ai.define_simple_retriever(
+        'dummy_retriever',
+        dummy_retriever_fn,
+    )
 
     # Define input/output schemas
     class QAInput(BaseModel):
@@ -1258,14 +1262,14 @@ This section explains how to perform inference-based evaluation using Genkit.
     @ai.flow()
     async def qa_flow(input: QAInput) -> QAOutput:
         fact_docs = await ai.retrieve(
-            retriever=dummy_retriever,
+            retriever='dummy_retriever',
             query=input.query,
         )
 
         response = await ai.generate(
             model='googleai/gemini-2.5-flash',
             prompt=f'Answer this question with the given context: {input.query}',
-            docs=fact_docs,
+            docs=fact_docs.documents,
         )
         return QAOutput(answer=response.text)
     ```
@@ -1273,7 +1277,7 @@ This section explains how to perform inference-based evaluation using Genkit.
 3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkit-plugin-evaluators` package.
 
     ```python
-    from genkit.ai import Genkit
+    from genkit import Genkit
     from genkit.blocks.model import ModelReference
     from genkit.plugins.google_genai import GoogleAI
     from genkit.plugins.evaluators import (
@@ -1431,20 +1435,19 @@ You define a custom evaluator using the `ai.define_evaluator()` method. The call
 Here's an example of a custom evaluator that uses an LLM to check for "deliciousness":
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
-from genkit.core.typing import (
-    BaseDataPoint,
+from genkit.types import (
+    BaseEvalDataPoint,
     EvalFnResponse,
     Score,
     EvalStatusEnum,
-    Details,
 )
 
 ai = Genkit(plugins=[GoogleAI()])
 
 async def food_evaluator(
-    datapoint: BaseDataPoint,
+    datapoint: BaseEvalDataPoint,
     options: dict[str, object] | None = None,
 ) -> EvalFnResponse:
     """Determines if an output is a delicious food item."""
@@ -1471,7 +1474,7 @@ async def food_evaluator(
         evaluation=Score(
             score=response.text,
             status=EvalStatusEnum.PASS_,
-            details=Details(reasoning=f'LLM judged: {response.text}'),
+            details={'reasoning': f'LLM judged: {response.text}'},
         ),
     )
 
@@ -1497,9 +1500,9 @@ You can also run evaluations directly in your code using `ai.evaluate()`:
 
 ```python
 import asyncio
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
-from genkit.core.typing import BaseDataPoint, EvalResponse
+from genkit.types import BaseEvalDataPoint, EvalResponse
 
 ai = Genkit(plugins=[GoogleAI()])
 
@@ -1507,13 +1510,13 @@ ai = Genkit(plugins=[GoogleAI()])
 
 async def run_evaluation() -> EvalResponse:
     dataset = [
-        BaseDataPoint(
+        BaseEvalDataPoint(
             test_case_id='test-1',
             input='What is the capital of France?',
             output='The capital of France is Paris.',
             context=['France is a country in Europe. Paris is its capital.'],
         ),
-        BaseDataPoint(
+        BaseEvalDataPoint(
             test_case_id='test-2',
             input='What color is the sky?',
             output='The sky is blue during the day.',
@@ -1739,7 +1742,7 @@ example:
 @ai.flow()
 async def qa_flow(input: QAInput) -> QAOutput:
     fact_docs = await ai.retrieve(
-        retriever=dummy_retriever,
+        retriever='dummy_retriever',
         query=input.query,
     )
     
@@ -1751,7 +1754,7 @@ async def qa_flow(input: QAInput) -> QAOutput:
         # extractors.
         #
         # Assume you have a method that checks if a fact is silly
-        doc for doc in fact_docs if is_silly_fact(doc)
+        doc for doc in fact_docs.documents if is_silly_fact(doc)
     ])
 
     response = await ai.generate(
@@ -1772,7 +1775,7 @@ questions.
 
 ```python
 from pathlib import Path
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
 from pydantic import BaseModel, Field
 import pypdf  # uv add pypdf

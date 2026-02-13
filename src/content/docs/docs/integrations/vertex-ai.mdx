@@ -619,7 +619,7 @@ uv add genkit-plugin-google-genai
 ### Configuration
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(
@@ -647,7 +647,7 @@ _Note: When using Express Mode, you do not provide `project` and `location` in t
 ### Basic Usage
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(
@@ -679,7 +679,9 @@ response = await ai.generate(
     prompt='A beautiful watercolor painting of a castle in the mountains.',
 )
 
-generated_image = response.media
+if response.message and response.message.content:
+    media_part = response.message.content[0]
+    generated_image = media_part.root.media.url
 ```
 
 ### Thinking Config
@@ -688,7 +690,7 @@ generated_image = response.media
 
 ```python
 response = await ai.generate(
-    model='googleai/gemini-3-pro-preview',
+    model='vertexai/gemini-3-pro-preview',
     prompt='what is heavier, one kilo of steel or one kilo of feathers',
     config={
         'thinking_config': {
@@ -702,7 +704,7 @@ response = await ai.generate(
 
 ```python
 message = (await ai.generate(
-    model='googleai/gemini-2.5-pro',
+    model='vertexai/gemini-2.5-pro',
     prompt='what is heavier, one kilo of steel or one kilo of feathers',
     config={
         'thinking_config': {
@@ -742,7 +744,7 @@ If you want to locally run flows that use these plugins, you also need the [Goog
 ### Configuration for Advanced Features
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(
@@ -887,7 +889,7 @@ uv add genkit-plugin-vertex-ai
 #### Claude 3 Models
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.vertex_ai import ModelGardenPlugin
 
 ai = Genkit(
@@ -956,28 +958,31 @@ uv add genkit-plugin-evaluators
 **Usage:**
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import VertexAI
-from genkit.plugins.evaluators import EvaluatorsPlugin
+from genkit.plugins.evaluators import define_genkit_evaluators, GenkitMetricType, MetricConfig
+from genkit.blocks.model import ModelReference
 
 ai = Genkit(
-    plugins=[
-        VertexAI(location='us-central1'),
-        EvaluatorsPlugin(),
-    ],
+    plugins=[VertexAI(location='us-central1')],
 )
 
-# Define an evaluator
-@ai.evaluator(name='my_evaluator')
-async def my_evaluator(input: str, output: str, context: list[str]) -> dict:
-    # Custom evaluation logic
-    return {'score': 0.85, 'reason': 'Good response'}
-
-# Use in evaluation
-result = await ai.evaluate(
-    evaluator='my_evaluator',
-    dataset=[
-        {'input': 'What is the capital of France?', 'output': 'Paris'},
+# Register evaluators using the evaluators plugin
+define_genkit_evaluators(
+    ai,
+    [
+        MetricConfig(
+            metric_type=GenkitMetricType.FAITHFULNESS,
+            judge=ModelReference(name='vertexai/gemini-2.5-flash'),
+        ),
+        MetricConfig(
+            metric_type=GenkitMetricType.ANSWER_RELEVANCY,
+            judge=ModelReference(name='vertexai/gemini-2.5-flash'),
+        ),
+        MetricConfig(
+            metric_type=GenkitMetricType.MALICIOUSNESS,
+            judge=ModelReference(name='vertexai/gemini-2.5-flash'),
+        ),
     ],
 )
 ```
@@ -1013,7 +1018,7 @@ uv add genkit-plugin-vertex-ai
 **Using Firestore:**
 
 ```python
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import VertexAI
 from genkit.plugins.vertex_ai import define_vertex_vector_search_firestore
 
@@ -1021,12 +1026,16 @@ ai = Genkit(
     plugins=[VertexAI(location='us-central1')],
 )
 
+from google.cloud import firestore
+firestore_client = firestore.AsyncClient()
+
 # Define a Firestore-backed retriever
 retriever = define_vertex_vector_search_firestore(
     ai,
     name='my_retriever',
-    collection='documents',
+    collection_name='documents',
     embedder='vertexai/text-embedding-004',
+    firestore_client=firestore_client,
 )
 ```
 
@@ -1035,12 +1044,17 @@ retriever = define_vertex_vector_search_firestore(
 ```python
 from genkit.plugins.vertex_ai import define_vertex_vector_search_big_query
 
+from google.cloud import bigquery
+bq_client = bigquery.Client()
+
 # Define a BigQuery-backed retriever
 retriever = define_vertex_vector_search_big_query(
     ai,
     name='bigquery_retriever',
-    table='my-project.my_dataset.my_table',
+    dataset_id='my_dataset',
+    table_id='my_table',
     embedder='vertexai/text-embedding-004',
+    bq_client=bq_client,
 )
 ```
 
@@ -1048,9 +1062,10 @@ retriever = define_vertex_vector_search_big_query(
 
 ```python
 # Use the retriever in a RAG flow
+docs = await ai.retrieve(retriever='my_retriever', query='your search query')
 response = await ai.generate(
-    prompt='What are the company benefits?',
-    retriever='my_retriever',
+    prompt='How do I use the vector search feature?',
+    docs=docs.documents,
 )
 ```
 
