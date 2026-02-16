@@ -1,0 +1,217 @@
+---
+title: Deploy With AWS Lambda
+description: Learn how to deploy Genkit flows as AWS Lambda functions using the AWS Bedrock plugin.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+	<LanguageSelector supportedLanguages="js" />
+	<CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+
+## Deploying Genkit Flows as AWS Lambda Functions
+
+This plugin includes an `onCallGenkit` helper function (similar to Firebase Functions' `onCallGenkit`) that makes it easy to deploy Genkit flows as AWS Lambda functions.
+
+### Basic Usage
+
+```typescript
+import { genkit, z } from 'genkit';
+import { awsBedrock, amazonNovaProV1, onCallGenkit } from 'genkitx-aws-bedrock';
+
+const ai = genkit({
+	plugins: [awsBedrock()],
+	model: amazonNovaProV1(),
+});
+
+const myFlow = ai.defineFlow(
+	{
+		name: 'myFlow',
+		inputSchema: z.string(),
+		outputSchema: z.string(),
+	},
+	async (input) => {
+		const { text } = await ai.generate({ prompt: input });
+		return text;
+	},
+);
+
+// Export as Lambda handler
+export const handler = onCallGenkit(myFlow);
+```
+
+### Response Streaming
+
+When `streaming: true` is set, `onCallGenkit` returns a streaming Lambda handler directly for real incremental streaming via [Lambda Function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html). This is compatible with `streamFlow` from `genkit/beta/client`.
+
+```typescript
+const myStreamingFlow = ai.defineFlow(
+	{
+		name: 'myStreamingFlow',
+		inputSchema: z.object({ subject: z.string() }),
+		outputSchema: z.object({ joke: z.string() }),
+		streamSchema: z.string(),
+	},
+	async (input, sendChunk) => {
+		const { stream, response } = await ai.generateStream({
+			prompt: `Tell me a joke about ${input.subject}`,
+			output: { schema: z.object({ joke: z.string() }) },
+		});
+
+		for await (const chunk of stream) {
+			sendChunk(chunk.text);
+		}
+
+		const result = await response;
+		return result.output || { joke: result.text };
+	},
+);
+
+// streaming: true returns a StreamifyHandler directly
+export const streamingHandler = onCallGenkit(
+	{ streaming: true, cors: { origin: '*' } },
+	myStreamingFlow,
+);
+```
+
+Deploy with a Lambda Function URL in `serverless.yml`:
+
+```yaml
+functions:
+  myStreamingFunction:
+    handler: src/index.streamingHandler
+    url:
+      invokeMode: RESPONSE_STREAM
+      cors: true
+```
+
+> **Note:** API Gateway buffers responses and does not support streaming. You must use a Lambda Function URL with `InvokeMode: RESPONSE_STREAM`.
+
+### With Configuration Options
+
+```typescript
+import { onCallGenkit, requireApiKey } from 'genkitx-aws-bedrock';
+
+export const handler = onCallGenkit(
+	{
+		// CORS configuration
+		cors: {
+			origin: 'https://myapp.com',
+			credentials: true,
+		},
+		// Context provider for authentication
+		contextProvider: requireApiKey('X-API-Key', process.env.API_KEY!),
+		// Debug logging
+		debug: true,
+		// Custom error handling
+		onError: async (error) => ({
+			statusCode: 500,
+			message: error.message,
+		}),
+	},
+	myFlow,
+);
+```
+
+### Context Providers for Authentication
+
+The plugin provides built-in context provider helpers that follow Genkit's `ContextProvider` pattern (same as `@genkit-ai/express`):
+
+```typescript
+import {
+	allowAll, // Allow all requests
+	requireHeader, // Require a specific header
+	requireApiKey, // Require API key in header
+	requireBearerToken, // Require Bearer token with custom validation
+	allOf, // Combine providers with AND logic
+	anyOf, // Combine providers with OR logic
+} from 'genkitx-aws-bedrock';
+
+// Public endpoint
+export const publicHandler = onCallGenkit({ contextProvider: allowAll() }, myFlow);
+
+// API key authentication
+export const apiKeyHandler = onCallGenkit(
+	{ contextProvider: requireApiKey('X-API-Key', 'my-secret-key') },
+	myFlow,
+);
+
+// Bearer token with custom validation
+export const tokenHandler = onCallGenkit(
+	{
+		contextProvider: requireBearerToken(async (token) => {
+			const user = await validateJWT(token);
+			return { auth: { user } };
+		}),
+	},
+	myFlow,
+);
+
+// Combine multiple providers (all must pass)
+export const strictHandler = onCallGenkit(
+	{
+		contextProvider: allOf(
+			requireHeader('X-Client-ID'),
+			requireBearerToken(async (token) => {
+				return await validateToken(token);
+			}),
+		),
+	},
+	myFlow,
+);
+```
+
+### Request & Response Format
+
+The handler follows the Genkit callable protocol (same as `@genkit-ai/express`).
+
+Request body (callable protocol):
+
+```json
+{
+	"data": {}
+}
+```
+
+Direct input is also supported for convenience:
+
+```json
+{}
+```
+
+Successful response:
+
+```json
+{
+	"result": {}
+}
+```
+
+Error response:
+
+```json
+{
+	"error": {
+		"status": "UNAUTHENTICATED",
+		"message": "Missing auth token"
+	}
+}
+```
+
+Streaming response (SSE, via `streaming: true`):
+
+```
+data: {"message": "chunk text"}
+
+data: {"message": "more text"}
+
+data: {"result": {"joke": "full result"}}
+```
+
+</LanguageContent>
