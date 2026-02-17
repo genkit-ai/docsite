@@ -953,95 +953,611 @@ TTS models automatically detect the input language. Supported languages include 
 
 <LanguageContent lang="go">
 
-The Google Generative AI plugin provides interfaces to Google's Gemini models through the Gemini API.
+The Google AI plugin provides a unified interface to Google's generative AI models through the **Gemini Developer API** using API key authentication.
 
-## Configuration
+The plugin supports a wide range of capabilities:
+- **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks
+- **Embedding Models**: Text and multimodal embeddings
+- **Image Models**: Imagen for generation and Gemini for image analysis
+- **Video Models**: Veo for video generation and Gemini for video understanding
 
-To use this plugin, import the `googlegenai` package and pass
-`googlegenai.GoogleAI` to `WithPlugins()` in the Genkit initializer:
+## Setup
+
+### Installation
+
+```bash
+go get github.com/firebase/genkit/go/plugins/googlegenai
+```
+
+### Configuration
 
 ```go
 import "github.com/firebase/genkit/go/plugins/googlegenai"
+
+// ... init genkit ...
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 ```
 
+### Authentication
+
+Requires a Gemini API Key, which you can get from [Google AI Studio](https://aistudio.google.com/apikey). You can provide this key in several ways:
+
+1. **Environment variables**: Set `GEMINI_API_KEY`
+2. **Plugin configuration**: Pass `APIKey` when initializing the plugin:
+
+   ```go
+   genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: "YOUR_API_KEY"})
+   ```
+
+## Language Models
+
+You can create models that call the Google Generative AI API. The models support tool calls and some have multi-modal capabilities.
+
+### Available Models
+
+**Gemini 3 Series** - Latest experimental models with state-of-the-art reasoning:
+- `gemini-3-pro-preview` - Preview of the most capable model for complex tasks
+- `gemini-3-flash-preview` - Fast and intelligent model for high-volume tasks
+- `gemini-3-pro-image-preview` - Supports image generation outputs
+
+**Gemini 2.5 Series** - Latest stable models with advanced reasoning and multimodal capabilities:
+- `gemini-2.5-pro` - Most capable stable model for complex tasks
+- `gemini-2.5-flash` - Fast and efficient for most use cases
+- `gemini-2.5-flash-lite` - Lightweight version for simple tasks
+- `gemini-2.5-flash-image` - Supports image generation outputs
+
+**Gemma 3 Series** - Open models for various use cases:
+- `gemma-3-27b-it` - Large instruction-tuned model
+- `gemma-3-12b-it` - Medium instruction-tuned model
+- `gemma-3-4b-it` - Small instruction-tuned model
+- `gemma-3-1b-it` - Tiny instruction-tuned model
+- `gemma-3n-e4b-it` - Efficient 4-bit model
+
+:::note
+See the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models) for a complete list of available models and their capabilities.
+:::
+
+### Basic Usage
+
 ```go
-g := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.GoogleAI{}))
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithPrompt("Explain how neural networks learn in simple terms."),
+)
 ```
 
-The plugin requires an API key for the Gemini API, which you can get from
-[Google AI Studio](https://aistudio.google.com/app/apikey).
+### Model References and Configuration
 
-Configure the plugin to use your API key by doing one of the following:
+You can reference models in several ways. Using **`googlegenai.ModelRef`** is generally considered best practice because it provides **strong typing**, ensuring that you are using the correct configuration type for the specific plugin:
 
-- Set the `GEMINI_API_KEY` environment variable to your API key.
+- **`googlegenai.ModelRef(name, config)`**: Creates a static reference that includes a specific configuration. This is the preferred way as it enforces type safety for the `config` parameter.
+- **`ai.WithModelName(name)`**: Resolves a model by its strong identifier (e.g., `"googleai/gemini-2.5-flash"`). A quick way to reference a model when no configuration is needed.
+- **`googlegenai.GoogleAIModel(g, name)`**: Returns a handle to a model registered with your Genkit instance. Use this when you want to provide configuration dynamically at the request level.
 
-- Specify the API key when you initialize the plugin:
-
-  ```go
-  genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: "YOUR_API_KEY"})
-  ```
-
-  However, don't embed your API key directly in code! Use this feature only
-  in conjunction with a service like Cloud Secret Manager or similar.
-
-## Usage
-
-### Generative models
-
-To get a reference to a supported model, specify its identifier to `googlegenai.GoogleAIModel`:
+You can provide configuration either when referencing the model or per-request to the `genkit.Generate` call:
 
 ```go
-model := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-```
+import "google.golang.org/genai"
 
-Alternatively, you may create a `ModelRef` which pairs the model name with its config:
-
-```go
-modelRef := googlegenai.GoogleAIModelRef("gemini-2.5-flash", &genai.GenerateContentConfig{
+config := &genai.GenerateContentConfig{
 	Temperature: genai.Ptr[float32](0.5),
-	MaxOutputTokens: genai.Ptr[int32](500),
-	// Other configuration...
-})
-```
-
-Model references have a `Generate()` method that calls the Google API:
-
-```go
-resp, err := genkit.Generate(ctx, g, ai.WithModel(modelRef), ai.WithPrompt("Tell me a joke."))
-if err != nil {
-	return err
 }
 
-log.Println(resp.Text())
+// Option 1: Use a model reference with "baked-in" config
+modelRef := googlegenai.ModelRef("gemini-2.5-flash", config)
+resp, err := genkit.Generate(ctx, g, ai.WithModel(modelRef), ai.WithPrompt("..."))
+
+// Option 2: Pass configuration per-request
+resp, err = genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithConfig(config), // Pass config explicitly
+	ai.WithPrompt("..."),
+)
 ```
 
-See [Generating content with AI models](/docs/models) for more information.
+### Structured Output
 
-### Embedding models
-
-To get a reference to a supported embedding model, specify its identifier to `googlegenai.GoogleAIEmbedder`:
+Gemini models support structured output generation, which guarantees that the model output will conform to a specified JSON schema.
 
 ```go
-embeddingModel := googlegenai.GoogleAIEmbedder(g, "text-embedding-004")
-```
+type CharacterProfile struct {
+	Name string `json:"name"`
+	Bio  string `json:"bio"`
+	Age  int    `json:"age"`
+}
 
-Embedder references have an `Embed()` method that calls the Google AI API:
+var profile CharacterProfile
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithPrompt("Generate a profile for a fictional character"),
+	ai.WithOutputType(CharacterProfile{}),
+)
 
-```go
-resp, err := genkit.Embed(ctx, g, ai.WithEmbedder(embeddingModel), ai.WithTextDocs(userInput))
 if err != nil {
-	return err
+	log.Fatal(err)
+}
+
+// Unmarshal the model output into the profile struct
+if err := resp.Output(&profile); err != nil {
+	log.Fatal(err)
 }
 ```
 
-See [Retrieval-augmented generation (RAG)](/docs/rag) for more information.
+Alternatively, you can use **`genkit.GenerateData`** for a more succinct call:
+
+```go
+profile, resp, err := genkit.GenerateData[CharacterProfile](ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithPrompt("Generate a profile for a fictional character"),
+)
+```
+
+#### Schema Limitations
+
+The Gemini API relies on a specific subset of the OpenAPI 3.0 standard. When defining schemas for structured output, keep the following limitations in mind:
+
+**Supported Features**
+- **Objects & Arrays**: Standard object properties and array items.
+- **Enums**: Supported via `enum` tag or string slices in schema.
+- **Nullable**: Supported (mapped to `nullable: true`).
+
+**Critical Limitations**
+- **Validation Keywords**: Keywords like `pattern`, `minLength`, `maxLength`, `minItems`, and `maxItems` are **not supported** by the Gemini API's constrained decoding. Including them may result in errors or them being ignored.
+- **Recursion**: Recursive schemas are generally not supported.
+- **Complexity**: Deeply nested schemas or schemas with hundreds of properties may trigger complexity limits.
+
+**Best Practices**
+- Keep schemas simple and flat where possible.
+- Use property descriptions to guide the model instead of complex validation rules.
+- If you need strict validation (e.g., regex), perform it in your application code *after* receiving the structured response.
+
+### Thinking and Reasoning
+
+Gemini 2.5 and newer models use an internal thinking process that improves reasoning for complex tasks.
+
+**Thinking Level (Gemini 3.0):**
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-3-pro-preview", &genai.GenerateContentConfig{
+		ThinkingConfig: &genai.ThinkingConfig{
+			ThinkingLevel: genai.Ptr("HIGH"), // Or "LOW" or "MEDIUM"
+		},
+	})),
+	ai.WithPrompt("what is heavier, one kilo of steel or one kilo of feathers"),
+)
+```
+
+Gemini 3 models support the following configuration options for thinking:
+
+- **ThinkingLevel** _string_
+  The reasoning depth for the model (`"HIGH"`, `"MEDIUM"`, `"LOW"`, `"MINIMAL"`).
+
+**Thinking Budget (Gemini 2.5):**
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-pro", &genai.GenerateContentConfig{
+		ThinkingConfig: &genai.ThinkingConfig{
+			ThinkingBudget:  genai.Ptr[int32](8192),
+			IncludeThoughts: true,
+		},
+	})),
+	ai.WithPrompt("what is heavier, one kilo of steel or one kilo of feathers"),
+)
+```
+
+Gemini 2.5 models support the following configuration options for thinking:
+
+- **ThinkingBudget** _int32_
+  The number of tokens the model is allowed to use for internal thinking.
+
+- **IncludeThoughts** _bool_
+  Whether to include the model's internal thoughts in the response. If enabled, you can access thoughts via `response.Reasoning`.
+
+### Context Caching
+
+Gemini 2.5 and newer models automatically cache common content prefixes (min 1024 tokens for Flash, 2048 for Pro), providing a 75% token discount on cached tokens.
+
+```go
+// Structure prompts with consistent content at the beginning
+baseContext := strings.Repeat("You are a helpful cook... (large context) ...", 50)
+
+// First request - content will be cached
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithPrompt(baseContext + "\n\nTask 1..."),
+)
+
+// Second request with same prefix - eligible for cache hit
+resp, err = genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithPrompt(baseContext + "\n\nTask 2..."),
+)
+```
+
+### Safety Settings
+
+You can configure safety settings to control content filtering for different harm categories:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", &genai.GenerateContentConfig{
+		SafetySettings: []*genai.SafetySetting{
+			{
+				Category:  genai.HarmCategoryHateSpeech,
+				Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
+			},
+			{
+				Category:  genai.HarmCategoryDangerousContent,
+				Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
+			},
+		},
+	})),
+	ai.WithPrompt("..."),
+)
+```
+
+Available harm categories:
+- `HarmCategoryHarassment`
+- `HarmCategoryHateSpeech`
+- `HarmCategorySexuallyExplicit`
+- `HarmCategoryDangerousContent`
+
+Available thresholds:
+- `HarmBlockThresholdUnspecified`
+- `HarmBlockThresholdBlockLowAndAbove`
+- `HarmBlockThresholdBlockMediumAndAbove`
+- `HarmBlockThresholdBlockOnlyHigh`
+- `HarmBlockThresholdBlockNone`
+
+### Google Search Grounding
+
+Enable Google Search to provide answers with current information and verifiable sources.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", &genai.GenerateContentConfig{
+		Tools: []*genai.Tool{
+			{GoogleSearch: &genai.GoogleSearch{}},
+		},
+	})),
+	ai.WithPrompt("What are the top tech news stories this week?"),
+)
+```
+
+The following configuration options are available for Google Search grounding:
+
+- **GoogleSearch** _struct_
+
+  Enables Google Search grounding.
+  Example: `&genai.GoogleSearch{}`
+
+  - **DynamicRetrievalConfig** _struct_
+    - **Mode** _string_
+      The retrieval mode (e.g., `"MODE_DYNAMIC"`).
+    - **DynamicThreshold** _float32_
+      The threshold for dynamic retrieval (e.g., `0.7`).
+
+### Google Maps Grounding
+
+Enable Google Maps to provide location-aware responses.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", &genai.GenerateContentConfig{
+		Tools: []*genai.Tool{
+			{GoogleMaps: &genai.GoogleMaps{}},
+		},
+	})),
+	ai.WithPrompt("Find a coffee shop nearby"),
+)
+```
+
+The following configuration options are available for Google Maps grounding:
+
+- **GoogleMaps** _struct_
+
+  Enables Google Maps grounding.
+  Example: `&genai.GoogleMaps{EnableWidget: genai.Ptr(true)}`
+
+  - **EnableWidget** _bool_
+    Whether to include a widget token in the response.
+
+- **ToolConfig** _struct_
+
+  Additional configuration for provider tools. Can improve relevance by providing location context for Google Maps.
+  Example: `&genai.ToolConfig{RetrievalConfig: &genai.RetrievalConfig{...}}`
+
+### Code Execution
+
+Enable the model to write and execute Python code for calculations and logic.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-pro", &genai.GenerateContentConfig{
+		Tools: []*genai.Tool{
+			{CodeExecution: &genai.ToolCodeExecution{}},
+		},
+	})),
+	ai.WithPrompt("Calculate the 100th prime number"),
+)
+```
+
+The following configuration options are available for code execution:
+
+- **CodeExecution** _struct_
+
+  Enables code execution for reasoning and calculations.
+  Example: `&genai.ToolCodeExecution{}`
+
+### Generating Text and Images (Nano Banana)
+
+Some Gemini models (like `gemini-2.5-flash-image` AKA "Nano Banana") can output images natively alongside text:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash-image", &genai.GenerateContentConfig{
+		ResponseModalities: []string{"IMAGE", "TEXT"},
+	})),
+	ai.WithPrompt("Create a picture of a futuristic city and describe it"),
+)
+
+// Get all content
+for _, part := range resp.Message.Content {
+	// ... process each part
+}
+
+// Extract image
+if img := resp.Media(); img != nil {
+	fmt.Printf("Image URL: %s\n", img.URL)
+}
+
+// Extract text
+fmt.Printf("Text: %s\n", resp.Text())
+```
+
+## Multimodal Input Capabilities
+
+### Video Understanding
+
+Gemini models can process videos passed as URIs or inline data.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithMessages(
+		ai.NewUserMessage(
+			ai.NewTextPart("What happens in this video?"),
+			ai.NewMediaPart("video/mp4", "https://example.com/video.mp4"),
+		),
+	),
+)
+```
+
+### Image Understanding
+
+Gemini models can reason about images passed as inline data or URLs.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithMessages(
+		ai.NewUserMessage(
+			ai.NewTextPart("Describe what is in this image"),
+			ai.NewMediaPart("image/jpeg", "https://example.com/image.jpg"),
+		),
+	),
+)
+```
+
+### Audio Understanding
+
+Gemini models can process audio files to transcribe speech text or answer questions.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithMessages(
+		ai.NewUserMessage(
+			ai.NewTextPart("Transcribe this audio clip"),
+			ai.NewMediaPart("audio/mp3", "https://example.com/audio.mp3"),
+		),
+	),
+)
+```
+
+### PDF Support
+
+Gemini models can process PDF documents.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", nil)),
+	ai.WithMessages(
+		ai.NewUserMessage(
+			ai.NewTextPart("Summarize this document"),
+			ai.NewMediaPart("application/pdf", "https://example.com/doc.pdf"),
+		),
+	),
+)
+```
+
+## Embedding Models
+
+### Available Models
+
+- `gemini-embedding-001` - Latest Gemini embedding model (3072 dimensions)
+- `text-embedding-004` - Text embedding model (768 dimensions)
+- `multimodalembedding` - Supports text, image, and video embeddings
+
+### Usage
+
+```go
+resp, err := genkit.Embed(ctx, g,
+	ai.WithEmbedderName("googleai/gemini-embedding-001"),
+	ai.WithTextDocs("Machine learning models process data to make predictions."),
+)
+```
+
+## Image Models
+
+### Available Models
+
+**Imagen 4 Series** - Latest generation with improved quality:
+- `imagen-4.0-generate-001` - Standard quality
+- `imagen-4.0-ultra-generate-001` - Ultra-high quality
+- `imagen-4.0-fast-generate-001` - Fast generation
+
+**Imagen 3 Series**:
+- `imagen-3.0-generate-002`
+
+### Usage
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("imagen-3.0-generate-002", &genai.GenerateImagesConfig{
+		NumberOfImages: genai.Ptr[int32](4),
+		AspectRatio:    genai.Ptr[string]("16:9"),
+	})),
+	ai.WithPrompt("A serene Japanese garden with cherry blossoms and a koi pond."),
+)
+```
+
+## Video Models
+
+The Google AI plugin provides access to video generation capabilities through the Veo models.
+
+### Available Models
+
+**Veo 3.1 Series** - Latest generation with native audio and high fidelity:
+- `veo-3.1-generate-preview` - High-quality video and audio generation
+- `veo-3.1-fast-generate-preview` - Fast generation with high quality
+
+**Veo 3.0 Series**:
+- `veo-3.0-generate-001`
+- `veo-3.0-fast-generate-001`
+
+**Veo 2.0 Series**:
+- `veo-2.0-generate-001`
+
+### Usage
+
+Video generation returns an operation that you must poll for results.
+
+```go
+// Start video generation
+op, err := genkit.GenerateOperation(ctx, g,
+	ai.WithModelName("googleai/veo-3.0-fast-generate-001"),
+	ai.WithPrompt("A majestic dragon soaring over a mystical forest at dawn."),
+)
+
+// Check progress using the operation ID
+for !op.Done {
+	time.Sleep(5 * time.Second)
+	op = genkit.CheckOperation(ctx, g, op)
+}
+
+if op.Error != nil {
+	log.Fatal(op.Error)
+}
+
+// Access generated video URI from the operation result
+videoURI := op.Output.Message.Content[0].Media.URL
+```
+
+The Veo models support the following configuration options via `genai.GenerateVideosConfig`:
+
+- **NegativePrompt** _string_
+
+  Text that describes anything you want to discourage the model from generating.
+
+- **AspectRatio** _string_
+
+  Changes the aspect ratio of the generated video.
+  - `"16:9"`
+  - `"9:16"`
+
+- **PersonGeneration** _string_
+
+  Allow the model to generate videos of people.
+  - **Text-to-video generation**:
+    - `"allow_all"`: Generate videos that include adults and children. Currently the only available value for Veo 3.
+    - `"dont_allow"` (Veo 2 only): Don't allow people or faces.
+    - `"allow_adult"` (Veo 2 only): Generate videos with adults, but not children.
+  - **Image-to-video generation** (Veo 2 only):
+    - `"dont_allow"`: Don't allow people or faces.
+    - `"allow_adult"`: Generate videos with adults, but not children.
+
+- **NumberOfVideos** _int32_
+
+  Output videos requested.
+  - `1`: Supported in Veo 3 and Veo 2.
+  - `2`: Supported in Veo 2 only.
+
+- **DurationSeconds** _int32_ (Veo 2 only)
+
+  Length of each output video in seconds (5 to 8). Not configurable for Veo 3.1/3.0 (defaults to 8 seconds).
+
+- **Resolution** _string_ (Veo 3.1 only)
+
+  Resolution of the generated video.
+  - `"720p"` (default)
+  - `"1080p"` (Available for 16:9 aspect ratio)
+
+- **Seed** _int32_ (Veo 3.1/3.0 only)
+
+  Sets the random seed for generation consistency. Doesn't guarantee determinism but improves consistency.
+
+- **EnhancePrompt** _bool_ (Veo 2 only)
+
+  Enable or disable the prompt rewriter. Enabled by default. For Veo 3.1/3.0, the prompt enhancer is always on.
+
+## Speech Models
+
+The Google GenAI plugin provides access to text-to-speech capabilities through Gemini TTS models.
+
+### Available Models
+
+- `gemini-2.5-flash-preview-tts`
+- `gemini-2.5-pro-preview-tts`
+
+### Usage
+
+To convert text to single-speaker audio, set the response modality to `"AUDIO"`, and pass a `SpeechConfig` object with `VoiceConfig` set. You'll need to choose a voice name from the prebuilt [output voices](https://ai.google.dev/gemini-api/docs/speech-generation#voices).
+
+The plugin returns raw PCM data in the response text (base64 encoded), which can then be converted to a standard format like WAV.
+
+```go
+import "google.golang.org/genai"
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash-preview-tts", &genai.GenerateContentConfig{
+		ResponseModalities: []string{"AUDIO"},
+		SpeechConfig: &genai.SpeechConfig{
+			VoiceConfig: &genai.VoiceConfig{
+				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
+					VoiceName: "Algenib",
+				},
+			},
+		},
+	})),
+	ai.WithPrompt("Say: Genkit is the best Gen AI library!"),
+)
+
+if err != nil {
+	log.Fatal(err)
+}
+
+// The model output will be a base64 encoded string in resp.Text()
+// You can decode this and save it as a PCM file or convert to WAV.
+```
 
 ## Next Steps
 
 - Learn about [generating content](/docs/models) to understand how to use these models effectively
 - Explore [creating flows](/docs/flows) to build structured AI workflows
 - To use the Gemini API at enterprise scale see the [Vertex AI plugin](/docs/integrations/vertex-ai)
-
 
 </LanguageContent>
 
