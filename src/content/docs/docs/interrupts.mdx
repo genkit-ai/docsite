@@ -110,7 +110,7 @@ same `generate` call:
 ```dart
 final response = await ai.generate(
   prompt: 'Ask me a movie trivia question.',
-  tools: [askQuestion],
+  toolNames: ['askQuestion'],
 );
 ```
 
@@ -145,7 +145,7 @@ var response = await ai.generate(
   config: GeminiOptions(
     systemInstruction: 'Ask clarifying questions until you have a complete solution.',
   ),
-  tools: [askQuestion],
+  toolNames: ['askQuestion'],
 );
 
 while (response.finishReason == FinishReason.interrupted) {
@@ -157,18 +157,65 @@ while (response.finishReason == FinishReason.interrupted) {
     final input = part.toolRequest.input as QuestionInput;
     final userAnswer = await askUser(input); 
 
-    resumeResponses.add(InterruptResponse(part, userAnswer));
+    resumeResponses.add(InterruptResponse(part.toolRequestPart!, userAnswer));
   }
 
   // Resume generation
   response = await ai.generate(
     messages: response.messages, // Pass history
-    tools: [askQuestion],
-    resume: resumeResponses,
+    toolNames: ['askQuestion'],
+    interruptRespond: resumeResponses,
   );
 }
 
 print(response.text);
+```
+
+## Tools with restartable interrupts
+
+Another common pattern for interrupts is the need to _confirm_ an action that the LLM suggests before actually performing it. For example, a payments app might want the user to confirm certain kinds of transfers before proceeding.
+
+### Define a restartable tool
+
+When defining a tool, you can check your application state (for example, reading a boolean variable or fetching a database record) to determine whether the action is approved. If not, trigger an interrupt:
+
+```dart
+var isApproved = false;
+
+ai.defineTool(
+  name: 'transfer_funds',
+  description: 'transfer funds, requires user approval',
+  inputSchema: ApprovalRequest.$schema,
+  fn: (input, ctx) async {
+    // Check if context has approval flag to simulate state or auth passing
+    if (!isApproved) {
+      ctx.interrupt(input);
+    }
+    return 'Successfully transferred funds! Details: ${input.details}';
+  },
+);
+```
+
+### Restart tools after interruption
+
+To restart the interrupted tool, pass the original interrupt part back to the `interruptRestart` parameter on your next `ai.generate` call. The model will re-execute the tool function, so ensure your state is updated so the tool check succeeds on the second run:
+
+```dart
+if (response.finishReason == FinishReason.interrupted) {
+  final interruptPart = response.interrupts.first;
+
+  // In your app logic: Ask the user to confirm the transfer...
+  // Once confirmed, pass approval flag so the tool succeeds on restart
+  isApproved = true;
+
+  final response2 = await ai.generate(
+    // Ensure you pass the previous messages back
+    messages: response.messages,
+    toolNames: ['transfer_funds'],
+    // Pass the part back to `interruptRestart` to signal a restart
+    interruptRestart: [interruptPart],
+  );
+}
 ```
 
 </LanguageContent>
