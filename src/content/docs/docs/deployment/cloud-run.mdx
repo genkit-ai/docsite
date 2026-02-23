@@ -288,7 +288,7 @@ flow.
     func main() {
         ctx := context.Background()
 
-        // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
+        // Initialize Genkit with the Google AI plugin and Gemini 2.5 Flash.
         // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-2.5-flash"
         // to use Vertex AI as the provider instead.
         g := genkit.Init(ctx,
@@ -430,51 +430,531 @@ curl -X POST https://<service-url>/jokesFlow \
 
 <LanguageContent lang="python">
 
-You can easily deploy your Genkit app to Cloud Run.
+You can deploy Genkit flows as HTTPS endpoints using Cloud Run. This page walks
+you through deploying a FastAPI-based Genkit application to Cloud Run with automatic
+scaling and containerization.
 
-For prerequisites and basic scaffolding see [Cloud Run - Python quickstart](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#before-you-begin) documentation.
+## Before you begin
 
-Once you have a simple Cloud Run app set up and ready to go, update the `requirements.txt` to add Genkit libraries. In this example we'll be using the Google GenAI plugin.
+- Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+- You should be familiar with Genkit's concept of [flows](/docs/flows) and how to
+  write them.
+- It would be helpful, but not required, if you've already used Google Cloud
+  and Cloud Run before.
 
-```text title="requirements.txt"
-genkit
-genkit-plugin-google-genai
+## 1. Set up a Google Cloud project
+
+If you don't already have a Google Cloud project set up, follow these steps:
+
+1.  Create a new Google Cloud project using the
+    [Cloud console](https://console.cloud.google.com) or choose an existing one.
+
+2.  Link the project to a billing account, which is required for Cloud Run.
+
+3.  Configure the Google Cloud CLI to use your project:
+
+    ```bash
+    gcloud init
+    ```
+
+## 2. Prepare your Python project for deployment
+
+### Initialize your project with uv
+
+Create a new project or navigate to your existing project:
+
+```bash
+# Create project directory
+mkdir genkit-cloudrun
+cd genkit-cloudrun
+
+# Initialize with uv
+uv init
+
+# Add dependencies
+uv add genkit genkit-plugin-google-genai fastapi uvicorn slowapi
 ```
 
-Update you app code to use Genkit.
+### Create your FastAPI application with Genkit
 
-```python
+Genkit flows work seamlessly with FastAPI as they're both built on ASGI standards.
+Create a `main.py` file:
+
+```python title="main.py"
 import os
+from contextlib import asynccontextmanager
 
-from flask import Flask
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
-from genkit.ai import Genkit
-from genkit.plugins.flask import genkit_flask_handler
-from genkit.plugins.google_genai import (
-    GoogleGenai,
-    google_genai_name,
-)
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
 
+# Initialize Genkit
 ai = Genkit(
-    plugins=[GoogleGenai()],
-    model=google_genai_name('gemini-2.5-flash'),
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
 )
 
-app = Flask(__name__)
+# Define input/output schemas
+class JokeRequest(BaseModel):
+    """Request schema for joke generation."""
+    topic: str = Field(description="Topic for the joke", min_length=1)
 
-@app.post('/joke')
-@genkit_flask_handler(ai)
+class JokeResponse(BaseModel):
+    """Response schema for joke generation."""
+    joke: str
+    topic: str
+
+class SummaryRequest(BaseModel):
+    """Request schema for text summarization."""
+    text: str = Field(description="Text to summarize", min_length=10)
+
+# Application lifespan for startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan."""
+    print("🚀 Starting Genkit Cloud Run service")
+    yield
+    print("👋 Shutting down Genkit Cloud Run service")
+
+# Create FastAPI app
+app = FastAPI(
+    title="Genkit Cloud Run Service",
+    description="AI-powered API with Genkit and FastAPI",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# Health check endpoint
+@app.get("/")
+async def root():
+    """Root endpoint with service info."""
+    return {
+        "service": "Genkit Cloud Run",
+        "status": "running",
+        "docs": "/docs"
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Cloud Run."""
+    return {"status": "healthy"}
+
+# Define Genkit flow
 @ai.flow()
-async def joke(name: str, ctx):
-    return await ai.generate(
-        on_chunk=ctx.send_chunk,
-        prompt=f'tell a medium sized joke about {name}',
+async def joke_flow(topic: str) -> str:
+    """Generate a joke about the given topic.
+    
+    Args:
+        topic: The topic for the joke.
+        
+    Returns:
+        A funny joke about the topic.
+    """
+    response = await ai.generate(
+        prompt=f'Tell a short, funny joke about {topic}. Be creative!',
     )
+    return response.text
+
+# FastAPI endpoint that uses the flow
+@app.post("/joke", response_model=JokeResponse)
+async def generate_joke(request: JokeRequest):
+    """Generate a joke via REST API.
+    
+    Args:
+        request: The joke request with topic.
+        
+    Returns:
+        The generated joke.
+    """
+    try:
+        joke = await joke_flow(request.topic)
+        return JokeResponse(joke=joke, topic=request.topic)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate joke: {str(e)}")
+
+@ai.flow()
+async def summarize_flow(text: str) -> str:
+    """Summarize the provided text.
+    
+    Args:
+        text: The text to summarize.
+        
+    Returns:
+        A concise summary.
+    """
+    response = await ai.generate(
+        prompt=f'Summarize the following text in 2-3 sentences:\n\n{text}',
+    )
+    return response.text
+
+@app.post("/summarize")
+async def summarize_text(request: SummaryRequest):
+    """Summarize text via REST API.
+    
+    Args:
+        request: The text to summarize.
+        
+    Returns:
+        The summary.
+    """
+    try:
+        summary = await summarize_flow(request.text)
+        return {"summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to summarize: {str(e)}")
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 ```
 
-Then proceeed with Cloud Run [deployment](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#deploy) instructions.
+### Optional: Add authorization
+
+All deployed flows should require some form of authorization. You have two options:
+
+**Cloud IAM-based authorization**: Use Google Cloud's native access management
+to gate access to your endpoints. See
+[Authentication](https://cloud.google.com/run/docs/authenticating/overview)
+in the Cloud Run docs.
+
+**Custom authorization with FastAPI**: Use FastAPI's dependency injection for JWT auth:
+
+```python
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+
+security = HTTPBearer()
+
+async def verify_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    """Verify JWT token and return user info.
+    
+    Args:
+        credentials: HTTP authorization credentials.
+        
+    Returns:
+        User information from token.
+        
+    Raises:
+        HTTPException: If token is invalid.
+    """
+    try:
+        token = credentials.credentials
+        # Replace with your actual token verification
+        payload = jwt.decode(token, "your-secret-key", algorithms=["HS256"])
+        return {
+            "user_id": payload.get("user_id"),
+            "email": payload.get("email"),
+        }
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+@app.post("/protected-joke", response_model=JokeResponse)
+async def protected_generate_joke(
+    request: JokeRequest,
+    user: dict = Depends(verify_token)
+):
+    """Generate a joke with authentication required.
+    
+    Args:
+        request: The joke request.
+        user: Authenticated user information.
+        
+    Returns:
+        The generated joke.
+    """
+    joke = await joke_flow(request.topic)
+    return JokeResponse(joke=joke, topic=request.topic)
+```
+
+### Create a Dockerfile for Cloud Run
+
+Create a `Dockerfile` for containerized deployment:
+
+```dockerfile title="Dockerfile"
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock* ./
+
+# Install dependencies
+RUN uv sync --frozen --no-dev
+
+# Copy application code
+COPY . .
+
+# Expose port
+EXPOSE 8080
+
+# Run with uvicorn
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+### Create .dockerignore
+
+Create a `.dockerignore` file to exclude unnecessary files:
+
+```text title=".dockerignore"
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+.uv
+.git
+.gitignore
+*.md
+.DS_Store
+```
+
+### Make API credentials available to deployed flows
+
+**Gemini (Google AI)**
+
+1. [Generate an API key](https://aistudio.google.com/app/apikey) for the
+   Gemini API using Google AI Studio.
+
+2. Store the API key in Secret Manager:
+   1. Enable the [Secret Manager API](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com).
+   2. Create a new secret containing your API key on the [Secret Manager](https://console.cloud.google.com/security/secret-manager) page.
+   3. Grant your default compute service account the **Secret Manager Secret Accessor** role.
+
+**Gemini (Vertex AI)**
+
+1. [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com)
+   for your project.
+
+2. On the [IAM](https://console.cloud.google.com/iam-admin/iam) page, ensure the
+   **Default compute service account** has the **Vertex AI User** role.
+
+## 3. Deploy to Cloud Run
+
+Deploy your application using the `gcloud` tool. Cloud Run will automatically build
+your container using the Dockerfile.
+
+**Gemini (Google AI)**
+
+```bash
+gcloud run deploy genkit-service \
+  --source . \
+  --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest \
+  --allow-unauthenticated
+```
+
+**Gemini (Vertex AI)**
+
+```bash
+gcloud run deploy genkit-service \
+  --source . \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=<your-project-id> \
+  --set-env-vars GOOGLE_CLOUD_LOCATION=us-central1 \
+  --allow-unauthenticated
+```
+
+When asked if you want to allow unauthenticated invocations:
+- Answer `Y` if you're using custom authorization in code.
+- Answer `N` to require IAM credentials (omit `--allow-unauthenticated` flag).
+
+### Alternative: Deploy with existing container
+
+If you prefer to build and push the container separately:
+
+```bash
+# Build and push to Artifact Registry
+gcloud builds submit --tag gcr.io/<your-project-id>/genkit-service
+
+# Deploy the container
+gcloud run deploy genkit-service \
+  --image gcr.io/<your-project-id>/genkit-service \
+  --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
+```
+
+## 4. Test the deployed flow
+
+After deployment, the tool will print the service URL. Test your endpoints:
+
+```bash
+# Save the service URL
+SERVICE_URL="https://<service-url>"
+
+# Test health endpoint
+curl $SERVICE_URL/health
+
+# Test joke generation
+curl -X POST $SERVICE_URL/joke \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "programming"}'
+
+# With IAM authentication (if required)
+curl -X POST $SERVICE_URL/joke \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "artificial intelligence"}'
+
+# Test summarization
+curl -X POST $SERVICE_URL/summarize \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Cloud Run is a fully managed compute platform that automatically scales your stateless containers. It abstracts away infrastructure management so you can focus on building applications."}'
+```
+
+## 5. View automatic API documentation
+
+FastAPI automatically generates interactive API documentation. After deployment, visit:
+
+- **Swagger UI**: `https://<service-url>/docs`
+- **ReDoc**: `https://<service-url>/redoc`
+
+These provide interactive documentation where you can test your endpoints directly in the browser.
+
+## Advanced Configuration
+
+### Environment Variables
+
+Set additional environment variables for your deployment:
+
+```bash
+gcloud run deploy genkit-service \
+  --source . \
+  --set-env-vars LOG_LEVEL=info \
+  --set-env-vars MAX_WORKERS=4 \
+  --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
+```
+
+### Resource Limits
+
+Configure CPU and memory allocation:
+
+```bash
+gcloud run deploy genkit-service \
+  --source . \
+  --cpu 2 \
+  --memory 2Gi \
+  --max-instances 10 \
+  --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
+```
+
+### Custom Domains
+
+Add a custom domain to your Cloud Run service:
+
+```bash
+# Map your domain
+gcloud run domain-mappings create \
+  --service genkit-service \
+  --domain api.yourdomain.com
+```
+
+### Monitoring and Logging
+
+View logs in Cloud Console or using gcloud:
+
+```bash
+# Stream logs
+gcloud run logs tail genkit-service --follow
+
+# View recent logs
+gcloud run logs read genkit-service --limit 50
+```
+
+## Production Best Practices
+
+### 1. Use Structured Logging
+
+```python
+import logging
+import json
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+logger = logging.getLogger(__name__)
+
+@app.post("/joke")
+async def generate_joke(request: JokeRequest):
+    logger.info(json.dumps({
+        "event": "joke_request",
+        "topic": request.topic
+    }))
+    joke = await joke_flow(request.topic)
+    logger.info(json.dumps({
+        "event": "joke_generated",
+        "topic": request.topic,
+        "length": len(joke)
+    }))
+    return JokeResponse(joke=joke, topic=request.topic)
+```
+
+### 2. Add Request Validation
+
+```python
+from fastapi import Request
+import time
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """Add processing time to response headers."""
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
+```
+
+### 3. Implement Rate Limiting
+
+Use Cloud Armor or implement rate limiting in your application:
+
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.post("/joke")
+@limiter.limit("10/minute")
+async def generate_joke(request: Request, joke_request: JokeRequest):
+    joke = await joke_flow(joke_request.topic)
+    return JokeResponse(joke=joke, topic=joke_request.topic)
+```
+
+### 4. Enable CORS for Web Applications
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://yourdomain.com"],
+    allow_credentials=True,
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
+)
+```
+
+## Next Steps
+
+- Learn about [FastAPI integration](/docs/frameworks/fastapi) for more advanced patterns
+- Explore [authorization options](/docs/deployment/authorization) for securing your endpoints
+- Set up [observability](/docs/observability/getting-started) to monitor your deployed flows
 
 </LanguageContent>

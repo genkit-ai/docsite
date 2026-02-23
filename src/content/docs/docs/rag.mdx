@@ -803,6 +803,7 @@ RAG is a very broad area and there are many different techniques used to achieve
 the best quality RAG. The core Genkit framework offers three main abstractions
 to help you do RAG:
 
+- **Indexers**: add documents to an "index".
 - **Embedders**: transforms documents into a vector representation
 - **Retrievers**: retrieve documents from an "index", given a query.
 
@@ -810,6 +811,110 @@ These definitions are broad on purpose because Genkit is un-opinionated about
 what an "index" is or how exactly documents are retrieved from it. Genkit only
 provides a `Document` format and everything else is defined by the retriever or
 indexer implementation provider.
+
+### Indexers
+
+The index is responsible for keeping track of your documents in such a way that
+you can quickly retrieve relevant documents given a specific query. This is most
+often accomplished using a vector database, which indexes your documents using
+multidimensional vectors called embeddings. A text embedding (opaquely)
+represents the concepts expressed by a passage of text; these are generated
+using special-purpose ML models. By indexing text using its embedding, a vector
+database is able to cluster conceptually related text and retrieve documents
+related to a novel string of text (the query).
+
+Before you can retrieve documents for the purpose of generation, you need to
+ingest them into your document index. A typical ingestion flow does the
+following:
+
+1. Split up large documents into smaller documents so that only relevant
+   portions are used to augment your prompts – "chunking". This is necessary
+   because many LLMs have a limited context window, making it impractical to
+   include entire documents with a prompt.
+
+   Genkit doesn't provide built-in chunking libraries; however, there are open
+   source libraries available that are compatible with Genkit.
+
+2. Generate embeddings for each chunk. Depending on the database you're using,
+   you might explicitly do this with an embedding generation model, or you might
+   use the embedding generator provided by the database.
+3. Add the text chunk and its index to the database.
+
+You might run your ingestion flow infrequently or only once if you are working
+with a stable source of data. On the other hand, if you are working with data
+that frequently changes, you might continuously run the ingestion flow (for
+example, in a Cloud Firestore trigger, whenever a document is updated).
+
+#### Defining an indexer
+
+To define a custom indexer in Python, use the `ai.define_indexer()` method.
+Your indexer function receives a list of `Document` objects plus an optional
+options object.
+
+```python
+from genkit import Genkit, Document
+
+ai = Genkit(plugins=[...])
+
+async def my_indexer(documents: list[Document], options: dict | None) -> None:
+    for doc in documents:
+        # Generate an embedding for the document (example only).
+        embedding = await ai.embed(
+            embedder='vertexai/text-embedding-004',
+            content=doc,
+        )
+
+        # Store the document + embedding in your vector store.
+        # (Pseudocode — use your actual DB client and schema.)
+        await my_vector_db.store(
+            text=doc.text(),
+            embedding=embedding[0].embedding,
+            metadata=doc.metadata,
+        )
+
+ai.define_indexer(name='my_indexer', fn=my_indexer)
+```
+
+#### Using an indexer
+
+Once defined, you can use your indexer to ingest documents:
+
+```python
+from genkit import Document, Part, TextPart
+
+# Prepare your documents
+documents = [
+    Document.from_text('The quick brown fox jumps over the lazy dog.'),
+    Document.from_text('Pack my box with five dozen liquor jugs.'),
+    Document(
+        content=[Part(root=TextPart(text='Custom document with metadata.'))],
+        metadata={'source': 'manual', 'category': 'example'},
+    ),
+]
+
+# Index the documents
+await ai.index(
+    indexer='my_indexer',
+    documents=documents,
+)
+```
+
+#### Using an IndexerRef
+
+You can also use `IndexerRef` to reference an indexer by name:
+
+```python
+from genkit.blocks.retriever import IndexerRef
+
+# Reference an indexer
+my_indexer_ref = IndexerRef(name='my_indexer')
+
+# Use the reference with ai.index()
+await ai.index(
+    indexer=my_indexer_ref,
+    documents=documents,
+)
+```
 
 ### Embedders
 
@@ -837,38 +942,52 @@ determines what food items are available. Note that indexing is outside the scop
 of Genkit and you should use the SDKs/APIs provided by the vector store you are using.
 
 The following example shows how you might use a retriever in a RAG flow. Like
-the retriever example, this example uses Firestore Vector Store.
+the retriever example, this example uses the Firestore vector store helper from
+the Firebase plugin.
 
 ```python
-from genkit.ai import Genkit, Document
-from genkit.plugins.google_genai import (
-    VertexAI,
-    vertexai_name,
-)
-from genkit.plugins.firebase.firestore import FirestoreVectorStore, DistanceMeasure
+from google.cloud import firestore
+from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+
+from genkit import Genkit
+from genkit.plugins.firebase import define_firestore_vector_store
+from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(
     plugins=[
-        VertexAI(),
-        FirestoreVectorStore(
-                name='my_firestore_retriever',
-                collection='mycollection',
-                vector_field='embedding',
-                content_field='text',
-                embedder=EMBEDDING_MODEL,
-                distance_measure=DistanceMeasure.EUCLIDEAN,
-                firestore_client=firestore_client,
-        ),
+        VertexAI(location='us-central1'),
     ],
 )
 
+firestore_client = firestore.Client()
+
+# Define a Firestore vector store retriever (returns the retriever action name).
+# Important: use the same embedding model for indexing and retrieval.
+EMBEDDING_MODEL = 'vertexai/text-embedding-004'
+
+RETRIEVER_NAME = define_firestore_vector_store(
+    ai,
+    name='my_firestore_retriever',
+    embedder=EMBEDDING_MODEL,
+    collection='mycollection',
+    vector_field='embedding',
+    content_field='text',
+    firestore_client=firestore_client,
+    distance_measure=DistanceMeasure.EUCLIDEAN,
+)
+
 @ai.flow()
-async def qa_flow(query: str):
-    docs = await ai.retrieve(
-        query=Document.from_text(query),
-        retriever='firestore/my_firestore_retriever'
+async def qa_flow(query: str) -> str:
+    retrieved = await ai.retrieve(
+        retriever=RETRIEVER_NAME,
+        query=query,
+        options={'limit': 3},
     )
-    response = await ai.generate(prompt=query, docs=docs)
+    response = await ai.generate(
+        model='vertexai/gemini-2.5-flash',
+        prompt=query,
+        docs=retrieved.documents,
+    )
     return response.text
 ```
 
@@ -892,22 +1011,14 @@ retrievers that build on top of existing retrievers in Genkit and apply advanced
 RAG techniques (such as reranking or prompt extensions) on top.
 
 ```python
-from genkit.types import (
-    RetrieverRequest,
-    RetrieverResponse,
-    Document,
-    ActionRunContext
-)
+from genkit import Document, Genkit
+from genkit.types import RetrieverResponse
 
-async def my_retriever(request: RetrieverRequest, ctx: ActionRunContext):
-    """Example of a retriever.
+ai = Genkit(plugins=[...])
 
-    Args:
-        request: The request to the retriever.
-        ctx: The context of the retriever.
-    """
+async def my_retriever(query: Document, options: dict | None) -> RetrieverResponse:
+    # Use query.text() and options to do a lookup in your datastore.
     return RetrieverResponse(documents=[Document.from_text('Hello'), Document.from_text('World')])
-
 
 ai.define_retriever(name='my_retriever', fn=my_retriever)
 ```
@@ -915,10 +1026,8 @@ ai.define_retriever(name='my_retriever', fn=my_retriever)
 Then you'll be able to use your retriever with `ai.retrieve`:
 
 ```python
-docs = await ai.retrieve(
-    query=Document.from_text(query),
-    retriever='my_retriever'
-)
+retrieved = await ai.retrieve(retriever='my_retriever', query=query)
+docs = retrieved.documents
 ```
 
 </LanguageContent>

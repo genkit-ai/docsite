@@ -274,75 +274,267 @@ See [Generating content](/docs/models) for more information.
 
 <LanguageContent lang="python">
 
-The `genkit-plugin-ollama` package provides integration with [Ollama](https://ollama.com/), allowing you to run various open-source large language models and embedding models locally.
+The Ollama plugin provides interfaces to any of the local LLMs supported by [Ollama](https://ollama.com/).
+
+## Prerequisites
+
+This plugin requires that you first install and run the Ollama server. You can follow the instructions on the [Download Ollama](https://ollama.com/download) page.
+
+Use the Ollama CLI to download the models you are interested in. For example:
+
+```bash
+ollama pull llama3.2
+ollama pull gemma2
+ollama pull mistral
+```
+
+For development, you can run Ollama on your development machine. Deployed apps usually run Ollama on a GPU-accelerated machine that is different from the one hosting the app backend running Genkit.
 
 ## Installation
 
 ```bash
-pip3 install genkit-plugin-ollama
-```
-
-You will need to download and install Ollama separately: [https://ollama.com/download](https://ollama.com/download)
-
-Use the Ollama CLI to pull the models you would like to use. For example:
-
-```bash
-ollama pull gemma2 # Example model
-ollama pull nomic-embed-text # Example embedder
+uv add genkit-plugin-ollama
 ```
 
 ## Configuration
 
-Configure the Ollama plugin in your Genkit initialization, specifying the models and embedders you have pulled and wish to use.
+To use this plugin, import `Ollama` and specify it when you initialize Genkit:
 
 ```python
-from genkit.ai import Genkit
-from genkit.plugins.ollama import Ollama, ModelDefinition, EmbeddingModelDefinition
+from genkit import Genkit
+from genkit.plugins.ollama import Ollama, ollama_name
+from genkit.plugins.ollama.models import ModelDefinition
 
 ai = Genkit(
     plugins=[
         Ollama(
-           models=[
-               ModelDefinition(name='gemma2'), # Match the model pulled via ollama CLI
-               # Add other models as needed
-               # ModelDefinition(name='mistral'),
-           ],
-           embedders=[
-               EmbeddingModelDefinition(
-                   name='nomic-embed-text', # Match the embedder pulled via ollama CLI
-                   # Specify dimensions if known/required by your use case
-                   # dimensions=768, # Example dimension
-               )
-           ],
-           # Optional: Specify Ollama server address if not default (http://127.0.0.1:11434)
-           # address="http://custom-ollama-host:11434"
+            models=[
+                ModelDefinition(name='llama3.2'),
+                ModelDefinition(name='gemma2'),
+            ],
+            server_address='http://127.0.0.1:11434',  # default local address
+        )
+    ],
+    model=ollama_name('llama3.2'),  # optional default model
+)
+```
+
+### Authentication
+
+If you would like to access remote deployments of Ollama that require custom headers (such as API keys), you can specify those in the Ollama plugin configuration:
+
+```python
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[ModelDefinition(name='gemma2')],
+            server_address='https://my-deployment',
+            request_headers={
+                'api-key': 'API Key goes here'
+            },
         )
     ],
 )
 ```
 
-Then use Ollama models and embedders by specifying the `ollama/` prefix followed by the model/embedder name defined in the configuration:
+## Usage
+
+This plugin doesn't statically export model references. Specify one of the models you configured using the `ollama_name()` helper or a string identifier:
 
 ```python
-from genkit.ai import Document # Import Document
-# Assuming 'ai' is configured as above
+from genkit import Genkit
+from genkit.plugins.ollama import Ollama, ollama_name
+from genkit.plugins.ollama.models import ModelDefinition
 
-async def run_ollama():
-    generate_response = await ai.generate(
-        prompt='Tell me a short story about a space cat.',
-        model='ollama/gemma2', # Use the configured model name
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[ModelDefinition(name='llama3.2')],
+        )
+    ],
+)
+
+@ai.flow()
+async def llama_flow(prompt: str) -> str:
+    """Generate text using Llama.
+
+    Args:
+        prompt: The prompt to generate from.
+
+    Returns:
+        The generated text.
+    """
+    response = await ai.generate(
+        model=ollama_name('llama3.2'),
+        prompt=prompt,
     )
-    print("Generated Text:", generate_response.text)
+    return response.text
+```
 
-    embedding_response = await ai.embed(
-        embedder='ollama/nomic-embed-text', # Use the configured embedder name
-        content=[Document.from_text('This is text to embed.')], # Pass content as a list of Documents
+Or reference the model directly by string:
+
+```python
+response = await ai.generate(
+    model='ollama/llama3.2',
+    prompt='Tell me a joke.',
+)
+```
+
+## Advanced usage
+
+### Embeddings
+
+The Ollama plugin supports embeddings, which can be used for similarity searches and other NLP tasks:
+
+```python
+from genkit import Genkit
+from genkit.plugins.ollama import Ollama
+from genkit.plugins.ollama.embedders import EmbeddingDefinition
+
+ai = Genkit(
+    plugins=[
+        Ollama(
+            server_address='http://localhost:11434',
+            embedders=[
+                EmbeddingDefinition(
+                    name='nomic-embed-text',
+                    dimensions=768,
+                )
+            ],
+        )
+    ],
+)
+
+@ai.flow()
+async def get_embeddings(text: str) -> list[float]:
+    """Generate embeddings for text.
+
+    Args:
+        text: The text to embed.
+
+    Returns:
+        The embedding vector.
+    """
+    result = await ai.embed(
+        embedder='ollama/nomic-embed-text',
+        content=text,
     )
-    print("Embedding:", embedding_response.embeddings[0].embedding) # Access the embedding vector
+    return result
+```
 
-# Example of running the async function
-# import asyncio
-# asyncio.run(run_ollama())
+### Streaming
+
+Ollama models support streaming responses for real-time output:
+
+```python
+from genkit import ActionRunContext
+
+@ai.flow()
+async def streaming_story(topic: str, ctx: ActionRunContext | None = None) -> str:
+    """Generate a story with streaming output.
+
+    Args:
+        topic: Story topic.
+        ctx: Action context for streaming chunks.
+
+    Returns:
+        The complete generated story.
+    """
+    response = await ai.generate(
+        model=ollama_name('llama3.2'),
+        prompt=f'Write a short story about {topic}',
+        on_chunk=ctx.send_chunk if ctx else None,
+    )
+    return response.text
+```
+
+### Tool Calling
+
+Some Ollama models support tool calling (e.g., Mistral, Llama 3.1+):
+
+```python
+from pydantic import BaseModel, Field
+
+class WeatherInput(BaseModel):
+    """Input for weather tool."""
+    location: str = Field(description='City name')
+
+@ai.tool(description='Get current weather for a location')
+def get_weather(input: WeatherInput) -> str:
+    """Get the current weather for a location."""
+    # In a real implementation, call a weather API
+    return f'The weather in {input.location} is 72°F and sunny.'
+
+@ai.flow()
+async def weather_flow(location: str) -> str:
+    """Get weather information using Ollama with tool calling.
+
+    Note: Requires a model that supports tools, such as mistral-nemo
+    or llama3.1 and newer.
+
+    Args:
+        location: The location to get weather for.
+
+    Returns:
+        Weather information for the location.
+    """
+    response = await ai.generate(
+        model=ollama_name('mistral-nemo'),
+        prompt=f"What's the weather like in {location}?",
+        tools=['get_weather'],
+    )
+    return response.text
+```
+
+### Structured Output
+
+Generate structured data using Pydantic models:
+
+```python
+from pydantic import BaseModel, Field
+from genkit import Output
+
+class Recipe(BaseModel):
+    """A cooking recipe."""
+    name: str = Field(description='Recipe name')
+    ingredients: list[str] = Field(description='List of ingredients')
+    steps: list[str] = Field(description='Cooking steps')
+    prep_time_minutes: int = Field(description='Preparation time in minutes')
+
+@ai.flow()
+async def create_recipe(dish: str) -> Recipe:
+    """Generate a recipe with structured output.
+
+    Args:
+        dish: The dish to create a recipe for.
+
+    Returns:
+        A structured recipe.
+    """
+    response = await ai.generate(
+        model=ollama_name('llama3.2'),
+        prompt=f'Create a recipe for {dish}',
+        output=Output(schema=Recipe),
+    )
+    return response.output
+```
+
+### Custom Server Configuration
+
+For production deployments or custom Ollama server locations:
+
+```python
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[ModelDefinition(name='llama3.2')],
+            server_address='http://ollama-server.internal:11434',
+            request_headers={
+                'X-Custom-Header': 'value',
+            },
+        )
+    ],
+)
 ```
 
 </LanguageContent>

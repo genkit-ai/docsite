@@ -9,7 +9,7 @@ import LanguageContent from '../../../components/LanguageContent.astro';
 import ThemeImage from '../../../components/ThemeImage.astro';
 
 <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-	<LanguageSelector supportedLanguages="js go" />
+	<LanguageSelector supportedLanguages="js go python" />
 	<CopyMarkdownButton />
 </div>
 
@@ -1188,7 +1188,670 @@ UI, located at `localhost:4000/evaluate`.
 </LanguageContent>
 
 <LanguageContent lang="python">
-:::note[Feature documentation unavailable for Python]
-Documentation is currently unavailable for Python. Stay tuned.
+
+Evaluation is a form of testing that helps you validate your LLM's responses and
+ensure they meet your quality bar.
+
+Genkit supports third-party evaluation tools through plugins, paired
+with powerful observability features that provide insight into the runtime state
+of your LLM-powered applications. Genkit tooling helps you automatically extract
+data including inputs, outputs, and information from intermediate steps to
+evaluate the end-to-end quality of LLM responses as well as understand the
+performance of your system's building blocks.
+
+### Types of evaluation
+
+Genkit supports two types of evaluation:
+
+- **Inference-based evaluation**: This type of evaluation runs against a
+  collection of pre-determined inputs, assessing the corresponding outputs for
+  quality.
+
+    This is the most common evaluation type, suitable for most use cases. This approach tests a system's actual output for each evaluation run.
+
+    You can perform the quality assessment manually, by visually inspecting the results. Alternatively, you can automate the assessment by using an evaluation metric.
+
+- **Raw evaluation**: This type of evaluation directly assesses the quality of
+  inputs without any inference. This approach typically is used with automated
+  evaluation using metrics. All required fields for evaluation (e.g., `input`,
+  `context`, `output` and `reference`) must be present in the input dataset. This
+  is useful when you have data coming from an external source (e.g., collected
+  from your production traces) and you want to have an objective measurement of
+  the quality of the collected data.
+
+    For more information, see the [Advanced use](#advanced-use) section of this page.
+
+This section explains how to perform inference-based evaluation using Genkit.
+
+## Quick start
+
+### Setup
+
+1.  Use an existing Genkit app or create a new one by following our [Get started](/docs/get-started) guide.
+2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
+
+    ```python
+    from genkit import Genkit
+    from genkit.plugins.google_genai import GoogleAI
+    from pydantic import BaseModel
+
+    # Initialize Genkit
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # Dummy retriever that always returns the same docs
+    async def dummy_retriever_fn(query, options):
+        facts = [
+            "Dog is man's best friend",
+            "Dogs have evolved and were domesticated from wolves",
+        ]
+        return facts
+
+    ai.define_simple_retriever(
+        'dummy_retriever',
+        dummy_retriever_fn,
+    )
+
+    # Define input/output schemas
+    class QAInput(BaseModel):
+        query: str
+
+    class QAOutput(BaseModel):
+        answer: str
+
+    # A simple question-answering flow
+    @ai.flow()
+    async def qa_flow(input: QAInput) -> QAOutput:
+        fact_docs = await ai.retrieve(
+            retriever='dummy_retriever',
+            query=input.query,
+        )
+
+        response = await ai.generate(
+            model='googleai/gemini-2.5-flash',
+            prompt=f'Answer this question with the given context: {input.query}',
+            docs=fact_docs.documents,
+        )
+        return QAOutput(answer=response.text)
+    ```
+
+3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkit-plugin-evaluators` package.
+
+    ```python
+    from genkit import Genkit
+    from genkit.blocks.model import ModelReference
+    from genkit.plugins.google_genai import GoogleAI
+    from genkit.plugins.evaluators import (
+        define_genkit_evaluators,
+        GenkitMetricType,
+        MetricConfig,
+    )
+
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # Add evaluators to your Genkit instance
+    define_genkit_evaluators(
+        ai,
+        [
+            MetricConfig(
+                metric_type=GenkitMetricType.MALICIOUSNESS,
+                judge=ModelReference(name='googleai/gemini-2.5-flash'),
+            ),
+        ],
+    )
+    ```
+
+    **Note:** The configuration above requires installation of the `genkit-plugin-evaluators` package.
+
+    ```bash
+    uv add genkit-plugin-evaluators
+    ```
+
+4.  Start your Genkit application.
+
+    ```bash
+    genkit start -- uv run main.py
+    ```
+
+### Create a dataset
+
+Create a dataset to define the examples we want to use for evaluating our flow.
+
+1. Go to the Dev UI at `http://localhost:4000` and click the **Datasets** button
+   to open the Datasets page.
+
+2. Click on the **Create Dataset** button to open the create dataset dialog.
+
+    a. Provide a `datasetId` for your new dataset. This guide uses
+    `myFactsQaDataset`.
+
+    b. Select `Flow` dataset type.
+
+    c. Leave the validation target field empty and click **Save**
+
+3. Your new dataset page appears, showing an empty dataset. Add examples to it by following these steps:
+
+    a. Click the **Add example** button to open the example editor panel.
+
+    b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example has to your dataset.
+
+    c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
+
+    ```
+    {"query": "Can I give milk to my cats?"}
+    {"query": "From which animals did dogs evolve?"}
+    ```
+
+By the end of this step, your dataset should have 3 examples in it, with the
+values mentioned above.
+
+### Run evaluation and view results
+
+To start evaluating the flow, click the **Run new evaluation** button on your
+dataset page. You can also start a new evaluation from the _Evaluations_ tab.
+
+1. Select the `Flow` radio button to evaluate a flow.
+
+2. Select `qa_flow` as the target flow to evaluate.
+
+3. Select `myFactsQaDataset` as the target dataset to use for evaluation.
+
+4. (Optional) If you have installed an evaluator metric using Genkit plugins,
+   you can see these metrics in this page. Select the metrics that you want to use
+   with this evaluation run. This is entirely optional: Omitting this step will
+   still return the results in the evaluation run, but without any associated
+   metrics.
+
+5. Finally, click **Run evaluation** to start evaluation. Depending on the flow
+   you're testing, this may take a while. Once the evaluation is complete, a
+   success message appears with a link to view the results. Click on the link to go
+   to the _Evaluation details_ page.
+
+You can see the details of your evaluation on this page, including original
+input, extracted context and metrics (if any).
+
+## Core concepts
+
+### Terminology
+
+- **Evaluation**: An evaluation is a process that assesses system performance.
+  In Genkit, such a system is usually a Genkit primitive, such as a flow, a
+  prompt, or a model. An evaluation can be automated or manual (human
+  evaluation).
+
+- **Bulk inference** Inference is the act of running an input on a flow or model to get the corresponding output. Bulk inference involves performing inference on multiple inputs simultaneously.
+
+- **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
+
+- **Dataset** A dataset is a collection of examples to use for inference-based  
+  evaluation. A dataset typically consists of `input` and optional `reference`
+  fields. The `reference` field does not affect the inference step of evaluation
+  but it is passed verbatim to any evaluation metrics. In Genkit, you can create
+  a dataset through the Dev UI. There are three types of datasets in Genkit:
+  _Flow_ datasets, _Model_ datasets, and _Prompt_ datasets.
+
+### Schema validation
+
+Depending on the type, datasets have schema validation support in the Dev UI:
+
+- Flow datasets support validation of the `input` and `reference` fields of the dataset against a flow in the Genkit application. Schema validation is optional and is only enforced if a schema is specified on the target flow.
+
+- Prompt datasets support validation of the `input` field against the prompt's input schema.
+
+- Model datasets have implicit schema, supporting both `string` and `GenerateRequest` input types. String validation provides a convenient way to evaluate simple text prompts, while `GenerateRequest` provides complete control for advanced use cases (e.g. providing model parameters, message history, tools, etc).
+
+Note: Schema validation is a helper tool for editing examples, but it is
+possible to save an example with invalid schema. These examples may fail when
+the running an evaluation.
+
+:::note[Evaluating Prompts]
+When evaluating a prompt, Genkit executes the prompt against the inputs in your dataset. If your prompt definition includes multiple variants (e.g., different model configurations or instructions), the Developer UI allows you to select the specific variant you want to evaluate. This enables A/B testing of different prompt strategies.
+
+If variants have different input schemas, schema validation will be performed against the schema of the currently selected variant.
 :::
+
+## Supported evaluators
+
+### Genkit evaluators
+
+Genkit includes a number of built-in evaluators, inspired by [RAGAS](https://docs.ragas.io/en/stable/), to help you get started:
+
+- **Faithfulness** -- Measures the factual consistency of the generated answer against the given context
+- **Answer Relevancy** -- Assesses how pertinent the generated answer is to the given prompt
+- **Maliciousness** -- Measures whether the generated output intends to deceive, harm, or exploit
+- **Regex** -- Checks if the generated output matches a regular expression pattern provided in the reference field
+- **Deep Equal** -- Checks if the generated output is deep-equal to the reference output
+- **JSONata** -- Checks if the generated output matches a JSONata expression provided in the reference field
+
+### Evaluator plugins
+
+Genkit supports additional evaluators through plugins, like the Vertex Rapid Evaluators, which you can access via the [VertexAI Plugin](/docs/integrations/vertex-ai#evaluation-metrics).
+
+### Custom Evaluators
+
+You can extend Genkit to support custom evaluation by defining your own evaluator functions. An evaluator can use an LLM as a judge, perform programmatic (heuristic) checks, or call external APIs to assess the quality of a response.
+
+You define a custom evaluator using the `ai.define_evaluator()` method. The callback function for the evaluator can contain any logic you need.
+
+Here's an example of a custom evaluator that uses an LLM to check for "deliciousness":
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+from genkit.types import (
+    BaseEvalDataPoint,
+    EvalFnResponse,
+    Score,
+    EvalStatusEnum,
+)
+
+ai = Genkit(plugins=[GoogleAI()])
+
+async def food_evaluator(
+    datapoint: BaseEvalDataPoint,
+    options: dict[str, object] | None = None,
+) -> EvalFnResponse:
+    """Determines if an output is a delicious food item."""
+    if not datapoint.output or not isinstance(datapoint.output, str):
+        raise ValueError("String output is required for food evaluation")
+
+    # You can use an LLM as a judge for more complex evaluations.
+    response = await ai.generate(
+        model='googleai/gemini-2.5-flash',
+        prompt=f'Is the following food delicious? Respond with "yes", "no", or "maybe". Food: {datapoint.output}',
+    )
+
+    # You can also perform any custom logic in the evaluator.
+    # if "marmite" in datapoint.output:
+    #     handle_marmite()
+    # or...
+    # score = await my_api.evaluate(
+    #     type='deliciousness',
+    #     value=datapoint.output
+    # )
+
+    return EvalFnResponse(
+        test_case_id=datapoint.test_case_id or '',
+        evaluation=Score(
+            score=response.text,
+            status=EvalStatusEnum.PASS_,
+            details={'reasoning': f'LLM judged: {response.text}'},
+        ),
+    )
+
+ai.define_evaluator(
+    name='custom/foodEvaluator',
+    display_name='Food Evaluator',
+    definition='Determines if an output is a delicious food item.',
+    fn=food_evaluator,
+)
+```
+
+You can then use this custom evaluator just like any other Genkit evaluator. You
+can use them with your datasets in the Dev UI or with the CLI in the `eval:run`
+or `eval:flow` commands:
+
+```bash
+genkit eval:flow myFlow --input myDataset.json --evaluators=custom/foodEvaluator
+```
+
+### Running evaluations programmatically
+
+You can also run evaluations directly in your code using `ai.evaluate()`:
+
+```python
+import asyncio
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+from genkit.types import BaseEvalDataPoint, EvalResponse
+
+ai = Genkit(plugins=[GoogleAI()])
+
+# ... define your evaluator ...
+
+async def run_evaluation() -> EvalResponse:
+    dataset = [
+        BaseEvalDataPoint(
+            test_case_id='test-1',
+            input='What is the capital of France?',
+            output='The capital of France is Paris.',
+            context=['France is a country in Europe. Paris is its capital.'],
+        ),
+        BaseEvalDataPoint(
+            test_case_id='test-2',
+            input='What color is the sky?',
+            output='The sky is blue during the day.',
+            context=['The sky appears blue due to light scattering.'],
+        ),
+    ]
+
+    result = await ai.evaluate(
+        evaluator='custom/foodEvaluator',
+        dataset=dataset,
+        eval_run_id='my-eval-run',
+    )
+
+    for item in result.root:
+        print(f'Test case: {item.test_case_id}')
+        print(f'Score: {item.evaluation}')
+
+    return result
+
+asyncio.run(run_evaluation())
+```
+
+## Advanced use
+
+### Evaluation comparison
+
+The Developer UI offers visual tools for side-by-side comparison of multiple
+evaluation runs. This feature allows you to analyze variations across different
+executions within a unified interface, making it easier to assess changes in
+output quality. Additionally, you can highlight outputs based on the performance
+of specific metrics, indicating improvements or regressions.
+
+When comparing evaluations, one run is designated as the _Baseline_. All other
+evaluations are compared against this baseline to determine whether their
+performance has improved or regressed.
+
+<ThemeImage
+	lightSrc="/src/assets/evals_compare_light.png"
+	darkSrc="/src/assets/evals_compare_dark.png"
+	alt="Evaluation comparison with metric highlighting"
+/>
+
+#### Prerequisites
+
+To use the evaluation comparison feature, the following conditions must be met:
+
+- Evaluations must originate from a dataset source. Evaluations from file
+  sources are not comparable.
+- All evaluations being compared must be from the same dataset.
+- For metric highlighting, all evaluations must use at least one common
+  metric that produces a `number` or `boolean` score.
+
+#### Comparing evaluations
+
+1.  Ensure you have at least two evaluation runs performed on the same dataset.
+    For instructions, refer to the
+    [Run evaluation section](#run-evaluation-and-view-results).
+
+2.  In the Developer UI, navigate to the **Datasets** page.
+
+3.  Select the relevant dataset and open its **Evaluations** tab. You should see
+    all evaluation runs associated with that dataset.
+
+4.  Choose one evaluation to serve as the baseline for comparison.
+
+5.  On the evaluation results page, click the **+ Comparison** button. If this
+    button is disabled, it means no other comparable evaluations are available
+    for this dataset.
+
+6.  A new column will appear with a dropdown menu. Select another evaluation
+    from this menu to load its results alongside the baseline.
+
+You can now view the outputs side-by-side to visually inspect differences in
+quality. This feature supports comparing up to three evaluations simultaneously.
+
+##### Metric highlighting (Optional)
+
+If your evaluations include metrics, you can enable metric highlighting to
+color-code the results. This feature helps you quickly identify changes in
+performance: improvements are colored green, while regressions are red.
+
+Note that highlighting is only supported for numeric and boolean metrics, and
+the selected metric must be present in all evaluations being compared.
+
+To enable metric highlighting:
+
+1.  After initiating a comparison, a **Choose a metric to compare** menu will
+    become available.
+
+2.  Select a metric from the dropdown. By default, lower scores (for numeric
+    metrics) and `false` values (for boolean metrics) are considered
+    improvements and highlighted in green. You can reverse this logic by
+    ticking the checkbox in the menu.
+
+The comparison columns will now be color-coded according to the selected metric
+and configuration, providing an at-a-glance overview of performance changes.
+
+### Evaluation using the CLI
+
+Genkit CLI provides a rich API for performing evaluation. This is especially
+useful in environments where the Dev UI is not available (e.g. in a CI/CD
+workflow).
+
+Genkit CLI provides 3 main evaluation commands: `eval:flow`, `eval:extractData`,
+and `eval:run`.
+
+#### `eval:flow` command
+
+The `eval:flow` command runs inference-based evaluation on an input dataset.
+This dataset may be provided either as a JSON file or by referencing an existing
+dataset in your Genkit runtime.
+
+```bash
+# Referencing an existing dataset
+genkit eval:flow qa_flow --input myFactsQaDataset
+
+# or, using a dataset from a file
+genkit eval:flow qa_flow --input testInputs.json
+```
+
+Note: Make sure that you start your genkit app before running these CLI
+commands.
+
+```bash
+genkit start -- uv run main.py
+```
+
+Here, `testInputs.json` should be an array of objects containing an `input`
+field and an optional `reference` field, like below:
+
+```json
+[
+	{
+		"input": { "query": "What is the French word for Cheese?" }
+	},
+	{
+		"input": { "query": "What green vegetable looks like cauliflower?" },
+		"reference": "Broccoli"
+	}
+]
+```
+
+If your flow requires auth, you may specify it using the `--context` argument:
+
+```bash
+genkit eval:flow qa_flow --input testInputs.json --context '{"auth": {"email_verified": true}}'
+```
+
+By default, the `eval:flow` and `eval:run` commands use all available metrics
+for evaluation. To run on a subset of the configured evaluators, use the
+`--evaluators` flag and provide a comma-separated list of evaluators by name:
+
+```bash
+genkit eval:flow qa_flow --input testInputs.json --evaluators=genkitEval/maliciousness,genkitEval/answer_relevancy
+```
+
+You can view the results of your evaluation run in the Dev UI at
+`localhost:4000/evaluate`.
+
+#### `eval:extractData` and `eval:run` commands
+
+To support _raw evaluation_, Genkit provides tools to extract data from traces
+and run evaluation metrics on extracted data. This is useful, for example, if
+you are using a different framework for evaluation or if you are collecting
+inferences from a different environment to test locally for output quality.
+
+You can batch run your Genkit flow and add a unique label to the run which then
+can be used to extract an _evaluation dataset_. A raw evaluation dataset is a
+collection of inputs for evaluation metrics, _without_ running any prior
+inference.
+
+Run your flow over your test inputs:
+
+```bash
+genkit flow:batchRun qa_flow testInputs.json --label firstRunSimple
+```
+
+Extract the evaluation data:
+
+```bash
+genkit eval:extractData qa_flow --label firstRunSimple --output factsEvalDataset.json
+```
+
+The exported data has a format different from the dataset format presented
+earlier. This is because this data is intended to be used with evaluation
+metrics directly, without any inference step. Here is the syntax of the
+extracted data.
+
+```json
+Array<{
+  "testCaseId": string,
+  "input": any,
+  "output": any,
+  "context": any[],
+  "traceIds": string[],
+}>;
+```
+
+The data extractor automatically locates retrievers and adds the produced docs
+to the context array. You can run evaluation metrics on this extracted dataset
+using the `eval:run` command.
+
+```bash
+genkit eval:run factsEvalDataset.json
+```
+
+By default, `eval:run` runs against all configured evaluators, and as with
+`eval:flow`, results for `eval:run` appear in the evaluation page of Developer
+UI, located at `localhost:4000/evaluate`.
+
+### Custom extractors
+
+Genkit provides reasonable default logic for extracting the necessary fields
+(`input`, `output` and `context`) while doing an evaluation. However, you may
+find that you need more control over the extraction logic for these fields.
+Genkit supports customs extractors to achieve this. You can provide custom
+extractors to be used in `eval:extractData` and `eval:flow` commands.
+
+First, as a preparatory step, introduce an auxiliary step in our `qa_flow`
+example:
+
+```python
+@ai.flow()
+async def qa_flow(input: QAInput) -> QAOutput:
+    fact_docs = await ai.retrieve(
+        retriever='dummy_retriever',
+        query=input.query,
+    )
+    
+    # Add a custom step to process the retrieved facts
+    fact_docs_modified = await ai.run('factModified', lambda: [
+        # Let us use only facts that are considered silly. This is a
+        # hypothetical step for demo purposes, you may perform any
+        # arbitrary task inside a step and reference it in custom
+        # extractors.
+        #
+        # Assume you have a method that checks if a fact is silly
+        doc for doc in fact_docs.documents if is_silly_fact(doc)
+    ])
+
+    response = await ai.generate(
+        model='googleai/gemini-2.5-flash',
+        prompt=f'Answer this question with the given context: {input.query}',
+        docs=fact_docs_modified,
+    )
+    return QAOutput(answer=response.text)
+```
+
+
+
+
+### Synthesizing test data using an LLM
+
+Here is an example flow that uses a PDF file to generate potential user
+questions.
+
+```python
+from pathlib import Path
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+from pydantic import BaseModel, Field
+import pypdf  # uv add pypdf
+
+ai = Genkit(plugins=[GoogleAI()])
+
+class SynthesizeInput(BaseModel):
+    file_path: str = Field(description="PDF file path")
+
+class Question(BaseModel):
+    query: str
+
+class SynthesizeOutput(BaseModel):
+    questions: list[Question]
+
+def extract_text(file_path: str) -> str:
+    """Extract text from a PDF file."""
+    pdf_path = Path(file_path).resolve()
+    with open(pdf_path, 'rb') as file:
+        reader = pypdf.PdfReader(file)
+        text = ''
+        for page in reader.pages:
+            text += page.extract_text()
+    return text
+
+def chunk_text(text: str, chunk_size: int = 2000, overlap: int = 100) -> list[str]:
+    """Split text into overlapping chunks."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start = end - overlap
+    return chunks
+
+@ai.flow()
+async def synthesize_questions(input: SynthesizeInput) -> SynthesizeOutput:
+    file_path = str(Path(input.file_path).resolve())
+    
+    # Extract text from the PDF
+    pdf_txt = await ai.run('extract-text', lambda: extract_text(file_path))
+    
+    # Chunk the text
+    chunks = await ai.run('chunk-it', lambda: chunk_text(pdf_txt))
+    
+    questions = []
+    for chunk in chunks:
+        response = await ai.generate(
+            model='googleai/gemini-2.5-flash',
+            prompt=f'Generate one question about the following text: {chunk}',
+        )
+        questions.append(Question(query=response.text))
+    
+    return SynthesizeOutput(questions=questions)
+```
+
+You can then use this command to export the data into a file and use for
+evaluation.
+
+```bash
+genkit flow:run synthesize_questions '{"file_path": "my_input.pdf"}' --output synthesizedQuestions.json
+```
+
+## Next steps
+
+- Learn about [creating flows](/docs/flows) to build AI workflows that can be evaluated
+- Explore [retrieval-augmented generation (RAG)](/docs/rag) for building knowledge-based systems that benefit from evaluation
+- See [tool calling](/docs/tool-calling) for creating AI agents that can be tested with evaluation metrics
+- Check out the [developer tools documentation](/docs/devtools) for more information about the Genkit Developer UI
+
+## Learn More
+
+- [Flows](/docs/flows)
+- [Retrieval-Augmented Generation (RAG)](/docs/rag)
+- [Tool Calling](/docs/tool-calling)
+- [Developer Tools](/docs/devtools)
+- [Models](/docs/models)
+
 </LanguageContent>

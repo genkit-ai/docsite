@@ -14,9 +14,232 @@ import LanguageContent from '../../../../components/LanguageContent.astro';
 
 <LanguageContent lang="python">
 
-:::note[Feature unavailable for Python]
-Vertex AI Vector Search with Bigquery database integration is not currently available for Python.
-:::
+Vertex AI Vector Search allows you to index and retrieve documents. The documents are stored in BigQuery and the corresponding document IDs are indexed using the vector search index provided by Vertex AI. These are suitable for production use cases.
+
+## Installation
+
+```bash
+uv add genkit-plugin-vertex-ai
+```
+
+## Prerequisites
+
+1. Create a Vertex AI Vector Search index. Details on creating an index can be found at [Create your Vector Search Index](https://cloud.google.com/vertex-ai/docs/vector-search/create-manage-index#create-index)
+2. Create a BigQuery Dataset and a Table within that dataset to store the documents that will be indexed. More information to create BigQuery datasets is available [here](https://cloud.google.com/bigquery/docs/datasets)
+
+## Configuration
+
+To use Vertex AI Vector Search with BigQuery, use the `define_vertex_vector_search_big_query()` helper function:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from genkit.plugins.vertex_ai import define_vertex_vector_search_big_query
+from google.cloud import bigquery
+
+# Initialize plugins
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+# Create BigQuery client
+bq_client = bigquery.Client()
+
+# Define the retriever
+retriever_name = define_vertex_vector_search_big_query(
+    ai,
+    name='my_vertex_bigquery_retriever',
+    embedder='vertexai/text-embedding-004',
+    bq_client=bq_client,
+    dataset_id='my_dataset',
+    table_id='documents',
+)
+```
+
+### Configuration Options
+
+- **name** (str): A unique name for this retriever instance.
+- **embedder** (str): The embedding model to use (e.g., `'vertexai/text-embedding-004'`).
+- **bq_client**: A `google.cloud.bigquery.Client` object for database queries.
+- **dataset_id** (str): The ID of the BigQuery dataset.
+- **table_id** (str): The ID of the BigQuery table.
+- **embedder_options** (optional): Configuration to pass to the embedder.
+- **match_service_client_generator** (optional): Custom generator for the Vertex AI Match Service client.
+
+## Usage
+
+### Indexing Documents
+
+To populate your BigQuery table with documents and vector search index:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from google.cloud import bigquery
+
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+bq_client = bigquery.Client()
+
+async def index_documents_to_bigquery(documents: list[str], dataset_id: str, table_id: str):
+    """Index documents in BigQuery with Vertex AI Vector Search.
+
+    Args:
+        documents: List of text documents to index.
+        dataset_id: BigQuery dataset ID.
+        table_id: BigQuery table ID.
+    """
+    rows_to_insert = []
+    
+    for i, text in enumerate(documents):
+        # Generate embedding
+        embedding_result = await ai.embed(
+            embedder='vertexai/text-embedding-004',
+            content=text,
+        )
+        embedding = embedding_result[0].embedding
+        
+        # Create document record
+        doc_id = f'doc-{i}'
+        rows_to_insert.append({
+            'id': doc_id,  # Required for vector search
+            'content': text,
+            'embedding': embedding,
+        })
+    
+    # Insert rows into BigQuery
+    table_ref = bq_client.dataset(dataset_id).table(table_id)
+    errors = bq_client.insert_rows_json(table_ref, rows_to_insert)
+    
+    if errors:
+        print(f"Errors occurred while inserting rows: {errors}")
+    else:
+        print(f"Successfully indexed {len(rows_to_insert)} documents")
+
+# Example usage
+# documents = [
+#     "Machine learning is a subset of artificial intelligence.",
+#     "Deep learning uses neural networks with multiple layers.",
+#     "Natural language processing enables computers to understand text.",
+# ]
+# import asyncio
+# asyncio.run(index_documents_to_bigquery(documents, 'my_dataset', 'documents'))
+```
+
+### Retrieving Documents
+
+Use the retriever you defined to search for relevant documents:
+
+```python
+@ai.flow()
+async def vector_search_flow(query: str) -> str:
+    """Search using Vertex AI Vector Search with BigQuery.
+
+    Args:
+        query: The search query.
+
+    Returns:
+        Generated response based on retrieved documents.
+    """
+    # Retrieve relevant documents
+    results = await ai.retrieve(
+        retriever='my_vertex_bigquery_retriever',
+        query=query,
+        options={'limit': 5},
+    )
+
+    # Use retrieved documents for generation
+    context = '\n\n'.join([
+        doc.text()
+        for doc in results.documents
+    ])
+    
+    response = await ai.generate(
+        prompt=f"""Based on the following context, answer the question:
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:""",
+    )
+    
+    return response.text
+```
+
+### Complete RAG Example
+
+Here's a complete example showing the full workflow:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+from genkit.plugins.vertex_ai import define_vertex_vector_search_big_query
+from google.cloud import bigquery
+
+# Initialize
+ai = Genkit(
+    plugins=[VertexAI(location='us-central1')],
+)
+
+bq_client = bigquery.Client()
+
+# Define retriever
+retriever_name = define_vertex_vector_search_big_query(
+    ai,
+    name='knowledge_base',
+    embedder='vertexai/text-embedding-004',
+    bq_client=bq_client,
+    dataset_id='my_dataset',
+    table_id='knowledge_base',
+)
+
+@ai.flow()
+async def rag_qa_flow(question: str) -> str:
+    """Answer questions using RAG with Vertex AI Vector Search.
+
+    Args:
+        question: The question to answer.
+
+    Returns:
+        The answer based on retrieved context.
+    """
+    # Step 1: Retrieve relevant documents
+    results = await ai.retrieve(
+        retriever='knowledge_base',
+        query=question,
+        options={'limit': 3},
+    )
+    
+    # Step 2: Prepare context from retrieved documents
+    context = '\n\n'.join([
+        f"Document {i+1}: {doc.text()}"
+        for i, doc in enumerate(results.documents)
+    ])
+    
+    # Step 3: Generate answer with context
+    response = await ai.generate(
+        model='vertexai/gemini-2.0-flash',
+        prompt=f"""Use the following context to answer the question. If the answer cannot be found in the context, say so.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:""",
+    )
+    
+    return response.text
+```
+
+## Learn More
+
+- See the [Retrieval-augmented generation](/docs/rag) page for a general discussion on indexers and retrievers in Genkit.
+- See [Vertex AI Vector Search documentation](https://cloud.google.com/vertex-ai/docs/vector-search/overview) for more details on the service.
 
 </LanguageContent>
 
