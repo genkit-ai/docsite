@@ -1,44 +1,77 @@
-# Genkit.dev Website
+# Genkit documentation website
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The [documentation site](https://genkit.dev) for the Genkit framework.
 
-## Project Structure
+## Issues, bugs, and requests
+We welcome contributions and feedback on our website.
+Please file a request in our
+[issue tracker](https://github.com/genkit-ai/docsite/issues/new/choose)
+or create a [pull request](https://github.com/genkit-ai/docsite/pulls).
+For simple changes (such as tweaking some text),
+it's easiest to make changes using the GitHub UI.
 
-Inside of your Astro + Starlight project, you'll see the following folders and files:
+## Before you submit a PR
+We love it when the community gets involved in improving our docs!
+Here are a few things to keep in mind before you submit a PR. Please read our [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
+- **Purposeful changes**: Ensure your PR has a clear, singular goal.
+- **Clear description**: Describe the problem you are solving and the approach you took in the PR description. 
+- **Testing**: Whenever possible, include tests that cover your new code or reproduce the bug you are fixing.
+
+## Contributing
+To update this site, fork the repo, make your changes,
+and generate a pull request.
+For small, contained changes (such as style and typo fixes),
+you probably don't need to build this site.
+Often you can make changes using the GitHub UI.
+
+If your change involves code samples, adds/removes pages, or affects navigation,
+please build and test your work before submitting.
+
+If you want or need to build the site, follow the steps below.
+
+## Build the site
+For changes beyond simple text and CSS tweaks,
+we recommend running the site locally to
+enable an edit-refresh cycle.
+
+### Get the prerequisites
+To build and develop the site, you'll need `pnpm`.
+
+Enable `pnpm` if you haven't already, you can learn more [here](https://pnpm.io/).
+
+### Clone this repo
+Clone the repository with `git clone`:
+
+```bash
+git clone https://github.com/genkit-ai/docsite.git
 ```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   ├── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-├── tailwind.config.mjs
-└── tsconfig.json
-```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Set up your local environment and serve changes
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+1. From the root directory of the repository, install dependencies:
 
-Static assets, like favicons, can be placed in the `public/` directory.
+   ```bash
+   pnpm install
+   ```
 
-## 🧞 Commands
+2. From the root directory, serve the site locally:
 
-All commands are run from the root of the project, from a terminal:
+   ```bash
+   pnpm dev
+   ```
 
-| Command                | Action                                           |
-| :--------------------- | :----------------------------------------------- |
-| `pnpm install`         | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
+   This command generates and serves the site on a
+   local port (usually `localhost:4321`) that's printed to your terminal.
 
-## 👀 Want to learn more?
+3. View your changes in the browser by navigating to <http://localhost:4321>.
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+4. Make your changes to the local repo. The site should automatically rebuild on most changes.
+
+5. Build your production site to `./dist/` if needed:
+
+   ```bash
+   pnpm build
+   ```
+
+6. Commit your changes to the branch and submit your PR.
