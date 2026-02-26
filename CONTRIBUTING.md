@@ -22,7 +22,7 @@ To ensure your contributions can be reviewed and merged efficiently, please focu
 - **Purposeful changes**: Ensure your PR has a clear, singular goal. If you are fixing multiple unrelated issues, please submit separate pull requests.
 - **Clear description**: Describe the problem you are solving and the approach you took in the PR description. 
 - **Testing**: Whenever possible, include tests that cover your new code or reproduce the bug you are fixing.
-- **Clean history**: Format your commits logically.
+- **History**: Use separate commits, ordered logically, to make it easier for others to review your PR.
 - **Documentation**: If your change affects users or other developers, please update the relevant documentation.
 
 For an example of exactly what we look for when contributing, please see this [reference PR](https://github.com/genkit-ai/docsite/pull/10)
