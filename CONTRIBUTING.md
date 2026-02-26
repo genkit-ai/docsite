@@ -19,7 +19,7 @@ This project follows [Google's Open Source Community Guidelines](https://opensou
 
 To ensure your contributions can be reviewed and merged efficiently, please focus on the following to help us merge your changes quickly:
 
-- **Purposeful changes**: Ensure your PR has a clear, singular goal. If you are fixing multiple unrelated issues, please submit separate pull requests.
+- **Purpose**: Ensure your PR has a clear, singular goal. If you are fixing multiple unrelated issues, please submit separate pull requests.
 - **Clear description**: Describe the problem you are solving and the approach you took in the PR description. 
 - **Testing**: Whenever possible, include tests that cover your new code or reproduce the bug you are fixing.
 - **History**: Use separate commits, ordered logically, to make it easier for others to review your PR.
