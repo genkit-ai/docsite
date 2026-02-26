@@ -29,7 +29,7 @@ For an example of exactly what we look for when contributing, please see this [r
 
 ## Setup
 
-This project uses Astro and `pnpm`. To set up your local development environment for building the docs:
+This project uses [Astro](https://astro.build/) and [pnpm](https://pnpm.io/). To set up your local development environment for building the docs:
 
 1. Clone the repository and navigate to the project root.
 2. Install the dependencies:
