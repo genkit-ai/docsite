@@ -23,7 +23,7 @@ To ensure your contributions can be reviewed and merged efficiently, please focu
 - **Clear description**: Describe the problem you are solving and the approach you took in the PR description. 
 - **Testing**: Whenever possible, include tests that cover your new code or reproduce the bug you are fixing.
 - **History**: Use separate commits, ordered logically, to make it easier for others to review your PR.
-- **Documentation**: If your change affects users or other developers, please update the relevant documentation.
+- **Documentation**: If your change affects users or other developers, please update the relevant documentation as part of your PR.
 
 For an example of exactly what we look for when contributing, please see this [reference PR](https://github.com/genkit-ai/docsite/pull/10)
 
