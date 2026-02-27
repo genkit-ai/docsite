@@ -1,6 +1,6 @@
 # Genkit documentation website
 
-The [documentation site](https://genkit.dev) for the Genkit framework.
+The Genkit framework documentation is on https://genkit.dev/.
 
 ## Issues, bugs, and requests
 We welcome contributions and feedback on our website.
@@ -10,9 +10,10 @@ or create a [pull request](https://github.com/genkit-ai/docsite/pulls).
 
 ## Before you submit a PR
 We love it when the community gets involved in improving our docs!
-Here are a few things to keep in mind before you submit a PR. Please read our [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
-## Set up your local environment and serve changes
+See [CONTRIBUTING.md](CONTRIBUTING.md) to learn more.
+
+## Setup
 
 1. From the root directory of the repository, install dependencies:
 

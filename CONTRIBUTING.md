@@ -19,28 +19,13 @@ This project follows [Google's Open Source Community Guidelines](https://opensou
 
 To ensure your contributions can be reviewed and merged efficiently, please focus on the following to help us merge your changes quickly:
 
-- **Purpose**: Ensure your PR has a clear, singular goal. If you are fixing multiple unrelated issues, please submit separate pull requests.
 - **Clarity**: Describe the problem you are solving and the approach you took in the PR description. 
+- **Purpose**: Ensure your PR has a clear, singular goal. If you are fixing multiple unrelated issues, please submit separate pull requests.
 - **Testing**: Whenever possible, include tests that cover your new code or reproduce the bug you are fixing.
 - **History**: Use separate commits, ordered logically, to make it easier for others to review your PR.
 - **Documentation**: If your change affects users or other developers, please update the relevant documentation as part of your PR.
 
 For an example of exactly what we look for when contributing, please see this [reference PR](https://github.com/genkit-ai/docsite/pull/10)
-
-## Setup
-
-This project uses [Astro](https://astro.build/) and [pnpm](https://pnpm.io/). To set up your local development environment for building the docs:
-
-1. Clone the repository and navigate to the project root.
-2. Install the dependencies:
-   ```bash
-   pnpm install
-   ```
-3. Start the local development server:
-   ```bash
-   pnpm dev
-   ```
-   The site will be available at `http://localhost:4321`.
 
 ## Contribution process
 
