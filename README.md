@@ -1,44 +1,37 @@
-# Genkit.dev Website
+# Genkit documentation website
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The Genkit framework documentation is on https://genkit.dev/.
 
-## Project Structure
+## Issues, bugs, and requests
+We welcome contributions and feedback on our website.
+Please file a request in our
+[issue tracker](https://github.com/genkit-ai/docsite/issues/new/choose)
+or create a [pull request](https://github.com/genkit-ai/docsite/pulls).
 
-Inside of your Astro + Starlight project, you'll see the following folders and files:
+## Before you submit a PR
+We love it when the community gets involved in improving our docs!
 
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   ├── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-├── tailwind.config.mjs
-└── tsconfig.json
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) to learn more.
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Setup
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+1. From the root directory of the repository, install dependencies:
 
-Static assets, like favicons, can be placed in the `public/` directory.
+   ```bash
+   pnpm install
+   ```
 
-## 🧞 Commands
+2. From the root directory, serve the site locally:
 
-All commands are run from the root of the project, from a terminal:
+   ```bash
+   pnpm run dev
+   ```
 
-| Command                | Action                                           |
-| :--------------------- | :----------------------------------------------- |
-| `pnpm install`         | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
+   This command generates and serves the site on a
+   local port (usually `localhost:4321`) that's printed to your terminal.
 
-## 👀 Want to learn more?
+3. View your changes in the browser by navigating to <http://localhost:4321>.
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+4. Make your changes to the local repo. The site should automatically rebuild on most changes.
+
+5. Commit your changes to the branch and submit your PR.
