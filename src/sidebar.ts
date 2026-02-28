@@ -87,6 +87,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
+      { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
       { label: "Any Platform", slug: "docs/deployment/any-platform" },
       { label: "Client App Integration", slug: "docs/client" },
     ],
