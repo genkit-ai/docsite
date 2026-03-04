@@ -80,6 +80,7 @@ const DOCS_SIDEBAR = [
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
       { label: "Angular", slug: "docs/frameworks/angular" },
       { label: "FastAPI", slug: "docs/frameworks/fastapi" },
+      { label: "Shelf (Dart)", slug: "docs/frameworks/shelf" },
     ],
   },
   {
