@@ -2,14 +2,201 @@
 import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.astro';
 import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
 import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
+import { docsAllLanguages, docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../sidebar';
 
-const { sidebar } = Astro.locals.starlightRoute;
+const { sidebar: routeSidebar } = Astro.locals.starlightRoute;
+
+const pathLangMatch = Astro.url.pathname.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
+const currentLang = pathLangMatch?.[1] || Astro.url.searchParams.get('lang') || 'js';
+const languageLabels: Record<string, string> = {
+	js: 'TypeScript',
+	go: 'Go',
+	python: 'Python',
+	dart: 'Dart',
+};
+const languageAriaLabels: Record<string, string> = {
+	js: 'JavaScript',
+	go: 'Go',
+	python: 'Python',
+	dart: 'Dart',
+};
+const docsLanguageSupportByPath = Object.fromEntries(
+	Object.entries(docsLanguageSupportBySlug).map(([slug, langs]) => [`/${slug}`, langs]),
+);
+const docsLanguageAgnosticByPath = Object.fromEntries(
+	Object.entries(docsLanguageAgnosticBySlug).map(([slug, isAgnostic]) => [`/${slug}`, isAgnostic]),
+);
 ---
 
+<div class="docs-nav-language-selector" role="tablist" aria-label="Filter docs by programming language">
+	{
+		docsAllLanguages.map((lang) => (
+			<button
+				class="lang-pill docs-nav-lang-pill"
+				role="tab"
+				aria-label={`Switch docs language to ${languageAriaLabels[lang] || lang}`}
+				aria-selected={currentLang === lang ? 'true' : 'false'}
+				data-lang={lang}
+			>
+				{languageLabels[lang] || lang}
+			</button>
+		))
+	}
+</div>
+
 <SidebarPersister>
-  <SidebarSublist sublist={sidebar} />
+	<SidebarSublist sublist={routeSidebar} />
 </SidebarPersister>
 
 <div class="md:sl-hidden">
-  <MobileMenuFooter />
+	<MobileMenuFooter />
 </div>
+
+<script
+	is:inline
+	data-docs-language-support={JSON.stringify(docsLanguageSupportByPath)}
+	data-docs-language-agnostic={JSON.stringify(docsLanguageAgnosticByPath)}
+	data-docs-all-languages={JSON.stringify(docsAllLanguages)}
+>
+	(() => {
+		const currentScript = document.currentScript;
+		if (!currentScript) return;
+
+		const languageSupportRaw = currentScript.getAttribute('data-docs-language-support') || '{}';
+		const languageAgnosticRaw = currentScript.getAttribute('data-docs-language-agnostic') || '{}';
+		const allLanguagesRaw = currentScript.getAttribute('data-docs-all-languages') || '[]';
+
+		/** @type {Record<string, string[]>} */
+		const languageSupportByPath = JSON.parse(languageSupportRaw);
+		/** @type {Record<string, boolean>} */
+		const languageAgnosticByPath = JSON.parse(languageAgnosticRaw);
+		/** @type {string[]} */
+		const allLanguages = JSON.parse(allLanguagesRaw);
+		const fallbackOrder = ['js', 'go', 'dart', 'python'];
+
+		const normalizePath = (href) => {
+			try {
+				const url = new URL(href, window.location.origin);
+				let normalized = url.pathname.replace(/\/$/, '');
+				if (!normalized) normalized = '/';
+				return normalized;
+			} catch {
+				return null;
+			}
+		};
+
+		const updateSidebarForLanguage = () => {
+			const selectedLanguage = document.documentElement.getAttribute('data-genkit-lang') || 'js';
+			const currentPath = normalizePath(window.location.pathname) || window.location.pathname;
+
+			document.querySelectorAll('.sidebar-pane a[href]').forEach((anchor) => {
+				const normalizedPath = normalizePath(anchor.getAttribute('href') || '');
+				if (!normalizedPath || !normalizedPath.startsWith('/docs/')) return;
+
+				const alreadyLanguagePath = /^\/docs\/(js|go|dart|python)\//.test(normalizedPath);
+				const basePath = alreadyLanguagePath
+					? normalizedPath.replace(/^\/docs\/(js|go|dart|python)(\/|$)/, '/docs/')
+					: normalizedPath;
+				const isLanguageAgnostic = Boolean(languageAgnosticByPath[basePath]);
+				const supported = languageSupportByPath[basePath] || allLanguages;
+				const isSupported = supported.includes(selectedLanguage);
+				const listItem = anchor.closest('li');
+				if (!listItem) return;
+
+				listItem.hidden = !isSupported;
+
+				if (!isSupported) {
+					return;
+				}
+
+				if (isLanguageAgnostic) {
+					const targetPath = `${basePath}/`.replace(/\/+$/, '/');
+					anchor.setAttribute('href', targetPath);
+					const isCurrent = (normalizePath(targetPath) || targetPath) === currentPath;
+					anchor.setAttribute('aria-current', isCurrent ? 'page' : 'false');
+					return;
+				}
+
+				const selectedOrFallback = supported.includes(selectedLanguage)
+					? selectedLanguage
+					: fallbackOrder.find((language) => supported.includes(language)) || selectedLanguage;
+
+				const slug = basePath.replace(/^\/docs\//, '').replace(/\/$/, '');
+				const targetPath = `/docs/${selectedOrFallback}/${slug}/`;
+				anchor.setAttribute('href', targetPath);
+				const isCurrent = (normalizePath(targetPath) || targetPath) === currentPath;
+				anchor.setAttribute('aria-current', isCurrent ? 'page' : 'false');
+			});
+
+			document.querySelectorAll('.sidebar-pane details').forEach((group) => {
+				const listItems = Array.from(group.querySelectorAll(':scope > ul > li'));
+				if (listItems.length === 0) return;
+				const hasVisibleItems = listItems.some((item) => !item.hidden);
+				group.hidden = !hasVisibleItems;
+			});
+		};
+
+		const runUpdate = () => window.requestAnimationFrame(updateSidebarForLanguage);
+
+		runUpdate();
+		document.addEventListener('genkit:languagechange', runUpdate);
+		document.addEventListener('astro:page-load', runUpdate);
+		window.addEventListener('popstate', runUpdate);
+	})();
+</script>
+
+<style>
+	.docs-nav-language-selector {
+		box-sizing: border-box;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.3rem;
+		margin: 0 0.5rem 0.9rem;
+		padding: 0.35rem;
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.8rem;
+		background: var(--sl-color-bg-sidebar);
+	}
+
+	.docs-nav-lang-pill {
+		border: 1px solid transparent;
+		background: transparent;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+		transition:
+			background-color 0.18s ease,
+			border-color 0.18s ease,
+			color 0.18s ease,
+			box-shadow 0.18s ease;
+		line-height: 1;
+		font-size: 0.76rem;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+		text-align: center;
+		padding: 0.42rem 0.5rem;
+		border-radius: 0.55rem;
+	}
+
+	.docs-nav-lang-pill:hover {
+		color: var(--sl-color-text);
+		background: var(--sl-color-bg);
+		border-color: var(--sl-color-hairline-light);
+	}
+
+	.docs-nav-lang-pill[aria-selected='true'] {
+		background: var(--sl-color-accent);
+		color: white;
+		border-color: var(--sl-color-accent);
+	}
+
+	.docs-nav-lang-pill:focus-visible {
+		outline: 2px solid color-mix(in srgb, var(--sl-color-accent) 55%, white);
+		outline-offset: 1px;
+	}
+
+	@media (max-width: 50rem) {
+		.docs-nav-language-selector {
+			margin-bottom: 0.7rem;
+		}
+	}
+</style>

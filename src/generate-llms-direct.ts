@@ -147,11 +147,14 @@ function createLanguageSetsFromSidebar(): LanguageSet[] {
 // Generate language sets from sidebar
 const LANGUAGE_SETS = createLanguageSetsFromSidebar();
 
-function generateLanguageSpecificContent(docs: ProcessedDocument[], language: 'js' | 'go' | 'python'): string {
+type Language = 'js' | 'go' | 'dart' | 'python';
+
+function generateLanguageSpecificContent(docs: ProcessedDocument[], language: Language): string {
   const languageNames = {
     js: 'JavaScript',
     go: 'Go',
-    python: 'Python'
+    dart: 'Dart',
+    python: 'Python',
   };
 
   let content = `# Genkit Documentation - ${languageNames[language]}\n\n`;
@@ -162,7 +165,7 @@ function generateLanguageSpecificContent(docs: ProcessedDocument[], language: 'j
   
   for (const docPath of allPaths) {
     const doc = docs.find(d => d.slug === docPath);
-    if (doc && doc.content[language]) {
+    if (doc && doc.content[language] && doc.supportedLanguages.includes(language)) {
       content += `${doc.content[language]}\n\n---\n\n`;
     }
   }
@@ -170,11 +173,12 @@ function generateLanguageSpecificContent(docs: ProcessedDocument[], language: 'j
   return content;
 }
 
-function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet, language: 'js' | 'go' | 'python'): string {
+function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet, language: Language): string {
   const languageNames = {
     js: 'JavaScript',
     go: 'Go',
-    python: 'Python'
+    dart: 'Dart',
+    python: 'Python',
   };
 
   let content = `# ${set.label} - ${languageNames[language]}\n\n`;
@@ -182,7 +186,7 @@ function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet
 
   for (const docPath of set.paths) {
     const doc = docs.find(d => d.slug === docPath);
-    if (doc && doc.content[language]) {
+    if (doc && doc.content[language] && doc.supportedLanguages.includes(language)) {
       content += `${doc.content[language]}\n\n---\n\n`;
     }
   }
@@ -192,7 +196,7 @@ function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet
 
 function generateFullDocumentation(docs: ProcessedDocument[]): string {
   let content = `# Genkit - Complete Documentation\n\n`;
-  content += `> Open-source GenAI toolkit for JS, Go, and Python.\n`;
+  content += `> Open-source GenAI toolkit for JS, Go, Dart, and Python.\n`;
   content += `> This is the complete unfiltered documentation (primarily for internal use).\n\n`;
 
   // Get all unique paths from all language sets and sort them
@@ -202,9 +206,9 @@ function generateFullDocumentation(docs: ProcessedDocument[]): string {
     const doc = docs.find(d => d.slug === docPath);
     if (doc) {
       // Include all language content for each document
-      const languages: Array<'js' | 'go' | 'python'> = ['js', 'go', 'python'];
+      const languages: Language[] = ['js', 'go', 'dart', 'python'];
       for (const lang of languages) {
-        if (doc.content[lang]) {
+        if (doc.content[lang] && doc.supportedLanguages.includes(lang)) {
           content += `## ${docPath} (${lang.toUpperCase()})\n\n`;
           content += `${doc.content[lang]}\n\n---\n\n`;
         }
@@ -218,13 +222,14 @@ function generateFullDocumentation(docs: ProcessedDocument[]): string {
 function generateMainLlmsTxt(): string {
   const content = `# Genkit
 
-> Open-source GenAI toolkit for JS, Go, and Python.
+> Open-source GenAI toolkit for JS, Go, Dart, and Python.
 
 ## Documentation Sets
 
 - [JavaScript documentation](https://genkit.dev/llms-js.txt): Genkit documentation focused on JavaScript/TypeScript
 - [Go documentation](https://genkit.dev/llms-go.txt): Genkit documentation focused on Go
 - [Python documentation](https://genkit.dev/llms-python.txt): Genkit documentation focused on Python
+- [Dart documentation](https://genkit.dev/llms-dart.txt): Genkit documentation focused on Dart
 
 ### Language-Specific Thematic Sets
 
@@ -251,6 +256,14 @@ function generateMainLlmsTxt(): string {
 - [Writing Plugins - Python](https://genkit.dev/_llms-txt/writing-plugins-python.txt): Guidance about how to author plugins for Genkit in Python.
 - [AI Providers - Python](https://genkit.dev/_llms-txt/ai-providers-python.txt): Provider-specific documentation for AI model providers in Python.
 - [Vector Databases - Python](https://genkit.dev/_llms-txt/vector-databases-python.txt): Documentation for vector database integrations in Python.
+
+#### Dart
+- [Building AI Workflows - Dart](https://genkit.dev/_llms-txt/building-ai-workflows-dart.txt): Guidance on how to generate content and interact with LLM and image models using Genkit in Dart.
+- [Deploying AI Workflows - Dart](https://genkit.dev/_llms-txt/deploying-ai-workflows-dart.txt): Guidance on how to deploy Genkit code to various environments using Dart.
+- [Observing AI Workflows - Dart](https://genkit.dev/_llms-txt/observing-ai-workflows-dart.txt): Guidance about Genkit's various observability features in Dart.
+- [Writing Plugins - Dart](https://genkit.dev/_llms-txt/writing-plugins-dart.txt): Guidance about how to author plugins for Genkit in Dart.
+- [AI Providers - Dart](https://genkit.dev/_llms-txt/ai-providers-dart.txt): Provider-specific documentation for AI model providers in Dart.
+- [Vector Databases - Dart](https://genkit.dev/_llms-txt/vector-databases-dart.txt): Documentation for vector database integrations in Dart.
 
 ### Developer Tools
 - [Developer Tools](https://genkit.dev/_llms-txt/devtools.txt): Documentation for development tools, MCP server, and local development.
@@ -291,7 +304,7 @@ export async function generateLlmsDirectly(): Promise<void> {
   console.log('Generated llms-full.txt');
   
   // Generate language-specific complete documentation
-  const languages: Array<'js' | 'go' | 'python'> = ['js', 'go', 'python'];
+  const languages: Language[] = ['js', 'go', 'dart', 'python'];
   
   for (const lang of languages) {
     console.log(`Generating complete documentation for ${lang}...`);
