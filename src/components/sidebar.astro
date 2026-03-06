@@ -3,6 +3,10 @@ import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.ast
 import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
 import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
 import { docsAllLanguages, docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../sidebar';
+import TypescriptIcon from '../assets/icons/typescript.svg';
+import GoIcon from '../assets/icons/go.svg';
+import PythonIcon from '../assets/icons/python.svg';
+import DartIcon from '../assets/icons/dart.svg';
 
 const { sidebar: routeSidebar } = Astro.locals.starlightRoute;
 
@@ -14,11 +18,11 @@ const languageLabels: Record<string, string> = {
 	python: 'Python',
 	dart: 'Dart',
 };
-const languageAriaLabels: Record<string, string> = {
-	js: 'JavaScript',
-	go: 'Go',
-	python: 'Python',
-	dart: 'Dart',
+const iconComponents: Record<string, any> = {
+	js: TypescriptIcon,
+	go: GoIcon,
+	python: PythonIcon,
+	dart: DartIcon,
 };
 const docsLanguageSupportByPath = Object.fromEntries(
 	Object.entries(docsLanguageSupportBySlug).map(([slug, langs]) => [`/${slug}`, langs]),
@@ -28,20 +32,44 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 );
 ---
 
-<div class="docs-nav-language-selector" role="tablist" aria-label="Filter docs by programming language">
-	{
-		docsAllLanguages.map((lang) => (
-			<button
-				class="lang-pill docs-nav-lang-pill"
-				role="tab"
-				aria-label={`Switch docs language to ${languageAriaLabels[lang] || lang}`}
-				aria-selected={currentLang === lang ? 'true' : 'false'}
-				data-lang={lang}
-			>
-				{languageLabels[lang] || lang}
-			</button>
-		))
-	}
+<div class="docs-nav-language-selector">
+	<div class="lang-dropdown" id="lang-dropdown">
+		<button
+			class="lang-dropdown-trigger"
+			aria-haspopup="listbox"
+			aria-expanded="false"
+			aria-label="Filter docs by programming language"
+			data-selected-lang={currentLang}
+		>
+			{docsAllLanguages.map((lang) => {
+				const IconComp = iconComponents[lang];
+				return <span class="lang-icon" data-icon-lang={lang}><IconComp /></span>;
+			})}
+			<span class="lang-trigger-label">{languageLabels[currentLang] || currentLang}</span>
+			<svg class="lang-chevron" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true" fill="none">
+				<path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+			</svg>
+		</button>
+		<ul class="lang-dropdown-menu" role="listbox" aria-label="Filter docs by programming language">
+			{
+				docsAllLanguages.map((lang) => {
+					const IconComp = iconComponents[lang];
+					return (
+						<li
+							class="lang-option"
+							role="option"
+							data-lang={lang}
+							aria-selected={currentLang === lang ? 'true' : 'false'}
+							tabindex="-1"
+						>
+							<span class="lang-icon"><IconComp /></span>
+							{languageLabels[lang] || lang}
+						</li>
+					);
+				})
+			}
+		</ul>
+	</div>
 </div>
 
 <SidebarPersister>
@@ -145,53 +173,198 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 	})();
 </script>
 
+<script>
+	const LABEL_MAP: Record<string, string> = { js: 'TypeScript', go: 'Go', python: 'Python', dart: 'Dart' };
+
+	function initLangDropdown() {
+		const dropdown = document.getElementById('lang-dropdown');
+		if (!dropdown) return;
+
+		const trigger = dropdown.querySelector<HTMLButtonElement>('.lang-dropdown-trigger');
+		const menu = dropdown.querySelector('.lang-dropdown-menu');
+		if (!trigger || !menu) return;
+
+		function open() {
+			dropdown!.setAttribute('data-open', '');
+			trigger!.setAttribute('aria-expanded', 'true');
+		}
+
+		function close() {
+			dropdown!.removeAttribute('data-open');
+			trigger!.setAttribute('aria-expanded', 'false');
+		}
+
+		function syncUI(lang: string) {
+			trigger!.dataset.selectedLang = lang;
+			const labelEl = trigger!.querySelector('.lang-trigger-label');
+			if (labelEl) labelEl.textContent = LABEL_MAP[lang] || lang;
+
+			menu!.querySelectorAll('.lang-option').forEach((opt) => {
+				opt.setAttribute('aria-selected', opt.getAttribute('data-lang') === lang ? 'true' : 'false');
+			});
+		}
+
+		trigger.addEventListener('click', () => {
+			dropdown!.hasAttribute('data-open') ? close() : open();
+		});
+
+		menu.addEventListener('click', (e) => {
+			const option = (e.target as Element).closest<HTMLElement>('.lang-option');
+			if (!option) return;
+			const lang = option.dataset.lang;
+			if (!lang) return;
+			close();
+			(window as any).unifiedPageManager?.setLanguage(lang);
+		});
+
+		document.addEventListener('click', (e) => {
+			if (!dropdown!.contains(e.target as Node)) close();
+		});
+
+		document.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') close();
+		});
+
+		document.addEventListener('genkit:languagechange', (e) => {
+			syncUI((e as CustomEvent).detail.language);
+		});
+
+		// Sync initial state from the live attribute (may differ from SSR if preference changed)
+		const currentLang = document.documentElement.getAttribute('data-genkit-lang') || 'js';
+		syncUI(currentLang);
+	}
+
+	document.addEventListener('astro:page-load', initLangDropdown);
+	initLangDropdown();
+</script>
+
 <style>
 	.docs-nav-language-selector {
 		box-sizing: border-box;
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.3rem;
 		margin: 0 0.5rem 0.9rem;
-		padding: 0.35rem;
-		border: 1px solid var(--sl-color-hairline-light);
-		border-radius: 0.8rem;
-		background: var(--sl-color-bg-sidebar);
+		position: relative;
 	}
 
-	.docs-nav-lang-pill {
-		border: 1px solid transparent;
-		background: transparent;
-		color: var(--sl-color-gray-2);
+	/* Dropdown container */
+	.lang-dropdown {
+		position: relative;
+	}
+
+	/* Trigger button */
+	.lang-dropdown-trigger {
+		width: 100%;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.4rem 0.55rem 0.4rem 0.5rem;
+		background: var(--sl-color-bg-sidebar);
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.5rem;
+		color: var(--sl-color-text);
 		cursor: pointer;
-		transition:
-			background-color 0.18s ease,
-			border-color 0.18s ease,
-			color 0.18s ease,
-			box-shadow 0.18s ease;
-		line-height: 1;
-		font-size: 0.76rem;
+		font-size: 0.8rem;
 		font-weight: 600;
 		letter-spacing: 0.01em;
-		text-align: center;
-		padding: 0.42rem 0.5rem;
-		border-radius: 0.55rem;
+		transition: border-color 0.15s ease;
+		text-align: left;
 	}
 
-	.docs-nav-lang-pill:hover {
-		color: var(--sl-color-text);
-		background: var(--sl-color-bg);
-		border-color: var(--sl-color-hairline-light);
-	}
-
-	.docs-nav-lang-pill[aria-selected='true'] {
-		background: var(--sl-color-accent);
-		color: white;
+	.lang-dropdown-trigger:hover {
 		border-color: var(--sl-color-accent);
 	}
 
-	.docs-nav-lang-pill:focus-visible {
+	.lang-dropdown-trigger:focus-visible {
 		outline: 2px solid color-mix(in srgb, var(--sl-color-accent) 55%, white);
 		outline-offset: 1px;
+	}
+
+	.lang-trigger-label {
+		flex: 1;
+	}
+
+	.lang-chevron {
+		flex-shrink: 0;
+		color: var(--sl-color-gray-3);
+		transition: transform 0.15s ease;
+	}
+
+	.lang-dropdown[data-open] .lang-chevron {
+		transform: rotate(180deg);
+	}
+
+	/* Dropdown menu */
+	.lang-dropdown-menu {
+		display: none;
+		position: absolute;
+		top: calc(100% + 0.3rem);
+		left: 0;
+		right: 0;
+		z-index: 100;
+		margin: 0;
+		padding: 0.25rem;
+		list-style: none;
+		background: var(--sl-color-bg);
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.5rem;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+	}
+
+	.lang-dropdown[data-open] .lang-dropdown-menu {
+		display: block;
+	}
+
+	/* Menu options */
+	.lang-option {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.4rem 0.5rem;
+		border-radius: 0.35rem;
+		font-size: 0.8rem;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+		transition: background 0.12s ease, color 0.12s ease;
+	}
+
+	.lang-option:hover {
+		background: var(--sl-color-bg-nav);
+		color: var(--sl-color-text);
+	}
+
+	.lang-option[aria-selected='true'] {
+		color: var(--sl-color-text);
+		background: var(--sl-color-bg-nav);
+	}
+
+	/* Icons */
+	.lang-icon {
+		display: none;
+		align-items: center;
+		justify-content: center;
+		width: 1.1rem;
+		height: 1.1rem;
+		flex-shrink: 0;
+	}
+
+	.lang-icon :global(svg) {
+		width: 100%;
+		height: 100%;
+	}
+
+	/* In the trigger, show only the selected language's icon */
+	.lang-dropdown-trigger[data-selected-lang='js'] [data-icon-lang='js'],
+	.lang-dropdown-trigger[data-selected-lang='go'] [data-icon-lang='go'],
+	.lang-dropdown-trigger[data-selected-lang='python'] [data-icon-lang='python'],
+	.lang-dropdown-trigger[data-selected-lang='dart'] [data-icon-lang='dart'] {
+		display: inline-flex;
+	}
+
+	/* In menu options, always show the icon */
+	.lang-option .lang-icon {
+		display: inline-flex;
 	}
 
 	@media (max-width: 50rem) {
