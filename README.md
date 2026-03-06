@@ -43,7 +43,7 @@ For each docs page:
 3. Use `<Lang>` blocks only where content differs by language.
 4. Keep common content outside language blocks.
 
-See [DOCUMENTATION-GUIDANCE.md](/Users/chgill/Projects/docsite/DOCUMENTATION-GUIDANCE.md) for full authoring standards.
+See [DOCUMENTATION-GUIDANCE.md](DOCUMENTATION-GUIDANCE.md) for full authoring standards.
 
 ## Commands
 
