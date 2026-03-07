@@ -130,6 +130,37 @@ This code:
 return &aix.SessionFlowResult{Artifacts: sess.Artifacts()}, nil
 ```
 
+Your session flow function runs for the entire lifetime of the connection,
+and `sess.Run()` blocks until the client closes it. This means the code
+before and after `sess.Run()` is a natural place for one-time setup and
+teardown. For long-running multi-turn conversations, you can initialize
+expensive resources (database connections, external API clients, model
+configuration) before the turn loop starts and clean them up after it ends:
+
+```go
+chatFlow := genkit.DefineSessionFlow(g, "chat",
+    func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+        // One-time setup: initialize resources for the session.
+        client, err := expensiveClient(ctx)
+        if err != nil {
+            return nil, err
+        }
+        defer client.Close()
+
+        if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
+            // This runs once per turn. The client is available
+            // across all turns without being recreated.
+            return handleTurn(ctx, client, resp, sess, input)
+        }); err != nil {
+            return nil, err
+        }
+
+        // Teardown: finalize results after the conversation ends.
+        return sess.Result(), nil
+    },
+)
+```
+
 ## Using session flows
 
 ### Single-turn
