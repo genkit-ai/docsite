@@ -114,6 +114,16 @@ export function processRawContent(rawContent: string, title: string): string {
   // 1. Remove frontmatter block
   let processedContent = rawContent.replace(/^---\s*[\s\S]*?---/, '').trim();
 
+  // Remove generated-file notices from markdown exports while keeping them in source files.
+  processedContent = processedContent.replace(
+    /^\s*\{\/\*\s*AUTO-GENERATED FILE[\s\S]*?\*\/\}\s*/i,
+    '',
+  );
+  processedContent = processedContent.replace(
+    /^\s*<!--\s*AUTO-GENERATED FILE[\s\S]*?-->\s*/i,
+    '',
+  );
+
   // 2. Remove ONLY leading import statements
   const lines = processedContent.split('\n');
   let firstNonImportIndex = 0;
