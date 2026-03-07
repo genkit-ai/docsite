@@ -2,14 +2,398 @@
 import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.astro';
 import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
 import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
+import { docsAllLanguages, docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../sidebar';
+import TypescriptIcon from '../assets/icons/typescript.svg';
+import GoIcon from '../assets/icons/go.svg';
+import PythonIcon from '../assets/icons/python.svg';
+import DartIcon from '../assets/icons/dart.svg';
 
-const { sidebar } = Astro.locals.starlightRoute;
+const { sidebar: routeSidebar } = Astro.locals.starlightRoute;
+
+const pathLangMatch = Astro.url.pathname.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
+const currentLang = pathLangMatch?.[1] || Astro.url.searchParams.get('lang') || 'js';
+const languageLabels: Record<string, string> = {
+	js: 'TypeScript',
+	go: 'Go',
+	python: 'Python',
+	dart: 'Dart',
+};
+const iconComponents: Record<string, any> = {
+	js: TypescriptIcon,
+	go: GoIcon,
+	python: PythonIcon,
+	dart: DartIcon,
+};
+const docsLanguageSupportByPath = Object.fromEntries(
+	Object.entries(docsLanguageSupportBySlug).map(([slug, langs]) => [`/${slug}`, langs]),
+);
+const docsLanguageAgnosticByPath = Object.fromEntries(
+	Object.entries(docsLanguageAgnosticBySlug).map(([slug, isAgnostic]) => [`/${slug}`, isAgnostic]),
+);
 ---
 
+<div class="docs-nav-language-selector">
+	<div class="lang-dropdown" id="lang-dropdown">
+		<button
+			class="lang-dropdown-trigger"
+			aria-haspopup="listbox"
+			aria-expanded="false"
+			aria-label="Filter docs by programming language"
+			data-selected-lang={currentLang}
+		>
+			{docsAllLanguages.map((lang) => {
+				const IconComp = iconComponents[lang];
+				return <span class="lang-icon-badge" data-icon-lang={lang}><IconComp /></span>;
+			})}
+			<span class="lang-trigger-label">{languageLabels[currentLang] || currentLang}</span>
+			<svg class="lang-chevron" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true" fill="none">
+				<path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+			</svg>
+		</button>
+		<ul class="lang-dropdown-menu" role="listbox" aria-label="Filter docs by programming language">
+			{
+				docsAllLanguages.map((lang) => {
+					const IconComp = iconComponents[lang];
+					return (
+						<li
+							class="lang-option"
+							role="option"
+							data-lang={lang}
+							aria-selected={currentLang === lang ? 'true' : 'false'}
+							tabindex="-1"
+						>
+							<span class="lang-icon-badge"><IconComp /></span>
+							<span class="lang-option-label">{languageLabels[lang] || lang}</span>
+							<svg class="lang-check" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+								<path d="M2.5 7l3.5 3.5 6-6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+						</li>
+					);
+				})
+			}
+		</ul>
+	</div>
+</div>
+
 <SidebarPersister>
-  <SidebarSublist sublist={sidebar} />
+	<SidebarSublist sublist={routeSidebar} />
 </SidebarPersister>
 
 <div class="md:sl-hidden">
-  <MobileMenuFooter />
+	<MobileMenuFooter />
 </div>
+
+<script
+	is:inline
+	data-docs-language-support={JSON.stringify(docsLanguageSupportByPath)}
+	data-docs-language-agnostic={JSON.stringify(docsLanguageAgnosticByPath)}
+	data-docs-all-languages={JSON.stringify(docsAllLanguages)}
+>
+	(() => {
+		const currentScript = document.currentScript;
+		if (!currentScript) return;
+
+		const languageSupportRaw = currentScript.getAttribute('data-docs-language-support') || '{}';
+		const languageAgnosticRaw = currentScript.getAttribute('data-docs-language-agnostic') || '{}';
+		const allLanguagesRaw = currentScript.getAttribute('data-docs-all-languages') || '[]';
+
+		/** @type {Record<string, string[]>} */
+		const languageSupportByPath = JSON.parse(languageSupportRaw);
+		/** @type {Record<string, boolean>} */
+		const languageAgnosticByPath = JSON.parse(languageAgnosticRaw);
+		/** @type {string[]} */
+		const allLanguages = JSON.parse(allLanguagesRaw);
+		const fallbackOrder = ['js', 'go', 'dart', 'python'];
+
+		const normalizePath = (href) => {
+			try {
+				const url = new URL(href, window.location.origin);
+				let normalized = url.pathname.replace(/\/$/, '');
+				if (!normalized) normalized = '/';
+				return normalized;
+			} catch {
+				return null;
+			}
+		};
+
+		const updateSidebarForLanguage = () => {
+			const selectedLanguage = document.documentElement.getAttribute('data-genkit-lang') || 'js';
+			const currentPath = normalizePath(window.location.pathname) || window.location.pathname;
+
+			document.querySelectorAll('.sidebar-pane a[href]').forEach((anchor) => {
+				const normalizedPath = normalizePath(anchor.getAttribute('href') || '');
+				if (!normalizedPath || !normalizedPath.startsWith('/docs/')) return;
+
+				const alreadyLanguagePath = /^\/docs\/(js|go|dart|python)\//.test(normalizedPath);
+				const basePath = alreadyLanguagePath
+					? normalizedPath.replace(/^\/docs\/(js|go|dart|python)(\/|$)/, '/docs/')
+					: normalizedPath;
+				const isLanguageAgnostic = Boolean(languageAgnosticByPath[basePath]);
+				const supported = languageSupportByPath[basePath] || allLanguages;
+				const isSupported = supported.includes(selectedLanguage);
+				const listItem = anchor.closest('li');
+				if (!listItem) return;
+
+				listItem.hidden = !isSupported;
+
+				if (!isSupported) {
+					return;
+				}
+
+				if (isLanguageAgnostic) {
+					const targetPath = `${basePath}/`.replace(/\/+$/, '/');
+					anchor.setAttribute('href', targetPath);
+					const isCurrent = (normalizePath(targetPath) || targetPath) === currentPath;
+					anchor.setAttribute('aria-current', isCurrent ? 'page' : 'false');
+					return;
+				}
+
+				const selectedOrFallback = supported.includes(selectedLanguage)
+					? selectedLanguage
+					: fallbackOrder.find((language) => supported.includes(language)) || selectedLanguage;
+
+				const slug = basePath.replace(/^\/docs\//, '').replace(/\/$/, '');
+				const targetPath = `/docs/${selectedOrFallback}/${slug}/`;
+				anchor.setAttribute('href', targetPath);
+				const isCurrent = (normalizePath(targetPath) || targetPath) === currentPath;
+				anchor.setAttribute('aria-current', isCurrent ? 'page' : 'false');
+			});
+
+			document.querySelectorAll('.sidebar-pane details').forEach((group) => {
+				const listItems = Array.from(group.querySelectorAll(':scope > ul > li'));
+				if (listItems.length === 0) return;
+				const hasVisibleItems = listItems.some((item) => !item.hidden);
+				group.hidden = !hasVisibleItems;
+			});
+		};
+
+		const runUpdate = () => window.requestAnimationFrame(updateSidebarForLanguage);
+
+		runUpdate();
+		document.addEventListener('genkit:languagechange', runUpdate);
+		document.addEventListener('astro:page-load', runUpdate);
+		window.addEventListener('popstate', runUpdate);
+	})();
+</script>
+
+<script>
+	const LABEL_MAP: Record<string, string> = { js: 'TypeScript', go: 'Go', python: 'Python', dart: 'Dart' };
+
+	function initLangDropdown() {
+		const dropdown = document.getElementById('lang-dropdown');
+		if (!dropdown) return;
+
+		const trigger = dropdown.querySelector<HTMLButtonElement>('.lang-dropdown-trigger');
+		const menu = dropdown.querySelector('.lang-dropdown-menu');
+		if (!trigger || !menu) return;
+
+		function open() {
+			dropdown!.setAttribute('data-open', '');
+			trigger!.setAttribute('aria-expanded', 'true');
+		}
+
+		function close() {
+			dropdown!.removeAttribute('data-open');
+			trigger!.setAttribute('aria-expanded', 'false');
+		}
+
+		function syncUI(lang: string) {
+			trigger!.dataset.selectedLang = lang;
+			const labelEl = trigger!.querySelector('.lang-trigger-label');
+			if (labelEl) labelEl.textContent = LABEL_MAP[lang] || lang;
+
+			menu!.querySelectorAll('.lang-option').forEach((opt) => {
+				opt.setAttribute('aria-selected', opt.getAttribute('data-lang') === lang ? 'true' : 'false');
+			});
+		}
+
+		trigger.addEventListener('click', () => {
+			dropdown!.hasAttribute('data-open') ? close() : open();
+		});
+
+		menu.addEventListener('click', (e) => {
+			const option = (e.target as Element).closest<HTMLElement>('.lang-option');
+			if (!option) return;
+			const lang = option.dataset.lang;
+			if (!lang) return;
+			close();
+			(window as any).unifiedPageManager?.setLanguage(lang);
+		});
+
+		document.addEventListener('click', (e) => {
+			if (!dropdown!.contains(e.target as Node)) close();
+		});
+
+		document.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') close();
+		});
+
+		document.addEventListener('genkit:languagechange', (e) => {
+			syncUI((e as CustomEvent).detail.language);
+		});
+
+		// Sync initial state from the live attribute (may differ from SSR if preference changed)
+		const currentLang = document.documentElement.getAttribute('data-genkit-lang') || 'js';
+		syncUI(currentLang);
+	}
+
+	document.addEventListener('astro:page-load', initLangDropdown);
+	initLangDropdown();
+</script>
+
+<style>
+	.docs-nav-language-selector {
+		box-sizing: border-box;
+		margin: 0 1rem 0.4rem;
+		position: relative;
+	}
+
+	/* Dropdown container */
+	.lang-dropdown {
+		position: relative;
+	}
+
+	/* Trigger button */
+	.lang-dropdown-trigger {
+		width: 100%;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		padding: 0.5rem 0.625rem;
+		background: var(--sl-color-bg-sidebar);
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.6rem;
+		color: var(--sl-color-text);
+		cursor: pointer;
+		font-size: 0.875rem;
+		font-weight: 500;
+		transition: border-color 0.15s ease;
+		text-align: left;
+	}
+
+	.lang-dropdown-trigger:hover {
+		border-color: var(--sl-color-accent);
+	}
+
+	.lang-dropdown-trigger:focus-visible {
+		outline: 2px solid color-mix(in srgb, var(--sl-color-accent) 55%, white);
+		outline-offset: 1px;
+	}
+
+	.lang-trigger-label {
+		flex: 1;
+	}
+
+	.lang-chevron {
+		flex-shrink: 0;
+		color: var(--sl-color-gray-3);
+		transition: transform 0.15s ease;
+	}
+
+	.lang-dropdown[data-open] .lang-chevron {
+		transform: rotate(180deg);
+	}
+
+	/* Dropdown menu */
+	.lang-dropdown-menu {
+		display: none;
+		position: absolute;
+		top: calc(100% + 0.35rem);
+		left: 0;
+		right: 0;
+		z-index: 100;
+		margin: 0;
+		padding: 0.3rem;
+		list-style: none;
+		background: var(--sl-color-bg);
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.6rem;
+		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+	}
+
+	.lang-dropdown[data-open] .lang-dropdown-menu {
+		display: block;
+	}
+
+	/* Menu options */
+	.lang-option {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		padding: 0.5rem 0.5rem;
+		border-radius: 0.45rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+		transition: background 0.12s ease, color 0.12s ease;
+	}
+
+	.lang-option + .lang-option {
+		margin-top: 0.1rem;
+	}
+
+	.lang-option:hover {
+		background: var(--sl-color-bg-nav);
+		color: var(--sl-color-text);
+	}
+
+	.lang-option[aria-selected='true'] {
+		color: var(--sl-color-text);
+	}
+
+	.lang-option-label {
+		flex: 1;
+	}
+
+	/* Checkmark */
+	.lang-check {
+		flex-shrink: 0;
+		color: var(--sl-color-accent);
+		opacity: 0;
+	}
+
+	.lang-option[aria-selected='true'] .lang-check {
+		opacity: 1;
+	}
+
+	/* Icon badge */
+	.lang-icon-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.75rem;
+		height: 1.75rem;
+		flex-shrink: 0;
+	}
+
+	.lang-icon-badge :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+
+	[data-icon-lang='go'] :global(svg),
+	.lang-option[data-lang='go'] .lang-icon-badge :global(svg) {
+		width: 1.4rem;
+		height: 1.4rem;
+	}
+
+	/* In the trigger, hide all badges except the selected language */
+	.lang-dropdown-trigger .lang-icon-badge {
+		display: none;
+	}
+
+	.lang-dropdown-trigger[data-selected-lang='js'] [data-icon-lang='js'],
+	.lang-dropdown-trigger[data-selected-lang='go'] [data-icon-lang='go'],
+	.lang-dropdown-trigger[data-selected-lang='python'] [data-icon-lang='python'],
+	.lang-dropdown-trigger[data-selected-lang='dart'] [data-icon-lang='dart'] {
+		display: inline-flex;
+	}
+
+	@media (max-width: 50rem) {
+		.docs-nav-language-selector {
+			margin-bottom: 0.4rem;
+		}
+	}
+</style>

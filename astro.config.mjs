@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidatorPlugin from 'starlight-links-validator';
 import sitemap from '@astrojs/sitemap';
-import { sidebar } from './src/sidebar.ts';
+import { sidebar, docsLanguageAgnosticBySlug } from './src/sidebar.ts';
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from './src/google-theme';
 
 const site = 'https://genkit.dev';
@@ -32,6 +32,7 @@ export default defineConfig({
         Header: './src/content/custom/header.astro',
         Hero: './src/content/custom/hero.astro',
         Head: './src/content/custom/head.astro',
+        PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
       },
       head: [
@@ -115,6 +116,16 @@ export default defineConfig({
         baseUrl: 'https://github.com/genkit-ai/docsite/edit/main/',
       },
     }),
-    sitemap(),
+    sitemap({
+      filter: (page) => {
+        const pathname = new URL(page).pathname.replace(/\/$/, '');
+        // Always include language-prefixed docs and non-docs pages (homepage, etc.)
+        if (/^\/docs\/(js|go|dart|python)(\/|$)/.test(pathname)) return true;
+        if (!pathname.startsWith('/docs/')) return true;
+        // Language-neutral docs paths: only include if explicitly marked isLanguageAgnostic in frontmatter
+        const slug = pathname.replace(/^\//, ''); // e.g. 'docs/flows'
+        return docsLanguageAgnosticBySlug[slug] === true;
+      },
+    }),
   ],
 });

@@ -1,37 +1,72 @@
-# Genkit documentation website
+# Genkit.dev Docsite
 
-The Genkit framework documentation is on https://genkit.dev/.
+[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
 
-## Issues, bugs, and requests
-We welcome contributions and feedback on our website.
-Please file a request in our
-[issue tracker](https://github.com/genkit-ai/docsite/issues/new/choose)
-or create a [pull request](https://github.com/genkit-ai/docsite/pulls).
+## Overview
 
-## Before you submit a PR
-We love it when the community gets involved in improving our docs!
+This repository powers the Genkit documentation site using Astro + Starlight.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to learn more.
+Current language architecture:
 
-## Setup
+1. Source docs are authored once per topic in `src/content/docs/docs/**/*.mdx`.
+2. Language-specific content inside a page uses `<Lang lang="...">...</Lang>`.
+3. Supported languages per page are declared in frontmatter using `supportedLanguages`.
+4. Language-specific route files are generated into `src/content/docs/docs/{js,go,dart,python}/...`.
+5. Canonical language routes use `/docs/{lang}/{slug}/` for language-variant pages.
+6. Source docs should generally link using neutral `/docs/{slug}/` routes; generation/runtime resolves to language-specific targets.
 
-1. From the root directory of the repository, install dependencies:
+## Key Directories
 
-   ```bash
-   pnpm install
-   ```
+```
+.
+├── public/
+├── src/
+│   ├── assets/
+│   ├── components/
+│   ├── content/
+│   │   └── docs/
+│   │       └── docs/               # source + generated language pages
+│   ├── scripts/
+│   │   └── generate-language-pages.ts
+│   └── content.config.ts
+├── astro.config.mjs
+└── package.json
+```
 
-2. From the root directory, serve the site locally:
+## Writing Docs
 
-   ```bash
-   pnpm run dev
-   ```
+For each docs page:
 
-   This command generates and serves the site on a
-   local port (usually `localhost:4321`) that's printed to your terminal.
+1. Keep one source file in `src/content/docs/docs/`.
+2. Add frontmatter:
+    - `supportedLanguages: [js, go, dart, python]` (subset allowed)
+    - optional `isLanguageAgnostic: true` for shared pages
+3. Use `<Lang>` blocks only where content differs by language.
+4. Keep common content outside language blocks.
+5. Use neutral internal docs links (`/docs/<slug>/`) in source files; do not manually hardcode `/docs/js/...` or other language-prefixed routes unless intentional.
 
-3. View your changes in the browser by navigating to <http://localhost:4321>.
+See [DOCUMENTATION-GUIDANCE.md](DOCUMENTATION-GUIDANCE.md) for full authoring standards.
 
-4. Make your changes to the local repo. The site should automatically rebuild on most changes.
+## Commands
 
-5. Commit your changes to the branch and submit your PR.
+All commands run from repo root:
+
+| Command                        | Action                                                                 |
+| :----------------------------- | :--------------------------------------------------------------------- |
+| `pnpm install`                 | Install dependencies                                                   |
+| `pnpm generate-language-pages` | Generate `/docs/{lang}/...` content files from unified source docs     |
+| `pnpm dev`                     | Generate language pages and start local dev server                     |
+| `pnpm build`                   | Generate language pages, build docs bundles/llms files, and build site |
+| `pnpm preview`                 | Preview the production build                                           |
+| `pnpm build-llms-direct`       | Generate `llms*.txt` outputs directly from docs source                 |
+
+## Contribution Notes
+
+Before opening a PR:
+
+1. Run `pnpm generate-language-pages`.
+2. Run `pnpm build-bundle` and `pnpm build-llms-direct`.
+3. Ensure docs routes load locally (`pnpm dev`).
+4. Commit source docs and code changes only.
+5. Do not commit generated language pages or generated llms artifacts (both are gitignored build artifacts).
+6. Expect non-blocking warnings if a language page must link to a different language variant because that target is unavailable in the current language.

@@ -1,3 +1,102 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { parse } from 'yaml';
+
+const ALL_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+type SupportedLanguage = (typeof ALL_LANGUAGES)[number];
+type DocLanguageMetadata = {
+  supportedLanguages: SupportedLanguage[];
+  isLanguageAgnostic: boolean;
+};
+
+function parseLanguageList(value: string): SupportedLanguage[] {
+  const tokens = value
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.toLowerCase())
+    .filter(Boolean);
+
+  const deduped = [...new Set(tokens)];
+  return ALL_LANGUAGES.filter((language) => deduped.includes(language));
+}
+
+function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
+  const docsRoot = path.resolve(process.cwd(), 'src/content/docs');
+  const candidates = [path.join(docsRoot, `${slug}.mdx`), path.join(docsRoot, `${slug}.md`)];
+  const docFile = candidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!docFile) {
+    return {
+      supportedLanguages: [...ALL_LANGUAGES],
+      isLanguageAgnostic: false,
+    };
+  }
+
+  const source = fs.readFileSync(docFile, 'utf8');
+  let isLanguageAgnostic = false;
+  const frontmatterMatch = source.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (frontmatterMatch) {
+    try {
+      const frontmatter = parse(frontmatterMatch[1]) as {
+        supportedLanguages?: unknown;
+        isLanguageAgnostic?: unknown;
+      };
+      if (typeof frontmatter.isLanguageAgnostic === 'boolean') {
+        isLanguageAgnostic = frontmatter.isLanguageAgnostic;
+      }
+      if (Array.isArray(frontmatter.supportedLanguages)) {
+        const langs = frontmatter.supportedLanguages
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.toLowerCase())
+          .filter((value): value is SupportedLanguage =>
+            (ALL_LANGUAGES as readonly string[]).includes(value),
+          );
+        if (langs.length > 0) {
+          return {
+            supportedLanguages: ALL_LANGUAGES.filter((language) => langs.includes(language)),
+            isLanguageAgnostic,
+          };
+        }
+      }
+    } catch {
+      // Fall through to content-based inference.
+    }
+  }
+
+  const contentLanguages = new Set<SupportedLanguage>();
+  const languageContentPattern = /<Lang[^>]*lang\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  let languageContentMatch = languageContentPattern.exec(source);
+  while (languageContentMatch) {
+    const parsed = parseLanguageList(languageContentMatch[1] || languageContentMatch[2] || '');
+    parsed.forEach((language) => contentLanguages.add(language));
+    languageContentMatch = languageContentPattern.exec(source);
+  }
+
+  if (contentLanguages.size > 0) {
+    return {
+      supportedLanguages: ALL_LANGUAGES.filter((language) => contentLanguages.has(language)),
+      isLanguageAgnostic,
+    };
+  }
+
+  return {
+    supportedLanguages: [...ALL_LANGUAGES],
+    isLanguageAgnostic,
+  };
+}
+
+function createLanguageMetadataMap(
+  sections: Array<{ items: Array<{ slug: string }> }>,
+): Record<string, DocLanguageMetadata> {
+  const map: Record<string, DocLanguageMetadata> = {};
+  sections.forEach((section) => {
+    section.items.forEach((item) => {
+      map[item.slug] = getDocLanguageMetadata(item.slug);
+    });
+  });
+  return map;
+}
+
 const DOCS_SIDEBAR = [
   {
     label: "Get started",
@@ -129,3 +228,12 @@ const DOCS_SIDEBAR = [
 export const sidebar = [
   ...DOCS_SIDEBAR,
 ];
+
+const docsLanguageMetadataBySlug = createLanguageMetadataMap(DOCS_SIDEBAR);
+export const docsLanguageSupportBySlug = Object.fromEntries(
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.supportedLanguages]),
+) as Record<string, SupportedLanguage[]>;
+export const docsLanguageAgnosticBySlug = Object.fromEntries(
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.isLanguageAgnostic]),
+) as Record<string, boolean>;
+export const docsAllLanguages = [...ALL_LANGUAGES];
