@@ -32,6 +32,12 @@ These files are build artifacts and are gitignored.
 - Language-agnostic pages reference canonical URLs as `/docs/{slug}`.
 - Redirect-only/query-param variants are not emitted.
 
+Source docs should use neutral internal docs links (`/docs/<slug>/`). During generation, links are rewritten per output language:
+
+- supported target in active language -> `/docs/{lang}/{slug}/`
+- unsupported target in active language -> canonical fallback language path
+- language-agnostic target -> neutral `/docs/{slug}/`
+
 ## Filtering Behavior
 
 The generator applies the same language rules used by docs navigation and routing:

@@ -7,8 +7,10 @@ const SOURCE_ROOT = path.resolve('src/content/docs/docs');
 const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
 const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const FALLBACK_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
 
 type Language = (typeof LANGUAGES)[number];
+const KNOWN_LANGUAGES = new Set<string>(LANGUAGES);
 type LanguageBlockNode = {
   langs: string[];
   openStart: number;
@@ -122,6 +124,57 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
   return roots.sort((a, b) => a.openStart - b.openStart);
 }
 
+function flattenLanguageBlocks(nodes: LanguageBlockNode[]): LanguageBlockNode[] {
+  const flattened: LanguageBlockNode[] = [];
+  for (const node of nodes) {
+    flattened.push(node);
+    if (node.children.length > 0) {
+      flattened.push(...flattenLanguageBlocks(node.children));
+    }
+  }
+  return flattened;
+}
+
+function getLineNumber(source: string, offset: number): number {
+  if (offset <= 0) return 1;
+  return source.slice(0, offset).split('\n').length;
+}
+
+function validateLanguageBlocks(
+  body: string,
+  supportedLanguages: Language[],
+  filePath: string,
+): string[] {
+  const errors: string[] = [];
+  const blocks = flattenLanguageBlocks(parseLanguageBlocks(body));
+  if (blocks.length === 0) {
+    return errors;
+  }
+
+  const supportedSet = new Set<string>(supportedLanguages);
+  const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+
+  for (const block of blocks) {
+    const line = getLineNumber(body, block.openStart);
+    for (const lang of block.langs) {
+      if (!KNOWN_LANGUAGES.has(lang)) {
+        errors.push(
+          `${fileRelativePath}:${line} uses unknown Lang language "${lang}" (allowed: ${LANGUAGES.join(', ')}).`,
+        );
+        continue;
+      }
+
+      if (!supportedSet.has(lang)) {
+        errors.push(
+          `${fileRelativePath}:${line} uses Lang language "${lang}" not listed in supportedLanguages [${supportedLanguages.join(', ')}].`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
 function renderLanguageSegment(
   source: string,
   nodes: LanguageBlockNode[],
@@ -174,6 +227,10 @@ function renderBodyForLanguage(body: string, language: Language): string {
 
   rendered = rendered.replace(/\n{3,}/g, '\n\n').trim();
   return `${rendered}\n`;
+}
+
+function getMeaningfulContentCharCount(content: string): number {
+  return content.replace(/\s+/g, '').length;
 }
 
 function slugFromSourcePath(filePath: string): string {
@@ -268,6 +325,9 @@ function buildGeneratedFileNotice(sourceFilePath: string, extension: 'md' | 'mdx
 }
 
 async function generate(): Promise<void> {
+  const validationErrors: string[] = [];
+  const sizeWarnings: string[] = [];
+
   for (const language of LANGUAGES) {
     await rm(path.join(OUTPUT_ROOT, language), { recursive: true, force: true });
     await mkdir(path.join(OUTPUT_ROOT, language), { recursive: true });
@@ -278,10 +338,29 @@ async function generate(): Promise<void> {
     const source = await readFile(filePath, 'utf8');
     const { frontmatter, body } = splitFrontmatter(source);
     const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
+    const supportedLanguages = getSupportedLanguages(frontmatter);
+    validationErrors.push(...validateLanguageBlocks(body, supportedLanguages, filePath));
+    const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+    const renderedByLanguage = new Map<Language, string>();
+    for (const language of supportedLanguages) {
+      const rendered = renderBodyForLanguage(body, language);
+      renderedByLanguage.set(language, rendered);
+      const charCount = getMeaningfulContentCharCount(rendered);
+      if (charCount === 0) {
+        sizeWarnings.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+        );
+        continue;
+      }
+      if (charCount < MIN_LANGUAGE_CONTENT_CHARS_WARNING) {
+        sizeWarnings.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is very small (${charCount} non-whitespace chars).`,
+        );
+      }
+    }
     if (isLanguageAgnostic) {
       continue;
     }
-    const supportedLanguages = getSupportedLanguages(frontmatter);
     const slug = slugFromSourcePath(filePath);
     const extension = filePath.endsWith('.mdx') ? 'mdx' : 'md';
 
@@ -296,7 +375,7 @@ async function generate(): Promise<void> {
         outputPath,
       ) as Record<string, unknown>;
       const renderedBody = rewriteBodyAssetPaths(
-        renderBodyForLanguage(body, language),
+        renderedByLanguage.get(language) || renderBodyForLanguage(body, language),
         filePath,
         outputPath,
       );
@@ -305,6 +384,25 @@ async function generate(): Promise<void> {
       await mkdir(path.dirname(outputPath), { recursive: true });
       await writeFile(outputPath, outputContent);
     }
+  }
+
+  if (validationErrors.length > 0) {
+    console.error(
+      [
+        'generate-language-pages: Lang/supportedLanguages validation failed.',
+        ...validationErrors.map((error) => `- ${error}`),
+      ].join('\n'),
+    );
+    throw new Error(`Found ${validationErrors.length} Lang/supportedLanguages validation error(s).`);
+  }
+
+  if (sizeWarnings.length > 0) {
+    console.warn(
+      [
+        'generate-language-pages: Found pages with empty/very-small content for declared supportedLanguages:',
+        ...sizeWarnings.map((warning) => `- ${warning}`),
+      ].join('\n'),
+    );
   }
 
   console.log(`Generated language-specific pages in ${OUTPUT_ROOT}/{js,go,dart,python}`);

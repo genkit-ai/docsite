@@ -13,6 +13,7 @@ Current language architecture:
 3. Supported languages per page are declared in frontmatter using `supportedLanguages`.
 4. Language-specific route files are generated into `src/content/docs/docs/{js,go,dart,python}/...`.
 5. Canonical language routes use `/docs/{lang}/{slug}/` for language-variant pages.
+6. Source docs should generally link using neutral `/docs/{slug}/` routes; generation/runtime resolves to language-specific targets.
 
 ## Key Directories
 
@@ -42,6 +43,7 @@ For each docs page:
     - optional `isLanguageAgnostic: true` for shared pages
 3. Use `<Lang>` blocks only where content differs by language.
 4. Keep common content outside language blocks.
+5. Use neutral internal docs links (`/docs/<slug>/`) in source files; do not manually hardcode `/docs/js/...` or other language-prefixed routes unless intentional.
 
 See [DOCUMENTATION-GUIDANCE.md](DOCUMENTATION-GUIDANCE.md) for full authoring standards.
 
@@ -67,3 +69,4 @@ Before opening a PR:
 3. Ensure docs routes load locally (`pnpm dev`).
 4. Commit source docs and code changes only.
 5. Do not commit generated language pages or generated llms artifacts (both are gitignored build artifacts).
+6. Expect non-blocking warnings if a language page must link to a different language variant because that target is unavailable in the current language.

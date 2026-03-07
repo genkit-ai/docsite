@@ -15,7 +15,7 @@ For every doc page:
 3. Set `isLanguageAgnostic: true` only if the page should have one shared canonical URL.
 4. Use `<Lang>` only for language-specific deltas.
 5. Keep shared prose outside `<Lang>` blocks.
-6. Ensure internal links point to canonical docs routes.
+6. Author internal docs links as neutral routes (`/docs/<slug>/`) unless intentionally language-pinned.
 
 ## Required Frontmatter
 
@@ -88,6 +88,24 @@ Use `isLanguageAgnostic: true` when content is truly shared.
 
 Author impact: if a page should appear for a language, include that language in `supportedLanguages`.
 
+## Internal Docs Links
+
+Author links in source docs as neutral docs routes:
+
+- Preferred: `/docs/flows/`
+- Avoid in source docs: `/docs/js/flows/`, `/docs/go/flows/` (unless intentionally language-pinned)
+
+Why:
+
+1. Build/runtime rewrite resolves links to the active language variant when available.
+2. If a target is unsupported in the active language, links resolve to the canonical fallback language.
+3. Language-agnostic pages remain neutral (`/docs/<slug>/`).
+4. Copy-as-markdown and `llms-*.txt` outputs use the same rewrite behavior.
+
+### Cross-language link warnings
+
+Generation emits non-blocking warnings when a language page must link to another language variant (for example, Go page linking to a JS-only target). These warnings help identify missing language coverage but do not fail the build.
+
 ## Writing Standards
 
 ### Clarity
@@ -130,6 +148,7 @@ Use callouts sparingly for high-signal information.
 ## Copy As Markdown
 
 Pages include a "Copy as Markdown" action in the page title area. Keep heading structure clean and avoid unnecessary wrapper markup so copied output remains readable.
+Generated-file warning comments are removed from markdown export/copy output.
 
 ## Validation Before PR
 
