@@ -1,0 +1,574 @@
+---
+title: Building multi-turn persisted flows
+description: Learn how to build multi-turn conversational AI applications in Genkit Go using session flows, with automatic conversation history, token-level streaming, snapshot persistence, and resumable state.
+---
+
+import LanguageSelector from '../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+  <LanguageSelector supportedLanguages="go" />
+  <CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+:::note[Feature unavailable for JavaScript]
+The features described in this document are not yet available for JavaScript.
+:::
+</LanguageContent>
+
+<LanguageContent lang="python">
+:::note[Feature unavailable for Python]
+The features described in this document are not yet available for Python.
+:::
+</LanguageContent>
+
+<LanguageContent lang="go">
+
+:::caution[Experimental]
+The session flow API in Genkit Go is **experimental** and may change in minor version releases.
+:::
+
+Session flows let you build multi-turn conversational AI applications where
+conversation history, streaming, and state are managed for you. They provide
+bidirectional streaming between client and server, automatic snapshot
+persistence, and a flexible interface for maintaining typed state across turns.
+
+Session flows are designed as low-level building blocks for custom agent and
+sub-agent frameworks. They give you full control over the conversation loop
+while handling the infrastructure concerns -- history tracking, snapshot
+management, and streaming coordination -- so you can focus on your
+application logic.
+
+## Before you begin
+
+Before reading this page, you should be familiar with the content covered on
+the [Creating flows](/docs/flows) and
+[Generating content with AI models](/docs/models) pages.
+
+If you want to run the code examples on this page, first complete the steps in
+the [Getting started](/docs/get-started) guide.
+
+The session flow API is in the experimental `exp` package:
+
+```go
+import aix "github.com/firebase/genkit/go/ai/exp"
+```
+
+## Defining a session flow
+
+Use `DefineSessionFlow` to create a session flow with full control over the
+conversation loop. Your function receives three things:
+
+- A **`Responder`** for sending output (model tokens, status updates, artifacts)
+  back to the client.
+- A **`SessionRunner`** for managing conversation state and driving the turn
+  loop.
+- A **context** for the lifetime of the invocation.
+
+Here is a session flow that streams a multi-turn chatbot:
+
+```go
+import (
+    "context"
+
+    "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+chatFlow := genkit.DefineSessionFlow(g, "chat",
+    func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+        if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
+            // Generate a response with the full conversation history.
+            for chunk, err := range genkit.GenerateStream(ctx, g,
+                ai.WithModelName("googleai/gemini-3-flash-preview"),
+                ai.WithMessages(sess.Messages()...),
+            ) {
+                if err != nil {
+                    return err
+                }
+                if chunk.Done {
+                    // Add the model's response to conversation history.
+                    sess.AddMessages(chunk.Response.Message)
+                    break
+                }
+                // Stream each token to the client as it arrives.
+                resp.SendModelChunk(chunk.Chunk)
+            }
+
+            return nil
+        }); err != nil {
+            return nil, err
+        }
+        return sess.Result(), nil
+    },
+)
+```
+
+This code:
+
+- Calls `sess.Run()` to start the turn loop. `Run` blocks on each incoming
+  message, calls your function once per turn, and signals the client when
+  each turn completes.
+- Uses `sess.Messages()` to pass the full conversation history to the model.
+  The session automatically tracks messages across turns, and each turn's
+  input messages are added to the history before your function is called.
+- Streams tokens to the client with `resp.SendModelChunk()`.
+- Adds the model's response to history with `sess.AddMessages()` so it
+  is available for the next turn.
+- Returns `sess.Result()`, which packages the last message and any artifacts
+  as the final output. If you need to control what gets sent back (for
+  example, returning only artifacts without a message), you can construct the
+  result directly:
+
+```go
+return &aix.SessionFlowResult{Artifacts: sess.Artifacts()}, nil
+```
+
+Your session flow function runs for the entire lifetime of the connection,
+and `sess.Run()` blocks until the client closes it. This means the code
+before and after `sess.Run()` is a natural place for one-time setup and
+teardown. For long-running multi-turn conversations, you can initialize
+expensive resources (database connections, external API clients, model
+configuration) before the turn loop starts and clean them up after it ends:
+
+```go
+chatFlow := genkit.DefineSessionFlow(g, "chat",
+    func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+        // One-time setup: initialize resources for the session.
+        client, err := expensiveClient(ctx)
+        if err != nil {
+            return nil, err
+        }
+        defer client.Close()
+
+        if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
+            // This runs once per turn. The client is available
+            // across all turns without being recreated.
+            return handleTurn(ctx, client, resp, sess, input)
+        }); err != nil {
+            return nil, err
+        }
+
+        // Teardown: finalize results after the conversation ends.
+        return sess.Result(), nil
+    },
+)
+```
+
+## Using session flows
+
+### Single-turn
+
+For simple request/response usage, `RunText` handles the connection
+lifecycle for you:
+
+```go
+output, err := chatFlow.RunText(ctx, "What is Go?")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(output.Message.Text())
+```
+
+You can also use `Run` with a `SessionFlowInput` for more control over the
+input (for example, sending multiple messages or tool restart parts):
+
+```go
+output, err := chatFlow.Run(ctx, &aix.SessionFlowInput{
+    Messages: []*ai.Message{ai.NewUserTextMessage("What is Go?")},
+})
+```
+
+### Multi-turn with streaming
+
+For interactive conversations, use `StreamBidi` to open a bidirectional
+connection. The client sends messages and iterates over streaming chunks
+until the turn completes:
+
+```go
+conn, err := chatFlow.StreamBidi(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+// First turn
+conn.SendText("What is Go?")
+
+for chunk, err := range conn.Receive() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text())
+    }
+    if chunk.EndTurn {
+        break // Turn complete, ready for next input.
+    }
+}
+
+// Second turn -- conversation history carries over automatically.
+conn.SendText("Tell me more about its concurrency model.")
+
+for chunk, err := range conn.Receive() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text())
+    }
+    if chunk.EndTurn {
+        break
+    }
+}
+
+conn.Close()
+output, err := conn.Output() // Final SessionFlowOutput
+```
+
+A key property of `SessionFlowConnection`: breaking out of the `Receive()`
+loop does **not** cancel the connection. This is what makes multi-turn
+patterns work. You break on `EndTurn`, send the next input, and call
+`Receive()` again.
+
+### Multi-turn without streaming
+
+For stateless backends (such as a REST API), you can use `Run` or `RunText`
+in a loop, passing state between requests. See
+[Managing state](#managing-state) for how to carry conversation
+context across separate requests.
+
+## Managing state
+
+Session flows support two models for who owns the conversation state. Pick
+the one that fits your architecture.
+
+### Client-managed state
+
+With client-managed state, the server returns the full conversation state in
+each response and the client sends it back on the next request. No server-side
+storage is needed.
+
+This is the default when you define a session flow without a store. It works
+well for simpler deployments, short conversations, and cases where the client
+can hold state (for example, in a mobile app's local storage or a browser
+session).
+
+```go
+// No store configured -- client manages state.
+chatFlow := genkit.DefineSessionFlow(g, "chat", myFunc)
+
+// First request
+output, err := chatFlow.RunText(ctx, "What is Go?")
+// output.State contains the full conversation state.
+
+// Second request -- pass the previous state back.
+output, err = chatFlow.RunText(ctx, "Tell me more.",
+    aix.WithState(output.State),
+)
+```
+
+With `StreamBidi`, client-managed state works the same way. The state is
+available in the final output:
+
+```go
+conn, _ := chatFlow.StreamBidi(ctx)
+// ... send messages, receive chunks ...
+conn.Close()
+
+output, _ := conn.Output()
+// output.State has the full state for the next invocation.
+
+// Next invocation with the saved state:
+conn2, _ := chatFlow.StreamBidi(ctx, aix.WithState(output.State))
+```
+
+### Server-managed state with snapshots
+
+For stateless horizontal scaling, long-lived conversations, or cases where
+you do not want to trust the client with conversation state, configure a
+snapshot store. The server persists snapshots automatically and the client
+only needs to keep track of a snapshot ID.
+
+```go
+store := aix.NewInMemorySessionStore[any]()
+
+chatFlow := genkit.DefineSessionFlow(g, "chat", myFunc,
+    aix.WithSessionStore(store),
+)
+
+// First request
+output, err := chatFlow.RunText(ctx, "What is Go?")
+// output.SnapshotID is the ID of the persisted snapshot.
+// output.State is nil -- the server owns the state.
+
+// Resume from the snapshot in a later request (possibly on a different server).
+output, err = chatFlow.RunText(ctx, "Tell me more.",
+    aix.WithSnapshotID[any](output.SnapshotID),
+)
+```
+
+Snapshots form a linked chain: each snapshot records its parent, so you can
+trace the full history of an invocation.
+
+#### Controlling when snapshots are created
+
+By default, a snapshot is created after every turn and at the end of each
+invocation. You can control this with `WithSnapshotOn` for simple event
+filtering, or `WithSnapshotCallback` for full programmatic control.
+
+**Filter by event:**
+
+```go
+// Only snapshot at the end of each turn, not at invocation end.
+chatFlow := genkit.DefineSessionFlow(g, "chat", myFunc,
+    aix.WithSessionStore(store),
+    aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+)
+```
+
+Two events are available:
+- `SnapshotEventTurnEnd` -- fires after each turn completes.
+- `SnapshotEventInvocationEnd` -- fires when the session flow function returns.
+
+**Custom callback for full control:**
+
+`WithSnapshotCallback` gives you a `SnapshotContext` with the current state,
+the state at the last snapshot, the turn index, and the event type. You
+decide whether to snapshot:
+
+```go
+chatFlow := genkit.DefineSessionFlow(g, "chat", myFunc,
+    aix.WithSessionStore(store),
+    aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
+        // Snapshot every 5 turns, and always at invocation end.
+        if sc.Event == aix.SnapshotEventInvocationEnd {
+            return true
+        }
+        return sc.TurnIndex % 5 == 0
+    }),
+)
+```
+
+The framework automatically deduplicates snapshots: if the state has not
+changed since the last snapshot, the new one is skipped.
+
+#### Implementing a custom snapshot store
+
+The built-in `NewInMemorySessionStore` is useful for development and testing.
+For production, implement the `SessionStore` interface to persist snapshots
+to any storage backend (a database, Redis, cloud storage, etc.):
+
+```go
+type SessionStore[State any] interface {
+    GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
+    SaveSnapshot(ctx context.Context, snapshot *SessionSnapshot[State]) error
+}
+```
+
+Each `SessionSnapshot` contains the full `SessionState` (messages, custom
+state, artifacts), a unique ID, a parent ID linking to the previous snapshot,
+a timestamp, and the event that triggered it.
+
+## Custom session state
+
+The `State` type parameter lets you maintain typed application state across
+turns. This is useful for tracking information your application cares about
+beyond the raw conversation history, like topics discussed, user preferences,
+or accumulated context.
+
+```go
+type ResearchState struct {
+    TopicsDiscussed []string `json:"topicsDiscussed"`
+    SourceCount     int      `json:"sourceCount"`
+}
+
+chatFlow := genkit.DefineSessionFlow(g, "research",
+    func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[ResearchState]) (*aix.SessionFlowResult, error) {
+        if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
+            // ... generate response ...
+
+            // Update custom state after each turn.
+            sess.UpdateCustom(func(s ResearchState) ResearchState {
+                s.TopicsDiscussed = append(s.TopicsDiscussed, extractTopic(input))
+                s.SourceCount += countSources(input)
+                return s
+            })
+            return nil
+        }); err != nil {
+            return nil, err
+        }
+        return sess.Result(), nil
+    },
+)
+```
+
+- `sess.Custom()` returns a copy of the current custom state.
+- `sess.UpdateCustom()` applies a mutation function atomically.
+- Custom state is included in snapshots when using server-managed state,
+  and returned in `SessionFlowOutput.State` when using client-managed state.
+
+## Artifacts
+
+Artifacts are named collections of content produced during a session, such as
+generated code files, images, diagrams, or structured data. They are tracked
+separately from conversation history so that both the client and server can
+reference them by name.
+
+Send artifacts to the client with `resp.SendArtifact()`. They are
+automatically added to the session and streamed to the client as they are
+produced:
+
+```go
+resp.SendArtifact(&aix.Artifact{
+    Name:  "main.go",
+    Parts: []*ai.Part{ai.NewTextPart("package main\n\nfunc main() {}")},
+    Metadata: map[string]any{"language": "go"},
+})
+```
+
+If you send an artifact with the same name as an existing one, it replaces
+the previous version. This lets you update artifacts across turns as the
+conversation refines them.
+
+You can access all artifacts on the session with `sess.Artifacts()`. Artifacts
+are included in snapshots and returned in the final output.
+
+## Streaming custom data
+
+Beyond model tokens, you can stream custom typed data to the client using the
+`Stream` type parameter on `DefineSessionFlow`. This is useful for sending
+progress updates, status changes, or any structured data your client needs
+in real time.
+
+```go
+type AgentStatus struct {
+    Phase   string `json:"phase"`
+    Details string `json:"details,omitempty"`
+}
+
+agentFlow := genkit.DefineSessionFlow(g, "agent",
+    func(ctx context.Context, resp aix.Responder[AgentStatus], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+        if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
+            resp.SendStatus(AgentStatus{Phase: "searching", Details: "querying knowledge base"})
+            // ... search ...
+
+            resp.SendStatus(AgentStatus{Phase: "generating"})
+            // ... generate response with streaming ...
+
+            return nil
+        }); err != nil {
+            return nil, err
+        }
+        return sess.Result(), nil
+    },
+)
+```
+
+The client receives custom status updates alongside model chunks:
+
+```go
+for chunk, err := range conn.Receive() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if chunk.Status != nil {
+        fmt.Printf("[%s] %s\n", chunk.Status.Phase, chunk.Status.Details)
+    }
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text())
+    }
+    if chunk.EndTurn {
+        break
+    }
+}
+```
+
+## Prompt-backed session flows
+
+If your session flow follows the standard pattern of rendering a prompt,
+appending conversation history, calling the model with streaming, and
+updating history, you can skip the manual loop entirely.
+`DefineSessionFlowFromPrompt` handles all of that given a
+[Dotprompt](/docs/dotprompt) definition:
+
+```yaml
+# prompts/chat.prompt
+---
+model: googleai/gemini-3-flash-preview
+input:
+  schema:
+    personality: string
+  default:
+    personality: a helpful assistant
+---
+{{ role "system" }}
+You are {{ personality }}. Keep responses concise.
+```
+
+```go
+type ChatInput struct {
+    Personality string `json:"personality"`
+}
+
+chatFlow := genkit.DefineSessionFlowFromPrompt(
+    g, "chat", ChatInput{Personality: "a sarcastic pirate"},
+)
+```
+
+This creates a fully functional session flow. It renders the prompt before
+each generation call, appends conversation history, streams model output,
+and updates the session, all without you writing a generate loop.
+
+You use it the same way as a custom session flow:
+
+```go
+// Single-turn
+output, _ := chatFlow.RunText(ctx, "What is Go?")
+fmt.Println(output.Message.Text())
+
+// Multi-turn with streaming
+conn, _ := chatFlow.StreamBidi(ctx)
+conn.SendText("What is Go?")
+for chunk, _ := range conn.Receive() {
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text())
+    }
+    if chunk.EndTurn {
+        break
+    }
+}
+conn.Close()
+```
+
+To override the prompt input variables for a specific invocation, use
+`WithInputVariables`:
+
+```go
+output, _ := chatFlow.RunText(ctx, "What is Go?",
+    aix.WithInputVariables[any](ChatInput{Personality: "a formal professor"}),
+)
+```
+
+Prompt-backed session flows support all the same features: server-managed and
+client-managed state, custom session state, snapshots, and artifacts.
+
+## Next steps
+
+- [Tool calling](/docs/tool-calling) -- add interactive tool use to your
+  session flows.
+- [Pause generation using interrupts](/docs/interrupts) -- pause and resume
+  generation for human-in-the-loop workflows.
+- [Managing prompts with Dotprompt](/docs/dotprompt) -- learn about the prompt
+  format used by `DefineSessionFlowFromPrompt`.
+- [Implementing agentic patterns](/docs/agentic-patterns) -- build more
+  complex agent architectures on top of session flows.
+- [Creating flows](/docs/flows) -- understand the foundational flow API that
+  session flows build on.
+
+</LanguageContent>
