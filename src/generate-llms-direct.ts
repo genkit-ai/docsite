@@ -17,6 +17,7 @@
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { getAllProcessedDocuments, type ProcessedDocument } from './utils/content-processor.js';
+import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
 import { sidebar } from './sidebar.js';
 
 interface LanguageSet {
@@ -166,7 +167,11 @@ function generateLanguageSpecificContent(docs: ProcessedDocument[], language: La
   for (const docPath of allPaths) {
     const doc = docs.find(d => d.slug === docPath);
     if (doc && doc.content[language] && doc.supportedLanguages.includes(language)) {
-      content += `${doc.content[language]}\n\n---\n\n`;
+      const rewritten = rewriteInternalDocsLinks(doc.content[language], language, undefined, {
+        context: `llms-${language}`,
+        warnOnUnresolved: true,
+      });
+      content += `${rewritten}\n\n---\n\n`;
     }
   }
 
@@ -187,7 +192,11 @@ function generateLanguageSpecificSet(docs: ProcessedDocument[], set: LanguageSet
   for (const docPath of set.paths) {
     const doc = docs.find(d => d.slug === docPath);
     if (doc && doc.content[language] && doc.supportedLanguages.includes(language)) {
-      content += `${doc.content[language]}\n\n---\n\n`;
+      const rewritten = rewriteInternalDocsLinks(doc.content[language], language, undefined, {
+        context: `${set.label}-${language}`,
+        warnOnUnresolved: true,
+      });
+      content += `${rewritten}\n\n---\n\n`;
     }
   }
 
@@ -209,8 +218,12 @@ function generateFullDocumentation(docs: ProcessedDocument[]): string {
       const languages: Language[] = ['js', 'go', 'dart', 'python'];
       for (const lang of languages) {
         if (doc.content[lang] && doc.supportedLanguages.includes(lang)) {
+          const rewritten = rewriteInternalDocsLinks(doc.content[lang], lang, undefined, {
+            context: `llms-full-${lang}`,
+            warnOnUnresolved: true,
+          });
           content += `## ${docPath} (${lang.toUpperCase()})\n\n`;
-          content += `${doc.content[lang]}\n\n---\n\n`;
+          content += `${rewritten}\n\n---\n\n`;
         }
       }
     }

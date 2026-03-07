@@ -17,6 +17,7 @@
 import { readdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import { parse } from 'yaml';
+import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
 
 export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
 
@@ -115,7 +116,10 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 			}
 			fullProcessedContent = fullLines.slice(fullFirstNonImportIndex).join('\n').trim();
 			fullProcessedContent = `# ${title}\n\n${fullProcessedContent}`; // Prepend title
-			return fullProcessedContent;
+			return rewriteInternalDocsLinks(fullProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+				context: 'gen-bundle',
+				warnOnUnresolved: true,
+			});
 		} else {
 			// --- Case 2: <LLMs> tag NOT found ---
 			// Apply standard processing:
@@ -144,11 +148,17 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 
 			// 2c. Prepend H1 title
 			standardProcessedContent = `# ${title}\n\n${standardProcessedContent}`;
-			return standardProcessedContent;
+			return rewriteInternalDocsLinks(standardProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+				context: 'gen-bundle',
+				warnOnUnresolved: true,
+			});
 		}
 	}
 	rawContent = `# ${title}\n\n${rawContent}`; // Prepend title
-	return rawContent;
+	return rewriteInternalDocsLinks(rawContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+		context: 'gen-bundle',
+		warnOnUnresolved: true,
+	});
 }
 
 export function extractFrontmatterAndBody(source: string) {
