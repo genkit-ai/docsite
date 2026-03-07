@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
+import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
 
 const SOURCE_ROOT = path.resolve('src/content/docs/docs');
 const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
@@ -165,6 +166,11 @@ function renderBodyForLanguage(body: string, language: Language): string {
 
   const blocks = parseLanguageBlocks(rendered);
   rendered = renderLanguageSegment(rendered, blocks, 0, rendered.length, language);
+  rendered = rewriteInternalDocsLinks(rendered, language, undefined, {
+    context: 'generate-language-pages',
+    warnOnUnresolved: true,
+    warnOnCrossLanguageTargets: true,
+  });
 
   rendered = rendered.replace(/\n{3,}/g, '\n\n').trim();
   return `${rendered}\n`;

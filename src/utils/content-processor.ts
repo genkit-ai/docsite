@@ -17,6 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'path';
 import { parse } from 'yaml';
+import { rewriteInternalDocsLinks } from './docs-link-routing.js';
 
 export interface ProcessedDocument {
   slug: string;
@@ -87,6 +88,10 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
 
   // Clean up extra whitespace
   filteredContent = filteredContent.replace(/\n{3,}/g, '\n\n');
+  filteredContent = rewriteInternalDocsLinks(filteredContent, normalizedLang as 'js' | 'go' | 'dart' | 'python', undefined, {
+    context: 'content-processor',
+    warnOnUnresolved: true,
+  });
 
   return filteredContent.trim();
 }
