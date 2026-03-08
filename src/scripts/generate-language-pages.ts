@@ -11,6 +11,21 @@ const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
 
 type Language = (typeof LANGUAGES)[number];
 const KNOWN_LANGUAGES = new Set<string>(LANGUAGES);
+const FENCE_TO_LANGUAGE: Record<string, Language> = {
+  js: 'js',
+  javascript: 'js',
+  jsx: 'js',
+  mjs: 'js',
+  cjs: 'js',
+  ts: 'js',
+  typescript: 'js',
+  tsx: 'js',
+  go: 'go',
+  golang: 'go',
+  dart: 'dart',
+  py: 'python',
+  python: 'python',
+};
 type LanguageBlockNode = {
   langs: string[];
   openStart: number;
@@ -144,11 +159,12 @@ function validateLanguageBlocks(
   body: string,
   supportedLanguages: Language[],
   filePath: string,
-): string[] {
+): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const blocks = flattenLanguageBlocks(parseLanguageBlocks(body));
   if (blocks.length === 0) {
-    return errors;
+    return { errors, warnings };
   }
 
   const supportedSet = new Set<string>(supportedLanguages);
@@ -170,9 +186,34 @@ function validateLanguageBlocks(
         );
       }
     }
+
+    if (block.langs.length !== 1 || !KNOWN_LANGUAGES.has(block.langs[0])) {
+      continue;
+    }
+
+    const blockLanguage = block.langs[0] as Language;
+    const blockContent = body.slice(block.openEnd, block.closeStart);
+    const codeFenceRegex = /(^|\n)[ \t]*```([^\n`]*)/g;
+    let fenceMatch: RegExpExecArray | null;
+    while ((fenceMatch = codeFenceRegex.exec(blockContent)) !== null) {
+      const rawFenceInfo = (fenceMatch[2] || '').trim();
+      if (!rawFenceInfo) {
+        continue;
+      }
+      const label = rawFenceInfo.split(/[\s{]/)[0].toLowerCase();
+      const codeLanguage = FENCE_TO_LANGUAGE[label];
+      if (!codeLanguage || codeLanguage === blockLanguage) {
+        continue;
+      }
+      const absoluteFenceOffset = block.openEnd + fenceMatch.index + (fenceMatch[1] ? fenceMatch[1].length : 0);
+      const fenceLine = getLineNumber(body, absoluteFenceOffset);
+      warnings.push(
+        `${fileRelativePath}:${fenceLine} has \`\`\`${label} inside <Lang lang="${blockLanguage}">.`,
+      );
+    }
   }
 
-  return errors;
+  return { errors, warnings };
 }
 
 function renderLanguageSegment(
@@ -326,6 +367,7 @@ function buildGeneratedFileNotice(sourceFilePath: string, extension: 'md' | 'mdx
 
 async function generate(): Promise<void> {
   const validationErrors: string[] = [];
+  const languageCodeWarnings: string[] = [];
   const sizeWarnings: string[] = [];
 
   for (const language of LANGUAGES) {
@@ -339,7 +381,9 @@ async function generate(): Promise<void> {
     const { frontmatter, body } = splitFrontmatter(source);
     const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
     const supportedLanguages = getSupportedLanguages(frontmatter);
-    validationErrors.push(...validateLanguageBlocks(body, supportedLanguages, filePath));
+    const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
+    validationErrors.push(...blockValidation.errors);
+    languageCodeWarnings.push(...blockValidation.warnings);
     const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
     const renderedByLanguage = new Map<Language, string>();
     for (const language of supportedLanguages) {
@@ -401,6 +445,15 @@ async function generate(): Promise<void> {
       [
         'generate-language-pages: Found pages with empty/very-small content for declared supportedLanguages:',
         ...sizeWarnings.map((warning) => `- ${warning}`),
+      ].join('\n'),
+    );
+  }
+
+  if (languageCodeWarnings.length > 0) {
+    console.warn(
+      [
+        'generate-language-pages: Found possible code-fence language mismatches inside Lang blocks:',
+        ...languageCodeWarnings.map((warning) => `- ${warning}`),
       ].join('\n'),
     );
   }
