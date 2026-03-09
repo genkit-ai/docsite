@@ -37,6 +37,8 @@ Once you submit your PR, a maintainer will review it. If it doesn't meet the gui
 
 When contributing docs:
 
-1. Author in source docs under `src/content/docs/docs/`; do not edit generated `src/content/docs/docs/{js,go,dart,python}/...` pages directly.
-2. Use neutral internal docs links (`/docs/<slug>/`) in source docs. Language-specific paths are resolved during generation/runtime.
-3. Language-specific cross-link warnings during generation are non-blocking and indicate targets missing in a language.
+1. Follow the [Genkit Documentation Guidance](DOCUMENTATION-GUIDANCE.md) for detailed instructions on authoring and maintaining pages in the language-aware architecture.
+2. If you are using a coding agent (like Gemini CLI) to assist in writing, you can use the `genkit-doc-guide` skill found in `.agent/skills/` to help ensure your content follows project standards.
+3. Author in source docs under `src/content/docs/docs/`; do not edit generated `src/content/docs/docs/{js,go,dart,python}/...` pages directly.
+4. Use neutral internal docs links (`/docs/<slug>/`) in source docs. Language-specific paths are resolved during generation/runtime.
+5. Language-specific cross-link warnings during generation are non-blocking and indicate targets missing in a language.
