@@ -15,8 +15,7 @@ For every doc page:
 3. Set `isLanguageAgnostic: true` only if the page should have one shared canonical URL.
 4. Use `<Lang>` only for language-specific deltas.
 5. Keep shared prose outside `<Lang>` blocks.
-6. Prefer neutral prose first. Use `<Lang terms={...}>` when only small language-specific tokens differ.
-7. Author internal docs links as neutral routes (`/docs/<slug>/`) unless intentionally language-pinned.
+6. Author internal docs links as neutral routes (`/docs/<slug>/`) unless intentionally language-pinned.
 
 ## Required Frontmatter
 
@@ -61,33 +60,6 @@ Rules:
 2. Only include languages also declared in `supportedLanguages`.
 3. Do not wrap entire pages in `Lang` unless every section is truly language-specific.
 4. Do not use legacy `LanguageContent`.
-
-## Language Terms for Minor Deltas
-
-Use `<Lang terms={...}>` when prose is mostly the same and only a few terms differ by language.
-
-```mdx
-import Lang from '../../../components/Lang.astro';
-
-<Lang lang="js go python dart" terms={{
-  "schemaLibraryName": {
-    "js": "Zod",
-    "go": "Go structs",
-    "python": "Pydantic Models",
-    "dart": "Schematic"
-  }
-}}>
-- Define schemas with [[schemaLibraryName]].
-</Lang>
-```
-
-Rules:
-
-1. Keep page-level variables in the page where they are used.
-2. `terms` must be a JSON object literal (quoted keys/values).
-3. Use global variables only for cross-doc constants, defined in `src/content/docs/_shared/global-terms.ts`.
-4. Global token syntax is `[[@global.path.to.value]]` (example: `[[@global.models.geminiFlash]]`).
-5. Resolution order is `page` then `global`; unresolved tokens produce generation warnings.
 
 ## Page Type Rules
 
@@ -134,14 +106,6 @@ Why:
 
 Generation emits non-blocking warnings when a language page must link to another language variant (for example, Go page linking to a JS-only target). These warnings help identify missing language coverage but do not fail the build.
 
-### Duplication and template warnings
-
-Generation also emits non-blocking warnings for:
-
-- high-similarity sibling `<Lang>` prose blocks (suggesting neutral prose or `<Lang terms={...}>`)
-- `<Lang>` terms missing per-language values for the block's declared `lang` set
-- unresolved `[[...]]` template tokens in rendered language output
-
 ## Writing Standards
 
 ### Clarity
@@ -153,7 +117,6 @@ Generation also emits non-blocking warnings for:
 
 - Keep parallel section structure across languages.
 - Use the same terminology and concept names across pages.
-- If sibling language prose is near-identical, merge to neutral prose or `<Lang terms={...}>`.
 
 ### Code Examples
 
