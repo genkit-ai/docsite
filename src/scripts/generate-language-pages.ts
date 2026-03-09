@@ -2,12 +2,23 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
+import {
+  DOC_LANGUAGES,
+  GLOBAL_LANG_TERMS,
+  resolveLanguageValue,
+  resolvePathValue,
+} from '../content/docs/_shared/global-terms.js';
 
 const SOURCE_ROOT = path.resolve('src/content/docs/docs');
 const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
-const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+const LANGUAGES = [...DOC_LANGUAGES] as const;
 const FALLBACK_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
+const DUPLICATE_PROSE_MIN_CHARS = 140;
+const DUPLICATE_PROSE_WARNING_SIMILARITY = 0.82;
+const DUPLICATE_PROSE_HIGH_CONFIDENCE_SIMILARITY = 0.93;
+const TEMPLATE_TOKEN_REGEX = /\[\[\s*([^[\]]+?)\s*\]\]/g;
+const GLOBAL_TOKEN_REGEX = /\[\[\s*@global\.([^[\]]+?)\s*\]\]/g;
 
 type Language = (typeof LANGUAGES)[number];
 const KNOWN_LANGUAGES = new Set<string>(LANGUAGES);
@@ -28,6 +39,7 @@ const FENCE_TO_LANGUAGE: Record<string, Language> = {
 };
 type LanguageBlockNode = {
   langs: string[];
+  attrs: string;
   openStart: number;
   openEnd: number;
   closeStart: number;
@@ -94,6 +106,7 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
         .filter(Boolean);
       const node: LanguageBlockNode & { tagName: string } = {
         langs,
+        attrs,
         openStart: tagStart,
         openEnd: tagEnd,
         closeStart: tagEnd,
@@ -121,6 +134,7 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
     node.closeEnd = tagEnd;
     const finalized: LanguageBlockNode = {
       langs: node.langs,
+      attrs: node.attrs,
       openStart: node.openStart,
       openEnd: node.openEnd,
       closeStart: node.closeStart,
@@ -216,12 +230,254 @@ function validateLanguageBlocks(
   return { errors, warnings };
 }
 
+function stripCodeFences(content: string): string {
+  return content.replace(/```[\s\S]*?```/g, '');
+}
+
+function normalizeProse(content: string): string {
+  return stripCodeFences(content)
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[_*~>#-]/g, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = new Set(left.split(' ').filter((token) => token.length > 2));
+  const rightTokens = new Set(right.split(' ').filter((token) => token.length > 2));
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap / Math.max(leftTokens.size, rightTokens.size);
+}
+
+function collectDuplicateLangWarnings(
+  body: string,
+  nodes: LanguageBlockNode[],
+  filePath: string,
+  warnings: string[],
+): void {
+  for (let i = 0; i < nodes.length - 1; i += 1) {
+    const left = nodes[i];
+    const right = nodes[i + 1];
+    if (left.langs.length !== 1 || right.langs.length !== 1 || left.langs[0] === right.langs[0]) {
+      continue;
+    }
+
+    const leftContent = normalizeProse(body.slice(left.openEnd, left.closeStart));
+    const rightContent = normalizeProse(body.slice(right.openEnd, right.closeStart));
+    if (
+      leftContent.length < DUPLICATE_PROSE_MIN_CHARS ||
+      rightContent.length < DUPLICATE_PROSE_MIN_CHARS
+    ) {
+      continue;
+    }
+
+    const similarity = tokenSimilarity(leftContent, rightContent);
+    if (similarity < DUPLICATE_PROSE_WARNING_SIMILARITY) {
+      continue;
+    }
+
+    const relativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+    const line = getLineNumber(body, left.openStart);
+    const confidence =
+      similarity >= DUPLICATE_PROSE_HIGH_CONFIDENCE_SIMILARITY
+        ? 'high-confidence'
+        : 'possible';
+    warnings.push(
+      `${relativePath}:${line} ${confidence} duplicated prose between <Lang lang="${left.langs[0]}"> and <Lang lang="${right.langs[0]}"> (similarity=${similarity.toFixed(
+        2,
+      )}). Consider language-neutral prose or <Lang terms={...}>.`,
+    );
+  }
+
+  for (const node of nodes) {
+    if (node.children.length > 0) {
+      collectDuplicateLangWarnings(body, node.children, filePath, warnings);
+    }
+  }
+}
+
+function extractTermsExpression(attributes: string): string | undefined {
+  const termsMatch = attributes.match(/\bterms\s*=\s*\{/);
+  if (!termsMatch) {
+    return undefined;
+  }
+
+  const start = termsMatch.index! + termsMatch[0].length - 1;
+  let depth = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  for (let i = start; i < attributes.length; i += 1) {
+    const char = attributes[i];
+    const prev = i > 0 ? attributes[i - 1] : '';
+
+    if (char === "'" && !inDoubleQuote && prev !== '\\') {
+      inSingleQuote = !inSingleQuote;
+    } else if (char === '"' && !inSingleQuote && prev !== '\\') {
+      inDoubleQuote = !inDoubleQuote;
+    }
+
+    if (inSingleQuote || inDoubleQuote) {
+      continue;
+    }
+
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return attributes.slice(start + 1, i);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function parseTerms(attributes: string): { terms: Record<string, unknown>; error?: string } {
+  const expression = extractTermsExpression(attributes);
+  if (!expression) {
+    return { terms: {} };
+  }
+
+  try {
+    const parsed = JSON.parse(expression);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { terms: {}, error: 'terms must be a JSON object literal.' };
+    }
+    return { terms: parsed as Record<string, unknown> };
+  } catch (error) {
+    return {
+      terms: {},
+      error: `Could not parse terms JSON expression: ${(error as Error).message}`,
+    };
+  }
+}
+
+function resolveTemplateToken(
+  token: string,
+  language: Language,
+  terms: Record<string, unknown>,
+): string | undefined {
+  const trimmed = token.trim();
+  if (trimmed.startsWith('@global.')) {
+    const pathSegments = trimmed
+      .slice('@global.'.length)
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    const globalValue = resolvePathValue(GLOBAL_LANG_TERMS, pathSegments);
+    return resolveLanguageValue(globalValue, language);
+  }
+
+  const pathSegments = trimmed.split('.').map((segment) => segment.trim()).filter(Boolean);
+  const scopedValue =
+    pathSegments.length > 1 ? resolvePathValue(terms, pathSegments) : terms[trimmed];
+  return resolveLanguageValue(scopedValue, language);
+}
+
+type LangWarningContext = {
+  warnings: string[];
+  filePath: string;
+};
+
+function validateLangTermTokens(
+  body: string,
+  nodes: LanguageBlockNode[],
+  context: LangWarningContext,
+): void {
+  const relativePath = path.relative(process.cwd(), context.filePath).replace(/\\/g, '/');
+
+  const visit = (blockNodes: LanguageBlockNode[]): void => {
+    for (const block of blockNodes) {
+      const startLine = getLineNumber(body, block.openStart);
+      const { terms, error } = parseTerms(block.attrs);
+      if (error) {
+        context.warnings.push(`${relativePath}:${startLine} ${error}`);
+      }
+
+      const knownLangs = block.langs.filter((lang): lang is Language => KNOWN_LANGUAGES.has(lang));
+      const content = body.slice(block.openEnd, block.closeStart);
+      const tokens = Array.from(
+        new Set(
+          [...content.matchAll(TEMPLATE_TOKEN_REGEX)]
+            .map((tokenMatch) => tokenMatch[1]?.trim())
+            .filter((token): token is string => Boolean(token)),
+        ),
+      );
+      for (const token of tokens) {
+        for (const language of knownLangs) {
+          if (resolveTemplateToken(token, language, terms) !== undefined) {
+            continue;
+          }
+          context.warnings.push(
+            `${relativePath}:${startLine} Lang token "[[${token}]]" has no value for "${language}" in this block.`,
+          );
+        }
+      }
+
+      if (block.children.length > 0) {
+        visit(block.children);
+      }
+    }
+  };
+
+  visit(nodes);
+}
+
+function replaceGlobalTokens(
+  content: string,
+  language: Language,
+  context: LangWarningContext,
+): string {
+  const relativePath = path.relative(process.cwd(), context.filePath).replace(/\\/g, '/');
+  return content.replace(GLOBAL_TOKEN_REGEX, (_full, pathExpression: string) => {
+    const pathSegments = pathExpression
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    const resolved = resolveLanguageValue(resolvePathValue(GLOBAL_LANG_TERMS, pathSegments), language);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+
+    context.warnings.push(
+      `${relativePath} global token "[[@global.${pathExpression}]]" has no value for "${language}".`,
+    );
+    return `[[@global.${pathExpression}]]`;
+  });
+}
+
+function renderLangTokensForLanguage(
+  content: string,
+  terms: Record<string, unknown>,
+  language: Language,
+): string {
+  return content.replace(TEMPLATE_TOKEN_REGEX, (_placeholder, token: string) => {
+    const resolved = resolveTemplateToken(token, language, terms);
+    return resolved !== undefined ? resolved : `[[${token.trim()}]]`;
+  });
+}
+
 function renderLanguageSegment(
   source: string,
   nodes: LanguageBlockNode[],
   start: number,
   end: number,
   language: Language,
+  context: LangWarningContext,
 ): string {
   let cursor = start;
   let output = '';
@@ -230,15 +486,26 @@ function renderLanguageSegment(
     if (node.openStart < start || node.closeEnd > end) {
       continue;
     }
+
     output += source.slice(cursor, node.openStart);
     if (node.langs.includes(language)) {
-      output += renderLanguageSegment(
+      const nested = renderLanguageSegment(
         source,
         node.children,
         node.openEnd,
         node.closeStart,
         language,
+        context,
       );
+      const { terms, error } = parseTerms(node.attrs);
+      if (error) {
+        const relativePath = path.relative(process.cwd(), context.filePath).replace(/\\/g, '/');
+        const line = getLineNumber(source, node.openStart);
+        context.warnings.push(`${relativePath}:${line} ${error}`);
+        output += nested;
+      } else {
+        output += renderLangTokensForLanguage(nested, terms, language);
+      }
     }
     cursor = node.closeEnd;
   }
@@ -247,7 +514,47 @@ function renderLanguageSegment(
   return output;
 }
 
-function renderBodyForLanguage(body: string, language: Language): string {
+function validateGlobalTokens(
+  body: string,
+  supportedLanguages: Language[],
+  context: LangWarningContext,
+): void {
+  const relativePath = path.relative(process.cwd(), context.filePath).replace(/\\/g, '/');
+  const globalTokens = Array.from(
+    new Set(
+      [...body.matchAll(GLOBAL_TOKEN_REGEX)]
+        .map((matchToken) => matchToken[1]?.trim())
+        .filter((token): token is string => Boolean(token)),
+    ),
+  );
+  for (const globalToken of globalTokens) {
+    const pathSegments = globalToken.split('.').map((segment) => segment.trim()).filter(Boolean);
+    for (const language of supportedLanguages) {
+      if (resolveLanguageValue(resolvePathValue(GLOBAL_LANG_TERMS, pathSegments), language) !== undefined) {
+        continue;
+      }
+      context.warnings.push(
+        `${relativePath} global token "[[@global.${globalToken}]]" has no value for "${language}".`,
+      );
+    }
+  }
+}
+
+function resolveBodyForLanguage(
+  body: string,
+  language: Language,
+  context: LangWarningContext,
+): string {
+  const blocks = parseLanguageBlocks(body);
+  const rendered = renderLanguageSegment(body, blocks, 0, body.length, language, context);
+  return replaceGlobalTokens(rendered, language, context);
+}
+
+function renderBodyForLanguage(
+  body: string,
+  language: Language,
+  context: LangWarningContext,
+): string {
   let rendered = body;
 
   rendered = rendered.replace(/^import\s+Lang\s+from\s+['"][^'"]+['"];?\n/gm, '');
@@ -258,8 +565,7 @@ function renderBodyForLanguage(body: string, language: Language): string {
     '',
   );
 
-  const blocks = parseLanguageBlocks(rendered);
-  rendered = renderLanguageSegment(rendered, blocks, 0, rendered.length, language);
+  rendered = resolveBodyForLanguage(rendered, language, context);
   rendered = rewriteInternalDocsLinks(rendered, language, undefined, {
     context: 'generate-language-pages',
     warnOnUnresolved: true,
@@ -369,6 +675,8 @@ async function generate(): Promise<void> {
   const validationErrors: string[] = [];
   const languageCodeWarnings: string[] = [];
   const sizeWarnings: string[] = [];
+  const duplicationWarnings: string[] = [];
+  const langTermsWarnings: string[] = [];
 
   for (const language of LANGUAGES) {
     await rm(path.join(OUTPUT_ROOT, language), { recursive: true, force: true });
@@ -384,10 +692,18 @@ async function generate(): Promise<void> {
     const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
     validationErrors.push(...blockValidation.errors);
     languageCodeWarnings.push(...blockValidation.warnings);
+    const languageBlockRoots = parseLanguageBlocks(body);
+    collectDuplicateLangWarnings(body, languageBlockRoots, filePath, duplicationWarnings);
+    const termsWarningContext = {
+      warnings: langTermsWarnings,
+      filePath,
+    };
+    validateLangTermTokens(body, languageBlockRoots, termsWarningContext);
+    validateGlobalTokens(body, supportedLanguages, termsWarningContext);
     const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
     const renderedByLanguage = new Map<Language, string>();
     for (const language of supportedLanguages) {
-      const rendered = renderBodyForLanguage(body, language);
+      const rendered = renderBodyForLanguage(body, language, termsWarningContext);
       renderedByLanguage.set(language, rendered);
       const charCount = getMeaningfulContentCharCount(rendered);
       if (charCount === 0) {
@@ -419,7 +735,7 @@ async function generate(): Promise<void> {
         outputPath,
       ) as Record<string, unknown>;
       const renderedBody = rewriteBodyAssetPaths(
-        renderedByLanguage.get(language) || renderBodyForLanguage(body, language),
+        renderedByLanguage.get(language) || renderBodyForLanguage(body, language, termsWarningContext),
         filePath,
         outputPath,
       );
@@ -454,6 +770,24 @@ async function generate(): Promise<void> {
       [
         'generate-language-pages: Found possible code-fence language mismatches inside Lang blocks:',
         ...languageCodeWarnings.map((warning) => `- ${warning}`),
+      ].join('\n'),
+    );
+  }
+
+  if (duplicationWarnings.length > 0) {
+    console.warn(
+      [
+        'generate-language-pages: Found possible duplicated prose across sibling Lang blocks:',
+        ...duplicationWarnings.map((warning) => `- ${warning}`),
+      ].join('\n'),
+    );
+  }
+
+  if (langTermsWarnings.length > 0) {
+    console.warn(
+      [
+        'generate-language-pages: Found Lang terms mapping issues:',
+        ...langTermsWarnings.map((warning) => `- ${warning}`),
       ].join('\n'),
     );
   }

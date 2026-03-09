@@ -1,14 +1,77 @@
 ---
+import {
+  GLOBAL_LANG_TERMS,
+  isDocLanguage,
+  resolveLanguageValue,
+  resolvePathValue,
+  type DocLanguage,
+} from '../content/docs/_shared/global-terms.js';
+
 export interface Props {
   lang: string;
+  terms?: Record<string, unknown>;
   children?: any;
 }
 
-const { lang } = Astro.props;
+const { lang, terms } = Astro.props;
 const languages = lang.trim().split(/\s+/).filter(Boolean);
 const langAttribute = languages.join(' ');
+
+function inferLanguage(pathname: string): DocLanguage {
+  const match = pathname.match(/\/docs\/(js|go|dart|python)(?:\/|$)/);
+  if (match && isDocLanguage(match[1])) {
+    return match[1];
+  }
+  return 'js';
+}
+
+const language = inferLanguage(Astro.url.pathname);
+const TOKEN_REGEX = /\[\[\s*([^[\]]+?)\s*\]\]/g;
+const unresolved = new Set<string>();
+
+function resolveToken(token: string): string | undefined {
+  const trimmedToken = token.trim();
+  if (trimmedToken.startsWith('@global.')) {
+    const pathSegments = trimmedToken.slice('@global.'.length).split('.').filter(Boolean);
+    return resolveLanguageValue(resolvePathValue(GLOBAL_LANG_TERMS, pathSegments), language);
+  }
+
+  if (!terms || typeof terms !== 'object') {
+    return undefined;
+  }
+
+  const pathSegments = trimmedToken.split('.').filter(Boolean);
+  const scopedValue =
+    pathSegments.length > 1
+      ? resolvePathValue(terms, pathSegments)
+      : (terms as Record<string, unknown>)[trimmedToken];
+  return resolveLanguageValue(scopedValue, language);
+}
+
+let rendered = '';
+if (terms && typeof terms === 'object') {
+  const template = (await Astro.slots.render('default')) ?? '';
+  rendered = template.replace(TOKEN_REGEX, (_full, token: string) => {
+    const resolved = resolveToken(token);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+    unresolved.add(token.trim());
+    return `[[${token.trim()}]]`;
+  });
+}
+
+if (unresolved.size > 0) {
+  throw new Error(
+    `Lang could not resolve terms for "${language}" in <Lang lang="${langAttribute}">: ${Array.from(
+      unresolved,
+    )
+      .sort()
+      .join(', ')}`,
+  );
+}
 ---
 
 <div class="lang-content" data-lang={langAttribute}>
-  <slot />
+  {terms ? <Fragment set:html={rendered} /> : <slot />}
 </div>
