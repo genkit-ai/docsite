@@ -95,38 +95,7 @@ class UnifiedPageManager {
     if (!Array.isArray(supported) || supported.length === 0) return false;
     if (DOC_LANGUAGE_AGNOSTIC[normalizedPath]) return false;
 
-    const preferredCandidates = [];
-    const params = new URLSearchParams(window.location.search);
-    const queryLanguage = params.get('lang');
-    if (queryLanguage) {
-      preferredCandidates.push(this.normalizeLanguage(queryLanguage));
-    }
-
-    try {
-      const referrer = document.referrer ? new URL(document.referrer) : null;
-      if (referrer && referrer.origin === window.location.origin) {
-        const refMatch = referrer.pathname.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
-        if (refMatch?.[1]) {
-          preferredCandidates.push(this.normalizeLanguage(refMatch[1]));
-        }
-      }
-    } catch {
-      // Ignore malformed referrer values.
-    }
-
-    const globalPreference = localStorage.getItem(this.storageKeys.globalPreference);
-    if (globalPreference) {
-      preferredCandidates.push(this.normalizeLanguage(globalPreference));
-    }
-
-    const currentLanguage = localStorage.getItem(this.storageKeys.currentLanguage);
-    if (currentLanguage) {
-      preferredCandidates.push(this.normalizeLanguage(currentLanguage));
-    }
-
-    preferredCandidates.push(...LANGUAGE_FALLBACK_ORDER);
-    const dedupedCandidates = [...new Set(preferredCandidates)];
-    const canonicalLanguage = dedupedCandidates.find((lang) => supported.includes(lang));
+    const canonicalLanguage = LANGUAGE_FALLBACK_ORDER.find((lang) => supported.includes(lang));
     if (!canonicalLanguage) return false;
 
     const slug = normalizedPath.replace(/^\/docs\//, '');
@@ -146,10 +115,32 @@ class UnifiedPageManager {
     const pathLang = pathLangMatch ? pathLangMatch[1] : null;
     const globalPreference = localStorage.getItem(this.storageKeys.globalPreference);
     const currentLanguage = localStorage.getItem(this.storageKeys.currentLanguage);
+    const normalizedRequestedLang = urlLang ? this.normalizeLanguage(urlLang) : null;
+    const pathSlugMatch = window.location.pathname.match(/^\/docs\/(js|go|dart|python)\/(.+)$/);
+
+    if (pathLang && pathSlugMatch && normalizedRequestedLang) {
+      const slugPath = pathSlugMatch[2].replace(/\/$/, '');
+      const basePath = `/docs/${slugPath}`;
+      const supported = DOC_LANGUAGE_SUPPORT[basePath];
+      const isAgnostic = Boolean(DOC_LANGUAGE_AGNOSTIC[basePath]);
+
+      if (
+        !isAgnostic &&
+        Array.isArray(supported) &&
+        supported.includes(normalizedRequestedLang) &&
+        normalizedRequestedLang !== pathLang
+      ) {
+        const nextUrl = new URL(window.location);
+        nextUrl.pathname = `/docs/${normalizedRequestedLang}/${slugPath}/`;
+        nextUrl.searchParams.delete('lang');
+        window.location.replace(nextUrl.toString());
+        return;
+      }
+    }
     
     // Determine the current language
     const selectedLang = pathLang ? this.normalizeLanguage(pathLang) :
-                        urlLang ? this.normalizeLanguage(urlLang) :
+                        normalizedRequestedLang ? normalizedRequestedLang :
                         globalPreference || currentLanguage || 'js';
     
     // Legacy compatibility: consume ?lang=... links, then normalize URL.

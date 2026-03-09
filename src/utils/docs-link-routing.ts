@@ -16,6 +16,7 @@ export type DocsPathMetadataMap = Record<string, DocsPathMetadata>;
 
 const INTERNAL_DOCS_URL_BASE = 'https://genkit.dev';
 const DOCS_SOURCE_ROOT = path.resolve(process.cwd(), 'src/content/docs/docs');
+const GENERATED_LANGUAGE_DIRS = new Set(LANGUAGE_FALLBACK_ORDER);
 const LEGACY_PATH_PREFIXES: Array<[prefix: string, replacement: string]> = [
   ['/docs/plugins/', '/docs/integrations/'],
 ];
@@ -175,7 +176,7 @@ function parseIsLanguageAgnosticFromSource(source: string): boolean {
   }
 }
 
-function findMetadataFromSource(basePath: string): DocsPathMetadata | null {
+export function findMetadataFromSource(basePath: string): DocsPathMetadata | null {
   const slugPath = basePath.replace(/^\/docs\//, '');
   const candidates = [
     path.join(DOCS_SOURCE_ROOT, `${slugPath}.mdx`),
@@ -193,8 +194,52 @@ function findMetadataFromSource(basePath: string): DocsPathMetadata | null {
   };
 }
 
-function chooseCanonicalLanguage(supportedLanguages: SupportedLanguage[]): SupportedLanguage | null {
+export function chooseCanonicalLanguage(supportedLanguages: SupportedLanguage[]): SupportedLanguage | null {
   return LANGUAGE_FALLBACK_ORDER.find((language) => supportedLanguages.includes(language)) || null;
+}
+
+function collectSourceDocFiles(dir: string): string[] {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (GENERATED_LANGUAGE_DIRS.has(entry.name as SupportedLanguage)) {
+        continue;
+      }
+      files.push(...collectSourceDocFiles(path.join(dir, entry.name)));
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    if (entry.name.endsWith('.mdx') || entry.name.endsWith('.md')) {
+      files.push(path.join(dir, entry.name));
+    }
+  }
+
+  return files;
+}
+
+export function getAllSourceDocsPathMetadata(): DocsPathMetadataMap {
+  const metadataEntries = collectSourceDocFiles(DOCS_SOURCE_ROOT)
+    .map((filePath) => {
+      const relativePath = path.relative(DOCS_SOURCE_ROOT, filePath).replace(/\\/g, '/');
+      const slugPath = relativePath.replace(/\.(md|mdx)$/, '');
+      const source = fs.readFileSync(filePath, 'utf8');
+      return [
+        `/docs/${slugPath}`,
+        {
+          supportedLanguages: parseSupportedLanguagesFromSource(source),
+          isLanguageAgnostic: parseIsLanguageAgnosticFromSource(source),
+        },
+      ] as const;
+    })
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  return Object.fromEntries(metadataEntries) as DocsPathMetadataMap;
 }
 
 export function resolveDocsTarget(
