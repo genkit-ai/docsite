@@ -17,14 +17,18 @@
 import fs from 'node:fs/promises';
 import path from 'path';
 import { parse } from 'yaml';
+import { rewriteInternalDocsLinks } from './docs-link-routing.js';
 
 export interface ProcessedDocument {
   slug: string;
   title: string;
+  supportedLanguages: string[];
+  isLanguageAgnostic?: boolean;
   content: {
     js: string;
     go: string;
     python: string;
+    dart: string;
   };
   filePath: string;
 }
@@ -34,24 +38,19 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
   // Normalize language parameter
   const normalizedLang = normalizeLanguage(targetLang);
 
-  // Remove the language controls div (contains LanguageSelector and CopyMarkdownButton)
+  // Remove the language controls div (contains copy controls)
   content = content.replace(/<div[^>]*language-controls[^>]*>[\s\S]*?<\/div>/g, '');
   content = content.replace(
     /<div[^>]*style="[^"]*display:\s*flex[^"]*justify-content:\s*space-between[^"]*">[\s\S]*?<\/div>/g,
     '',
   );
 
-  // Remove LanguageSelector components
-  content = content.replace(/<LanguageSelector[^>]*\/>/g, '');
-  content = content.replace(/<LanguageSelector[^>]*>[\s\S]*?<\/LanguageSelector>/g, '');
-
   // Remove CopyMarkdownButton components
   content = content.replace(/<CopyMarkdownButton[^>]*\/>/g, '');
   content = content.replace(/<CopyMarkdownButton[^>]*>[\s\S]*?<\/CopyMarkdownButton>/g, '');
 
-  // Process LanguageContent blocks
-  // First, find all LanguageContent blocks
-  const languageContentRegex = /<LanguageContent\s+lang=["']([^"']+)["'][^>]*>([\s\S]*?)<\/LanguageContent>/g;
+  // Process language blocks.
+  const languageContentRegex = /<Lang\s+lang=["']([^"']+)["'][^>]*>([\s\S]*?)<\/Lang>/g;
 
   let filteredContent = content;
   let match;
@@ -60,12 +59,14 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
   // Reset regex lastIndex to ensure we find all matches
   languageContentRegex.lastIndex = 0;
 
-  // Collect all LanguageContent blocks
+  // Collect all language blocks.
   while ((match = languageContentRegex.exec(content)) !== null) {
     const [fullMatch, lang, innerContent] = match;
-    const normalizedBlockLang = normalizeLanguage(lang);
-
-    if (normalizedBlockLang === normalizedLang) {
+    const blockLangs = lang
+      .split(/\s+/)
+      .map((value) => normalizeLanguage(value))
+      .filter(Boolean);
+    if (blockLangs.includes(normalizedLang)) {
       // Keep content for matching language, but remove the wrapper
       replacements.push({
         original: fullMatch,
@@ -87,6 +88,10 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
 
   // Clean up extra whitespace
   filteredContent = filteredContent.replace(/\n{3,}/g, '\n\n');
+  filteredContent = rewriteInternalDocsLinks(filteredContent, normalizedLang as 'js' | 'go' | 'dart' | 'python', undefined, {
+    context: 'content-processor',
+    warnOnUnresolved: true,
+  });
 
   return filteredContent.trim();
 }
@@ -99,6 +104,7 @@ export function normalizeLanguage(lang: string): string {
     golang: 'go',
     python: 'python',
     py: 'python',
+    dart: 'dart',
   };
   return langMap[lang.toLowerCase()] || 'js';
 }
@@ -107,6 +113,16 @@ export function processRawContent(rawContent: string, title: string): string {
   // Apply standard processing
   // 1. Remove frontmatter block
   let processedContent = rawContent.replace(/^---\s*[\s\S]*?---/, '').trim();
+
+  // Remove generated-file notices from markdown exports while keeping them in source files.
+  processedContent = processedContent.replace(
+    /^\s*\{\/\*\s*AUTO-GENERATED FILE[\s\S]*?\*\/\}\s*/i,
+    '',
+  );
+  processedContent = processedContent.replace(
+    /^\s*<!--\s*AUTO-GENERATED FILE[\s\S]*?-->\s*/i,
+    '',
+  );
 
   // 2. Remove ONLY leading import statements
   const lines = processedContent.split('\n');
@@ -152,11 +168,14 @@ export async function processDocumentEntry(entry: any): Promise<ProcessedDocumen
       js: filterContentByLanguage(baseContent, 'js'),
       go: filterContentByLanguage(baseContent, 'go'),
       python: filterContentByLanguage(baseContent, 'python'),
+      dart: filterContentByLanguage(baseContent, 'dart'),
     };
 
     return {
       slug,
       title,
+      supportedLanguages: entry.data.supportedLanguages || ['js', 'go', 'dart', 'python'],
+      isLanguageAgnostic: entry.data.isLanguageAgnostic,
       content,
       filePath,
     };
@@ -234,11 +253,14 @@ export async function getAllProcessedDocuments(): Promise<ProcessedDocument[]> {
         js: filterContentByLanguage(baseContent, 'js'),
         go: filterContentByLanguage(baseContent, 'go'),
         python: filterContentByLanguage(baseContent, 'python'),
+        dart: filterContentByLanguage(baseContent, 'dart'),
       };
 
       processedDocs.push({
         slug,
         title: frontmatter.title,
+        supportedLanguages: frontmatter.supportedLanguages || ['js', 'go', 'dart', 'python'],
+        isLanguageAgnostic: frontmatter.isLanguageAgnostic,
         content,
         filePath,
       });

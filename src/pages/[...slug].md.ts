@@ -1,7 +1,7 @@
 import { getCollection } from 'astro:content';
 import type { APIContext } from 'astro';
 import fs from 'node:fs/promises';
-import { filterContentByLanguage, normalizeLanguage, processRawContent } from '../utils/content-processor.js';
+import { filterContentByLanguage, processRawContent } from '../utils/content-processor.js';
 
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
@@ -34,7 +34,8 @@ export async function getStaticPaths() {
           const standardProcessedContent = processRawContent(rawContent, title);
 
           // Add paths for each language
-          const languages = ['js', 'go', 'python'];
+          const languages = ['js', 'go', 'dart', 'python'];
+          const supportedLanguages = entry.data.supportedLanguages || languages;
 
           // Default path (JavaScript)
           entryPaths.push({
@@ -49,6 +50,9 @@ export async function getStaticPaths() {
 
           // Language-specific paths
           languages.forEach((lang) => {
+            if (!supportedLanguages.includes(lang)) {
+              return;
+            }
             const filteredContent = filterContentByLanguage(standardProcessedContent, lang);
             entryPaths.push({
               params: { slug: `${slug}.${lang}` },
