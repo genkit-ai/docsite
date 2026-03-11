@@ -1,0 +1,311 @@
+---
+title: Deploy With Azure Functions
+description: Learn how to deploy Genkit Flows as Azure Functions HTTP triggers using the Azure AI Foundry plugin.
+---
+
+import LanguageSelector from '../../../../components/LanguageSelector.astro';
+import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
+import LanguageContent from '../../../../components/LanguageContent.astro';
+
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
+	<LanguageSelector supportedLanguages="js" />
+	<CopyMarkdownButton />
+</div>
+
+<LanguageContent lang="js">
+
+
+## Deploying Genkit Flows as Azure Functions
+
+The `genkitx-azure-openai` plugin includes an `onCallGenkit` helper function (similar to Firebase Functions' `onCallGenkit`) that makes it easy to deploy Genkit Flows as Azure Functions HTTP triggers. It auto-registers the function with `app.http()` using the flow name, handles CORS, supports streaming via SSE, and provides authentication via `ContextProvider`.
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) >= 20
+- [Azure Functions Core Tools](https://learn.microsoft.com/en-us/azure/azure-functions/functions-run-local) v4
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- An Azure OpenAI resource with a deployed model
+
+### Basic Usage
+
+```typescript
+import { genkit, z } from 'genkit';
+import { azureOpenAI, gpt5, onCallGenkit } from 'genkitx-azure-openai';
+
+const ai = genkit({
+	plugins: [azureOpenAI()],
+	model: gpt5,
+});
+
+const jokeFlow = ai.defineFlow(
+	{
+		name: 'jokeFlow',
+		inputSchema: z.object({ subject: z.string() }),
+		outputSchema: z.object({ joke: z.string() }),
+	},
+	async (input) => {
+		const { text } = await ai.generate({
+			prompt: `Tell me a joke about ${input.subject}`,
+		});
+		return { joke: text };
+	},
+);
+
+// Automatically registered as POST /api/jokeFlow
+export const jokeHandler = onCallGenkit(jokeFlow);
+```
+
+### Response Streaming
+
+When `streaming: true` is set, `onCallGenkit` returns a streaming handler that uses `ReadableStream` with Server-Sent Events (SSE) for real incremental streaming. This is compatible with `streamFlow` from `genkit/beta/client`.
+
+```typescript
+const jokeStreamingFlow = ai.defineFlow(
+	{
+		name: 'jokeStreamingFlow',
+		inputSchema: z.object({ subject: z.string() }),
+		outputSchema: z.object({ joke: z.string() }),
+		streamSchema: z.string(),
+	},
+	async (input, sendChunk) => {
+		const { stream, response } = await ai.generateStream({
+			prompt: `Tell me a funny joke about ${input.subject}`,
+		});
+
+		for await (const chunk of stream) {
+			sendChunk(chunk.text);
+		}
+
+		const result = await response;
+		return { joke: result.text };
+	},
+);
+
+export const jokeStreamHandler = onCallGenkit(
+	{
+		streaming: true,
+		cors: { origin: '*', methods: ['POST', 'OPTIONS'] },
+	},
+	jokeStreamingFlow,
+);
+```
+
+> **Note:** Azure Functions supports HTTP streaming responses in the v4 programming model. For production streaming, ensure your Function App plan supports long-running requests (Consumption plan has a 5-minute timeout; Premium or Dedicated plans are recommended for streaming workloads).
+
+### With Configuration Options
+
+```typescript
+import { onCallGenkit, requireApiKey } from 'genkitx-azure-openai';
+
+export const handler = onCallGenkit(
+	{
+		// Azure Functions auth level (anonymous, function, admin)
+		authLevel: 'anonymous',
+		// CORS configuration
+		cors: {
+			origin: 'https://myapp.com',
+			credentials: true,
+		},
+		// Context provider for authentication
+		contextProvider: requireApiKey('X-API-Key', process.env.API_KEY!),
+		// Debug logging
+		debug: true,
+		// Custom error handling
+		onError: async (error) => ({
+			statusCode: 500,
+			message: error.message,
+		}),
+	},
+	myFlow,
+);
+```
+
+### Context Providers for Authentication
+
+The plugin provides built-in context provider helpers that follow Genkit's `ContextProvider` pattern (same as `@genkit-ai/express`):
+
+```typescript
+import {
+	allowAll, // Allow all requests
+	requireHeader, // Require a specific header
+	requireApiKey, // Require API key in header
+	requireBearerToken, // Require Bearer token with custom validation
+	allOf, // Combine providers with AND logic
+	anyOf, // Combine providers with OR logic
+} from 'genkitx-azure-openai';
+
+// Public endpoint
+export const publicHandler = onCallGenkit(
+	{ contextProvider: allowAll() },
+	myFlow,
+);
+
+// API key authentication
+export const apiKeyHandler = onCallGenkit(
+	{ contextProvider: requireApiKey('X-API-Key', 'my-secret-key') },
+	myFlow,
+);
+
+// Bearer token with custom validation
+export const tokenHandler = onCallGenkit(
+	{
+		contextProvider: requireBearerToken(async (token) => {
+			const user = await validateJWT(token);
+			return { auth: { user } };
+		}),
+	},
+	myFlow,
+);
+
+// Combine multiple providers (all must pass)
+export const strictHandler = onCallGenkit(
+	{
+		contextProvider: allOf(
+			requireHeader('X-Client-ID'),
+			requireBearerToken(async (token) => {
+				return await validateToken(token);
+			}),
+		),
+	},
+	myFlow,
+);
+```
+
+### Deploying to Azure
+
+1. **Create a resource group:**
+
+   ```bash
+   az group create --name <rg> --location <region>
+   ```
+
+2. **Create a storage account** (required by Azure Functions):
+
+   ```bash
+   az storage account create \
+     --name <storage-account> \
+     --resource-group <rg> \
+     --location <region> \
+     --sku Standard_LRS
+   ```
+
+3. **Create an Azure Function App** (Node.js 20+, v4 programming model):
+
+   ```bash
+   az functionapp create \
+     --resource-group <rg> \
+     --consumption-plan-location <region> \
+     --runtime node \
+     --runtime-version 20 \
+     --functions-version 4 \
+     --name <app-name> \
+     --storage-account <storage-account>
+   ```
+
+4. **Set application settings:**
+
+   ```bash
+   az functionapp config appsettings set \
+     --name <app-name> \
+     --resource-group <rg> \
+     --settings \
+       AZURE_OPENAI_API_KEY="<your-key>" \
+       AZURE_OPENAI_ENDPOINT="<your-endpoint>" \
+       AZURE_OPENAI_DEPLOYMENT_ID="<your-deployment>" \
+       OPENAI_API_VERSION="<your-api-version>"
+   ```
+
+5. **Deploy:**
+
+   ```bash
+   npm run deploy --name=<app-name>
+   ```
+
+### Removing the Azure Function App
+
+To delete the deployed function app:
+
+```bash
+az functionapp delete --name <app-name> --resource-group <rg>
+```
+
+Or to delete the entire resource group and all its resources:
+
+```bash
+az group delete --name <rg> --yes --no-wait
+```
+
+### Using with the Genkit Client
+
+You can call these endpoints using the official Genkit client library:
+
+```typescript
+import { runFlow, streamFlow } from 'genkit/beta/client';
+
+// Non-streaming call
+const result = await runFlow({
+	url: 'https://<app-name>.azurewebsites.net/api/jokeFlow',
+	input: { subject: 'programming' },
+});
+
+// Streaming call
+const stream = streamFlow({
+	url: 'https://<app-name>.azurewebsites.net/api/jokeStreamingFlow',
+	input: { subject: 'TypeScript' },
+});
+
+for await (const chunk of stream.stream) {
+	console.log('Chunk:', chunk);
+}
+
+const finalResult = await stream.output;
+```
+
+### Request & Response Format
+
+The handler follows the Genkit callable protocol (same as `@genkit-ai/express`).
+
+Request body (callable protocol):
+
+```json
+{
+	"data": {}
+}
+```
+
+Direct input is also supported for convenience:
+
+```json
+{}
+```
+
+Successful response:
+
+```json
+{
+	"result": {}
+}
+```
+
+Error response:
+
+```json
+{
+	"error": {
+		"status": "UNAUTHENTICATED",
+		"message": "Missing auth token"
+	}
+}
+```
+
+Streaming response (SSE, via `streaming: true`):
+
+```
+data: {"message": "chunk text"}
+
+data: {"message": "more text"}
+
+data: {"result": {"joke": "full result"}}
+```
+
+</LanguageContent>
