@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { watch } from 'node:fs';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
@@ -8,9 +9,11 @@ const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
 const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const FALLBACK_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
+const WATCH_DEBOUNCE_MS = 160;
 
 type Language = (typeof LANGUAGES)[number];
 const KNOWN_LANGUAGES = new Set<string>(LANGUAGES);
+const GENERATED_LANGUAGE_DIRS = new Set<string>(LANGUAGES);
 const FENCE_TO_LANGUAGE: Record<string, Language> = {
   js: 'js',
   javascript: 'js',
@@ -35,14 +38,90 @@ type LanguageBlockNode = {
   children: LanguageBlockNode[];
 };
 
-async function walk(dir: string): Promise<string[]> {
+type GenerateContext = {
+  validationErrors: string[];
+  languageCodeWarnings: string[];
+  sizeWarnings: string[];
+};
+
+type CliOptions = {
+  watch: boolean;
+  files: string[];
+};
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isSupportedDocExtension(filePath: string): boolean {
+  return filePath.endsWith('.md') || filePath.endsWith('.mdx');
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function getRelativePathInsideSource(filePath: string): string | null {
+  const resolvedPath = path.resolve(filePath);
+  if (resolvedPath === SOURCE_ROOT) {
+    return '';
+  }
+  if (!isPathInside(SOURCE_ROOT, resolvedPath)) {
+    return null;
+  }
+  return path.relative(SOURCE_ROOT, resolvedPath).replace(/\\/g, '/');
+}
+
+function isGeneratedLanguagePath(filePath: string): boolean {
+  const rel = getRelativePathInsideSource(filePath);
+  if (rel === null) {
+    return false;
+  }
+  const firstSegment = rel.split('/')[0];
+  return GENERATED_LANGUAGE_DIRS.has(firstSegment);
+}
+
+function isSourceDocFile(filePath: string): boolean {
+  if (!isSupportedDocExtension(filePath)) {
+    return false;
+  }
+  const rel = getRelativePathInsideSource(filePath);
+  if (rel === null || rel.length === 0) {
+    return false;
+  }
+  const firstSegment = rel.split('/')[0];
+  return !GENERATED_LANGUAGE_DIRS.has(firstSegment);
+}
+
+function isSourceDocCandidate(filePath: string): boolean {
+  const rel = getRelativePathInsideSource(filePath);
+  if (rel === null || rel.length === 0) {
+    return false;
+  }
+  const firstSegment = rel.split('/')[0];
+  if (GENERATED_LANGUAGE_DIRS.has(firstSegment)) {
+    return false;
+  }
+  return isSupportedDocExtension(filePath);
+}
+
+async function walkSourceDocs(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await walk(fullPath)));
-    } else if (entry.isFile() && (fullPath.endsWith('.md') || fullPath.endsWith('.mdx'))) {
+      if (isGeneratedLanguagePath(fullPath)) {
+        continue;
+      }
+      files.push(...(await walkSourceDocs(fullPath)));
+    } else if (entry.isFile() && isSourceDocFile(fullPath)) {
       files.push(fullPath);
     }
   }
@@ -64,7 +143,9 @@ function getSupportedLanguages(frontmatter: Record<string, unknown>): Language[]
   const declared = Array.isArray(frontmatter.supportedLanguages)
     ? frontmatter.supportedLanguages.filter((value): value is string => typeof value === 'string')
     : [];
-  const normalized = declared.map((value) => value.toLowerCase()).filter((value): value is Language => LANGUAGES.includes(value as Language));
+  const normalized = declared
+    .map((value) => value.toLowerCase())
+    .filter((value): value is Language => LANGUAGES.includes(value as Language));
   if (normalized.length > 0) {
     return LANGUAGES.filter((lang) => normalized.includes(lang));
   }
@@ -232,13 +313,7 @@ function renderLanguageSegment(
     }
     output += source.slice(cursor, node.openStart);
     if (node.langs.includes(language)) {
-      output += renderLanguageSegment(
-        source,
-        node.children,
-        node.openEnd,
-        node.closeStart,
-        language,
-      );
+      output += renderLanguageSegment(source, node.children, node.openEnd, node.closeStart, language);
     }
     cursor = node.closeEnd;
   }
@@ -331,19 +406,16 @@ function rewriteBodyAssetPaths(body: string, sourceFilePath: string, outputFileP
 
   let rewritten = body;
 
-  // ESM-style imports in MDX frontmatter/body.
   rewritten = rewritten.replace(
     /(from\s+['"])(\.\.?\/[^'"]+)(['"])/g,
     (_full, prefix, rel, suffix) => `${prefix}${rewriteRelativePath(rel)}${suffix}`,
   );
 
-  // Markdown links and images: [text](../path) / ![alt](../path)
   rewritten = rewritten.replace(
     /(\]\()(\.\.?\/[^)\s]+)(\))/g,
     (_full, prefix, rel, suffix) => `${prefix}${rewriteRelativePath(rel)}${suffix}`,
   );
 
-  // HTML src/href attributes in inline HTML.
   rewritten = rewritten.replace(
     /((?:src|href)=['"])(\.\.?\/[^'"]+)(['"])/g,
     (_full, prefix, rel, suffix) => `${prefix}${rewriteRelativePath(rel)}${suffix}`,
@@ -365,103 +437,273 @@ function buildGeneratedFileNotice(sourceFilePath: string, extension: 'md' | 'mdx
   return `<!--\n${lines.join('\n')}\n-->`;
 }
 
-async function generate(): Promise<void> {
-  const validationErrors: string[] = [];
-  const languageCodeWarnings: string[] = [];
-  const sizeWarnings: string[] = [];
-
+async function ensureOutputLanguageDirs(): Promise<void> {
   for (const language of LANGUAGES) {
-    await rm(path.join(OUTPUT_ROOT, language), { recursive: true, force: true });
     await mkdir(path.join(OUTPUT_ROOT, language), { recursive: true });
   }
+}
 
-  const sourceFiles = await walk(SOURCE_ROOT);
-  for (const filePath of sourceFiles) {
-    const source = await readFile(filePath, 'utf8');
-    const { frontmatter, body } = splitFrontmatter(source);
-    const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
-    const supportedLanguages = getSupportedLanguages(frontmatter);
-    const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
-    validationErrors.push(...blockValidation.errors);
-    languageCodeWarnings.push(...blockValidation.warnings);
-    const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
-    const renderedByLanguage = new Map<Language, string>();
-    for (const language of supportedLanguages) {
-      const rendered = renderBodyForLanguage(body, language);
-      renderedByLanguage.set(language, rendered);
-      const charCount = getMeaningfulContentCharCount(rendered);
-      if (charCount === 0) {
-        sizeWarnings.push(
-          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
-        );
-        continue;
-      }
-      if (charCount < MIN_LANGUAGE_CONTENT_CHARS_WARNING) {
-        sizeWarnings.push(
-          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is very small (${charCount} non-whitespace chars).`,
-        );
-      }
-    }
-    if (isLanguageAgnostic) {
+async function removeGeneratedForSlug(slug: string): Promise<void> {
+  for (const language of LANGUAGES) {
+    await rm(path.join(OUTPUT_ROOT, language, `${slug}.md`), { force: true });
+    await rm(path.join(OUTPUT_ROOT, language, `${slug}.mdx`), { force: true });
+  }
+}
+
+async function generateForSourceFile(filePath: string, context: GenerateContext): Promise<void> {
+  const source = await readFile(filePath, 'utf8');
+  const { frontmatter, body } = splitFrontmatter(source);
+  const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
+  const supportedLanguages = getSupportedLanguages(frontmatter);
+  const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
+  context.validationErrors.push(...blockValidation.errors);
+  context.languageCodeWarnings.push(...blockValidation.warnings);
+
+  const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+  const renderedByLanguage = new Map<Language, string>();
+  for (const language of supportedLanguages) {
+    const rendered = renderBodyForLanguage(body, language);
+    renderedByLanguage.set(language, rendered);
+    const charCount = getMeaningfulContentCharCount(rendered);
+    if (charCount === 0) {
+      context.sizeWarnings.push(
+        `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+      );
       continue;
     }
-    const slug = slugFromSourcePath(filePath);
-    const extension = filePath.endsWith('.mdx') ? 'mdx' : 'md';
-
-    for (const language of supportedLanguages) {
-      const outputPath = path.join(OUTPUT_ROOT, language, `${slug}.${extension}`);
-      const languageFrontmatter = rewriteRelativeAssetPaths(
-        {
-          ...frontmatter,
-          supportedLanguages: [language],
-        },
-        filePath,
-        outputPath,
-      ) as Record<string, unknown>;
-      const renderedBody = rewriteBodyAssetPaths(
-        renderedByLanguage.get(language) || renderBodyForLanguage(body, language),
-        filePath,
-        outputPath,
+    if (charCount < MIN_LANGUAGE_CONTENT_CHARS_WARNING) {
+      context.sizeWarnings.push(
+        `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is very small (${charCount} non-whitespace chars).`,
       );
-      const generatedNotice = buildGeneratedFileNotice(filePath, extension);
-      const outputContent = `---\n${stringify(languageFrontmatter).trimEnd()}\n---\n\n${generatedNotice}\n\n${renderedBody}`;
-      await mkdir(path.dirname(outputPath), { recursive: true });
-      await writeFile(outputPath, outputContent);
     }
   }
 
-  if (validationErrors.length > 0) {
-    console.error(
-      [
-        'generate-language-pages: Lang/supportedLanguages validation failed.',
-        ...validationErrors.map((error) => `- ${error}`),
-      ].join('\n'),
-    );
-    throw new Error(`Found ${validationErrors.length} Lang/supportedLanguages validation error(s).`);
+  const slug = slugFromSourcePath(filePath);
+  await removeGeneratedForSlug(slug);
+
+  if (isLanguageAgnostic) {
+    return;
   }
 
-  if (sizeWarnings.length > 0) {
+  const extension = filePath.endsWith('.mdx') ? 'mdx' : 'md';
+  for (const language of supportedLanguages) {
+    const outputPath = path.join(OUTPUT_ROOT, language, `${slug}.${extension}`);
+    const languageFrontmatter = rewriteRelativeAssetPaths(
+      {
+        ...frontmatter,
+        supportedLanguages: [language],
+      },
+      filePath,
+      outputPath,
+    ) as Record<string, unknown>;
+    const renderedBody = rewriteBodyAssetPaths(
+      renderedByLanguage.get(language) || renderBodyForLanguage(body, language),
+      filePath,
+      outputPath,
+    );
+    const generatedNotice = buildGeneratedFileNotice(filePath, extension);
+    const outputContent = `---\n${stringify(languageFrontmatter).trimEnd()}\n---\n\n${generatedNotice}\n\n${renderedBody}`;
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, outputContent);
+  }
+}
+
+function printGenerateWarnings(context: GenerateContext): void {
+  if (context.sizeWarnings.length > 0) {
     console.warn(
       [
         'generate-language-pages: Found pages with empty/very-small content for declared supportedLanguages:',
-        ...sizeWarnings.map((warning) => `- ${warning}`),
+        ...context.sizeWarnings.map((warning) => `- ${warning}`),
       ].join('\n'),
     );
   }
 
-  if (languageCodeWarnings.length > 0) {
+  if (context.languageCodeWarnings.length > 0) {
     console.warn(
       [
         'generate-language-pages: Found possible code-fence language mismatches inside Lang blocks:',
-        ...languageCodeWarnings.map((warning) => `- ${warning}`),
+        ...context.languageCodeWarnings.map((warning) => `- ${warning}`),
+      ].join('\n'),
+    );
+  }
+}
+
+function createGenerateContext(): GenerateContext {
+  return {
+    validationErrors: [],
+    languageCodeWarnings: [],
+    sizeWarnings: [],
+  };
+}
+
+function throwValidationErrors(context: GenerateContext): void {
+  if (context.validationErrors.length === 0) {
+    return;
+  }
+  console.error(
+    [
+      'generate-language-pages: Lang/supportedLanguages validation failed.',
+      ...context.validationErrors.map((error) => `- ${error}`),
+    ].join('\n'),
+  );
+  throw new Error(`Found ${context.validationErrors.length} Lang/supportedLanguages validation error(s).`);
+}
+
+async function generateAll(): Promise<void> {
+  for (const language of LANGUAGES) {
+    await rm(path.join(OUTPUT_ROOT, language), { recursive: true, force: true });
+  }
+  await ensureOutputLanguageDirs();
+
+  const context = createGenerateContext();
+  const sourceFiles = await walkSourceDocs(SOURCE_ROOT);
+  for (const filePath of sourceFiles) {
+    await generateForSourceFile(filePath, context);
+  }
+
+  throwValidationErrors(context);
+  printGenerateWarnings(context);
+  console.log(`Generated language-specific pages in ${OUTPUT_ROOT}/{js,go,dart,python}`);
+}
+
+async function generateSpecificFiles(files: string[], strictValidation: boolean): Promise<void> {
+  await ensureOutputLanguageDirs();
+  const context = createGenerateContext();
+
+  for (const requestedPath of files) {
+    const absolutePath = path.resolve(requestedPath);
+    if (!isSourceDocCandidate(absolutePath)) {
+      continue;
+    }
+    if (!(await fileExists(absolutePath))) {
+      await removeGeneratedForSlug(slugFromSourcePath(absolutePath));
+      continue;
+    }
+    if (!isSourceDocFile(absolutePath)) {
+      continue;
+    }
+    await generateForSourceFile(absolutePath, context);
+  }
+
+  if (strictValidation) {
+    throwValidationErrors(context);
+  } else if (context.validationErrors.length > 0) {
+    console.error(
+      [
+        'generate-language-pages: Validation failed for changed files (watch mode continues):',
+        ...context.validationErrors.map((error) => `- ${error}`),
       ].join('\n'),
     );
   }
 
-  console.log(`Generated language-specific pages in ${OUTPUT_ROOT}/{js,go,dart,python}`);
+  printGenerateWarnings(context);
 }
 
-generate().catch((error) => {
+function parseCliOptions(argv: string[]): CliOptions {
+  const files: string[] = [];
+  let watchMode = false;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--watch') {
+      watchMode = true;
+      continue;
+    }
+    if (arg === '--file' && argv[i + 1]) {
+      files.push(argv[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--file=')) {
+      files.push(arg.slice('--file='.length));
+      continue;
+    }
+  }
+
+  return { watch: watchMode, files };
+}
+
+async function runWatchMode(): Promise<void> {
+  await generateAll();
+  console.log(`Watching ${SOURCE_ROOT} for source doc changes...`);
+
+  const pending = new Set<string>();
+  let flushTimer: NodeJS.Timeout | null = null;
+  let isProcessing = false;
+
+  const flushChanges = async () => {
+    if (isProcessing || pending.size === 0) {
+      return;
+    }
+    isProcessing = true;
+    const changed = Array.from(pending);
+    pending.clear();
+    try {
+      await generateSpecificFiles(changed, false);
+      if (changed.length > 0) {
+        const relList = changed
+          .map((filePath) => path.relative(process.cwd(), filePath).replace(/\\/g, '/'))
+          .join(', ');
+        console.log(`Regenerated changed docs: ${relList}`);
+      }
+    } catch (error) {
+      console.error('generate-language-pages: Failed to process changed docs.');
+      console.error(error);
+    } finally {
+      isProcessing = false;
+      if (pending.size > 0) {
+        queueFlush();
+      }
+    }
+  };
+
+  const queueFlush = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      void flushChanges();
+    }, WATCH_DEBOUNCE_MS);
+  };
+
+  watch(
+    SOURCE_ROOT,
+    { recursive: true },
+    (_eventType, filename) => {
+      if (!filename) {
+        return;
+      }
+      const changedPath = path.resolve(SOURCE_ROOT, filename.toString());
+      if (!isSourceDocCandidate(changedPath)) {
+        return;
+      }
+      pending.add(changedPath);
+      queueFlush();
+    },
+  );
+
+  await new Promise(() => {});
+}
+
+async function main(): Promise<void> {
+  const options = parseCliOptions(process.argv.slice(2));
+
+  if (options.watch) {
+    await runWatchMode();
+    return;
+  }
+
+  if (options.files.length > 0) {
+    await generateSpecificFiles(options.files, true);
+    console.log('Generated language-specific pages for requested files.');
+    return;
+  }
+
+  await generateAll();
+}
+
+main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
