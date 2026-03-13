@@ -55,7 +55,8 @@ All commands run from repo root:
 | :----------------------------- | :--------------------------------------------------------------------- |
 | `pnpm install`                 | Install dependencies                                                   |
 | `pnpm generate-language-pages` | Generate `/docs/{lang}/...` content files from unified source docs     |
-| `pnpm dev`                     | Generate language pages and start local dev server                     |
+| `pnpm generate-language-pages --watch` | Watch source docs and regenerate only changed pages |
+| `pnpm dev`                     | Start local dev server with incremental language-page regeneration     |
 | `pnpm build`                   | Generate language pages, build docs bundles/llms files, and build site |
 | `pnpm preview`                 | Preview the production build                                           |
 | `pnpm build-llms-direct`       | Generate `llms*.txt` outputs directly from docs source                 |
