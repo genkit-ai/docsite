@@ -113,6 +113,13 @@ Generation emits non-blocking warnings when a language page must link to another
 - Prefer direct language over theory-heavy explanations.
 - Explain "why" briefly, then show working examples.
 
+### Headings and Casing
+
+- Use **sentence case** for all headings and admonition titles (e.g., "Getting started with Genkit").
+- Preserve capitalization for proper nouns, product names (e.g., "Cloud Functions for Firebase", "Genkit", "Agent Skills"), and pure acronyms (e.g., "API", "JSON").
+- Preserve internal capitalization for code-specific words (camelCase, PascalCase) within headings (e.g., "InMemoryStreamManager").
+
+
 ### Consistency
 
 - Keep parallel section structure across languages.

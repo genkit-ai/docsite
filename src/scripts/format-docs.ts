@@ -16,85 +16,6 @@ function extractSupportedLanguages(frontmatter: string): string[] {
     return langs;
 }
 
-function sentenceCaseString(title?: string): string {
-    if (!title) return '';
-    const properNouns = [
-        "Cloud Functions for Firebase", "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
-        "JSON", "Google", "Firebase", "Cloud", "TypeScript", 
-        "JavaScript", "Go", "Dart", "Python", "Node.js", "Next.js", 
-        "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI",
-        "Agent Skills"
-    ];
-
-    const localProperNouns = [...properNouns];
-    const words = title.split(/[^a-zA-Z0-9_-]+/);
-    for (const w of words) {
-        // preserve pure acronyms (e.g. AST, JSON)
-        if (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w)) {
-            localProperNouns.push(w);
-        }
-        // preserve words with internal capitalization (camelCase, PascalCase) e.g InMemoryStreamManager
-        else if (w.length > 1 && /[a-z]/.test(w) && /[A-Z]/.test(w.substring(1))) {
-            localProperNouns.push(w);
-        }
-    }
-    
-    // Sort descending by length so longer multi-word nouns don't get partially matched
-    localProperNouns.sort((a, b) => b.length - a.length);
-
-    const parts = title.split(/(`[^`]+`)/);
-    let capitalizeNext = true;
-    
-    for (let i = 0; i < parts.length; i++) {
-        if (i % 2 !== 0) {
-            capitalizeNext = false;
-            continue;
-        }
-        
-        let chunk = parts[i];
-        if (!chunk) continue;
-        
-        chunk = chunk.toLowerCase();
-        
-        const colonParts = chunk.split(':');
-        let processedChunk = colonParts[0];
-        
-        if (capitalizeNext && processedChunk.trim()) {
-            const stripped = processedChunk.trimStart();
-            const spaces = processedChunk.substring(0, processedChunk.length - stripped.length);
-            processedChunk = spaces + stripped.charAt(0).toUpperCase() + stripped.slice(1);
-            capitalizeNext = false;
-        }
-        
-        for (let j = 1; j < colonParts.length; j++) {
-            const part = colonParts[j];
-            if (part.trim()) {
-                const stripped = part.trimStart();
-                const spaces = part.substring(0, part.length - stripped.length);
-                processedChunk += ':' + spaces + stripped.charAt(0).toUpperCase() + stripped.slice(1);
-            } else {
-                processedChunk += ':' + part;
-            }
-        }
-        
-        if (/:[ \t]*$/.test(chunk)) {
-            capitalizeNext = true;
-        }
-        
-        for (const noun of localProperNouns) {
-            const regex = new RegExp(`\\b${escapeRegExp(noun)}\\b`, 'gi');
-            processedChunk = processedChunk.replace(regex, noun);
-        }
-        
-        parts[i] = processedChunk;
-    }
-    
-    return parts.join('');
-}
-
-function escapeRegExp(string: string) {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
-}
 
 function formatFile(filepath: string) {
     let text = fs.readFileSync(filepath, 'utf8');
@@ -170,13 +91,13 @@ function formatFile(filepath: string) {
         if (i % 2 === 0) {
             // headers
             parts[i] = parts[i].replace(/(?:\n+|^)(#{1,6})[ \t]+([^\n]*)(?:\n+|$)/g, (match, hashes, title) => {
-                return `\n\n${hashes} ${sentenceCaseString(title)}\n\n`;
+                return `\n\n${hashes} ${title}\n\n`;
             });
             // admonitions
             parts[i] = parts[i].replace(/(?:\n+|^)([ \t]*:::[\w]+)(?:\[(.*?)\])?(.*)(?:\n+|$)/g, (match, prefix, title, suffix) => {
                 let formattedTitle = '';
                 if (title) {
-                    formattedTitle = '[' + sentenceCaseString(title) + ']';
+                    formattedTitle = '[' + title + ']';
                 }
                 return `\n\n${prefix}${formattedTitle}${suffix}\n\n`;
             });
