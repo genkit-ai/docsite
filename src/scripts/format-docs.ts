@@ -25,6 +25,18 @@ function sentenceCaseString(title?: string): string {
         "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI",
         "Agent Skills"
     ];
+
+    const localProperNouns = [...properNouns];
+    const words = title.split(/[^a-zA-Z0-9_-]+/);
+    for (const w of words) {
+        if (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w)) {
+            localProperNouns.push(w);
+        }
+    }
+    
+    // Sort descending by length so longer multi-word nouns don't get partially matched
+    localProperNouns.sort((a, b) => b.length - a.length);
+
     const parts = title.split(/(`[^`]+`)/);
     let capitalizeNext = true;
     
@@ -64,7 +76,7 @@ function sentenceCaseString(title?: string): string {
             capitalizeNext = true;
         }
         
-        for (const noun of properNouns) {
+        for (const noun of localProperNouns) {
             const regex = new RegExp(`\\b${escapeRegExp(noun)}\\b`, 'gi');
             processedChunk = processedChunk.replace(regex, noun);
         }
