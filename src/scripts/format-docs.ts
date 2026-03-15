@@ -24,27 +24,54 @@ function sentenceCaseHeader(hashes: string, title?: string): string {
         "JavaScript", "Go", "Dart", "Python", "Node.js", "Next.js", 
         "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI"
     ];
-    let newTitle = title.charAt(0).toUpperCase() + title.slice(1).toLowerCase();
+    const parts = title.split(/(`[^`]+`)/);
+    let capitalizeNext = true;
     
-    if (newTitle.includes(':')) {
-        const parts = newTitle.split(':');
-        newTitle = parts[0] + ':';
-        for (let i = 1; i < parts.length; i++) {
-            const part = parts[i];
+    for (let i = 0; i < parts.length; i++) {
+        if (i % 2 !== 0) {
+            capitalizeNext = false;
+            continue;
+        }
+        
+        let chunk = parts[i];
+        if (!chunk) continue;
+        
+        chunk = chunk.toLowerCase();
+        
+        const colonParts = chunk.split(':');
+        let processedChunk = colonParts[0];
+        
+        if (capitalizeNext && processedChunk.trim()) {
+            const stripped = processedChunk.trimStart();
+            const spaces = processedChunk.substring(0, processedChunk.length - stripped.length);
+            processedChunk = spaces + stripped.charAt(0).toUpperCase() + stripped.slice(1);
+            capitalizeNext = false;
+        }
+        
+        for (let j = 1; j < colonParts.length; j++) {
+            const part = colonParts[j];
             if (part.trim()) {
-                const strippedPart = part.trimStart();
-                const spacesStr = part.substring(0, part.length - strippedPart.length);
-                newTitle += spacesStr + strippedPart.charAt(0).toUpperCase() + strippedPart.slice(1);
+                const stripped = part.trimStart();
+                const spaces = part.substring(0, part.length - stripped.length);
+                processedChunk += ':' + spaces + stripped.charAt(0).toUpperCase() + stripped.slice(1);
             } else {
-                newTitle += part;
+                processedChunk += ':' + part;
             }
         }
+        
+        if (/:[ \t]*$/.test(chunk)) {
+            capitalizeNext = true;
+        }
+        
+        for (const noun of properNouns) {
+            const regex = new RegExp(`\\b${escapeRegExp(noun)}\\b`, 'gi');
+            processedChunk = processedChunk.replace(regex, noun);
+        }
+        
+        parts[i] = processedChunk;
     }
-
-    for (const noun of properNouns) {
-        const regex = new RegExp(`\\b${escapeRegExp(noun)}\\b`, 'gi');
-        newTitle = newTitle.replace(regex, noun);
-    }
+    
+    const newTitle = parts.join('');
     return `\n\n${hashes} ${newTitle}\n\n`;
 }
 
