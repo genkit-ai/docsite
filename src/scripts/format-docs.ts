@@ -134,7 +134,22 @@ function formatFile(filepath: string) {
 
     text = parts.map((part, i) => {
         if (i % 2 !== 0) {
-            return '\n\n' + part.replace(/\n$/, '') + '\n\n';
+            const repl = part.replace(/^([ \t]*)```([^\n]*)\n([\s\S]*?)\n[ \t]*```$/, (match, startIndent, lang, content) => {
+                const lines = content.split('\n');
+                const nonEmpty = lines.filter((l: string) => l.trim() !== '');
+                
+                if (nonEmpty.length > 0) {
+                    const indents = nonEmpty.map((l: string) => {
+                        const matchInfo = l.match(/^[ \t]*/);
+                        return matchInfo ? matchInfo[0].length : 0;
+                    });
+                    const minIndent = Math.min(...indents);
+                    content = lines.map((l: string) => l.trim() === '' ? '' : l.substring(minIndent)).join('\n');
+                }
+                
+                return `\`\`\`${lang}\n${content}\n\`\`\``;
+            });
+            return '\n\n' + repl.replace(/\n$/, '') + '\n\n';
         }
         return part;
     }).join('');
