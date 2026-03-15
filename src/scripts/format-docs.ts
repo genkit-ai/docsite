@@ -16,7 +16,7 @@ function extractSupportedLanguages(frontmatter: string): string[] {
     return langs;
 }
 
-function sentenceCaseHeader(hashes: string, title?: string): string {
+function sentenceCaseString(title?: string): string {
     if (!title) return '';
     const properNouns = [
         "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
@@ -71,8 +71,7 @@ function sentenceCaseHeader(hashes: string, title?: string): string {
         parts[i] = processedChunk;
     }
     
-    const newTitle = parts.join('');
-    return `\n\n${hashes} ${newTitle}\n\n`;
+    return parts.join('');
 }
 
 function escapeRegExp(string: string) {
@@ -120,10 +119,16 @@ function formatFile(filepath: string) {
         if (i % 2 === 0) {
             // headers
             parts[i] = parts[i].replace(/(?:\n+|^)(#{1,6})[ \t]+([^\n]*)(?:\n+|$)/g, (match, hashes, title) => {
-                return sentenceCaseHeader(hashes, title);
+                return `\n\n${hashes} ${sentenceCaseString(title)}\n\n`;
             });
             // admonitions
-            parts[i] = parts[i].replace(/(?:\n+|^)([ \t]*:::[^\n]*)(?:\n+|$)/g, '\n\n$1\n\n');
+            parts[i] = parts[i].replace(/(?:\n+|^)([ \t]*:::[\w]+)(?:\[(.*?)\])?(.*)(?:\n+|$)/g, (match, prefix, title, suffix) => {
+                let formattedTitle = '';
+                if (title) {
+                    formattedTitle = '[' + sentenceCaseString(title) + ']';
+                }
+                return `\n\n${prefix}${formattedTitle}${suffix}\n\n`;
+            });
         }
     }
 
