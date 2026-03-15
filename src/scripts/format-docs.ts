@@ -29,7 +29,12 @@ function sentenceCaseString(title?: string): string {
     const localProperNouns = [...properNouns];
     const words = title.split(/[^a-zA-Z0-9_-]+/);
     for (const w of words) {
+        // preserve pure acronyms (e.g. AST, JSON)
         if (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w)) {
+            localProperNouns.push(w);
+        }
+        // preserve words with internal capitalization (camelCase, PascalCase) e.g InMemoryStreamManager
+        else if (w.length > 1 && /[a-z]/.test(w) && /[A-Z]/.test(w.substring(1))) {
             localProperNouns.push(w);
         }
     }
