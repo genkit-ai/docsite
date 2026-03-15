@@ -115,15 +115,30 @@ function formatFile(filepath: string) {
 
     text = text.replace(/^([ \t]*<TabItem[^>]*>)[ \t]*\n([\s\S]*?)\n([ \t]*<\/TabItem>)[ \t]*$/gm, (match, openTag, content, closeTag) => {
         const lines = content.split('\n');
-        const nonEmpty = lines.filter((l: string) => l.trim() !== '');
         
-        if (nonEmpty.length > 0) {
-            const indents = nonEmpty.map((l: string) => {
+        let inCodeBlock = false;
+        const plainLines = lines.filter((l: string) => {
+            if (l.trim().startsWith('```')) {
+                inCodeBlock = !inCodeBlock;
+                return false;
+            }
+            if (inCodeBlock) return false;
+            return l.trim() !== '';
+        });
+        
+        if (plainLines.length > 0) {
+            const indents = plainLines.map((l: string) => {
                 const matchInfo = l.match(/^[ \t]*/);
                 return matchInfo ? matchInfo[0].length : 0;
             });
             const minIndent = Math.min(...indents);
-            content = lines.map((l: string) => l.trim() === '' ? '' : l.substring(minIndent)).join('\n');
+            
+            content = lines.map((l: string) => {
+                if (l.trim() === '') return '';
+                const matchSpace = l.match(/^[ \t]*/);
+                const chop = matchSpace ? Math.min(matchSpace[0].length, minIndent) : 0;
+                return l.substring(chop);
+            }).join('\n');
         }
         
         return `${openTag}\n${content}\n${closeTag}`;
