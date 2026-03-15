@@ -19,7 +19,7 @@ function extractSupportedLanguages(frontmatter: string): string[] {
 function sentenceCaseString(title?: string): string {
     if (!title) return '';
     const properNouns = [
-        "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
+        "Cloud Functions for Firebase", "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
         "JSON", "Google", "Firebase", "Cloud", "TypeScript", 
         "JavaScript", "Go", "Dart", "Python", "Node.js", "Next.js", 
         "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI"
