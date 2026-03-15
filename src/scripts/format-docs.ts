@@ -113,6 +113,24 @@ function formatFile(filepath: string) {
 
     text = otherLines.join('\n');
 
+    text = text.replace(/^([ \t]*<TabItem[^>]*>)[ \t]*\n([\s\S]*?)\n([ \t]*<\/TabItem>)[ \t]*$/gm, (match, openTag, content, closeTag) => {
+        const lines = content.split('\n');
+        const nonEmpty = lines.filter((l: string) => l.trim() !== '');
+        
+        if (nonEmpty.length > 0) {
+            const indents = nonEmpty.map((l: string) => {
+                const matchInfo = l.match(/^[ \t]*/);
+                return matchInfo ? matchInfo[0].length : 0;
+            });
+            const minIndent = Math.min(...indents);
+            content = lines.map((l: string) => l.trim() === '' ? '' : l.substring(minIndent)).join('\n');
+        }
+        
+        return `${openTag}\n${content}\n${closeTag}`;
+    });
+
+    text = text.replace(/^[ \t]*(<\/?(Tabs|TabItem)[^>]*>)[ \t]*$/gm, '\n\n$1\n\n');
+
     const parts = text.split(/([ \t]*```[^\n]*\n[\s\S]*?\n[ \t]*```)/);
 
     for (let i = 0; i < parts.length; i++) {
