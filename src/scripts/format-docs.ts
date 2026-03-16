@@ -16,12 +16,28 @@ function extractSupportedLanguages(frontmatter: string): string[] {
     return langs;
 }
 
+function outdentText(content: string, prefix: string = ''): string {
+    const lines = content.split('\n');
+    const nonEmpty = lines.filter((l: string) => l.trim() !== '');
+    if (nonEmpty.length > 0) {
+        const minIndent = Math.min(...nonEmpty.map((l: string) => {
+            const matchInfo = l.match(/^[ \t]*/);
+            return matchInfo ? matchInfo[0].length : 0;
+        }));
+        return lines.map((l: string) => l.trim() === '' ? '' : prefix + l.substring(minIndent)).join('\n');
+    }
+    return content;
+}
+
 
 function formatFile(filepath: string) {
     let text = fs.readFileSync(filepath, 'utf8');
 
     let frontmatter = "";
     let rest = text;
+    // ------------------------------------------------------------------------
+    // 1. EXTRACT FRONTMATTER
+    // ------------------------------------------------------------------------
     const m = text.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)/);
     if (m) {
         frontmatter = m[1];
@@ -30,6 +46,11 @@ function formatFile(filepath: string) {
 
     const supportedLanguages = extractSupportedLanguages(frontmatter);
 
+    // ------------------------------------------------------------------------
+    // 2. ISOLATE IMPORTS
+    // ------------------------------------------------------------------------
+    // Prettier can scramble import placements inside MDX if they aren't contiguous.
+    // We isolate imports and re-inject them cleanly below the frontmatter.
     const lines = rest.split('\n');
     const imports: string[] = [];
     const otherLines: string[] = [];
@@ -52,6 +73,12 @@ function formatFile(filepath: string) {
 
     text = otherLines.join('\n');
 
+    // ------------------------------------------------------------------------
+    // 3. <TabItem> / <Tabs> NORMALIZATION
+    // ------------------------------------------------------------------------
+    // Prettier does not handle multi-line indentation correctly for nested MD text.
+    // We calculate the minimum indent of text/code inside a TabItem and outdent.
+    // This stops tools like MDX parsers treating leading indents as raw <pre> sections.
     text = text.replace(/^([ \t]*<TabItem[^>]*>)[ \t]*\n([\s\S]*?)\n([ \t]*<\/TabItem>)[ \t]*$/gm, (match, openTag, content, closeTag) => {
         const lines = content.split('\n');
         
@@ -85,78 +112,56 @@ function formatFile(filepath: string) {
 
     text = text.replace(/^[ \t]*(<\/?(Tabs|TabItem)[^>]*>)[ \t]*$/gm, '\n\n$1\n\n');
 
+    // Split at code boundaries so we don't accidentally format text inside code fences
     const parts = text.split(/([ \t]*```[^\n]*\n[\s\S]*?\n[ \t]*```)/);
 
-    for (let i = 0; i < parts.length; i++) {
-        if (i % 2 === 0) {
-            // headers
-            parts[i] = parts[i].replace(/(?:\n+|^)(#{1,6})[ \t]+([^\n]*)(?:\n+|$)/g, (match, hashes, title) => {
-                return `\n\n${hashes} ${title}\n\n`;
-            });
-            // admonitions
-            parts[i] = parts[i].replace(/(?:\n+|^)([ \t]*:::[\w]+)(?:\[(.*?)\])?(.*)(?:\n+|$)/g, (match, prefix, title, suffix) => {
-                let formattedTitle = '';
-                if (title) {
-                    formattedTitle = '[' + title + ']';
-                }
-                return `\n\n${prefix}${formattedTitle}${suffix}\n\n`;
-            });
-        }
-    }
-
+    // ------------------------------------------------------------------------
+    // 4. CODEBLOCK INDENTATION NORMALIZATION
+    // ------------------------------------------------------------------------
+    // Fixes over-indented code blocks that sit globally in the document.
+    // This allows authors to quickly paste copied code (with generic indentation)
+    // while standardizing it to be completely left-justified.
     text = parts.map((part, i) => {
         if (i % 2 !== 0) {
             const repl = part.replace(/^([ \t]*)```([^\n]*)\n([\s\S]*?)\n[ \t]*```$/, (match, startIndent, lang, content) => {
-                const lines = content.split('\n');
-                const nonEmpty = lines.filter((l: string) => l.trim() !== '');
-                
-                if (nonEmpty.length > 0) {
-                    const indents = nonEmpty.map((l: string) => {
-                        const matchInfo = l.match(/^[ \t]*/);
-                        return matchInfo ? matchInfo[0].length : 0;
-                    });
-                    const minIndent = Math.min(...indents);
-                    content = lines.map((l: string) => l.trim() === '' ? '' : l.substring(minIndent)).join('\n');
-                }
-                
-                return `\`\`\`${lang}\n${content}\n\`\`\``;
+                return `\`\`\`${lang}\n${outdentText(content)}\n\`\`\``;
             });
             return '\n\n' + repl.replace(/\n$/, '') + '\n\n';
         }
         return part;
     }).join('');
 
-    // blockquotes
+    // ------------------------------------------------------------------------
+    // 5. BLOCKQUOTES -> ADMONITION CONVERSION
+    // ------------------------------------------------------------------------
+    // Converts classic GitHub/Markdown blockquotes into Starlight active admonitions/asides.
     text = text.replace(/^>\s*\**\b(Note|Tip|Warning|Important|Caution)\b\**[.:]?\s*([\s\S]*?)(?=\n[ \t]*\n|\n[ \t]*<\/Lang>|$)/gmi, (match, btype, content) => {
         const lowerBtype = btype.toLowerCase();
         const cleanedContent = content.trim().replace(/\n>\s*/g, '\n');
         return `:::${lowerBtype}\n${cleanedContent}\n:::`;
     });
 
-    // normalize bash
+    // ------------------------------------------------------------------------
+    // 6. BASH COMMAND CLEANUP
+    // ------------------------------------------------------------------------
+    // Developers usually copy-paste shell commands beginning with `$ `. To ensure clean 
+    // copying within codeblocks, we recursively strip the prefix from all bash blocks.
     text = text.replace(/```(?:bash|sh)\n([\s\S]*?)\n```/g, (match, content) => {
         const lines = content.split('\n');
         const newLines = lines.map((l: string) => l.startsWith('$ ') ? l.substring(2) : l);
         return '```bash\n' + newLines.join('\n') + '\n```';
     });
 
-    // loosely wrap content inside Lang tags
+    // ------------------------------------------------------------------------
+    // 7. MULTI-LANGUAGE (<Lang>) BLOCK FORMATTING AND MERGING
+    // ------------------------------------------------------------------------
+    // loosely wrap content inside Lang tags with empty lines 
     text = text.replace(/([ \t]*<Lang[^>]*>)\n+/g, '$1\n\n');
     text = text.replace(/\n+([ \t]*<\/Lang>)/g, '\n\n$1');
 
-    // re-indent contents of Lang blocks
+    // Re-indent contents of individual Lang blocks back to column 0 to prevent issues.
     text = text.replace(/([ \t]*)<Lang([^>]*)>\n([\s\S]*?)\n[ \t]*<\/Lang>/g, (match, startIndent, tag, content) => {
-        content = content.replace(/^\n+|\n+$/g, '');
-        const lines = content.split('\n');
-        const nonEmpty = lines.filter((l: string) => l.trim() !== '');
-        if (nonEmpty.length > 0) {
-            const indents = nonEmpty.map((l: string) => {
-                const matchInfo = l.match(/^[ \t]*/);
-                return matchInfo ? matchInfo[0].length : 0;
-            });
-            const minIndent = Math.min(...indents);
-            content = lines.map((l: string) => l.trim() === '' ? '' : startIndent + l.substring(minIndent)).join('\n');
-        }
+        content = outdentText(content.replace(/^\n+|\n+$/g, ''), startIndent);
         return `${startIndent}<Lang${tag}>\n\n${content}\n\n${startIndent}</Lang>`;
     });
 
@@ -317,18 +322,8 @@ function formatFile(filepath: string) {
     text = text.replace(/([ \t]*:::[\w]+(?:\[.*?\])?)\n+(?!```|[-*]\s|\d+\.\s|<Lang)/g, '$1\n');
     text = text.replace(/([ \t]*:::[\w]+(?:\[.*?\])?)\n+(?=```|[-*]\s|\d+\.\s|<Lang)/g, '$1\n\n');
 
-    text = text.replace(/([^\n]+)\n+([ \t]*:::)(?:\n|$)/gm, (match, prevLine, blockEnd) => {
-        prevLine = prevLine.trim();
-        if (prevLine.startsWith('```') || /^[-*]\s/.test(prevLine) || /^\d+\.\s/.test(prevLine) || prevLine.startsWith('</Lang>')) {
-            return `${match}`;
-        }
-        return `${match}`;
-    });
-    // Let's accurately map Python logic:
-    // prev_line = m.group(1).strip()
-    // if prev_line.startswith('```') or re.match(r'^[-*]\s', prev_line) or re.match(r'^\d+\.\s', prev_line) or prev_line.startswith('</Lang>'):
-    //     return f"{m.group(1)}\n\n{m.group(2)}"
-    // return f"{m.group(1)}\n{m.group(2)}"
+    // Ensure there is spacing before an admonition block if the previous line
+    // wasn't a code block or list item, to prevent the admonition from breaking formatting.
     text = text.replace(/([^\n]+)\n+([ \t]*:::)(?:\n|$)/g, (match, prevLine, blockEnd) => {
         const stripped = prevLine.trim();
         if (stripped.startsWith('```') || /^[-*]\s/.test(stripped) || /^\d+\.\s/.test(stripped) || stripped.startsWith('</Lang>')) {
@@ -337,10 +332,11 @@ function formatFile(filepath: string) {
         return `${prevLine}\n${blockEnd}`;
     });
 
+    // Make sure we have proper blank lines isolating the start/end of admonitions.
     text = text.replace(/(?:\n+|^)([ \t]*:::[\w]+(?:\[.*?\])?)(?=\n)/g, '\n\n$1');
     text = text.replace(/\n([ \t]*:::)(?:\n+|$)/g, '\n$1\n\n');
 
-    text = text.replace(/\n{3,}/g, '\n\n');
+    // Note: Compacting \n{3,} to \n\n was removed since Prettier does it natively.
 
     let finalText = frontmatter;
     if (imports.length > 0) {
