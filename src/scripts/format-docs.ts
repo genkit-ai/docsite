@@ -220,17 +220,74 @@ function formatFile(filepath: string) {
             uc.langs = finalLangs;
         }
 
-        uniqueContents.sort((a, b) => {
-            if (supportedLanguages.length === 0 || a.langs.length === 0 || b.langs.length === 0) return 0;
-            const firstLangA = a.langs[0];
-            const firstLangB = b.langs[0];
-            const idxA = supportedLanguages.includes(firstLangA) ? supportedLanguages.indexOf(firstLangA) : 999;
-            const idxB = supportedLanguages.includes(firstLangB) ? supportedLanguages.indexOf(firstLangB) : 999;
-            return idxA - idxB;
-        });
+        const langPrecedence = ['js', 'go', 'dart', 'python'];
+        const getPrecedence = (langs: string[]) => {
+            let minIdx = 999;
+            for (const l of langs) {
+                const idx = supportedLanguages.includes(l) ? supportedLanguages.indexOf(l) : langPrecedence.includes(l) ? langPrecedence.indexOf(l) : 999;
+                if (idx < minIdx) {
+                    minIdx = idx;
+                }
+            }
+            return minIdx;
+        };
+
+        const numNodes = uniqueContents.length;
+        const adj: number[][] = Array.from({ length: numNodes }, () => []);
+        const inDegree: number[] = Array(numNodes).fill(0);
+        
+        const allLangs = new Set<string>();
+        for (const uc of uniqueContents) {
+            for (const l of uc.langs) allLangs.add(l);
+        }
+
+        for (const lang of allLangs) {
+            let prevIdx = -1;
+            for (let i = 0; i < numNodes; i++) {
+                if (uniqueContents[i].langs.includes(lang)) {
+                    if (prevIdx !== -1) {
+                        adj[prevIdx].push(i);
+                        inDegree[i]++;
+                    }
+                    prevIdx = i;
+                }
+            }
+        }
+
+        const sorted: any[] = [];
+        const available: number[] = [];
+        for (let i = 0; i < numNodes; i++) {
+            if (inDegree[i] === 0) available.push(i);
+        }
+
+        while (available.length > 0) {
+            let bestAvailIdx = 0;
+            let bestPrec = getPrecedence(uniqueContents[available[0]].langs);
+            let bestOrigIdx = available[0];
+
+            for (let i = 1; i < available.length; i++) {
+                const idx = available[i];
+                const prec = getPrecedence(uniqueContents[idx].langs);
+                if (prec < bestPrec || (prec === bestPrec && idx < bestOrigIdx)) {
+                    bestPrec = prec;
+                    bestAvailIdx = i;
+                    bestOrigIdx = idx;
+                }
+            }
+
+            const u = available.splice(bestAvailIdx, 1)[0];
+            sorted.push(uniqueContents[u]);
+
+            for (const v of adj[u]) {
+                inDegree[v]--;
+                if (inDegree[v] === 0) {
+                    available.push(v);
+                }
+            }
+        }
 
         const mergedUniqueContents: any[] = [];
-        for (const uc of uniqueContents) {
+        for (const uc of sorted) {
             if (mergedUniqueContents.length === 0) {
                 mergedUniqueContents.push(uc);
             } else {

@@ -8,301 +8,381 @@ supportedLanguages:
   - python
 ---
 
-import Lang from "../../../../components/Lang.astro";
+import Lang from '../../../../components/Lang.astro';
 
-<Lang lang="python">
+<Lang lang="js">
 
-Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
-configurable modules that can provide models, retrievers, indexers, embedders,
-evaluators, and more. You've already seen plugins in action just by using Genkit:
-```python
-from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+Genkit's capabilities are designed to be extended by plugins. Genkit plugins are configurable modules
+that can provide models, retrievers, indexers, trace stores, and more. You've already seen plugins in
+action just by using Genkit:
 
-ai = Genkit(
-    plugins=[GoogleAI()],
-)
+```ts
+import { genkit } from 'genkit';
+import { vertexAI } from '@genkit-ai/vertexai';
+
+const ai = genkit({
+  plugins: [vertexAI({ projectId: 'my-project' })],
+});
 ```
 
-The Google GenAI plugin takes configuration (such as the user's API key) and
-registers a variety of new models, embedders, and more with the Genkit registry.
-The registry powers Genkit's local UI for running and inspecting models,
-prompts, and more as well as serves as a lookup service for named actions at
-runtime.
+The Vertex AI plugin takes configuration (such as the user's Google Cloud
+project ID) and registers a variety of new models, embedders, and more with the
+Genkit registry. The registry powers Genkit's local UI for running and
+inspecting models, prompts, and more as well as serves as a lookup service for
+named actions at runtime.
 
 ## Creating a Plugin
 
-Python plugins follow a simple pattern. A plugin is a class that:
+To create a plugin you'll generally want to create a new NPM package:
 
-1. Inherits from `Plugin` base class
-2. Has a `name` class attribute for the plugin identifier
-3. Implements three async methods: `init()`, `resolve()`, and `list_actions()`
+```bash
+mkdir genkitx-my-plugin
 
-### Basic Plugin Structure
-```python
-from os import environ
-from genkit import Plugin, ActionKind
-from genkit.core.action import Action, ActionMetadata
+cd genkitx-my-plugin
 
-class MyPlugin(Plugin):
-    """A custom Genkit plugin."""
+npm init -y
 
-    name = 'my-plugin'  # Plugin namespace
+npm install genkit
 
-    def __init__(self, api_key: str | None = None):
-        """Initialize plugin with configuration.
+npm install --save-dev typescript
 
-        Args:
-            api_key: API key for the service. Can also use
-                MY_PLUGIN_API_KEY environment variable.
-        """
-        self.api_key = api_key or environ.get('MY_PLUGIN_API_KEY')
-        if not self.api_key:
-            raise ValueError(
-                'API key required. Set MY_PLUGIN_API_KEY or pass api_key parameter.'
-            )
-
-    async def init(self) -> list[Action]:
-        """One-time initialization called lazily on first use.
-
-        Returns:
-            List of Action instances to pre-register (optional).
-        """
-        # Return empty list for lazy loading, or pre-register actions
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """Resolve an action by type and name.
-
-        Args:
-            action_type: The kind of action (MODEL, EMBEDDER, etc.).
-            name: The fully namespaced name (e.g., 'my-plugin/my-model').
-
-        Returns:
-            Action instance if found, None otherwise.
-        """
-        if action_type == ActionKind.MODEL:
-            return self._create_model_action(name)
-        return None
-
-    async def list_actions(self) -> list[ActionMetadata]:
-        """List available actions for dev UI discovery.
-
-        Returns:
-            List of ActionMetadata describing available actions.
-        """
-        return [
-            ActionMetadata(kind=ActionKind.MODEL, name='my-plugin/my-model'),
-        ]
-
-    def _create_model_action(self, name: str) -> Action:
-        """Create and return a model action."""
-        # Model implementation
-        pass
+npx tsc --init
 ```
 
-### Plugin Options Guidance
+Then, define and export your plugin from your main entry point using the
+`genkitPlugin` helper:
 
-For any plugin option that requires a secret value, such as API keys, you should
-offer both an option and a default environment variable to configure it. This
-lets your plugin take advantage of the secret-management features offered by
-many hosting providers.
+```ts
+import { Genkit, z, modelActionMetadata } from 'genkit';
+import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
+import { ActionMetadata, ActionType } from 'genkit/registry';
 
-## Building Plugin Features
+interface MyPluginOptions {
+  // add any plugin configuration here
+}
 
-A single plugin can activate many new things within Genkit. For example, the
-Google GenAI plugin activates several new models as well as embedders.
-
-### Model Plugins
-
-Genkit model plugins add one or more generative AI models to the Genkit
-registry. A model represents any generative model that is capable of receiving a
-prompt as input and generating text, media, or data as output.
-
-#### Defining a Model
-```python
-from os import environ
-from genkit import Plugin, ActionKind, ActionRunContext
-from genkit.core.action import Action, ActionMetadata
-from genkit.blocks.model import model_action_metadata
-from genkit.core.typing import (
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResponseChunk,
-)
-from genkit.core.schema import to_json_schema
-from genkit.types import GenerationCommonConfig
-from collections.abc import AsyncIterator
-
-class MyModelPlugin(Plugin):
-    """Plugin that provides a custom model."""
-
-    name = 'my-provider'
-
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or environ.get('MY_API_KEY')
-        if not self.api_key:
-            raise ValueError('API key required')
-
-    async def init(self) -> list[Action]:
-        """Initialize plugin.
-
-        Returns:
-            Empty list for lazy loading via resolve().
-        """
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """Resolve an action by type and name.
-
-        Args:
-            action_type: The kind of action to resolve.
-            name: The fully namespaced name (e.g., 'my-provider/my-model').
-
-        Returns:
-            Action instance if found, None otherwise.
-        """
-        if action_type != ActionKind.MODEL:
-            return None
-
-        return self._create_model_action(name)
-
-    async def list_actions(self) -> list[ActionMetadata]:
-        """List available models for dev UI.
-
-        Returns:
-            List of ActionMetadata for available models.
-        """
-        return [
-            model_action_metadata(
-                name=f'{self.name}/my-model',
-                info={
-                    'label': 'My Custom Model',
-                    'supports': {
-                        'multiturn': True,
-                        'media': False,
-                        'tools': False,
-                        'systemRole': True,
-                        'output': ['text'],
-                    },
-                },
-                config_schema=GenerationCommonConfig,
-            )
-        ]
-
-    def _create_model_action(self, name: str) -> Action:
-        """Create an Action object for the model.
-
-        Args:
-            name: The fully namespaced model name.
-
-        Returns:
-            Action object for the model.
-        """
-        async def generate(
-            request: GenerateRequest,
-            ctx: ActionRunContext,
-        ) -> GenerateResponse:
-            """Generate a response from the model.
-
-            Args:
-                request: The generation request containing messages and config.
-                ctx: The action run context.
-
-            Returns:
-                A GenerateResponse with the model's output.
-            """
-            # Transform Genkit request to your API format
-            api_request = self._to_api_request(request)
-
-            # Call your model API
-            api_response = await self._call_api(api_request)
-
-            # Transform API response to Genkit format
-            return self._to_genkit_response(api_response)
-
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=generate,
-            metadata={
-                'model': {
-                    'supports': {
-                        'multiturn': True,
-                        'media': False,
-                        'tools': False,
-                        'systemRole': True,
-                        'output': ['text'],
-                    },
-                    'customOptions': to_json_schema(GenerationCommonConfig),
-                },
-            },
-        )
-
-    def _to_api_request(self, request: GenerateRequest) -> dict:
-        """Convert Genkit request to API format."""
-        # Implementation depends on your API
-        pass
-
-    async def _call_api(self, request: dict) -> dict:
-        """Call your model's API."""
-        # Implementation depends on your API
-        pass
-
-    def _to_genkit_response(self, response: dict) -> GenerateResponse:
-        """Convert API response to Genkit format."""
-        # Implementation depends on your API
-        pass
+export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
+  return genkitPlugin(
+    'myPlugin',
+    // Initializer function (required): Registers actions defined upfront.
+    async (ai: Genkit) => {
+      // Example: Define a model that's always available
+      ai.defineModel({ name: 'myPlugin/always-available-model', ... });
+      ai.defineEmbedder(/* ... */);
+      // ... other upfront definitions
+    },
+    // Dynamic Action Resolver (optional): Defines actions on-demand.
+    async (ai: Genkit, actionType: ActionType, actionName: string) => {
+      // Called when an action (e.g., 'myPlugin/some-dynamic-model') is
+      // requested but not found in the registry.
+      if (actionType === 'model' && actionName === 'some-dynamic-model') {
+        ai.defineModel({ name: `myPlugin/${actionName}`, ... });
+      }
+      // ... handle other dynamic actions
+    },
+    // List Actions function (optional): Lists all potential actions.
+    async (): Promise<ActionMetadata[]> => {
+      // Returns metadata for all actions the plugin *could* provide,
+      // even if not yet defined dynamically. Used by Dev UI, etc.
+      // Example: Fetch available models from an API
+      const availableModels = await fetchMyModelsFromApi();
+      return availableModels.map(model => modelActionMetadata({
+        type: 'model',
+        name: `myPlugin/${model.id}`,
+        // ... other metadata
+      }));
+    }
+  );
+}
 ```
 
-#### Model Capabilities
+The `genkitPlugin` function accepts up to three arguments:
 
-The `supports` dict declares what features the model supports:
+1.  **Plugin Name (string, required):** A unique identifier for your plugin (e.g., `'myPlugin'`).
+2.  **Initializer Function (`async (ai: Genkit) => void`, required):** This function runs when Genkit starts. Use it to register actions (models, embedders, etc.) that should always be available using `ai.defineModel()`, `ai.defineEmbedder()`, etc.
+3.  **Dynamic Action Resolver (`async (ai: Genkit, actionType: ActionType, actionName: string) => void`, optional):** This function is called when Genkit tries to access an action (by type and name) that hasn't been registered yet. It lets you define actions dynamically, just-in-time. For example, if a user requests `model: 'myPlugin/some-model'`, and it wasn't defined in the initializer, this function runs, giving you a chance to define it using `ai.defineModel()`. This is useful when a plugin supports many possible actions (like numerous models) and you don't want to register them all at startup.
+4.  **List Actions Function (`async () => Promise<ActionMetadata[]>`, optional):** This function should return metadata for _all_ actions your plugin can potentially provide, including those that would be dynamically defined. This is primarily used by development tools like the Genkit Developer UI to populate lists of available models, embedders, etc., allowing users to discover and select them even if they haven't been explicitly defined yet. This function is generally _not_ called during normal flow execution.
 
-| Capability   | Description                                   |
-| ------------ | --------------------------------------------- |
-| `multiturn`  | Supports multi-turn conversations             |
-| `media`      | Accepts media input (images, audio, etc.)     |
-| `tools`      | Supports function/tool calling                |
-| `systemRole` | Supports system messages                      |
-| `output`     | List of output types: 'text', 'media', 'json' |
+### Plugin options guidance
 
-## Publishing a Plugin
+In general, your plugin should take a single `options` argument that includes
+any plugin-wide configuration necessary to function. For any plugin option that
+requires a secret value, such as API keys, you should offer both an option and a
+default environment variable to configure it:
 
-Genkit plugins can be published as normal Python packages on PyPI. To increase
-discoverability, your package should be named `genkit-plugin-{name}` to indicate
-it is a Genkit plugin. Include relevant keywords in your `pyproject.toml`:
-```toml
-[project]
-name = "genkit-plugin-my-service"
-description = "Genkit plugin for My Service"
-keywords = [
-    "genkit",
-    "genkit-plugin",
-    "ai",
-    "llm",
-]
+```ts
+import { GenkitError, Genkit, z } from 'genkit';
+import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
 
-[project.urls]
-Homepage = "https://github.com/yourorg/genkit-plugin-my-service"
+interface MyPluginOptions {
+  apiKey?: string;
+}
+
+export function myPlugin(options?: MyPluginOptions) {
+  return genkitPlugin('myPlugin', async (ai: Genkit) => {
+    if (!apiKey)
+      throw new GenkitError({
+        source: 'my-plugin',
+        status: 'INVALID_ARGUMENT',
+        message:
+          'Must supply either `options.apiKey` or set `MY_PLUGIN_API_KEY` environment variable.',
+      });
+
+    ai.defineModel(...);
+    ai.defineEmbedder(...)
+
+    // ....
+  });
+};
 ```
 
-### Recommended Keywords
+## Building your plugin
 
-- `genkit-plugin`: Always include this to indicate it's a Genkit plugin
-- `genkit-model`: If your package provides models
-- `genkit-embedder`: If your package provides embedders
-- `genkit-retriever`: If your package provides retrievers
-- `genkit-indexer`: If your package provides indexers
-- `genkit-evaluator`: If your package provides evaluators
-- `genkit-telemetry`: If your package provides telemetry export
+A single plugin can activate many new things within Genkit. For example, the Vertex AI plugin activates several new models as well as an embedder.
+
+### Model plugins
+
+Genkit model plugins add one or more generative AI models to the Genkit registry. A model represents any generative
+model that is capable of receiving a prompt as input and generating text, media, or data as output.
+Generally, a model plugin will make one or more `defineModel` calls in its initialization function.
+
+A custom model generally consists of three components:
+
+1.  Metadata defining the model's capabilities.
+2.  A configuration schema with any specific parameters supported by the model.
+3.  A function that implements the model accepting `GenerateRequest` and
+    returning `GenerateResponse`.
+
+To build a model plugin, you'll need to use the `genkit/model` package:
+
+At a high level, a model plugin might look something like this:
+
+```ts
+import { genkitPlugin, GenkitPlugin } from 'genkit/plugin';
+import { GenerationCommonConfigSchema } from 'genkit/model';
+import { simulateSystemPrompt } from 'genkit/model/middleware';
+import { Genkit, GenkitError, z } from 'genkit';
+
+export interface MyPluginOptions {
+ // ...
+}
+
+export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
+  return genkitPlugin('my-plugin', async (ai: Genkit) => {
+    ai.defineModel({
+      // be sure to include your plugin as a provider prefix
+      name: 'my-plugin/my-model',
+      // label for your model as shown in Genkit Developer UI
+      label: 'My Awesome Model',
+      // optional list of supported versions of your model
+      versions: ['my-model-001', 'my-model-001'],
+      // model support attributes
+      supports: {
+        multiturn: true, // true if your model supports conversations
+        media: true, // true if your model supports multimodal input
+        tools: true, // true if your model supports tool/function calling
+        systemRole: true, // true if your model supports the system role
+        output: ['text', 'media', 'json'], // types of output your model supports
+      },
+      // Zod schema for your model's custom configuration
+      configSchema: GenerationCommonConfigSchema.extend({
+        safetySettings: z.object({...}),
+      }),
+      // list of middleware for your model to use
+      use: [simulateSystemPrompt()]
+    }, async request => {
+      const myModelRequest = toMyModelRequest(request);
+      const myModelResponse = await myModelApi(myModelRequest);
+      return toGenerateResponse(myModelResponse);
+    });
+  });
+};
+```
+
+#### Transforming Requests and Responses
+
+The primary work of a Genkit model plugin is transforming the
+`GenerateRequest` from Genkit's common format into a format that is recognized
+and supported by your model's API, and then transforming the response from your
+model into the `GenerateResponseData` format used by Genkit.
+
+Sometimes, this may require massaging or manipulating data to work around model limitations. For example, if your model does not natively support a `system` message, you may need to transform a prompt's system message into a user/model message pair.
+
+#### Action References (Models, Embedders, etc.)
+
+While actions like models and embedders can always be referenced by their string name (e.g., `'myPlugin/my-model'`) after being defined (either upfront or dynamically), providing strongly-typed references offers better developer experience through improved type checking and IDE autocompletion.
+
+The recommended pattern is to attach helper methods directly to your exported plugin function. These methods use reference builders like `modelRef` and `embedderRef` from Genkit core.
+
+First, define the type for your plugin function including the helper methods:
+
+```ts
+import { GenkitPlugin } from 'genkit/plugin';
+import {
+  ModelReference,
+  EmbedderReference,
+  modelRef,
+  embedderRef,
+  z,
+} from 'genkit';
+
+// Define your model's specific config schema if it has one
+const MyModelConfigSchema = z.object({
+  customParam: z.string().optional(),
+});
+
+// Define the type for your plugin function
+export type MyPlugin = {
+  // The main plugin function signature
+  (options?: MyPluginOptions): GenkitPlugin;
+
+  // Helper method for creating model references
+  model(
+    name: string, // e.g., 'some-model-name'
+    config?: z.infer<typeof MyModelConfigSchema>,
+  ): ModelReference<typeof MyModelConfigSchema>;
+
+  // Helper method for creating embedder references
+  embedder(
+    name: string, // e.g., 'my-embedder'
+    config?: Record<string, any>, // Or a specific config schema
+  ): EmbedderReference;
+
+  // ... add helpers for other action types if needed
+};
+```
+
+Then, implement the plugin function and attach the helper methods before exporting:
+
+```ts
+// (Previous imports and MyPluginOptions interface definition)
+import { modelRef, embedderRef } from 'genkit/model'; // Ensure modelRef/embedderRef are imported
+
+function myPluginFn(options?: MyPluginOptions): GenkitPlugin {
+  return genkitPlugin(
+    'myPlugin',
+    async (ai: Genkit) => {
+      // Initializer...
+    },
+    async (ai, actionType, actionName) => {
+      // Dynamic resolver...
+      // Example: Define model if requested dynamically
+      if (actionType === 'model') {
+        ai.defineModel(
+          {
+            name: `myPlugin/${actionName}`,
+            // ... other model definition properties
+            configSchema: MyModelConfigSchema, // Use the defined schema
+          },
+          async (request) => {
+            /* ... model implementation ... */
+          },
+        );
+      }
+      // Handle other dynamic actions...
+    },
+    async () => {
+      // List actions...
+    },
+  );
+}
+
+// Create the final export conforming to the MyPlugin type
+export const myPlugin = myPluginFn as MyPlugin;
+
+// Implement the helper methods
+myPlugin.model = (
+  name: string,
+  config?: z.infer<typeof MyModelConfigSchema>,
+): ModelReference<typeof MyModelConfigSchema> => {
+  return modelRef({
+    name: `myPlugin/${name}`, // Automatically prefixes the name
+    configSchema: MyModelConfigSchema,
+    config,
+  });
+};
+
+myPlugin.embedder = (
+  name: string,
+  config?: Record<string, any>,
+): EmbedderReference => {
+  return embedderRef({
+    name: `myPlugin/${name}`,
+    config,
+  });
+};
+```
+
+Now, users can import your plugin and use the helper methods for type-safe action references:
+
+```ts
+import { genkit } from 'genkit';
+import { myPlugin } from 'genkitx-my-plugin'; // Assuming your package name
+
+const ai = genkit({
+  plugins: [
+    myPlugin({
+      /* options */
+    }),
+  ],
+});
+
+async function run() {
+  const { text } = await ai.generate({
+    // Use the helper for a type-safe model reference
+    model: myPlugin.model('some-model-name', { customParam: 'value' }),
+    prompt: 'Tell me a story.',
+  });
+  console.log(text);
+
+  const embeddings = await ai.embed({
+    // Use the helper for a type-safe embedder reference
+    embedder: myPlugin.embedder('my-embedder'),
+    content: 'Embed this text.',
+  });
+  console.log(embeddings);
+}
+
+run();
+```
+
+This approach keeps the plugin definition clean while providing a convenient and type-safe way for users to reference the actions provided by your plugin. It works seamlessly with both statically and dynamically defined actions, as the references only contain metadata, not the implementation itself.
+
+## Publishing a plugin
+
+Genkit plugins can be published as normal NPM packages. To increase
+discoverability and maximize consistency, your package should be named
+`genkitx-{name}` to indicate it is a Genkit plugin and you should include as
+many of the following `keywords` in your `package.json` as are relevant to your
+plugin:
+
+- `genkit-plugin`: always include this keyword in your package to indicate it is a Genkit plugin.
+- `genkit-model`: include this keyword if your package defines any models.
+- `genkit-retriever`: include this keyword if your package defines any retrievers.
+- `genkit-indexer`: include this keyword if your package defines any indexers.
+- `genkit-embedder`: include this keyword if your package defines any indexers.
+- `genkit-telemetry`: include this keyword if your package defines a telemetry provider.
+- `genkit-deploy`: include this keyword if your package includes helpers to deploy Genkit apps to cloud providers.
+- `genkit-flow`: include this keyword if your package enhances Genkit flows.
+
+A plugin that provided a retriever, embedder, and model might have a `package.json` that looks like:
+
+```js
+{
+  "name": "genkitx-my-plugin",
+  "keywords": ["genkit-plugin", "genkit-retriever", "genkit-embedder", "genkit-model"],
+  // ... dependencies etc.
+}
+```
 
 </Lang>
+
 <Lang lang="go">
 
 Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
 configurable modules that can provide models, retrievers, trace
 stores, and more. You've already seen plugins in action just by using Genkit:
+
 ```go
 import (
 
@@ -312,6 +392,7 @@ import (
     "[github.com/firebase/genkit/go/plugins/server](https://github.com/firebase/genkit/go/plugins/server)"
 )
 ```
+
 ```go
 g := genkit.Init(ctx,
     ai.WithPlugins(
@@ -343,6 +424,7 @@ For example, if your plugin has an ID `yourplugin` and provides a model called
 
 This provider ID needs to be exported and you should define it once for your
 plugin and use it consistently when required by a Genkit function.
+
 ```go
 package yourplugin
 
@@ -362,33 +444,36 @@ Every plugin should define and export the following symbols to conform to the
   it. This lets your plugin take advantage of the secret-management features
   offered by many hosting providers (such as Cloud Secret Manager, which you
   can use with Cloud Run). For example:
+
 ```go
-  type MyPlugin struct {
-      APIKey string
-      // Other options you may allow to configure...
-  }
+type MyPlugin struct {
+    APIKey string
+    // Other options you may allow to configure...
+}
 ```
 
 - A `Name()` method on the struct that returns the provider ID.
 
 - An `Init()` method on the struct with a declaration like the following:
+
 ```go
-  func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
+func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
 ```
 
-  In this function, perform any setup steps required by your plugin. For
-  example:
-  - Confirm that any required configuration values are specified and assign
-    default values to any unspecified optional settings.
-  - Verify that the given configuration options are valid together.
-  - Create any shared resources required by the rest of your plugin. For
-    example, create clients for any services your plugin accesses.
+In this function, perform any setup steps required by your plugin. For
+example:
 
-  To the extent possible, the resources provided by your plugin shouldn't
-  assume that any other plugins have been installed before this one.
+- Confirm that any required configuration values are specified and assign
+  default values to any unspecified optional settings.
+- Verify that the given configuration options are valid together.
+- Create any shared resources required by the rest of your plugin. For
+  example, create clients for any services your plugin accesses.
 
-  This method will be called automatically during `genkit.Init()` when the
-  user passes the plugin into the `WithPlugins()` option.
+To the extent possible, the resources provided by your plugin shouldn't
+assume that any other plugins have been installed before this one.
+
+This method will be called automatically during `genkit.Init()` when the
+user passes the plugin into the `WithPlugins()` option.
 
 ## Building Plugin Features
 
@@ -415,6 +500,7 @@ A model definition consists of three components:
     `ai.ModelResponse`, presumably using an AI model to generate the latter.
 
 At a high level, here's what it looks like in code:
+
 ```go
 package myplugin
 
@@ -584,23 +670,26 @@ also export the following:
 
 - A `Model()` function, which returns references to your plugin's defined
   models. Often, this can be:
+
 ```go
-  func Model(g *genkit.Genkit, name string) *ai.Model {
-      return genkit.LookupModel(g, providerID, name)
-  }
+func Model(g *genkit.Genkit, name string) *ai.Model {
+    return genkit.LookupModel(g, providerID, name)
+}
 ```
 
 - A `ModelRef` function, which creates a model reference paired with its
   config that can validate the type and be passed around together:
+
 ```go
-  func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
-      return ai.NewModelRef(name, config)
-  }
+func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
+    return ai.NewModelRef(name, config)
+}
 ```
 
 - **Optional**: A `DefineModel()` function, which lets users define models
   that your plugin can provide, but that you do not automatically define.
   There are two main reasons why you might want to provide such a function:
+
   - Your plugin provides access to too many models to practically register
     each one. For example, the Ollama plugin can provide access to dozens of
     different models, with more added frequently. For this reason, it
@@ -666,15 +755,16 @@ and the page [A Guide to Writing `slog` Handlers](https://github.com/golang/exam
 
 Every telemetry plugin needs to import the Genkit core library and several
 OpenTelemetry libraries:
+
 ```go
-    // Import the Genkit core library.
+// Import the Genkit core library.
 
-    "[github.com/firebase/genkit/go/genkit](https://github.com/firebase/genkit/go/genkit)"
+"[github.com/firebase/genkit/go/genkit](https://github.com/firebase/genkit/go/genkit)"
 
-    // Import the OpenTelemetry libraries.
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/sdk/metric"
-    "go.opentelemetry.io/otel/sdk/trace"
+// Import the OpenTelemetry libraries.
+"go.opentelemetry.io/otel"
+"go.opentelemetry.io/otel/sdk/metric"
+"go.opentelemetry.io/otel/sdk/trace"
 ```
 
 If you are building a plugin around an existing OpenTelemetry or `slog`
@@ -684,6 +774,7 @@ integration, you will also need to import them.
 
 A telemetry plugin should, at a minimum, support the following configuration
 options:
+
 ```go
 type Config struct {
     // Export even in the dev environment.
@@ -709,43 +800,47 @@ The `Init()` function of a telemetry plugin should do all of the following:
 - Return early if Genkit is running in a development environment (such as when
   running with with `genkit start`) and the `Config.ForceExport` option isn't
   set:
+
 ```go
-  shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
-  if !shouldExport {
-    return nil
-  }
+shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
+if !shouldExport {
+  return nil
+}
 ```
 
 - Initialize your trace span exporter and register it with Genkit:
+
 ```go
-  spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
-  genkit.RegisterSpanProcessor(g, spanProcessor)
+spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
+genkit.RegisterSpanProcessor(g, spanProcessor)
 ```
 
 - Initialize your metric exporter and register it with the OpenTelemetry
   library:
+
 ```go
-  r := metric.NewPeriodicReader(
-    YourCustomMetricExporter{},
-    metric.WithInterval(cfg.MetricInterval),
-  )
-  mp := metric.NewMeterProvider(metric.WithReader(r))
-  otel.SetMeterProvider(mp)
+r := metric.NewPeriodicReader(
+  YourCustomMetricExporter{},
+  metric.WithInterval(cfg.MetricInterval),
+)
+mp := metric.NewMeterProvider(metric.WithReader(r))
+otel.SetMeterProvider(mp)
 ```
 
-  Use the user-configured collection interval (`Config.MetricInterval`) when
-  initializing the `PeriodicReader`.
+Use the user-configured collection interval (`Config.MetricInterval`) when
+initializing the `PeriodicReader`.
 
 - Register your `slog` handler as the default logger:
+
 ```go
-  logger := slog.New(YourCustomHandler{
-    Options: &slog.HandlerOptions{Level: cfg.LogLevel},
-  })
-  slog.SetDefault(logger)
+logger := slog.New(YourCustomHandler{
+  Options: &slog.HandlerOptions{Level: cfg.LogLevel},
+})
+slog.SetDefault(logger)
 ```
 
-  You should configure your handler to honor the user-specified minimum log
-  level (`Config.LogLevel`).
+You should configure your handler to honor the user-specified minimum log
+level (`Config.LogLevel`).
 
 #### PII redaction
 
@@ -762,6 +857,7 @@ can wrap the provided span exporter with a custom exporter that carries out this
 task. For example, the `googlecloud` plugin removes the `genkit:input` and
 `genkit:output` attributes from every span before exporting them using a wrapper
 similar to the following:
+
 ```go
 type redactingSpanExporter struct {
     trace.SpanExporter
@@ -814,6 +910,7 @@ good choices:
 - `github.com/yourorg/your-repo/genkit/servicename`
 
 </Lang>
+
 <Lang lang="dart">
 
 Genkit's capabilities are designed to be extended by plugins. Genkit plugins are configurable modules that can provide models, retrievers, trace stores, and more.
@@ -825,6 +922,7 @@ In Dart, a Genkit plugin is a class that extends `GenkitPlugin`.
 ### 1. Define the Plugin
 
 Create a class that extends `GenkitPlugin`. You usually define this in a separate package or within your app's code.
+
 ```dart
 import 'package:genkit/genkit.dart';
 
@@ -878,6 +976,7 @@ class MyPlugin extends GenkitPlugin {
 ### 2. Register the Plugin
 
 To use your plugin, instantiate it and pass it to the `Genkit` constructor.
+
 ```dart
 final ai = Genkit(
   plugins: [
@@ -891,6 +990,7 @@ final ai = Genkit(
 To make your plugin easy to discover and use within the Genkit ecosystem, consistent with other plugins like `genkit_google_genai`, it is recommended to create a plugin handle.
 
 This pattern allows users to instantiate your plugin with a simple global function or constant, and provides a namespace for accessing your plugin's actions (like `myPlugin.myModel`) in a type-safe way if you choose to implement it.
+
 ```dart
 // Define a global constant for easy access
 const myPlugin = MyPluginHandle();
@@ -928,6 +1028,7 @@ final response = await ai.generate(
 Genkit Dart plugins can be published as normal Dart packages to [pub.dev](https://pub.dev).
 
 To increase discoverability, your package should be named `genkit_plugin_<name>` or `genkit_<name>` and include `genkit` in the `topics` within your `pubspec.yaml`.
+
 ```yaml
 name: genkit_plugin_myplugin
 description: My awesome Genkit plugin.
@@ -939,360 +1040,296 @@ topics:
 ```
 
 </Lang>
-<Lang lang="js">
 
-Genkit's capabilities are designed to be extended by plugins. Genkit plugins are configurable modules
-that can provide models, retrievers, indexers, trace stores, and more. You've already seen plugins in
-action just by using Genkit:
-```ts
-import { genkit } from 'genkit';
-import { vertexAI } from '@genkit-ai/vertexai';
+<Lang lang="python">
 
-const ai = genkit({
-  plugins: [vertexAI({ projectId: 'my-project' })],
-});
+Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
+configurable modules that can provide models, retrievers, indexers, embedders,
+evaluators, and more. You've already seen plugins in action just by using Genkit:
+
+```python
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+)
 ```
 
-The Vertex AI plugin takes configuration (such as the user's Google Cloud
-project ID) and registers a variety of new models, embedders, and more with the
-Genkit registry. The registry powers Genkit's local UI for running and
-inspecting models, prompts, and more as well as serves as a lookup service for
-named actions at runtime.
+The Google GenAI plugin takes configuration (such as the user's API key) and
+registers a variety of new models, embedders, and more with the Genkit registry.
+The registry powers Genkit's local UI for running and inspecting models,
+prompts, and more as well as serves as a lookup service for named actions at
+runtime.
 
 ## Creating a Plugin
 
-To create a plugin you'll generally want to create a new NPM package:
-```bash
-mkdir genkitx-my-plugin
+Python plugins follow a simple pattern. A plugin is a class that:
 
-cd genkitx-my-plugin
+1. Inherits from `Plugin` base class
+2. Has a `name` class attribute for the plugin identifier
+3. Implements three async methods: `init()`, `resolve()`, and `list_actions()`
 
-npm init -y
+### Basic Plugin Structure
 
-npm install genkit
+```python
+from os import environ
+from genkit import Plugin, ActionKind
+from genkit.core.action import Action, ActionMetadata
 
-npm install --save-dev typescript
+class MyPlugin(Plugin):
+    """A custom Genkit plugin."""
 
-npx tsc --init
+    name = 'my-plugin'  # Plugin namespace
+
+    def __init__(self, api_key: str | None = None):
+        """Initialize plugin with configuration.
+
+        Args:
+            api_key: API key for the service. Can also use
+                MY_PLUGIN_API_KEY environment variable.
+        """
+        self.api_key = api_key or environ.get('MY_PLUGIN_API_KEY')
+        if not self.api_key:
+            raise ValueError(
+                'API key required. Set MY_PLUGIN_API_KEY or pass api_key parameter.'
+            )
+
+    async def init(self) -> list[Action]:
+        """One-time initialization called lazily on first use.
+
+        Returns:
+            List of Action instances to pre-register (optional).
+        """
+        # Return empty list for lazy loading, or pre-register actions
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolve an action by type and name.
+
+        Args:
+            action_type: The kind of action (MODEL, EMBEDDER, etc.).
+            name: The fully namespaced name (e.g., 'my-plugin/my-model').
+
+        Returns:
+            Action instance if found, None otherwise.
+        """
+        if action_type == ActionKind.MODEL:
+            return self._create_model_action(name)
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List available actions for dev UI discovery.
+
+        Returns:
+            List of ActionMetadata describing available actions.
+        """
+        return [
+            ActionMetadata(kind=ActionKind.MODEL, name='my-plugin/my-model'),
+        ]
+
+    def _create_model_action(self, name: str) -> Action:
+        """Create and return a model action."""
+        # Model implementation
+        pass
 ```
 
-Then, define and export your plugin from your main entry point using the
-`genkitPlugin` helper:
-```ts
-import { Genkit, z, modelActionMetadata } from 'genkit';
-import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
-import { ActionMetadata, ActionType } from 'genkit/registry';
+### Plugin Options Guidance
 
-interface MyPluginOptions {
-  // add any plugin configuration here
-}
+For any plugin option that requires a secret value, such as API keys, you should
+offer both an option and a default environment variable to configure it. This
+lets your plugin take advantage of the secret-management features offered by
+many hosting providers.
 
-export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
-  return genkitPlugin(
-    'myPlugin',
-    // Initializer function (required): Registers actions defined upfront.
-    async (ai: Genkit) => {
-      // Example: Define a model that's always available
-      ai.defineModel({ name: 'myPlugin/always-available-model', ... });
-      ai.defineEmbedder(/* ... */);
-      // ... other upfront definitions
-    },
-    // Dynamic Action Resolver (optional): Defines actions on-demand.
-    async (ai: Genkit, actionType: ActionType, actionName: string) => {
-      // Called when an action (e.g., 'myPlugin/some-dynamic-model') is
-      // requested but not found in the registry.
-      if (actionType === 'model' && actionName === 'some-dynamic-model') {
-        ai.defineModel({ name: `myPlugin/${actionName}`, ... });
-      }
-      // ... handle other dynamic actions
-    },
-    // List Actions function (optional): Lists all potential actions.
-    async (): Promise<ActionMetadata[]> => {
-      // Returns metadata for all actions the plugin *could* provide,
-      // even if not yet defined dynamically. Used by Dev UI, etc.
-      // Example: Fetch available models from an API
-      const availableModels = await fetchMyModelsFromApi();
-      return availableModels.map(model => modelActionMetadata({
-        type: 'model',
-        name: `myPlugin/${model.id}`,
-        // ... other metadata
-      }));
-    }
-  );
-}
+## Building Plugin Features
+
+A single plugin can activate many new things within Genkit. For example, the
+Google GenAI plugin activates several new models as well as embedders.
+
+### Model Plugins
+
+Genkit model plugins add one or more generative AI models to the Genkit
+registry. A model represents any generative model that is capable of receiving a
+prompt as input and generating text, media, or data as output.
+
+#### Defining a Model
+
+```python
+from os import environ
+from genkit import Plugin, ActionKind, ActionRunContext
+from genkit.core.action import Action, ActionMetadata
+from genkit.blocks.model import model_action_metadata
+from genkit.core.typing import (
+    GenerateRequest,
+    GenerateResponse,
+    GenerateResponseChunk,
+)
+from genkit.core.schema import to_json_schema
+from genkit.types import GenerationCommonConfig
+from collections.abc import AsyncIterator
+
+class MyModelPlugin(Plugin):
+    """Plugin that provides a custom model."""
+
+    name = 'my-provider'
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or environ.get('MY_API_KEY')
+        if not self.api_key:
+            raise ValueError('API key required')
+
+    async def init(self) -> list[Action]:
+        """Initialize plugin.
+
+        Returns:
+            Empty list for lazy loading via resolve().
+        """
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolve an action by type and name.
+
+        Args:
+            action_type: The kind of action to resolve.
+            name: The fully namespaced name (e.g., 'my-provider/my-model').
+
+        Returns:
+            Action instance if found, None otherwise.
+        """
+        if action_type != ActionKind.MODEL:
+            return None
+
+        return self._create_model_action(name)
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List available models for dev UI.
+
+        Returns:
+            List of ActionMetadata for available models.
+        """
+        return [
+            model_action_metadata(
+                name=f'{self.name}/my-model',
+                info={
+                    'label': 'My Custom Model',
+                    'supports': {
+                        'multiturn': True,
+                        'media': False,
+                        'tools': False,
+                        'systemRole': True,
+                        'output': ['text'],
+                    },
+                },
+                config_schema=GenerationCommonConfig,
+            )
+        ]
+
+    def _create_model_action(self, name: str) -> Action:
+        """Create an Action object for the model.
+
+        Args:
+            name: The fully namespaced model name.
+
+        Returns:
+            Action object for the model.
+        """
+        async def generate(
+            request: GenerateRequest,
+            ctx: ActionRunContext,
+        ) -> GenerateResponse:
+            """Generate a response from the model.
+
+            Args:
+                request: The generation request containing messages and config.
+                ctx: The action run context.
+
+            Returns:
+                A GenerateResponse with the model's output.
+            """
+            # Transform Genkit request to your API format
+            api_request = self._to_api_request(request)
+
+            # Call your model API
+            api_response = await self._call_api(api_request)
+
+            # Transform API response to Genkit format
+            return self._to_genkit_response(api_response)
+
+        return Action(
+            kind=ActionKind.MODEL,
+            name=name,
+            fn=generate,
+            metadata={
+                'model': {
+                    'supports': {
+                        'multiturn': True,
+                        'media': False,
+                        'tools': False,
+                        'systemRole': True,
+                        'output': ['text'],
+                    },
+                    'customOptions': to_json_schema(GenerationCommonConfig),
+                },
+            },
+        )
+
+    def _to_api_request(self, request: GenerateRequest) -> dict:
+        """Convert Genkit request to API format."""
+        # Implementation depends on your API
+        pass
+
+    async def _call_api(self, request: dict) -> dict:
+        """Call your model's API."""
+        # Implementation depends on your API
+        pass
+
+    def _to_genkit_response(self, response: dict) -> GenerateResponse:
+        """Convert API response to Genkit format."""
+        # Implementation depends on your API
+        pass
 ```
 
-The `genkitPlugin` function accepts up to three arguments:
+#### Model Capabilities
 
-1.  **Plugin Name (string, required):** A unique identifier for your plugin (e.g., `'myPlugin'`).
-2.  **Initializer Function (`async (ai: Genkit) => void`, required):** This function runs when Genkit starts. Use it to register actions (models, embedders, etc.) that should always be available using `ai.defineModel()`, `ai.defineEmbedder()`, etc.
-3.  **Dynamic Action Resolver (`async (ai: Genkit, actionType: ActionType, actionName: string) => void`, optional):** This function is called when Genkit tries to access an action (by type and name) that hasn't been registered yet. It lets you define actions dynamically, just-in-time. For example, if a user requests `model: 'myPlugin/some-model'`, and it wasn't defined in the initializer, this function runs, giving you a chance to define it using `ai.defineModel()`. This is useful when a plugin supports many possible actions (like numerous models) and you don't want to register them all at startup.
-4.  **List Actions Function (`async () => Promise<ActionMetadata[]>`, optional):** This function should return metadata for _all_ actions your plugin can potentially provide, including those that would be dynamically defined. This is primarily used by development tools like the Genkit Developer UI to populate lists of available models, embedders, etc., allowing users to discover and select them even if they haven't been explicitly defined yet. This function is generally _not_ called during normal flow execution.
+The `supports` dict declares what features the model supports:
 
-### Plugin options guidance
+| Capability   | Description                                   |
+| ------------ | --------------------------------------------- |
+| `multiturn`  | Supports multi-turn conversations             |
+| `media`      | Accepts media input (images, audio, etc.)     |
+| `tools`      | Supports function/tool calling                |
+| `systemRole` | Supports system messages                      |
+| `output`     | List of output types: 'text', 'media', 'json' |
 
-In general, your plugin should take a single `options` argument that includes
-any plugin-wide configuration necessary to function. For any plugin option that
-requires a secret value, such as API keys, you should offer both an option and a
-default environment variable to configure it:
-```ts
-import { GenkitError, Genkit, z } from 'genkit';
-import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
+## Publishing a Plugin
 
-interface MyPluginOptions {
-  apiKey?: string;
-}
+Genkit plugins can be published as normal Python packages on PyPI. To increase
+discoverability, your package should be named `genkit-plugin-{name}` to indicate
+it is a Genkit plugin. Include relevant keywords in your `pyproject.toml`:
 
-export function myPlugin(options?: MyPluginOptions) {
-  return genkitPlugin('myPlugin', async (ai: Genkit) => {
-    if (!apiKey)
-      throw new GenkitError({
-        source: 'my-plugin',
-        status: 'INVALID_ARGUMENT',
-        message:
-          'Must supply either `options.apiKey` or set `MY_PLUGIN_API_KEY` environment variable.',
-      });
+```toml
+[project]
+name = "genkit-plugin-my-service"
+description = "Genkit plugin for My Service"
+keywords = [
+    "genkit",
+    "genkit-plugin",
+    "ai",
+    "llm",
+]
 
-    ai.defineModel(...);
-    ai.defineEmbedder(...)
-
-    // ....
-  });
-};
+[project.urls]
+Homepage = "https://github.com/yourorg/genkit-plugin-my-service"
 ```
 
-## Building your plugin
+### Recommended Keywords
 
-A single plugin can activate many new things within Genkit. For example, the Vertex AI plugin activates several new models as well as an embedder.
-
-### Model plugins
-
-Genkit model plugins add one or more generative AI models to the Genkit registry. A model represents any generative
-model that is capable of receiving a prompt as input and generating text, media, or data as output.
-Generally, a model plugin will make one or more `defineModel` calls in its initialization function.
-
-A custom model generally consists of three components:
-
-1.  Metadata defining the model's capabilities.
-2.  A configuration schema with any specific parameters supported by the model.
-3.  A function that implements the model accepting `GenerateRequest` and
-    returning `GenerateResponse`.
-
-To build a model plugin, you'll need to use the `genkit/model` package:
-
-At a high level, a model plugin might look something like this:
-```ts
-import { genkitPlugin, GenkitPlugin } from 'genkit/plugin';
-import { GenerationCommonConfigSchema } from 'genkit/model';
-import { simulateSystemPrompt } from 'genkit/model/middleware';
-import { Genkit, GenkitError, z } from 'genkit';
-
-export interface MyPluginOptions {
- // ...
-}
-
-export function myPlugin(options?: MyPluginOptions): GenkitPlugin {
-  return genkitPlugin('my-plugin', async (ai: Genkit) => {
-    ai.defineModel({
-      // be sure to include your plugin as a provider prefix
-      name: 'my-plugin/my-model',
-      // label for your model as shown in Genkit Developer UI
-      label: 'My Awesome Model',
-      // optional list of supported versions of your model
-      versions: ['my-model-001', 'my-model-001'],
-      // model support attributes
-      supports: {
-        multiturn: true, // true if your model supports conversations
-        media: true, // true if your model supports multimodal input
-        tools: true, // true if your model supports tool/function calling
-        systemRole: true, // true if your model supports the system role
-        output: ['text', 'media', 'json'], // types of output your model supports
-      },
-      // Zod schema for your model's custom configuration
-      configSchema: GenerationCommonConfigSchema.extend({
-        safetySettings: z.object({...}),
-      }),
-      // list of middleware for your model to use
-      use: [simulateSystemPrompt()]
-    }, async request => {
-      const myModelRequest = toMyModelRequest(request);
-      const myModelResponse = await myModelApi(myModelRequest);
-      return toGenerateResponse(myModelResponse);
-    });
-  });
-};
-```
-
-#### Transforming Requests and Responses
-
-The primary work of a Genkit model plugin is transforming the
-`GenerateRequest` from Genkit's common format into a format that is recognized
-and supported by your model's API, and then transforming the response from your
-model into the `GenerateResponseData` format used by Genkit.
-
-Sometimes, this may require massaging or manipulating data to work around model limitations. For example, if your model does not natively support a `system` message, you may need to transform a prompt's system message into a user/model message pair.
-
-#### Action References (Models, Embedders, etc.)
-
-While actions like models and embedders can always be referenced by their string name (e.g., `'myPlugin/my-model'`) after being defined (either upfront or dynamically), providing strongly-typed references offers better developer experience through improved type checking and IDE autocompletion.
-
-The recommended pattern is to attach helper methods directly to your exported plugin function. These methods use reference builders like `modelRef` and `embedderRef` from Genkit core.
-
-First, define the type for your plugin function including the helper methods:
-```ts
-import { GenkitPlugin } from 'genkit/plugin';
-import {
-  ModelReference,
-  EmbedderReference,
-  modelRef,
-  embedderRef,
-  z,
-} from "genkit";
-
-// Define your model's specific config schema if it has one
-const MyModelConfigSchema = z.object({
-  customParam: z.string().optional(),
-});
-
-// Define the type for your plugin function
-export type MyPlugin = {
-  // The main plugin function signature
-  (options?: MyPluginOptions): GenkitPlugin;
-
-  // Helper method for creating model references
-  model(
-    name: string, // e.g., 'some-model-name'
-    config?: z.infer<typeof MyModelConfigSchema>,
-  ): ModelReference<typeof MyModelConfigSchema>;
-
-  // Helper method for creating embedder references
-  embedder(
-    name: string, // e.g., 'my-embedder'
-    config?: Record<string, any>, // Or a specific config schema
-  ): EmbedderReference;
-
-  // ... add helpers for other action types if needed
-};
-```
-
-Then, implement the plugin function and attach the helper methods before exporting:
-```ts
-// (Previous imports and MyPluginOptions interface definition)
-import { modelRef, embedderRef } from 'genkit/model'; // Ensure modelRef/embedderRef are imported
-
-function myPluginFn(options?: MyPluginOptions): GenkitPlugin {
-  return genkitPlugin(
-    'myPlugin',
-    async (ai: Genkit) => {
-      // Initializer...
-    },
-    async (ai, actionType, actionName) => {
-      // Dynamic resolver...
-      // Example: Define model if requested dynamically
-      if (actionType === 'model') {
-        ai.defineModel(
-          {
-            name: `myPlugin/${actionName}`,
-            // ... other model definition properties
-            configSchema: MyModelConfigSchema, // Use the defined schema
-          },
-          async (request) => {
-            /* ... model implementation ... */
-          },
-        );
-      }
-      // Handle other dynamic actions...
-    },
-    async () => {
-      // List actions...
-    },
-  );
-}
-
-// Create the final export conforming to the MyPlugin type
-export const myPlugin = myPluginFn as MyPlugin;
-
-// Implement the helper methods
-myPlugin.model = (
-  name: string,
-  config?: z.infer<typeof MyModelConfigSchema>,
-): ModelReference<typeof MyModelConfigSchema> => {
-  return modelRef({
-    name: `myPlugin/${name}`, // Automatically prefixes the name
-    configSchema: MyModelConfigSchema,
-    config,
-  });
-};
-
-myPlugin.embedder = (
-  name: string,
-  config?: Record<string, any>,
-): EmbedderReference => {
-  return embedderRef({
-    name: `myPlugin/${name}`,
-    config,
-  });
-};
-```
-
-Now, users can import your plugin and use the helper methods for type-safe action references:
-```ts
-import { genkit } from 'genkit';
-import { myPlugin } from 'genkitx-my-plugin'; // Assuming your package name
-
-const ai = genkit({
-  plugins: [
-    myPlugin({
-      /* options */
-    }),
-  ],
-});
-
-async function run() {
-  const { text } = await ai.generate({
-    // Use the helper for a type-safe model reference
-    model: myPlugin.model('some-model-name', { customParam: 'value' }),
-    prompt: 'Tell me a story.',
-  });
-  console.log(text);
-
-  const embeddings = await ai.embed({
-    // Use the helper for a type-safe embedder reference
-    embedder: myPlugin.embedder('my-embedder'),
-    content: 'Embed this text.',
-  });
-  console.log(embeddings);
-}
-
-run();
-```
-
-This approach keeps the plugin definition clean while providing a convenient and type-safe way for users to reference the actions provided by your plugin. It works seamlessly with both statically and dynamically defined actions, as the references only contain metadata, not the implementation itself.
-
-## Publishing a plugin
-
-Genkit plugins can be published as normal NPM packages. To increase
-discoverability and maximize consistency, your package should be named
-`genkitx-{name}` to indicate it is a Genkit plugin and you should include as
-many of the following `keywords` in your `package.json` as are relevant to your
-plugin:
-
-- `genkit-plugin`: always include this keyword in your package to indicate it is a Genkit plugin.
-- `genkit-model`: include this keyword if your package defines any models.
-- `genkit-retriever`: include this keyword if your package defines any retrievers.
-- `genkit-indexer`: include this keyword if your package defines any indexers.
-- `genkit-embedder`: include this keyword if your package defines any indexers.
-- `genkit-telemetry`: include this keyword if your package defines a telemetry provider.
-- `genkit-deploy`: include this keyword if your package includes helpers to deploy Genkit apps to cloud providers.
-- `genkit-flow`: include this keyword if your package enhances Genkit flows.
-
-A plugin that provided a retriever, embedder, and model might have a `package.json` that looks like:
-```js
-{
-  "name": "genkitx-my-plugin",
-  "keywords": ["genkit-plugin", "genkit-retriever", "genkit-embedder", "genkit-model"],
-  // ... dependencies etc.
-}
-```
+- `genkit-plugin`: Always include this to indicate it's a Genkit plugin
+- `genkit-model`: If your package provides models
+- `genkit-embedder`: If your package provides embedders
+- `genkit-retriever`: If your package provides retrievers
+- `genkit-indexer`: If your package provides indexers
+- `genkit-evaluator`: If your package provides evaluators
+- `genkit-telemetry`: If your package provides telemetry export
 
 </Lang>
