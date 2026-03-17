@@ -4,7 +4,6 @@ description: Learn how to extend Genkit's capabilities using the Model Context P
 supportedLanguages:
   - js
   - go
-  - python
 ---
 
 import Lang from '../../../components/Lang.astro';
@@ -257,7 +256,7 @@ The `createMcpClient` function takes an `McpClientOptions` object:
 
 Both `GenkitMcpHost` (via `getActiveTools()`) and `GenkitMcpClient` (via `getActiveTools()`) discover available tools from their connected and enabled MCP server(s). These tools are standard Genkit `ToolAction` instances and can be provided to Genkit models.
 
-MCP prompts can be fetched using `McpHost.getPrompt(serverName, promptName)` or `mcpClient.getPrompt(promptName)`. These return an `ExecutablePrompt`.
+MCP prompts can be fetched using `mcpHost.getPrompt(ai, serverName, promptName)` or `mcpClient.getPrompt(ai, promptName)`. These return an `ExecutablePrompt`.
 
 All MCP actions (tools, prompts, resources) are namespaced.
 
@@ -349,12 +348,8 @@ const server = createMcpServer(ai, {
   name: 'example_server',
   version: '0.0.1',
 });
-// Setup (async) then starts with stdio transport by default
-server.setup().then(async () => {
-  await server.start();
-  const transport = new StdioServerTransport();
-  await server!.server?.connect(transport);
-});
+// Start the server with stdio transport by default
+server.start();
 ```
 
 The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start()` method on this instance will start an MCP server (using the stdio transport by default) that exposes all registered Genkit tools and prompts. To start the server with a different MCP transport, you can pass the transport instance to the `start()` method (e.g., `server.start(customMcpTransport)`).
@@ -420,14 +415,14 @@ if err != nil {
 
 ### Multiple server management
 
-To manage connections to multiple MCP servers, use `GenkitMCPManager`:
+To manage connections to multiple MCP servers, use `MCPHost`:
 
 ```go
 import "github.com/firebase/genkit/go/plugins/mcp"
 ```
 
 ```go
-manager, err := mcp.NewMCPManager(mcp.MCPManagerOptions{
+host, err := mcp.NewMCPHost(g, mcp.MCPHostOptions{
     Name: "my-app",
     MCPServers: []mcp.MCPServerConfig{
         {
@@ -523,11 +518,11 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Managing multiple servers
 
-With `GenkitMCPManager`, you can dynamically manage server connections:
+With `MCPHost`, you can dynamically manage server connections:
 
 ```go
 // Connect to a new server at runtime
-err = manager.Connect("weather", mcp.MCPClientOptions{
+err = host.Connect(ctx, g, "weather", mcp.MCPClientOptions{
     Name: "weather-server",
     Stdio: &mcp.StdioConfig{
         Command: "python",
@@ -539,19 +534,19 @@ if err != nil {
 }
 
 // Disconnect a server completely
-err = manager.Disconnect("weather")
+err = host.Disconnect(ctx, "weather")
 if err != nil {
     log.Fatal(err)
 }
 
 // Get all tools from all active servers
-tools, err := manager.GetActiveTools(ctx, g)
+tools, err := host.GetActiveTools(ctx, g)
 if err != nil {
     log.Fatal(err)
 }
 
 // Get a specific prompt from a specific server
-prompt, err := manager.GetPrompt(ctx, g, "mcp-server-time", "current_time", nil)
+prompt, err := host.GetPrompt(ctx, g, "mcp-server-time", "current_time", nil)
 if err != nil {
     log.Fatal(err)
 }
@@ -564,22 +559,16 @@ For individual client management (disable/enable without disconnecting), you wou
 To run your Genkit application as an MCP server:
 
 ```go
-// Option 1: Auto-expose all defined tools
+// Auto-expose all defined tools
 server := mcp.NewMCPServer(g, mcp.MCPServerOptions{
     Name:    "genkit-calculator",
     Version: "1.0.0",
 })
 
-// Option 2: Expose only specific tools
-server = mcp.NewMCPServer(g, mcp.MCPServerOptions{
-    Name:    "genkit-calculator",
-    Version: "1.0.0",
-    Tools:   []ai.Tool{addTool, multiplyTool},
-})
 
 // Start the MCP server
 log.Println("Starting MCP server...")
-if err := server.ServeStdio(ctx); err != nil {
+if err := server.ServeStdio(); err != nil {
     log.Fatal(err)
 }
 ```
@@ -651,12 +640,12 @@ type MCPServerConfig struct {
 }
 ```
 
-### MCPManagerOptions
+### MCPHostOptions
 
 ```go
-type MCPManagerOptions struct {
-    Name       string              // Manager instance name
-    Version    string              // Manager version (defaults to "1.0.0")
+type MCPHostOptions struct {
+    Name       string              // Host instance name
+    Version    string              // Host version (defaults to "1.0.0")
     MCPServers []MCPServerConfig   // Array of server configurations
 }
 ```
@@ -667,176 +656,7 @@ type MCPManagerOptions struct {
 type MCPServerOptions struct {
     Name    string     // Server name
     Version string     // Server version
-    Tools   []ai.Tool  // Specific tools to expose (optional)
 }
-```
-
-</Lang>
-
-<Lang lang="python">
-
-The Genkit MCP plugin provides integration between Genkit and the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). The plugin allows you to:
-
-- **Consume MCP tools** as a client using `create_mcp_client` or `create_mcp_host`
-- **Expose Genkit tools** as an MCP server using `create_mcp_server`
-
-## Installation
-
-```bash
-pip install genkit-plugin-mcp
-```
-
-## MCP client
-
-Connect to MCP servers to use their tools:
-
-```python
-import asyncio
-
-from genkit import Genkit
-from genkit.plugins.mcp import McpServerConfig, create_mcp_client
-from genkit.plugins.google_genai import GoogleAI
-
-async def main():
-    # Create a client for an MCP server
-    fs_client = create_mcp_client(
-        name='filesystem',
-        config=McpServerConfig(
-            command='npx',
-            args=['-y', '@modelcontextprotocol/server-filesystem', '.'],
-        ),
-    )
-
-    ai = Genkit(
-        plugins=[GoogleAI(), fs_client],
-        model='googleai/gemini-2.5-flash',
-    )
-
-    # Connect to the server
-    await fs_client.connect()
-
-    # List available tools
-    tools = await fs_client.list_tools()
-    for tool in tools:
-        print(f'- {tool.name}: {tool.description}')
-
-    # Use tools in generation
-    response = await ai.generate(
-        prompt='List all Python files in the current directory',
-        tools=[tool.name for tool in tools],
-    )
-    print(response.text)
-
-    await fs_client.close()
-
-asyncio.run(main())
-```
-
-## MCP host
-
-Connect to multiple MCP servers at once:
-
-```python
-from genkit.plugins.mcp import McpServerConfig, create_mcp_host
-
-# Create a host managing multiple servers
-host = create_mcp_host({
-    'filesystem': McpServerConfig(
-        command='npx',
-        args=['-y', '@modelcontextprotocol/server-filesystem', '.'],
-    ),
-    'memory': McpServerConfig(
-        command='npx',
-        args=['-y', '@modelcontextprotocol/server-memory'],
-    ),
-})
-
-# Start all servers
-await host.start()
-
-# Register tools from all connected servers
-await host.register_tools(ai)
-
-# Close all connections
-await host.close()
-```
-
-## MCP server
-
-Expose your Genkit tools as an MCP server:
-
-```python
-import asyncio
-from pydantic import BaseModel, Field
-from genkit import Genkit
-from genkit.plugins.mcp import McpServerOptions, create_mcp_server
-
-class AddInput(BaseModel):
-    a: int = Field(description='First number')
-    b: int = Field(description='Second number')
-
-ai = Genkit()
-
-@ai.tool(name='add', description='Add two numbers together')
-def add(input: AddInput) -> int:
-    return input.a + input.b
-
-# Create and start the MCP server
-server = create_mcp_server(
-    ai,
-    McpServerOptions(name='my-genkit-server', version='1.0.0'),
-)
-
-# Run the server (stdio transport)
-asyncio.run(server.start())
-```
-
-## Configuration options
-
-### McpServerConfig
-
-```python
-McpServerConfig(
-    command='npx',           # Command to run
-    args=['server-name'],    # Command arguments
-    url='http://...',        # Alternative: HTTP endpoint
-    disabled=False,          # Disable this server
-)
-```
-
-### McpServerOptions
-
-```python
-McpServerOptions(
-    name='my-server',        # Server name
-    version='1.0.0',         # Server version
-)
-```
-
-## Using MCP tools with AI
-
-```python
-from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.mcp import create_mcp_client, McpServerConfig
-
-client = create_mcp_client(
-    name='tools-server',
-    config=McpServerConfig(command='my-mcp-server'),
-)
-
-ai = Genkit(plugins=[GoogleAI(), client])
-
-await client.connect()
-
-# Get tools and use them in generation
-tools = await client.list_tools()
-response = await ai.generate(
-    prompt='Use the available tools to help me',
-    tools=[tool.name for tool in tools],
-)
-
-await client.close()
 ```
 
 </Lang>
