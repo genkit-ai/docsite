@@ -92,7 +92,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/firebase/genkit',
+          href: 'https://github.com/genkit-ai/genkit',
         },
         {
           icon: 'discord',
