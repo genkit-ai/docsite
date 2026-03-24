@@ -29,7 +29,7 @@ As agents become more autonomous, debugging them becomes significantly more diff
 
 ### **Embracing and expanding our community**
 
-Finally, Genkit is only as strong as the community behind it. To facilitate faster iteration and easier contributions, we have migrated to a dedicated GitHub organization and are going to seperate our SDKs into specialized repositories.
+Finally, Genkit is only as strong as the community behind it. To facilitate faster iteration and easier contributions, we have migrated to a dedicated GitHub organization and are going to separate our SDKs into specialized repositories.
 
 We are also investigating mechanisms to make it easier for you to share patterns and plugins that you have developed using Genkit’s extensibility features. These reusable pieces provide developers with customizable, "copy-and-paste" code for complex integrations such as vector stores, giving you total control over your implementation. Our goal is to continue expanding Genkit’s capabilities with the support of our community so that by the end of 2026, Genkit's position is solidified as a leading powerful, flexible, and community-driven AI framework on the market.
 
