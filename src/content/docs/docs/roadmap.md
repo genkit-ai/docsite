@@ -13,7 +13,7 @@ We are focusing our efforts on four areas:
 
 Our plans will evolve over time based on customer feedback and new market opportunities. We will use your feedback and GitHub issues to prioritize work. The list here shouldn't be viewed either as exhaustive nor a promise that we will complete all this work. If you have feedback about what you think we should work on, we encourage you to get in touch by filing a GitHub issue, or using the "thumbs-up" emoji reaction on an issue's first comment. Because Genkit is an open source project, we invite contributions both towards the themes presented below and in other areas.
 
-### **Broadening our reach and ecosystem**
+### Broadening our reach and ecosystem
 
 We believe that your choice of programming language should never be a barrier to building AI and agentic features to your apps and systems. While Genkit's roots are in TypeScript, 2026 marks our expansion into a truly multi-language ecosystem. The centerpiece of this effort is the launch of Genkit for Dart. By moving from Alpha to a stable 1.0 release this year, we are providing Flutter and Dart developers with an idiomatic experience to build AI features on any platform that Dart runs.
 
