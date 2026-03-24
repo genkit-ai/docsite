@@ -1,9 +1,20 @@
 ---
 const { head } = Astro.locals.starlightRoute;
+import { docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../../sidebar';
+const docsLanguageSupportByPath = Object.fromEntries(
+  Object.entries(docsLanguageSupportBySlug).map(([slug, langs]) => [`/${slug}`, langs]),
+);
+const docsLanguageAgnosticByPath = Object.fromEntries(
+  Object.entries(docsLanguageAgnosticBySlug).map(([slug, isAgnostic]) => [`/${slug}`, isAgnostic]),
+);
 ---
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
 
-<script is:inline>
+<script
+  is:inline
+  data-doc-language-support={JSON.stringify(docsLanguageSupportByPath)}
+  data-doc-language-agnostic={JSON.stringify(docsLanguageAgnosticByPath)}
+>
 // Inline the unified page manager to ensure it loads immediately
 /**
  * Unified Page Manager for Genkit Documentation
@@ -14,6 +25,14 @@ const { head } = Astro.locals.starlightRoute;
  * 3. Smooth page transitions
  * 4. Font loading optimization
  */
+const currentScript = document.currentScript;
+const DOC_LANGUAGE_SUPPORT = currentScript
+  ? JSON.parse(currentScript.getAttribute('data-doc-language-support') || '{}')
+  : {};
+const DOC_LANGUAGE_AGNOSTIC = currentScript
+  ? JSON.parse(currentScript.getAttribute('data-doc-language-agnostic') || '{}')
+  : {};
+const LANGUAGE_FALLBACK_ORDER = ['js', 'go', 'dart', 'python'];
 
 class UnifiedPageManager {
   constructor() {
@@ -22,8 +41,6 @@ class UnifiedPageManager {
       globalPreference: 'genkit-global-language-preference',
       currentLanguage: 'genkit-current-language'
     };
-    this.languages = ['js', 'go', 'python'];
-    this.defaultLanguage = 'js';
     this.isInitialized = false;
     this.isRestoring = false;
     
@@ -33,6 +50,10 @@ class UnifiedPageManager {
 
   init() {
     if (this.isInitialized) return;
+
+    if (this.redirectNeutralDocsPathToCanonicalLanguage()) {
+      return;
+    }
     
     // Disable browser's automatic scroll restoration
     if ('scrollRestoration' in history) {
@@ -65,29 +86,67 @@ class UnifiedPageManager {
     this.isInitialized = true;
   }
 
+  redirectNeutralDocsPathToCanonicalLanguage() {
+    const normalizedPath = window.location.pathname.replace(/\/$/, '') || '/';
+    if (!normalizedPath.startsWith('/docs/')) return false;
+    if (/^\/docs\/(js|go|dart|python)(\/|$)/.test(normalizedPath)) return false;
+
+    const supported = DOC_LANGUAGE_SUPPORT[normalizedPath];
+    if (!Array.isArray(supported) || supported.length === 0) return false;
+    if (DOC_LANGUAGE_AGNOSTIC[normalizedPath]) return false;
+
+    const canonicalLanguage = LANGUAGE_FALLBACK_ORDER.find((lang) => supported.includes(lang));
+    if (!canonicalLanguage) return false;
+
+    const slug = normalizedPath.replace(/^\/docs\//, '');
+    const targetPath = `/docs/${canonicalLanguage}/${slug}/`;
+    const targetUrl = `${targetPath}${window.location.search}${window.location.hash}`;
+    if (window.location.pathname === targetPath) return false;
+
+    window.location.replace(targetUrl);
+    return true;
+  }
+
   setupLanguage() {
     // Get language from URL or storage
     const params = new URLSearchParams(window.location.search);
     const urlLang = params.get('lang');
+    const pathLangMatch = window.location.pathname.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
+    const pathLang = pathLangMatch ? pathLangMatch[1] : null;
     const globalPreference = localStorage.getItem(this.storageKeys.globalPreference);
     const currentLanguage = localStorage.getItem(this.storageKeys.currentLanguage);
+    const normalizedRequestedLang = urlLang ? this.normalizeLanguage(urlLang) : null;
+    const pathSlugMatch = window.location.pathname.match(/^\/docs\/(js|go|dart|python)\/(.+)$/);
+
+    if (pathLang && pathSlugMatch && normalizedRequestedLang) {
+      const slugPath = pathSlugMatch[2].replace(/\/$/, '');
+      const basePath = `/docs/${slugPath}`;
+      const supported = DOC_LANGUAGE_SUPPORT[basePath];
+      const isAgnostic = Boolean(DOC_LANGUAGE_AGNOSTIC[basePath]);
+
+      if (
+        !isAgnostic &&
+        Array.isArray(supported) &&
+        supported.includes(normalizedRequestedLang) &&
+        normalizedRequestedLang !== pathLang
+      ) {
+        const nextUrl = new URL(window.location);
+        nextUrl.pathname = `/docs/${normalizedRequestedLang}/${slugPath}/`;
+        nextUrl.searchParams.delete('lang');
+        window.location.replace(nextUrl.toString());
+        return;
+      }
+    }
     
     // Determine the current language
-    const selectedLang = urlLang ? this.normalizeLanguage(urlLang) :
+    const selectedLang = pathLang ? this.normalizeLanguage(pathLang) :
+                        normalizedRequestedLang ? normalizedRequestedLang :
                         globalPreference || currentLanguage || 'js';
     
-    // Update URL to reflect the selected language
-    const currentUrl = new URL(window.location);
-    const currentUrlLang = currentUrl.searchParams.get('lang');
-    // Don't redirect if lang is js, standard behaviour with other languages
-    const shouldUpdateUrl = selectedLang !== 'js' && currentUrlLang !== selectedLang;
-    
-    if (shouldUpdateUrl) {
-      if (selectedLang === 'js') {
-        currentUrl.searchParams.delete('lang');
-      } else {
-        currentUrl.searchParams.set('lang', selectedLang);
-      }
+    // Legacy compatibility: consume ?lang=... links, then normalize URL.
+    if (urlLang) {
+      const currentUrl = new URL(window.location);
+      currentUrl.searchParams.delete('lang');
       window.history.replaceState({}, '', currentUrl);
     }
     
@@ -99,6 +158,11 @@ class UnifiedPageManager {
     
     // Set HTML attribute
     document.documentElement.setAttribute('data-genkit-lang', selectedLang);
+    document.dispatchEvent(
+      new CustomEvent('genkit:languagechange', {
+        detail: { language: selectedLang },
+      })
+    );
   }
 
 
@@ -109,7 +173,8 @@ class UnifiedPageManager {
       'go': 'go',
       'golang': 'go',
       'python': 'python',
-      'py': 'python'
+      'py': 'python',
+      'dart': 'dart'
     };
     return langMap[lang.toLowerCase()] || 'js';
   }
@@ -154,14 +219,6 @@ class UnifiedPageManager {
     window.addEventListener('beforeunload', storeScrollPosition);
     window.addEventListener('pagehide', storeScrollPosition);
 
-    // Handle language selector clicks
-    document.addEventListener('click', (event) => {
-      const langButton = event.target.closest('[data-lang]');
-      if (langButton && langButton.classList.contains('lang-pill')) {
-        event.preventDefault();
-        this.setLanguage(langButton.dataset.lang);
-      }
-    });
 
     // Handle browser back/forward
     window.addEventListener('popstate', () => {
@@ -180,16 +237,6 @@ class UnifiedPageManager {
   setLanguage(lang, isUserChoice = true) {
     const normalizedLang = this.normalizeLanguage(lang);
     
-    // Update URL
-    const url = new URL(window.location);
-    if (normalizedLang === 'js') {
-      url.searchParams.delete('lang');
-    } else {
-      url.searchParams.set('lang', normalizedLang);
-    }
-    
-    window.history.replaceState({}, '', url);
-    
     // Store current page language
     localStorage.setItem(this.storageKeys.currentLanguage, normalizedLang);
     
@@ -197,9 +244,32 @@ class UnifiedPageManager {
     if (isUserChoice) {
       localStorage.setItem(this.storageKeys.globalPreference, normalizedLang);
     }
+
+    // If currently on a language-specific docs URL, keep the same slug and switch language in path.
+    const pathMatch = window.location.pathname.match(/^\/docs\/(js|go|dart|python)\/(.+)$/);
+    if (pathMatch) {
+      const slugPath = pathMatch[2].replace(/\/$/, '');
+      const basePath = `/docs/${slugPath}`;
+      const supported = DOC_LANGUAGE_SUPPORT[basePath];
+      const isAgnostic = DOC_LANGUAGE_AGNOSTIC[basePath];
+      const targetPath = isAgnostic
+        ? `${basePath}/`
+        : Array.isArray(supported) && supported.includes(normalizedLang)
+          ? `/docs/${normalizedLang}/${slugPath}/`
+          : `/docs/${normalizedLang}/overview/`;
+      if (targetPath !== window.location.pathname) {
+        window.location.assign(targetPath);
+        return;
+      }
+    }
     
     // Update HTML attribute
     document.documentElement.setAttribute('data-genkit-lang', normalizedLang);
+    document.dispatchEvent(
+      new CustomEvent('genkit:languagechange', {
+        detail: { language: normalizedLang },
+      })
+    );
     
     // Update UI
     this.updateLanguageUI();
@@ -208,21 +278,7 @@ class UnifiedPageManager {
   updateLanguageUI() {
     const currentLang = document.documentElement.getAttribute('data-genkit-lang') || 'js';
     
-    // Update language selector pills
-    document.querySelectorAll('.lang-pill').forEach(pill => {
-      const isActive = pill.dataset.lang === currentLang;
-      pill.setAttribute('aria-selected', isActive ? 'true' : 'false');
-    });
-  }
-
-  // Public method to get current language
-  getCurrentLanguage() {
-    return document.documentElement.getAttribute('data-genkit-lang') || 'js';
-  }
-
-  // Public method to manually set language
-  setLanguagePublic(language) {
-    this.setLanguage(language);
+    // Language selector UI is managed by the sidebar component via genkit:languagechange
   }
 
 }
@@ -232,12 +288,6 @@ const unifiedPageManager = new UnifiedPageManager();
 
 // Make it globally available for debugging and compatibility
 window.unifiedPageManager = unifiedPageManager;
-
-// Legacy compatibility for existing language preference enhancer
-window.languagePreferenceEnhancer = {
-  getCurrentLanguage: () => unifiedPageManager.getCurrentLanguage(),
-  setLanguage: (lang) => unifiedPageManager.setLanguagePublic(lang)
-};
 </script>
 
 <!-- Critical CSS to prevent FOUC and scroll flash -->
@@ -275,6 +325,11 @@ html[data-genkit-lang="go"] .lang-content[data-lang~="go"] {
 }
 
 html[data-genkit-lang="python"] .lang-content[data-lang~="python"] {
+  display: block !important;
+  visibility: visible !important;
+}
+
+html[data-genkit-lang="dart"] .lang-content[data-lang~="dart"] {
   display: block !important;
   visibility: visible !important;
 }
