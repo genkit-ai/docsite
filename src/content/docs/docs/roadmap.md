@@ -11,7 +11,7 @@ We are focusing our efforts on four areas:
 - **Improving observability**
 - **Embracing and expanding our community**
 
-Our plans will evolve over time based on customer feedback and new market opportunities. We will use your feedback and GitHub issues to prioritize work. The list here shouldn't be viewed either as exhaustive nor a promise that we will complete all this work. If you have feedback about what you think we should work on, we encourage you to get in touch by filing a Github issue, or using the "thumbs-up" emoji reaction on an issue's first comment. Because Genkit is an open source project, we invite contributions both towards the themes presented below and in other areas.
+Our plans will evolve over time based on customer feedback and new market opportunities. We will use your feedback and GitHub issues to prioritize work. The list here shouldn't be viewed either as exhaustive nor a promise that we will complete all this work. If you have feedback about what you think we should work on, we encourage you to get in touch by filing a GitHub issue, or using the "thumbs-up" emoji reaction on an issue's first comment. Because Genkit is an open source project, we invite contributions both towards the themes presented below and in other areas.
 
 ### **Broadening our reach and ecosystem**
 
