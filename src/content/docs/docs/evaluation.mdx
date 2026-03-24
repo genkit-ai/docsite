@@ -783,7 +783,7 @@ func main() {
         }
         return &ai.RetrieverResponse{Documents: docs}, nil
     }
-    factsRetriever := genkit.DefineRetriever(g, "local", "dogFacts", dummyRetrieverFunc)
+    factsRetriever := genkit.DefineRetriever(g, "dogFacts", nil, dummyRetrieverFunc)
 
     m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
     if m == nil {
@@ -792,14 +792,14 @@ func main() {
 
     // A simple question-answering flow
     genkit.DefineFlow(g, "qaFlow", func(ctx context.Context, query string) (string, error) {
-        factDocs, err := ai.Retrieve(ctx, factsRetriever, ai.WithTextDocs(query))
+        factDocs, err := genkit.Retrieve(ctx, g, ai.WithRetriever(factsRetriever), ai.WithTextDocs(query))
         if err != nil {
             return "", fmt.Errorf("retrieval failed: %w", err)
         }
         llmResponse, err := genkit.Generate(ctx, g,
             ai.WithModelName("googleai/gemini-2.5-flash"),
             ai.WithPrompt("Answer this question with the given context: %s", query),
-            ai.WithDocs(factDocs.Documents...)
+            ai.WithDocs(factDocs.Documents...),
         )
         if err != nil {
             return "", fmt.Errorf("generation failed: %w", err)
@@ -1231,25 +1231,20 @@ This section explains how to perform inference-based evaluation using Genkit.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
 ```python
-from genkit import Genkit
+from genkit import Genkit, Document
 from genkit.plugins.google_genai import GoogleAI
 from pydantic import BaseModel
 
 # Initialize Genkit
 ai = Genkit(plugins=[GoogleAI()])
 
-# Dummy retriever that always returns the same docs
-async def dummy_retriever_fn(query, options):
+# Dummy retriever function that always returns the same docs
+async def dummy_retrieve(query: str) -> list[Document]:
     facts = [
         "Dog is man's best friend",
         "Dogs have evolved and were domesticated from wolves",
     ]
-    return facts
-
-ai.define_simple_retriever(
-    'dummy_retriever',
-    dummy_retriever_fn,
-)
+    return [Document.from_text(f) for f in facts]
 
 # Define input/output schemas
 class QAInput(BaseModel):
@@ -1261,52 +1256,17 @@ class QAOutput(BaseModel):
 # A simple question-answering flow
 @ai.flow()
 async def qa_flow(input: QAInput) -> QAOutput:
-    fact_docs = await ai.retrieve(
-        retriever='dummy_retriever',
-        query=input.query,
-    )
+    fact_docs = await dummy_retrieve(input.query)
 
     response = await ai.generate(
         model='googleai/gemini-2.5-flash',
         prompt=f'Answer this question with the given context: {input.query}',
-        docs=fact_docs.documents,
+        docs=fact_docs,
     )
     return QAOutput(answer=response.text)
 ```
 
-3.  (Optional) Add evaluation metrics to your application to use while evaluating. This guide uses the `MALICIOUSNESS` metric from the `genkit-plugin-evaluators` package.
-
-```python
-from genkit import Genkit
-from genkit.blocks.model import ModelReference
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.evaluators import (
-    define_genkit_evaluators,
-    GenkitMetricType,
-    MetricConfig,
-)
-
-ai = Genkit(plugins=[GoogleAI()])
-
-# Add evaluators to your Genkit instance
-define_genkit_evaluators(
-    ai,
-    [
-        MetricConfig(
-            metric_type=GenkitMetricType.MALICIOUSNESS,
-            judge=ModelReference(name='googleai/gemini-2.5-flash'),
-        ),
-    ],
-)
-```
-
-    **Note:** The configuration above requires installation of the `genkit-plugin-evaluators` package.
-
-```bash
-uv add genkit-plugin-evaluators
-```
-
-4.  Start your Genkit application.
+3.  Start your Genkit application.
 
 ```bash
 genkit start -- uv run main.py
@@ -1437,7 +1397,7 @@ Here's an example of a custom evaluator that uses an LLM to check for "delicious
 ```python
 from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
-from genkit.types import (
+from genkit.evaluator import (
     BaseEvalDataPoint,
     EvalFnResponse,
     Score,
@@ -1502,7 +1462,7 @@ You can also run evaluations directly in your code using `ai.evaluate()`:
 import asyncio
 from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
-from genkit.types import BaseEvalDataPoint, EvalResponse
+from genkit.evaluator import BaseEvalDataPoint, EvalResponse
 
 ai = Genkit(plugins=[GoogleAI()])
 
@@ -1741,21 +1701,19 @@ example:
 ```python
 @ai.flow()
 async def qa_flow(input: QAInput) -> QAOutput:
-    fact_docs = await ai.retrieve(
-        retriever='dummy_retriever',
-        query=input.query,
-    )
+    fact_docs = await dummy_retrieve(input.query)
 
     # Add a custom step to process the retrieved facts
-    fact_docs_modified = await ai.run('factModified', lambda: [
+    async def _process_facts():
         # Let us use only facts that are considered silly. This is a
         # hypothetical step for demo purposes, you may perform any
         # arbitrary task inside a step and reference it in custom
         # extractors.
         #
         # Assume you have a method that checks if a fact is silly
-        doc for doc in fact_docs.documents if is_silly_fact(doc)
-    ])
+        return [doc for doc in fact_docs if is_silly_fact(doc)]
+        
+    fact_docs_modified = await ai.run(name='factModified', fn=_process_facts)
 
     response = await ai.generate(
         model='googleai/gemini-2.5-flash',
@@ -1813,10 +1771,14 @@ async def synthesize_questions(input: SynthesizeInput) -> SynthesizeOutput:
     file_path = str(Path(input.file_path).resolve())
 
     # Extract text from the PDF
-    pdf_txt = await ai.run('extract-text', lambda: extract_text(file_path))
+    async def _extract():
+        return extract_text(file_path)
+    pdf_txt = await ai.run(name='extract-text', fn=_extract)
 
     # Chunk the text
-    chunks = await ai.run('chunk-it', lambda: chunk_text(pdf_txt))
+    async def _chunk():
+        return chunk_text(pdf_txt)
+    chunks = await ai.run(name='chunk-it', fn=_chunk)
 
     questions = []
     for chunk in chunks:
