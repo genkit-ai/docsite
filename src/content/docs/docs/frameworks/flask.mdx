@@ -34,8 +34,7 @@ Create a Flask application with Genkit integration:
 
 ```python title="main.py"
 from flask import Flask
-from genkit import Genkit
-from genkit import ActionRunContext
+from genkit import Genkit, ActionRunContext
 from genkit.plugins.flask import genkit_flask_handler
 from genkit.plugins.google_genai import GoogleAI
 
@@ -54,7 +53,7 @@ app = Flask(__name__)
 async def joke_flow(name: str, ctx: ActionRunContext | None = None):
     """Generate a joke about the given name."""
     return await ai.generate(
-        on_chunk=ctx.send_chunk,
+        on_chunk=ctx.send_chunk if ctx else None,
         prompt=f'Tell a medium-sized joke about {name}',
     )
 
@@ -107,7 +106,7 @@ class JokeResponse(BaseModel):
 @app.post('/structured-joke')
 @genkit_flask_handler(ai)
 @ai.flow()
-async def structured_joke_flow(request: JokeRequest, ctx) -> JokeResponse:
+async def structured_joke_flow(request: JokeRequest, ctx: ActionRunContext | None = None) -> JokeResponse:
     """Generate a structured joke response."""
 
     prompt = f"""
@@ -117,7 +116,7 @@ async def structured_joke_flow(request: JokeRequest, ctx) -> JokeResponse:
 
     response = await ai.generate(
         prompt=prompt,
-        on_chunk=ctx.send_chunk,
+        on_chunk=ctx.send_chunk if ctx else None,
     )
 
     return JokeResponse(
@@ -135,13 +134,13 @@ Genkit Flask integration supports streaming responses out of the box:
 @app.post('/story')
 @genkit_flask_handler(ai)
 @ai.flow()
-async def story_flow(prompt: str, ctx):
+async def story_flow(prompt: str, ctx: ActionRunContext | None = None):
     """Generate a story with streaming output."""
 
     # The ctx.send_chunk function enables streaming
     response = await ai.generate(
         prompt=f"Write a short story about: {prompt}",
-        on_chunk=ctx.send_chunk,  # This enables streaming
+        on_chunk=ctx.send_chunk if ctx else None,  # This enables streaming
     )
 
     return {"story": response.text, "status": "complete"}
@@ -179,13 +178,15 @@ consume_stream("http://localhost:5000/story", "a magical forest")
 Implement custom authentication using context providers:
 
 ```python
-from genkit import GenkitError
-from flask import request
+from genkit import GenkitError, ActionRunContext
+from genkit.plugin_api import RequestData
 import jwt
 
-async def auth_context_provider(request):
+def auth_context_provider(req: RequestData):
     """Custom authentication context provider."""
-    auth_header = request.headers.get('Authorization')
+    # req is a RequestData object wrapping the Flask request.
+    # Its headers dictionary uses lowercased keys.
+    auth_header = req.headers.get('authorization')
 
     if not auth_header or not auth_header.startswith('Bearer '):
         return {'user': None}
@@ -208,7 +209,7 @@ async def auth_context_provider(request):
 @app.post('/protected-endpoint')
 @genkit_flask_handler(ai, context_provider=auth_context_provider)
 @ai.flow()
-async def protected_flow(message: str, ctx):
+async def protected_flow(message: str, ctx: ActionRunContext):
     """A protected endpoint that requires authentication."""
 
     if not ctx.context.get('user'):
@@ -229,14 +230,23 @@ async def protected_flow(message: str, ctx):
 
 ```python
 from functools import wraps
+import inspect
 
 def require_role(required_role: str):
     """Decorator to require specific roles."""
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Get context from the flow
-            ctx = kwargs.get('ctx')
+            # Bind arguments to extract ctx robustly
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            
+            ctx = None
+            for arg_val in bound_args.arguments.values():
+                if isinstance(arg_val, ActionRunContext):
+                    ctx = arg_val
+                    break
+            
             if not ctx or not ctx.context.get('user'):
                 raise GenkitError(status='UNAUTHENTICATED', message='Authentication required')
 
@@ -252,7 +262,7 @@ def require_role(required_role: str):
 @genkit_flask_handler(ai, context_provider=auth_context_provider)
 @ai.flow()
 @require_role('admin')
-async def admin_flow(action: str, ctx):
+async def admin_flow(action: str, ctx: ActionRunContext):
     """Admin-only endpoint."""
     user = ctx.context['user']
 
@@ -291,7 +301,7 @@ def handle_general_error(error):
 @app.post('/safe-endpoint')
 @genkit_flask_handler(ai)
 @ai.flow()
-async def safe_flow(input_text: str, ctx):
+async def safe_flow(input_text: str, ctx: ActionRunContext | None = None):
     """Flow with proper error handling."""
     try:
         if not input_text or len(input_text.strip()) == 0:
@@ -302,7 +312,7 @@ async def safe_flow(input_text: str, ctx):
 
         response = await ai.generate(
             prompt=f"Process this text: {input_text}",
-            on_chunk=ctx.send_chunk,
+            on_chunk=ctx.send_chunk if ctx else None,
         )
 
         return {"result": response.text, "status": "success"}
@@ -311,7 +321,7 @@ async def safe_flow(input_text: str, ctx):
         # Log the error for debugging
         app.logger.error(f"Error in safe_flow: {str(e)}")
         raise GenkitError(
-            status='INTERNAL_ERROR',
+            status='INTERNAL',
             message='Failed to process request'
         )
 ```
@@ -360,10 +370,10 @@ def register_routes(app, ai):
     @app.post('/generate')
     @genkit_flask_handler(ai)
     @ai.flow()
-    async def generate_flow(prompt: str, ctx):
+    async def generate_flow(prompt: str, ctx: ActionRunContext | None = None):
         return await ai.generate(
             prompt=prompt,
-            on_chunk=ctx.send_chunk,
+            on_chunk=ctx.send_chunk if ctx else None,
         )
 
 # Create app instance
@@ -390,10 +400,10 @@ CORS(app, origins=['http://localhost:3000', 'https://yourdomain.com'])
 @cross_origin(origins=['http://localhost:3000'])
 @genkit_flask_handler(ai)
 @ai.flow()
-async def chat_flow(message: str, ctx):
+async def chat_flow(message: str, ctx: ActionRunContext | None = None):
     return await ai.generate(
         prompt=f"Chat response to: {message}",
-        on_chunk=ctx.send_chunk,
+        on_chunk=ctx.send_chunk if ctx else None,
     )
 ```
 
@@ -413,10 +423,10 @@ limiter = Limiter(
 @limiter.limit("10 per minute")
 @genkit_flask_handler(ai)
 @ai.flow()
-async def limited_flow(input_data: str, ctx):
+async def limited_flow(input_data: str, ctx: ActionRunContext | None = None):
     return await ai.generate(
         prompt=f"Limited processing: {input_data}",
-        on_chunk=ctx.send_chunk,
+        on_chunk=ctx.send_chunk if ctx else None,
     )
 ```
 
