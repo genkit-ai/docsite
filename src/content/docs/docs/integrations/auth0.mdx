@@ -278,7 +278,7 @@ export const fetchData = ai.defineTool(
 ## FGA
 
 ```javascript
-import { Auth0AI } from '@auth0/ai-llamaindex';
+import { Auth0AI } from '@auth0/ai-genkit';
 
 const auth0AI = new Auth0AI.FGA({
   apiScheme,
@@ -299,7 +299,7 @@ const auth0AI = new Auth0AI.FGA({
 Then initialize the tool wrapper:
 
 ```javascript
-const authorizedTool = fgaAI.withFGA(
+const authorizedTool = auth0AI.withFGA(
   {
     buildQuery: async ({ userID, doc }) => ({
       user: userID,
@@ -311,7 +311,7 @@ const authorizedTool = fgaAI.withFGA(
 );
 
 // Or create a wrapper to apply to tools later
-const authorizer = fgaAI.withFGA({
+const authorizer = auth0AI.withFGA({
   buildQuery: async ({ userID, doc }) => ({
     user: userID,
     object: doc,
@@ -319,7 +319,7 @@ const authorizer = fgaAI.withFGA({
   }),
 });
 
-const authorizedTool = authorizer(myAITool);
+const authorizedTool2 = authorizer(myAITool);
 ```
 
 :::note
@@ -330,39 +330,32 @@ The parameters given to the `buildQuery` function are the same provided to the t
 
 Auth0 AI can leverage OpenFGA to authorize RAG applications. The `FGARetriever` can be used to filter documents based on access control checks defined in Okta FGA. This retriever performs batch checks on retrieved documents, returning only the ones that pass the specified access criteria.
 
-Create a Retriever instance using the `FGARetriever.create` method:
+Create a Retriever instance:
 
 ```javascript
-// From examples/langchain/retrievers-with-fga
 import { FGARetriever } from '@auth0/ai-genkit/RAG';
-import { MemoryStore, RetrievalChain } from './helpers/memory-store';
-import { readDocuments } from './helpers/read-documents';
+import { myVectorStoreRetriever } from './my-retriever';
 
 async function main() {
-  // UserID
   const user = 'user1';
-  const documents = await readDocuments();
-  // 1. Call helper function to load LangChain MemoryStore
-  const vectorStore = await MemoryStore.fromDocuments(documents);
-  // 2. Call helper function to create a LangChain retrieval chain.
-  const retrievalChain = await RetrievalChain.create({
-    // 3. Decorate the retriever with the FGARetriever to check permissions.
-    retriever: FGARetriever.create({
-      retriever: vectorStore.asRetriever(),
-      buildQuery: (doc) => ({
-        user: `user:${user}`,
-        object: `doc:${doc.metadata.id}`,
-        relation: 'viewer',
-      }),
+
+  // Decorate your Genkit retriever with the FGARetriever
+  const secureRetriever = FGARetriever.create({
+    retriever: myVectorStoreRetriever,
+    buildQuery: (doc) => ({
+      user: `user:${user}`,
+      object: `doc:${doc.metadata.id}`,
+      relation: 'viewer',
     }),
   });
 
-  // 4. Execute the query
-  const { answer } = await retrievalChain.query({
+  // Execute the query
+  const docs = await ai.retrieve({
+    retriever: secureRetriever,
     query: 'Show me forecast for ZEKO?',
   });
 
-  console.log(answer);
+  console.log(docs);
 }
 
 main().catch(console.error);
@@ -387,14 +380,23 @@ const response = await ai.generate({
 const interrupt = response.interrupts[0];
 
 if (interrupt && AuthorizationPendingInterrupt.is(interrupt.metadata)) {
-  //do something
+  // do something
   const tool = tools.find(
-    (t) => t.name === interrupt.metadata.toolCall.toolName,
+    (t) => t.name === interrupt.toolRequest.name,
   );
-  tool.restart(
+  
+  const restartRequest = tool.restart(
     interrupt,
-    //resume data if needed
+    // resume data if needed
   );
+  
+  const resumedResponse = await ai.generate({
+    tools,
+    messages: response.messages,
+    resume: {
+      restart: [restartRequest],
+    }
+  });
 }
 ```
 

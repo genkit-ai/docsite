@@ -25,7 +25,7 @@ npm i --save genkitx-cloud-sql-pg
 To use this plugin, first create a `PostgresEngine` instance:
 
 ```ts
-import { PostgresEngine } from 'genkitx-cloud-sql-pg';
+import { PostgresEngine, Column } from 'genkitx-cloud-sql-pg';
 
 // Create PostgresEngine instance
 const engine = await PostgresEngine.fromInstance(
@@ -45,8 +45,8 @@ await engine.initVectorstoreTable('my-documents', 768, {
   embeddingColumn: 'embedding',
   idColumn: 'custom_id', // Custom ID column name
   metadataColumns: [
-    { name: 'source', dataType: 'TEXT' },
-    { name: 'category', dataType: 'TEXT' },
+    new Column('source', 'TEXT'),
+    new Column('category', 'TEXT'),
   ],
   metadataJsonColumn: 'metadata',
   storeMetadata: true,
@@ -126,8 +126,6 @@ You can create reusable references for your indexers:
 ```ts
 export const myDocumentsIndexer = postgresIndexerRef({
   tableName: 'my-custom-documents',
-  idColumn: 'custom_id',
-  metadataColumns: ['source', 'category'],
 });
 ```
 
@@ -180,8 +178,6 @@ You can create reusable references for your retrievers:
 ```ts
 export const myDocumentsRetriever = postgresRetrieverRef({
   tableName: 'my-documents',
-  idColumn: 'custom_id',
-  metadataColumns: ['source', 'category'],
 });
 ```
 
@@ -217,13 +213,17 @@ filter: SQL WHERE clause to filter results (e.g., "category = 'docs' AND source 
 The retriever supports different distance strategies for vector similarity search:
 
 ```ts
+// Configure distance strategy during plugin initialization
 import { DistanceStrategy } from 'genkitx-cloud-sql-pg';
 
-// Configure retriever with specific distance strategy
-const myDocumentsRetriever = postgresRetrieverRef({
-  tableName: 'my-documents',
-  distanceStrategy: DistanceStrategy.COSINE_DISTANCE, // or EUCLIDEAN_DISTANCE
-});
+postgres([
+  {
+    tableName: 'my-documents',
+    engine: engine, // PostgresEngine instance
+    embedder: vertexAI.embedder('text-embedding-004'),
+    distanceStrategy: DistanceStrategy.COSINE_DISTANCE, // or EUCLIDEAN_DISTANCE, INNER_PRODUCT
+  },
+]);
 ```
 
 Available strategies:
@@ -291,20 +291,20 @@ import "github.com/firebase/genkit/go/plugins/postgresql"
    - Using basic authentication
 
 ```go
-pEngine, err := NewPostgresEngine(ctx,
-		WithUser('user'),
-		WithPassword('password'),
-		WithCloudSQLInstance('my-project', 'us-central1', 'my-instance'),
-		WithDatabase('my-database')
+pEngine, err := postgresql.NewPostgresEngine(ctx,
+		postgresql.WithUser("user"),
+		postgresql.WithPassword("password"),
+		postgresql.WithCloudSQLInstance("my-project", "us-central1", "my-instance"),
+		postgresql.WithDatabase("my-database"))
 ```
 
 - Using email authentication
 
 ```go
-pEngine, err := NewPostgresEngine(ctx,
-	WithCloudSQLInstance('my-project', 'us-central1', 'my-instance'),
-	WithDatabase('my-database'),
-	WithIAMAccountEmail('mail@company.com'))
+pEngine, err := postgresql.NewPostgresEngine(ctx,
+	postgresql.WithCloudSQLInstance("my-project", "us-central1", "my-instance"),
+	postgresql.WithDatabase("my-database"),
+	postgresql.WithIAMAccountEmail("mail@company.com"))
 ```
 
 - Using custom pool
@@ -315,29 +315,17 @@ if err != nil {
 	return err
 }
 
-pEngine, err := NewPostgresEngine(ctx,
-	WithDatabase("db_test"),
-	WithPool(pool))
+pEngine, err := postgresql.NewPostgresEngine(ctx,
+	postgresql.WithDatabase("db_test"),
+	postgresql.WithPool(pool))
 ```
 
 3. Create the Postgres plugin
-   - Using plugin method Init
+   - Using the genkit method init
 
 ```go
 postgres := &postgresql.Postgres{
-	engine: pEngine,
-}
-
-if err := (postgres).Init(ctx, g); err != nil {
-	return err
-}
-```
-
-- Using the genkit method init
-
-```go
-postgres := &postgresql.Postgres{
-	engine: pEngine,
+	Engine: pEngine,
 }
 
 g := genkit.Init(ctx, genkit.WithPlugins(postgres))
@@ -349,8 +337,8 @@ To add documents to a Postgresql index, first create a retrieve definition that 
 
 ```go
 cfg := &postgresql.Config{
-	TableName:             'documents',
-	SchemaName:            'public',
+	TableName:             "documents",
+	SchemaName:            "public",
 	ContentColumn:         "content",
 	EmbeddingColumn:       "embedding",
 	MetadataColumns:       []string{"source", "category"},
@@ -386,8 +374,10 @@ d2 := ai.DocumentFromText( "The product features include..." , nil)
 
 resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
     Query: d2,
-    k:5,
-    filter: "source='website' AND category='product-docs'"
+    Options: &postgresql.RetrieverOptions{
+        K: 5,
+        Filter: "source='website' AND category='product-docs'",
+    },
 })
 
 if err != nil {
@@ -406,11 +396,11 @@ if err != nil {
 d2 := ai.DocumentFromText( "The product features include..." , nil)
 
 retrieverOptions := &postgresql.RetrieverOptions{
-	k:5,
-    filter: "source='website' AND category='product-docs'"
+    K: 5,
+    Filter: "source='website' AND category='product-docs'",
 }
 
-resp, err := ai.Retrieve(ctx, retriever,ai.WithDocs(d2), &ai.WithConfig(retrieverOptions))
+resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(retriever), ai.WithDocs(d2), ai.WithConfig(retrieverOptions))
 if err != nil {
     return err
 }
