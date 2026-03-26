@@ -28,13 +28,20 @@ Install FastAPI and Genkit dependencies:
 uv add fastapi uvicorn genkit genkit-plugin-google-genai
 ```
 
-## Define Genkit flows
+## Define Genkit flows and FastAPI routes
 
-Create a file for your Genkit flows, for example `flows.py`. Choose the initialization that matches your provider:
+To expose your Genkit flows as FastAPI endpoints, you should use standard FastAPI custom endpoints. For simplicity in this example, we'll create a single file (for example, `main.py`) to initialize Genkit, define your flows, and expose them.
 
-**For Google AI (Gemini API):**
+### 1. Genkit Client Compatible API (Recommended)
+
+If you want your FastAPI server to work with the official Genkit Client SDKs for Web or Dart (see [Accessing flows from the client](/docs/client)), your endpoint must consume and produce messages that match Genkit's network protocol.
+
+The Genkit client sends a JSON payload wrapped in a `{"data": ...}` envelope. You can map this easily by defining a wrapping Pydantic endpoint:
 
 ```python
+from typing import Any
+from fastapi import FastAPI
+from pydantic import BaseModel
 from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
 
@@ -43,48 +50,81 @@ ai = Genkit(
     plugins=[GoogleAI()],
     model='googleai/gemini-2.5-flash',
 )
-```
 
-**For Vertex AI (Google Cloud):**
+app = FastAPI()
 
-```python
-from genkit import Genkit
-from genkit.plugins.google_genai import VertexAI
+# Pydantic model matching Genkit's envelope format
+class GenkitEnvelope(BaseModel):
+    data: Any # can be a string, dict, etc.
 
-# Initialize Genkit
-ai = Genkit(
-    plugins=[VertexAI()],
-    model='vertexai/gemini-2.5-flash',
-)
-```
-
-Then, define your flow:
-
-```python
-@ai.flow()
-async def menu_suggestion_flow(theme: str) -> str:
-    """Generate a menu item for a themed restaurant.
-
-    Args:
-        theme: The restaurant theme.
-
-    Returns:
-        A suggested menu item.
-    """
+@app.post("/menuSuggestionGenkit")
+async def menu_suggestion_genkit(payload: GenkitEnvelope):
+    """Generate a menu suggestion compatible with standard Genkit clients."""
+    # Unpack payload.data (which will be a string 'pirate')
+    theme = payload.data 
+    
     response = await ai.generate(
         prompt=f'Invent a menu item for a {theme} themed restaurant.',
     )
-    return response.text
+    return {"result": response.text} # Return structure Genkit expects
 ```
 
-## Create FastAPI routes
+### 2. Streaming to Clients
 
-Create your FastAPI application and expose your flows as API endpoints:
+To stream content to Genkit Web or Dart clients, you must yield Server-Sent Events (SSE) that conform to Genkit's protocol (using `event: chunk`). In Python, you can achieve this by passing an `ActionRunContext` to your flow and using `.stream()` on the server.
+
+```python
+import json
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from genkit import Genkit, ActionRunContext
+
+app = FastAPI()
+ai = Genkit(...)
+
+# Define flow with ctx for streaming
+@ai.flow()
+async def streaming_menu_flow(theme: str, ctx: ActionRunContext) -> str:
+    response = await ai.generate(
+        prompt=f'Invent a menu item for a {theme} themed restaurant.',
+        on_chunk=lambda chunk: ctx.send_chunk(chunk.text) if chunk.text else None
+    )
+    return response.text
+
+class GenkitEnvelope(BaseModel):
+    data: Any
+
+@app.post("/menuSuggestionStream")
+async def menu_suggestion_stream(payload: GenkitEnvelope):
+    theme = payload.data
+    
+    async def sse_generator():
+        flow_stream = streaming_menu_flow.stream(theme)
+        
+        # In current PyPI Genkit (0.5.1), stream() returns a tuple (stream, future).
+        # We use flow_stream[0] if it is a tuple, otherwise we assume it is the stream itself.
+        fs = flow_stream[0] if isinstance(flow_stream, tuple) else flow_stream
+        
+        async for chunk in fs:
+            # Yield as expected by standard Genkit clients: data: {"message": chunk}\n\n
+            yield f'data: {json.dumps({"message": chunk})}\n\n'
+        
+        # Yield final answer
+        final_output = await flow_stream[1] if isinstance(flow_stream, tuple) else await flow_stream.response
+        res = final_output.result if hasattr(final_output, 'result') else final_output
+        yield f'data: {json.dumps({"result": res})}\n\n'
+
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+```
+
+### 3. Standard API (Idiomatic FastAPI)
+
+If you do NOT need to support standard Genkit client libraries and are building your own custom REST API, use standard Pydantic models for your own domain types.
 
 ```python
 from fastapi import FastAPI
 from pydantic import BaseModel
-from flows import menu_suggestion_flow
 
 app = FastAPI()
 
@@ -94,13 +134,18 @@ class MenuRequest(BaseModel):
 @app.post("/menuSuggestion")
 async def menu_suggestion(request: MenuRequest):
     """Generate a menu suggestion."""
-    result = await menu_suggestion_flow(request.theme)
-    return {"menuItem": result}
+    response = await ai.generate(
+        prompt=f'Invent a menu item for a {request.theme} themed restaurant.',
+    )
+    return {"menuItem": response.text}
 ```
 
-## Call your flows from the client
 
-You can call your FastAPI endpoints using any HTTP client:
+## Call your flows
+
+### Standard API Client
+
+If you used the **Standard API (Idiomatic FastAPI)** approach, you can call it using any standard HTTP client like `requests` in Python or standard `fetch` in JavaScript:
 
 ```python
 import requests
@@ -112,32 +157,46 @@ response = requests.post(
 print(response.json())
 ```
 
+### Genkit Client SDK Client
+
+If you used the **Genkit Client Compatible API** approach, it will play nicely with standard `runFlow()` from `@genkit-ai/client`:
+
+```javascript
+import { runFlow } from '@genkit-ai/client';
+
+const result = await runFlow({
+  url: 'http://localhost:8000/menuSuggestionGenkit',
+  input: 'pirate', // Input sent as 'pirate', client automatic wraps in 'data'
+});
+console.log(result);
+```
+
+
 ## Authentication (Optional)
 
-Add authentication to your API routes using FastAPI's dependency injection:
+You can secure your endpoints using FastAPI's standard dependency injection (`Depends`), checking tokens before running your Genkit logic:
 
 ```python
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 security = HTTPBearer()
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """Verify JWT token."""
-    token = credentials.credentials
-    # Add your token verification logic here
-    # Return user info or raise HTTPException
+    # Token verification logic here...
     return {"user_id": "123", "email": "user@example.com"}
 
-@app.post("/menuSuggestion")
-async def protected_menu_suggestion(
-    request: MenuRequest,
+@app.post("/protectedMenu")
+async def protected_menu(
+    request: MenuRequest, 
     user: dict = Depends(verify_token)
 ):
-    """Generate a menu suggestion with authentication."""
-    result = await menu_suggestion_flow(request.theme)
-    return {"menuItem": result, "user": user["email"]}
+    response = await ai.generate(
+        prompt=f'Invent a menu item for a {request.theme} themed restaurant.',
+    )
+    return {"menuItem": response.text, "user": user}
 ```
+
 
 ## Run your application
 
