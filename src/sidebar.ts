@@ -134,8 +134,8 @@ const DOCS_SIDEBAR = [
   {
     label: "Build with AI",
     items: [
-      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
-      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
+      { label: "Genkit MCP server", slug: "docs/mcp-server" },
+      { label: "AI-assisted development", slug: "docs/develop-with-ai" },
     ],
   },
   {
@@ -149,7 +149,7 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Model Providers",
+    label: "Model providers",
     items: [
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
@@ -167,11 +167,11 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Database Providers",
+    label: "Database providers",
     items: [
       { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
       {
-        label: "Dev Local Vector Store",
+        label: "Dev local vector store",
         slug: "docs/integrations/dev-local-vectorstore",
       },
       { label: "Pinecone", slug: "docs/integrations/pinecone" },
@@ -187,17 +187,17 @@ const DOCS_SIDEBAR = [
       },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
       {
-        label: "Vertex AI VectorSearch with Bigquery",
+        label: "Vertex AI Vector Search with BigQuery",
         slug: "docs/integrations/vectorsearch-bigquery",
       },
       {
-        label: "Vertex AI VectorSearch with Firestore",
+        label: "Vertex AI Vector Search with Firestore",
         slug: "docs/integrations/vectorsearch-firestore",
       },
     ],
   },
   {
-    label: "Web Framework Integrations",
+    label: "Web framework integrations",
     items: [
       { label: "Express.js", slug: "docs/frameworks/express" },
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
@@ -214,9 +214,8 @@ const DOCS_SIDEBAR = [
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
       { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
       { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
-
-      { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "Client App Integration", slug: "docs/client" },
+      { label: "Any platform", slug: "docs/deployment/any-platform" },
+      { label: "Client app integration", slug: "docs/client" },
     ],
   },
   {
@@ -230,31 +229,31 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Writing Plugins",
+    label: "Writing plugins",
     items: [{ label: "Overview", slug: "docs/plugin-authoring/overview" }],
   },
   {
-    label: "Observability and Monitoring",
+    label: "Observability and monitoring",
     items: [
       { label: "Getting started", slug: "docs/observability/getting-started" },
       { label: "Authentication", slug: "docs/observability/authentication" },
       {
-        label: "Telemetry Collection",
+        label: "Telemetry collection",
         slug: "docs/observability/telemetry-collection",
       },
       {
-        label: "Advanced Configuration",
+        label: "Advanced configuration",
         slug: "docs/observability/advanced-configuration",
       },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
-      { label: "Google Cloud Plugin", slug: "docs/integrations/google-cloud" },
+      { label: "Google Cloud plugin", slug: "docs/integrations/google-cloud" },
     ],
   },
   {
     label: "Reference",
     items: [
-      { label: "API References", slug: "docs/api-references" },
-      { label: "API Stability", slug: "docs/api-stability" },
+      { label: "API references", slug: "docs/api-references" },
+      { label: "API stability", slug: "docs/api-stability" },
       { label: "Feedback", slug: "docs/feedback" },
     ],
   },
