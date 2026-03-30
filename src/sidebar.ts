@@ -149,7 +149,7 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Model Providers",
+    label: "Model providers",
     items: [
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
@@ -167,7 +167,7 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Database Providers",
+    label: "Database providers",
     items: [
       { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
       {
@@ -197,7 +197,7 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Web Framework Integrations",
+    label: "Web framework integrations",
     items: [
       { label: "Express.js", slug: "docs/frameworks/express" },
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
@@ -230,11 +230,11 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Writing Plugins",
+    label: "Writing plugins",
     items: [{ label: "Overview", slug: "docs/plugin-authoring/overview" }],
   },
   {
-    label: "Observability and Monitoring",
+    label: "Observability and monitoring",
     items: [
       { label: "Getting started", slug: "docs/observability/getting-started" },
       { label: "Authentication", slug: "docs/observability/authentication" },
