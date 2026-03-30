@@ -117,12 +117,18 @@ const DOCS_SIDEBAR = [
       { label: "Passing information through context", slug: "docs/context" },
       { label: "Pause generation using interrupts", slug: "docs/interrupts" },
       { label: "Creating persistent chat sessions", slug: "docs/chat" },
-      { label: "Model Context Protocol (MCP)", slug: "docs/model-context-protocol" },
+      {
+        label: "Model Context Protocol (MCP)",
+        slug: "docs/model-context-protocol",
+      },
       { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
       { label: "Building multi-agent systems", slug: "docs/multi-agent" },
       { label: "Error types", slug: "docs/error-types" },
       { label: "Evaluation", slug: "docs/evaluation" },
-      { label: "Local observability and metrics", slug: "docs/local-observability" },
+      {
+        label: "Local observability and metrics",
+        slug: "docs/local-observability",
+      },
     ],
   },
   {
@@ -136,7 +142,10 @@ const DOCS_SIDEBAR = [
     label: "Tutorials",
     items: [
       { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
-      { label: "Summarize YouTube videos", slug: "docs/tutorials/summarize-youtube-videos" },
+      {
+        label: "Summarize YouTube videos",
+        slug: "docs/tutorials/summarize-youtube-videos",
+      },
     ],
   },
   {
@@ -145,7 +154,10 @@ const DOCS_SIDEBAR = [
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
-      { label: "OpenAI-Compatible APIs", slug: "docs/integrations/openai-compatible" },
+      {
+        label: "OpenAI-Compatible APIs",
+        slug: "docs/integrations/openai-compatible",
+      },
       { label: "Anthropic (Claude)", slug: "docs/integrations/anthropic" },
       { label: "AWS Bedrock", slug: "docs/integrations/aws-bedrock" },
       { label: "Azure AI Foundry", slug: "docs/integrations/azure-foundry" },
@@ -158,7 +170,10 @@ const DOCS_SIDEBAR = [
     label: "Database Providers",
     items: [
       { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
-      { label: "Dev Local Vector Store", slug: "docs/integrations/dev-local-vectorstore" },
+      {
+        label: "Dev Local Vector Store",
+        slug: "docs/integrations/dev-local-vectorstore",
+      },
       { label: "Pinecone", slug: "docs/integrations/pinecone" },
       { label: "Chroma", slug: "docs/integrations/chroma" },
       { label: "pgvector", slug: "docs/integrations/pgvector" },
@@ -166,10 +181,19 @@ const DOCS_SIDEBAR = [
       { label: "Astra DB", slug: "docs/integrations/astra-db" },
       { label: "Neo4j", slug: "docs/integrations/neo4j" },
       { label: "AlloyDB for PostgreSQL", slug: "docs/integrations/alloydb" },
-      { label: "Cloud SQL PostgreSQL", slug: "docs/integrations/cloud-sql-postgresql" },
+      {
+        label: "Cloud SQL PostgreSQL",
+        slug: "docs/integrations/cloud-sql-postgresql",
+      },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
-      { label: "Vertex AI VectorSearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
-      { label: "Vertex AI VectorSearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
+      {
+        label: "Vertex AI VectorSearch with Bigquery",
+        slug: "docs/integrations/vectorsearch-bigquery",
+      },
+      {
+        label: "Vertex AI VectorSearch with Firestore",
+        slug: "docs/integrations/vectorsearch-firestore",
+      },
     ],
   },
   {
@@ -179,7 +203,8 @@ const DOCS_SIDEBAR = [
       { label: "Next.js", slug: "docs/frameworks/nextjs" },
       { label: "Angular", slug: "docs/frameworks/angular" },
       { label: "FastAPI", slug: "docs/frameworks/fastapi" },
-      { label: "Shelf (Dart)", slug: "docs/frameworks/shelf" },
+      { label: "Shelf", slug: "docs/frameworks/shelf" },
+      { label: "Flutter", slug: "docs/frameworks/flutter" },
     ],
   },
   {
@@ -194,23 +219,30 @@ const DOCS_SIDEBAR = [
   {
     label: "Authorization",
     items: [
-      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
+      {
+        label: "Authorization & Integrity",
+        slug: "docs/deployment/authorization",
+      },
       { label: "Auth0 AI", slug: "docs/integrations/auth0" },
     ],
   },
   {
     label: "Writing Plugins",
-    items: [
-      { label: "Overview", slug: "docs/plugin-authoring/overview" },
-    ],
+    items: [{ label: "Overview", slug: "docs/plugin-authoring/overview" }],
   },
   {
     label: "Observability and Monitoring",
     items: [
       { label: "Getting started", slug: "docs/observability/getting-started" },
       { label: "Authentication", slug: "docs/observability/authentication" },
-      { label: "Telemetry Collection", slug: "docs/observability/telemetry-collection" },
-      { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
+      {
+        label: "Telemetry Collection",
+        slug: "docs/observability/telemetry-collection",
+      },
+      {
+        label: "Advanced Configuration",
+        slug: "docs/observability/advanced-configuration",
+      },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
       { label: "Google Cloud Plugin", slug: "docs/integrations/google-cloud" },
     ],
