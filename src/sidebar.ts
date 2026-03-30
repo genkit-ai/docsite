@@ -187,7 +187,7 @@ const DOCS_SIDEBAR = [
       },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
       {
-        label: "Vertex AI Vector Search with Bigquery",
+        label: "Vertex AI Vector Search with BigQuery",
         slug: "docs/integrations/vectorsearch-bigquery",
       },
       {
