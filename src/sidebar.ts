@@ -115,6 +115,7 @@ const DOCS_SIDEBAR = [
       { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
       { label: "Passing information through context", slug: "docs/context" },
+      { label: "Building multi-turn persisted flows", slug: "docs/session-flows" },
       { label: "Pause generation using interrupts", slug: "docs/interrupts" },
       { label: "Creating persistent chat sessions", slug: "docs/chat" },
       {
