@@ -1,0 +1,114 @@
+---
+title: Deploy to any platform
+description: Learn how to deploy Genkit flows to any supported hosting platform
+  with maximum flexibility and control.
+supportedLanguages:
+  - python
+---
+
+{/* AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY. Edit the source document instead: src/content/docs/guides/deployment/any-platform.mdx Then run: pnpm generate-language-pages */}
+
+Prerequisites: make sure you've completed the [Get Started](/docs/python/get-started/) guide.
+
+This page shows one way to deploy a Python Genkit app to _any_ platform: run a
+FastAPI server that calls your flows. (FastAPI is ASGI and works well on most
+Python hosting providers.)
+
+## 1. Set up your project (uv)
+
+```bash
+mkdir -p ~/tmp/genkit-fastapi-project
+cd ~/tmp/genkit-fastapi-project
+
+uv init
+uv add genkit genkit-plugin-google-genai fastapi uvicorn
+```
+
+## 2. Define a flow
+
+Create `flows.py`:
+
+```python title="flows.py"
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
+)
+
+@ai.flow()
+async def joke_flow(topic: str) -> str:
+    response = await ai.generate(
+        prompt=f'Tell a medium-sized joke about {topic}',
+    )
+    return response.text
+```
+
+## 3. Create a web server
+
+Create `main.py`:
+
+```python title="main.py"
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
+from flows import joke_flow
+
+app = FastAPI()
+security = HTTPBearer(auto_error=False)
+
+class JokeRequest(BaseModel):
+    topic: str
+
+async def require_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> None:
+    # Optional: replace with real auth logic, or delete this dependency entirely.
+    if credentials is None or credentials.credentials != 'open-sesame':
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='not authorized',
+        )
+
+@app.get('/health')
+async def health() -> dict[str, str]:
+    return {'status': 'ok'}
+
+@app.post('/joke')
+async def joke(request: JokeRequest, _auth: None = Depends(require_auth)) -> dict[str, str]:
+    text = await joke_flow(request.topic)
+    return {'joke': text}
+```
+
+## 4. Run the app
+
+```bash
+export GEMINI_API_KEY=<your API key>
+uv run uvicorn main:app --reload --port 8000
+```
+
+Or with the Developer UI:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+genkit start -- uv run uvicorn main:app --reload --port 8000
+```
+
+Invoke the endpoint:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/joke" \
+  -H "Authorization: Bearer open-sesame" \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"bananas"}'
+```
+
+## 5. Deploy the project
+
+Deployment steps vary by provider, but generally you configure:
+
+- **runtime**: Python 3.11+ (or your provider's recommended version)
+- **start command**: `uv run uvicorn main:app --host 0.0.0.0 --port $PORT`
+- **environment variables**: set `GEMINI_API_KEY` (and any other secrets)

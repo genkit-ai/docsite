@@ -1,0 +1,208 @@
+---
+title: Next.js Pages Router
+description: Use Genkit from a Next.js Pages Router app, with clear guidance on the current App Router-first support model.
+supportedLanguages:
+  - js
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide when your app still uses the Next.js Pages Router. Genkit works well in Pages Router applications, but the first-party `@genkit-ai/next` route helper is currently designed for the App Router's `route.ts` handlers.
+
+That means the best path depends on how much of your app you want to modernize right now:
+
+- If you want the most integrated Next.js setup for Genkit HTTP routes and client helpers, use the [Next.js App Router](/guides/frameworks/nextjs-app-router) guide.
+- If your app is staying on Pages Router for now, you can still define Genkit flows in shared server-side code and expose them through a separate Genkit server layer such as [Express](/guides/frameworks/express) or [Hono](/guides/frameworks/hono).
+
+## When to use this path
+
+This is a good fit when:
+
+- your UI is already built on `pages/`
+- you want to add AI features without migrating your entire app first
+- you're comfortable keeping Genkit routes in a small companion server or separate backend
+
+## Recommended architecture
+
+For Pages Router apps, the cleanest setup today is:
+
+1. Keep your Next.js app for pages, layouts, and frontend logic.
+2. Define Genkit flows in shared TypeScript modules.
+3. Expose those flows from a Genkit-friendly server runtime such as Express or Hono.
+4. Call those flow endpoints from your Next.js frontend.
+
+This gives you a smooth upgrade path:
+
+- you can ship Genkit features now
+- you can keep your existing Pages Router app structure
+- you can move individual APIs to App Router later if you choose
+
+## Project layout
+
+<FileTree>
+
+- package.json
+- src
+  - genkit
+    - **recipeGeneratorFlow.ts**
+  - pages
+    - **index.tsx**
+  - server
+    - **index.ts**
+
+</FileTree>
+
+## Define your flows
+
+Create a shared flow module, for example `src/genkit/menuSuggestionFlow.ts`:
+
+```ts title="src/genkit/menuSuggestionFlow.ts"
+import { googleAI } from '@genkit-ai/google-genai';
+import { genkit, z } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.5-flash'),
+});
+
+export const menuSuggestionFlow = ai.defineFlow(
+  {
+    name: 'menuSuggestionFlow',
+    inputSchema: z.object({ theme: z.string() }),
+    outputSchema: z.object({ menuItem: z.string() }),
+  },
+  async ({ theme }) => {
+    const { text } = await ai.generate({
+      prompt: `Invent a menu item for a ${theme} themed restaurant.`,
+    });
+    return { menuItem: text };
+  },
+);
+```
+
+## Expose the flows from a backend
+
+Choose one of these guides to expose the flow over HTTP:
+
+- [Express](/guides/frameworks/express) if you want a familiar Node.js server
+- [Hono](/guides/frameworks/hono) if you want a lightweight fetch-based server that can target multiple runtimes
+
+Once that backend is running, your Next.js app can call it like any other API.
+
+## Call flows from your Pages Router frontend
+
+From a client component or page-level interaction, use the generic Genkit client:
+
+```tsx title="src/pages/index.tsx"
+import { runFlow } from 'genkit/beta/client';
+
+async function getMenuItem(theme: string) {
+  const result = await runFlow({
+    url: 'http://localhost:8080/menuSuggestionFlow',
+    input: { theme },
+  });
+
+  return result.menuItem;
+}
+```
+
+If you're exposing the flow from Hono using the fetch plugin, the URL would look more like:
+
+```ts title="src/pages/index.tsx"
+const result = await runFlow({
+  url: 'http://localhost:3780/api/menuSuggestionFlow',
+  input: { theme },
+});
+```
+
+## Run and test locally
+
+Before running your app, configure the Google AI Gemini API:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+Then run:
+
+- your Next.js app with `npm run dev`
+- your Genkit backend using the framework guide you chose
+- the Genkit Developer UI against your flow module or backend command
+
+For example:
+
+```bash
+genkit start -- npx tsx --watch src/genkit/menuSuggestionFlow.ts
+```
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+### Start the Developer UI
+
+The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
+
+Run the following command from your project root:
+
+```bash
+genkit start -- npx tsx --watch src/genkit/menuSuggestionFlow.ts
+```
+
+This starts your app and launches the Developer UI at `http://localhost:4000` by default.
+
+:::note
+The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/devtools).
+:::
+
+##### Optional: Add an npm script
+
+To make starting the Developer UI easier, add the following to your `package.json` scripts:
+
+```json
+"scripts": {
+  "genkit:ui": "genkit start -- npx tsx --watch src/genkit/menuSuggestionFlow.ts"
+}
+```
+
+Then run it with:
+
+```bash
+npm run genkit:ui
+```
+
+### Run and inspect flows
+
+In the Developer UI:
+
+1. Select `menuSuggestionFlow` from the list of flows.
+2. Enter sample input:
+
+   ```json
+   {
+     "theme": "Italian vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated output, along with a visual trace of the AI generation process for debugging and optimization.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the recipe generator flow
+     with input parameters and the resulting structured output.
+   </video>
+
+## Recommended next step
+
+If you're starting a new Next.js app or you're ready to adopt route handlers for Genkit endpoints, continue with [Next.js App Router](/guides/frameworks/nextjs-app-router). That's the current first-party Next.js integration path for Genkit JS.

@@ -2,7 +2,7 @@
 import MobileMenuFooter from '@astrojs/starlight/components/MobileMenuFooter.astro';
 import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
 import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
-import { docsAllLanguages, docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../sidebar';
+import { docsAllLanguages, docsLanguageAgnosticBySlug, docsLanguageSupportBySlug, DOCS_SIDEBAR, GUIDES_SIDEBAR } from '../sidebar';
 import TypescriptIcon from '../assets/icons/typescript.svg';
 import GoIcon from '../assets/icons/go.svg';
 import PythonIcon from '../assets/icons/python.svg';
@@ -10,8 +10,15 @@ import DartIcon from '../assets/icons/dart.svg';
 
 const { sidebar: routeSidebar } = Astro.locals.starlightRoute;
 
-const pathLangMatch = Astro.url.pathname.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
-const currentLang = pathLangMatch?.[1] || Astro.url.searchParams.get('lang') || 'js';
+// Filter the sidebar to show only the relevant section based on URL
+const isGuidesPage = Astro.url.pathname.startsWith('/guides/');
+const docsLabels = new Set(DOCS_SIDEBAR.map((s: any) => s.label));
+const guidesLabels = new Set(GUIDES_SIDEBAR.map((s: any) => s.label));
+const activeSectionLabels = isGuidesPage ? guidesLabels : docsLabels;
+const filteredSidebar = routeSidebar.filter((group: any) => activeSectionLabels.has(group.label));
+
+const pathLangMatch = Astro.url.pathname.match(/^\/(docs|guides)\/(js|go|dart|python)(\/|$)/);
+const currentLang = pathLangMatch?.[2] || Astro.url.searchParams.get('lang') || 'js';
 const languageMeta: Record<string, { name: string; preview?: boolean }> = {
 	js: { name: 'TypeScript' },
 	go: { name: 'Go' },
@@ -82,7 +89,7 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 </div>
 
 <SidebarPersister>
-	<SidebarSublist sublist={routeSidebar} />
+	<SidebarSublist sublist={filteredSidebar} />
 </SidebarPersister>
 
 <div class="md:sl-hidden">
@@ -111,6 +118,11 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 		const allLanguages = JSON.parse(allLanguagesRaw);
 		const fallbackOrder = ['js', 'go', 'dart', 'python'];
 
+		/** @type {RegExp} */
+		const docsOrGuidesPrefix = /^\/(docs|guides)\//;
+		/** @type {RegExp} */
+		const langPrefixPattern = /^\/(docs|guides)\/(js|go|dart|python)\//;
+
 		const normalizePath = (href) => {
 			try {
 				const url = new URL(href, window.location.origin);
@@ -128,11 +140,11 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 
 			document.querySelectorAll('.sidebar-pane a[href]').forEach((anchor) => {
 				const normalizedPath = normalizePath(anchor.getAttribute('href') || '');
-				if (!normalizedPath || !normalizedPath.startsWith('/docs/')) return;
+				if (!normalizedPath || !docsOrGuidesPrefix.test(normalizedPath)) return;
 
-				const alreadyLanguagePath = /^\/docs\/(js|go|dart|python)\//.test(normalizedPath);
+				const alreadyLanguagePath = langPrefixPattern.test(normalizedPath);
 				const basePath = alreadyLanguagePath
-					? normalizedPath.replace(/^\/docs\/(js|go|dart|python)(\/|$)/, '/docs/')
+					? normalizedPath.replace(langPrefixPattern, (_, section) => `/${section}/`)
 					: normalizedPath;
 				const isLanguageAgnostic = Boolean(languageAgnosticByPath[basePath]);
 				const supported = languageSupportByPath[basePath] || allLanguages;
@@ -158,8 +170,12 @@ const docsLanguageAgnosticByPath = Object.fromEntries(
 					? selectedLanguage
 					: fallbackOrder.find((language) => supported.includes(language)) || selectedLanguage;
 
-				const slug = basePath.replace(/^\/docs\//, '').replace(/\/$/, '');
-				const targetPath = `/docs/${selectedOrFallback}/${slug}/`;
+				// Extract section (docs or guides) and slug from basePath
+				const sectionMatch = basePath.match(/^\/(docs|guides)\/(.*)/);
+				if (!sectionMatch) return;
+				const section = sectionMatch[1];
+				const slug = sectionMatch[2].replace(/\/$/, '');
+				const targetPath = `/${section}/${selectedOrFallback}/${slug}/`;
 				anchor.setAttribute('href', targetPath);
 				const isCurrent = (normalizePath(targetPath) || targetPath) === currentPath;
 				anchor.setAttribute('aria-current', isCurrent ? 'page' : 'false');

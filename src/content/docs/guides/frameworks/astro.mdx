@@ -1,0 +1,303 @@
+---
+title: Astro
+description: Start from an Astro SSR app and expose the same recipe flow from the main quickstart using API routes and the Genkit fetch handler.
+supportedLanguages:
+  - js
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide when you're starting from an Astro app with server-side rendering (SSR) and want to add Genkit flows as API endpoints alongside your Astro pages.
+
+## Before you begin
+
+- Node.js v20 or later
+- npm
+
+This guide assumes you're already familiar with building Astro applications.
+
+## Create a project
+
+If you don't already have an Astro project, create one:
+
+```bash
+npm create astro@latest my-genkit-astro
+cd my-genkit-astro
+```
+
+When prompted, select the **Empty** template and enable TypeScript.
+
+### Enable SSR
+
+Install the Node.js adapter so your Astro app can run server-side code:
+
+```bash
+npx astro add node
+```
+
+This adds `@astrojs/node` and configures `astro.config.mjs` automatically. If you prefer to do it manually, install the adapter and update your config:
+
+```bash
+npm install @astrojs/node
+```
+
+```ts title="astro.config.mjs"
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'server',
+  adapter: node({
+    mode: 'standalone',
+  }),
+});
+```
+
+## Project layout
+
+<FileTree>
+
+- package.json
+- astro.config.mjs
+- src
+  - pages
+    - api
+      - recipeGeneratorFlow
+        - **\[...path\].ts**
+    - **index.astro**
+  - genkit
+    - **recipeGeneratorFlow.ts**
+
+</FileTree>
+
+## Install Genkit packages
+
+Install the Genkit CLI globally:
+
+```bash
+npm install -g genkit-cli
+```
+
+Then install the packages you need in your project:
+
+```bash
+npm install genkit @genkit-ai/google-genai
+npm install -D tsx
+```
+
+## Configure your model API key
+
+This guide uses the Gemini API from Google AI Studio.
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+## Define your recipe flow
+
+Create `src/genkit/recipeGeneratorFlow.ts`:
+
+```ts title="src/genkit/recipeGeneratorFlow.ts"
+import { googleAI } from '@genkit-ai/google-genai';
+import { genkit, z } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.5-flash', {
+    temperature: 0.8,
+  }),
+});
+
+const RecipeInputSchema = z.object({
+  ingredient: z.string().describe('Main ingredient or cuisine type'),
+  dietaryRestrictions: z
+    .string()
+    .optional()
+    .describe('Any dietary restrictions'),
+});
+
+const RecipeSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  prepTime: z.string(),
+  cookTime: z.string(),
+  servings: z.number(),
+  ingredients: z.array(z.string()),
+  instructions: z.array(z.string()),
+  tips: z.array(z.string()).optional(),
+});
+
+export const recipeGeneratorFlow = ai.defineFlow(
+  {
+    name: 'recipeGeneratorFlow',
+    inputSchema: RecipeInputSchema,
+    outputSchema: RecipeSchema,
+  },
+  async (input) => {
+    const prompt = `Create a recipe with the following requirements:
+      Main ingredient: ${input.ingredient}
+      Dietary restrictions: ${input.dietaryRestrictions || 'none'}`;
+
+    const { output } = await ai.generate({
+      prompt,
+      output: { schema: RecipeSchema },
+    });
+
+    if (!output) throw new Error('Failed to generate recipe');
+    return output;
+  },
+);
+```
+
+## Create an API route
+
+Create `src/pages/api/recipeGeneratorFlow/[...path].ts` to expose the flow as an HTTP endpoint using Genkit's fetch handler:
+
+```ts title="src/pages/api/recipeGeneratorFlow/[...path].ts"
+import type { APIRoute } from 'astro';
+import { recipeGeneratorFlow } from '../../../genkit/recipeGeneratorFlow';
+import { fetchHandlers } from 'genkit/beta/fetch';
+
+const handleFlow = fetchHandlers(
+  [recipeGeneratorFlow],
+  '/api/recipeGeneratorFlow',
+);
+
+export const POST: APIRoute = async ({ request }) => {
+  return handleFlow(request);
+};
+```
+
+The `fetchHandlers` function wraps your Genkit flow in Genkit's HTTP protocol, which supports streaming chunks, structured errors, and compatibility with the Genkit client SDK.
+
+## Call your flow from the frontend
+
+Update `src/pages/index.astro`:
+
+```astro title="src/pages/index.astro"
+---
+// No server-side logic needed for this page
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Recipe generator</title>
+  </head>
+  <body>
+    <h1>Recipe generator</h1>
+    <label>
+      Ingredient
+      <input id="ingredient" value="avocado" />
+    </label>
+    <label>
+      Dietary restrictions
+      <input id="dietary" value="vegetarian" />
+    </label>
+    <button id="generate">Generate recipe</button>
+    <pre id="result"></pre>
+
+    <script>
+      import { runFlow } from 'genkit/beta/client';
+
+      document.getElementById('generate')!.addEventListener('click', async () => {
+        const ingredient = (document.getElementById('ingredient') as HTMLInputElement).value;
+        const dietaryRestrictions = (document.getElementById('dietary') as HTMLInputElement).value;
+
+        const result = await runFlow({
+          url: '/api/recipeGeneratorFlow',
+          input: { ingredient, dietaryRestrictions },
+        });
+
+        document.getElementById('result')!.textContent = JSON.stringify(result, null, 2);
+      });
+    </script>
+  </body>
+</html>
+```
+
+## Run your application
+
+Run your app locally:
+
+```bash
+npm run dev
+```
+
+You can also launch the Developer UI alongside your flow code:
+
+```bash
+genkit start -- npx tsx --watch src/genkit/recipeGeneratorFlow.ts
+```
+
+## Test your flow
+
+With the server running, call your flow over HTTP:
+
+```bash
+curl -X POST http://localhost:4321/api/recipeGeneratorFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
+```
+
+You should receive a structured recipe in the response.
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+### Start the Developer UI
+
+The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
+
+Run the following command from your project root:
+
+```bash
+genkit start -- npx tsx --watch src/genkit/recipeGeneratorFlow.ts
+```
+
+This starts your app and launches the Developer UI at `http://localhost:4000` by default.
+
+:::note
+The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/devtools).
+:::
+
+### Run and inspect flows
+
+In the Developer UI:
+
+1. Select `recipeGeneratorFlow` from the list of flows.
+2. Enter sample input:
+
+   ```json
+   {
+     "ingredient": "avocado",
+     "dietaryRestrictions": "vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the recipe generator flow
+     with input parameters and the resulting structured output.
+   </video>
+
+## Next steps
+
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Accessing flows from the client](/docs/client)
+- [Developer tools](/docs/devtools)

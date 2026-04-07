@@ -18,7 +18,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { getAllProcessedDocuments, type ProcessedDocument } from './utils/content-processor.js';
 import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
-import { sidebar } from './sidebar.js';
+import { DOCS_SIDEBAR, GUIDES_SIDEBAR } from './sidebar.js';
 
 interface LanguageSet {
   label: string;
@@ -48,15 +48,14 @@ function extractPathsFromSidebar(items: SidebarItem[]): string[] {
   return paths;
 }
 
-// Get the docs sidebar from the imported sidebar structure
-function getDocsSidebar(): SidebarItem[] {
-  // Filter out the Introduction item and return the rest
-  return sidebar.filter(item => item.label !== "Introduction");
+// Get all sidebar items from both docs and guides
+function getAllSidebarItems(): SidebarItem[] {
+  return [...DOCS_SIDEBAR, ...GUIDES_SIDEBAR].filter(item => item.label !== "Introduction");
 }
 
 // Create language sets based on sidebar structure
 function createLanguageSetsFromSidebar(): LanguageSet[] {
-  const docsSidebar = getDocsSidebar();
+  const docsSidebar = getAllSidebarItems();
   const languageSets: LanguageSet[] = [];
 
   // Find specific sections in the sidebar and map them to language sets
