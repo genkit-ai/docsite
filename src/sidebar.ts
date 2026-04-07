@@ -101,9 +101,37 @@ const DOCS_SIDEBAR = [
   {
     label: "Get started",
     items: [
-      { label: "Overview", slug: "docs/overview" },
-      { label: "Get started", slug: "docs/get-started" },
+      { label: "Introduction", slug: "docs/overview" },
+      { label: "Choose your stack", slug: "docs/choose-your-stack" },
+      { label: "Quickstart", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
+      { label: "Work with Genkit in AI tools", slug: "docs/work-with-ai-tools" },
+    ],
+  },
+  {
+    label: "Server & full-stack frameworks",
+    items: [
+      { label: "Next.js App Router", slug: "docs/frameworks/nextjs-app-router" },
+      { label: "Next.js Pages Router", slug: "docs/frameworks/nextjs-pages" },
+      { label: "Astro", slug: "docs/frameworks/astro" },
+      { label: "Angular", slug: "docs/frameworks/angular" },
+      { label: "Express", slug: "docs/frameworks/express" },
+      { label: "Hono", slug: "docs/frameworks/hono" },
+      { label: "Fastify", slug: "docs/frameworks/fastify" },
+      { label: "FastAPI", slug: "docs/frameworks/fastapi" },
+      { label: "Flask", slug: "docs/frameworks/flask" },
+      { label: "Django", slug: "docs/frameworks/django" },
+      { label: "Gin", slug: "docs/frameworks/gin" },
+      { label: "Echo", slug: "docs/frameworks/echo" },
+      { label: "Chi", slug: "docs/frameworks/chi" },
+      { label: "Shelf", slug: "docs/frameworks/shelf" },
+    ],
+  },
+  {
+    label: "Frontend integration",
+    items: [
+      { label: "Web client", slug: "docs/frameworks/web-client" },
+      { label: "Flutter", slug: "docs/frameworks/flutter" },
     ],
   },
   {
@@ -130,13 +158,6 @@ const DOCS_SIDEBAR = [
         label: "Local observability and metrics",
         slug: "docs/local-observability",
       },
-    ],
-  },
-  {
-    label: "Build with AI",
-    items: [
-      { label: "Genkit MCP server", slug: "docs/mcp-server" },
-      { label: "AI-assisted development", slug: "docs/develop-with-ai" },
     ],
   },
   {
@@ -198,17 +219,6 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Web framework integrations",
-    items: [
-      { label: "Express.js", slug: "docs/frameworks/express" },
-      { label: "Next.js", slug: "docs/frameworks/nextjs" },
-      { label: "Angular", slug: "docs/frameworks/angular" },
-      { label: "FastAPI", slug: "docs/frameworks/fastapi" },
-      { label: "Shelf", slug: "docs/frameworks/shelf" },
-      { label: "Flutter", slug: "docs/frameworks/flutter" },
-    ],
-  },
-  {
     label: "Deployment",
     items: [
       { label: "Firebase", slug: "docs/deployment/firebase" },
@@ -216,7 +226,6 @@ const DOCS_SIDEBAR = [
       { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
       { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
       { label: "Any platform", slug: "docs/deployment/any-platform" },
-      { label: "Client app integration", slug: "docs/client" },
     ],
   },
   {

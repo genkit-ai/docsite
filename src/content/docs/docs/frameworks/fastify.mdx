@@ -1,42 +1,48 @@
 ---
-title: Angular
-description: Start from an Angular app and add the same recipe flow from the main quickstart with an SSR server route and frontend call.
+title: Fastify
+description: Start from a Fastify server and expose the same recipe flow from the main quickstart using the fetch plugin.
 supportedLanguages:
   - js
 ---
 
 import { FileTree } from '@astrojs/starlight/components';
 
-Use this guide when you're starting from an Angular app and want a practical Genkit setup with a server route and frontend call.
+Use this guide when you're building with Fastify and want to expose Genkit flows over HTTP using `@genkit-ai/fetch`. This pattern works well when you want Fastify's routing and plugin model while keeping Genkit on its standard fetch-based protocol.
 
 ## Before you begin
 
 - Node.js v20 or later
 - npm
-- Angular CLI
 
-This guide assumes you're already familiar with building Angular applications.
+This guide assumes you're already familiar with building TypeScript server applications.
 
 ## Create a project
 
-This guide uses Angular with SSR and server routing:
+If you don't already have a Fastify project, create one:
 
 ```bash
-ng new --ssr --server-routing
+# Generate a Fastify project
+npm init fastify my-genkit-fastify
+
+# Navigate to the project
+cd my-genkit-fastify
+
+# Install dependencies
+npm install
 ```
 
+When prompted, choose a TypeScript-friendly setup so you can follow the code in this guide directly.
+
 ## Project layout
+
+Your generated starter may include a few extra files, but for this guide you'll mainly work in your Fastify app entrypoint:
 
 <FileTree>
 
 - package.json
+- tsconfig.json
 - src
-  - app
-    - **app.component.html**
-    - **app.component.ts**
-  - genkit
-    - **recipeGeneratorFlow.ts**
-  - **server.ts**
+  - **index.ts**
 
 </FileTree>
 
@@ -51,8 +57,7 @@ npm install -g genkit-cli
 Then install the packages you need in your project:
 
 ```bash
-npm install genkit @genkit-ai/google-genai @genkit-ai/express
-npm install -D tsx
+npm install genkit @genkit-ai/google-genai @genkit-ai/fetch
 ```
 
 ## Configure your model API key
@@ -63,12 +68,18 @@ This guide uses the Gemini API from Google AI Studio.
 export GEMINI_API_KEY=<your API key>
 ```
 
-## Define your recipe flow
+## Create your application
 
-Create `src/genkit/recipeGeneratorFlow.ts`:
+Update your app entrypoint with the same recipe flow used in the main quickstart, then expose it through Fastify with `@genkit-ai/fetch`:
 
-```ts title="src/genkit/recipeGeneratorFlow.ts"
+If your generated starter uses a different file name, place this code there instead.
+
+```ts title="src/index.ts"
+import { Readable } from 'node:stream';
+import { fetchHandlers } from '@genkit-ai/fetch';
 import { googleAI } from '@genkit-ai/google-genai';
+import Fastify from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
@@ -97,7 +108,7 @@ const RecipeSchema = z.object({
   tips: z.array(z.string()).optional(),
 });
 
-export const recipeGeneratorFlow = ai.defineFlow(
+const recipeGeneratorFlow = ai.defineFlow(
   {
     name: 'recipeGeneratorFlow',
     inputSchema: RecipeInputSchema,
@@ -117,103 +128,85 @@ export const recipeGeneratorFlow = ai.defineFlow(
     return output;
   },
 );
-```
 
-## Add a server route
+function toWebRequest(request: FastifyRequest): Request {
+  const protocol = request.protocol || 'http';
+  const host = request.headers.host || 'localhost:3000';
+  const url = new URL(request.raw.url || '/', `${protocol}://${host}`);
+  const headers = new Headers();
 
-In `src/server.ts`, add:
-
-```ts title="src/server.ts"
-import { expressHandler } from '@genkit-ai/express';
-import { recipeGeneratorFlow } from './genkit/recipeGeneratorFlow';
-```
-
-Then register the route after your `app` is created:
-
-```ts
-app.use(express.json());
-app.post('/api/recipeGeneratorFlow', expressHandler(recipeGeneratorFlow));
-```
-
-## Call your flow from Angular
-
-Update `src/app/app.component.ts`:
-
-```ts title="src/app/app.component.ts"
-import { Component, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { runFlow } from 'genkit/beta/client';
-
-@Component({
-  selector: 'app-root',
-  imports: [FormsModule],
-  templateUrl: './app.component.html',
-})
-export class AppComponent {
-  ingredient = signal('avocado');
-  dietaryRestrictions = signal('vegetarian');
-  recipe = signal<any | null>(null);
-
-  async generateRecipe() {
-    const result = await runFlow({
-      url: '/api/recipeGeneratorFlow',
-      input: {
-        ingredient: this.ingredient(),
-        dietaryRestrictions: this.dietaryRestrictions(),
-      },
-    });
-
-    this.recipe.set(result);
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => headers.append(key, entry));
+    } else {
+      headers.set(key, String(value));
+    }
   }
+
+  const body =
+    request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : JSON.stringify(request.body ?? {});
+
+  const controller = new AbortController();
+  request.raw.on('close', () => controller.abort());
+
+  return new Request(url, {
+    method: request.method,
+    headers,
+    body,
+    duplex: 'half',
+    signal: controller.signal,
+  });
 }
-```
 
-Update `src/app/app.component.html`:
+async function sendWebResponse(reply: FastifyReply, response: Response) {
+  reply.hijack();
+  reply.raw.statusCode = response.status;
 
-```html title="src/app/app.component.html"
-<main>
-  <h1>Recipe generator</h1>
-  <input
-    [ngModel]="ingredient()"
-    (ngModelChange)="ingredient.set($event)"
-    placeholder="Ingredient"
-  />
-  <input
-    [ngModel]="dietaryRestrictions()"
-    (ngModelChange)="dietaryRestrictions.set($event)"
-    placeholder="Dietary restrictions"
-  />
-  <button (click)="generateRecipe()">Generate recipe</button>
+  response.headers.forEach((value, key) => {
+    reply.raw.setHeader(key, value);
+  });
 
-  @if (recipe()) {
-    <pre>{{ recipe() | json }}</pre>
+  if (!response.body) {
+    reply.raw.end();
+    return;
   }
-</main>
+
+  Readable.fromWeb(response.body).pipe(reply.raw);
+}
+
+const app = Fastify({ logger: true });
+const handleFlowRequest = fetchHandlers([recipeGeneratorFlow], '/api');
+
+app.post('/api/:flowName', async (request, reply) => {
+  const response = await handleFlowRequest(toWebRequest(request));
+  await sendWebResponse(reply, response);
+});
+
+await app.listen({ port: 3000, host: '0.0.0.0' });
 ```
 
 ## Run your application
 
-Run your app locally as normal:
+Run your app locally:
 
 ```bash
-npm start
-```
-
-You can also launch the Developer UI alongside your flow code:
-
-```bash
-genkit start -- npx tsx --watch src/genkit/recipeGeneratorFlow.ts
+npx tsx src/index.ts
 ```
 
 ## Test your flow
 
-You can test the route directly:
+With the server running, call your flow over HTTP:
 
 ```bash
-curl -X POST http://localhost:4200/api/recipeGeneratorFlow \
+curl -X POST http://localhost:3000/api/recipeGeneratorFlow \
   -H "Content-Type: application/json" \
   -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
 ```
+
+You should receive a structured recipe in the response.
 
 ## Test in the Developer UI
 
@@ -226,7 +219,7 @@ The Genkit CLI is required to run the Developer UI. If you followed the installa
 Run the following command from your project root:
 
 ```bash
-genkit start -- npx tsx --watch src/genkit/recipeGeneratorFlow.ts
+genkit start -- npx tsx --watch src/index.ts
 ```
 
 This starts your app and launches the Developer UI at `http://localhost:4000` by default.
@@ -241,7 +234,7 @@ To make starting the Developer UI easier, add the following to your `package.jso
 
 ```json
 "scripts": {
-  "genkit:ui": "genkit start -- npx tsx --watch src/genkit/recipeGeneratorFlow.ts"
+  "genkit:ui": "genkit start -- npx tsx --watch src/index.ts"
 }
 ```
 
@@ -288,5 +281,6 @@ In the Developer UI:
 
 - [Creating flows](/docs/flows)
 - [Generating content](/docs/models)
-- [Accessing flows from the client](/docs/client)
+- [Connect a web frontend](/docs/frameworks/web-client)
+- [Connect a Flutter app](/docs/frameworks/flutter)
 - [Developer tools](/docs/devtools)

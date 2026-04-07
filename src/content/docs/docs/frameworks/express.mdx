@@ -1,71 +1,246 @@
 ---
-title: Express plugin
-description: The Genkit Express plugin provides utilities for conveniently exposing Genkit flows and actions via an Express HTTP server as REST APIs.
+title: Express
+description: Start from an Express server and expose the same recipe flow from the main quickstart as an HTTP API.
 supportedLanguages:
   - js
 ---
 
-The Genkit Express plugin provides utilities for conveniently exposing Genkit flows and actions via an Express HTTP server as REST APIs. This allows you to integrate your Genkit applications with existing Express-based backends or deploy them to any platform that can serve an Express.js app.
+import { FileTree } from '@astrojs/starlight/components';
 
-## Installation
+Use this guide when you're starting from an Express backend and want the quickest path to a working Genkit integration.
 
-To use this plugin, install it in your project:
+## Before you begin
+
+- Node.js v20 or later
+- npm
+
+This guide assumes you're already familiar with building Express applications.
+
+## Create a project
+
+If you don't already have an Express project, create one:
 
 ```bash
-npm i @genkit-ai/express
+# Create and navigate to a new directory
+mkdir my-genkit-express
+cd my-genkit-express
+
+# Initialize a new Node.js project
+npm init -y
+npm pkg set type=module
+
+# Install and configure TypeScript
+npm install -D typescript tsx @types/node @types/express
+npx tsc --init
+
+# Set up your source directory
+mkdir src
+touch src/index.ts
 ```
 
-## Usage
+## Project layout
 
-You can expose your Genkit flows and actions as REST API endpoints using the `expressHandler` function.
+<FileTree>
 
-First, define your Genkit flow:
+- package.json
+- tsconfig.json
+- src
+  - **index.ts**
 
-```typescript
-import { genkit, z } from 'genkit';
+</FileTree>
+
+## Install Genkit packages
+
+Install the Genkit CLI globally:
+
+```bash
+npm install -g genkit-cli
+```
+
+Then install the packages you need in your project:
+
+```bash
+npm install express genkit @genkit-ai/google-genai @genkit-ai/express
+```
+
+## Configure your model API key
+
+This guide uses the Gemini API from Google AI Studio.
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+## Create your application
+
+Update `src/index.ts` with the same recipe flow used in the main quickstart, then expose it through Express:
+
+```ts title="src/index.ts"
+import express from 'express';
 import { googleAI } from '@genkit-ai/google-genai';
 import { expressHandler } from '@genkit-ai/express';
-
-import express from 'express';
+import { genkit, z } from 'genkit';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-2.5-flash', {
+    temperature: 0.8,
+  }),
 });
 
-const simpleFlow = ai.defineFlow(
+const RecipeInputSchema = z.object({
+  ingredient: z.string().describe('Main ingredient or cuisine type'),
+  dietaryRestrictions: z
+    .string()
+    .optional()
+    .describe('Any dietary restrictions'),
+});
+
+const RecipeSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  prepTime: z.string(),
+  cookTime: z.string(),
+  servings: z.number(),
+  ingredients: z.array(z.string()),
+  instructions: z.array(z.string()),
+  tips: z.array(z.string()).optional(),
+});
+
+const recipeGeneratorFlow = ai.defineFlow(
   {
-    name: 'simpleFlow',
-    inputSchema: z.object({ input: z.string() }),
-    outputSchema: z.object({ output: z.string() }),
+    name: 'recipeGeneratorFlow',
+    inputSchema: RecipeInputSchema,
+    outputSchema: RecipeSchema,
   },
-  async ({ input }, { sendChunk }) => {
-    const { text } = await ai.generate({
-      prompt: input,
-      onChunk: (c) => sendChunk(c.text),
+  async (input) => {
+    const prompt = `Create a recipe with the following requirements:
+      Main ingredient: ${input.ingredient}
+      Dietary restrictions: ${input.dietaryRestrictions || 'none'}`;
+
+    const { output } = await ai.generate({
+      prompt,
+      output: { schema: RecipeSchema },
     });
-    return { output: text };
+
+    if (!output) throw new Error('Failed to generate recipe');
+    return output;
   },
 );
 
 const app = express();
 app.use(express.json());
 
-app.post('/simpleFlow', expressHandler(simpleFlow));
+app.post('/recipeGeneratorFlow', expressHandler(recipeGeneratorFlow));
 
 app.listen(8080, () => {
-  console.log('Express server listening on port 8080');
+  console.log('Express server listening on http://localhost:8080');
 });
 ```
 
-### Serving Models
+## Run your application
 
-You can also expose AI models as REST API endpoints using `expressHandler`. This allows you to serve models that can be consumed by other Genkit applications using [`defineRemoteModel`](/docs/models#consuming-remote-models) (or directly via HTTP clients).
+Run your app locally:
 
-```typescript
-import { openAI } from '@genkit-ai/compat-oai/openai';
-import { expressHandler } from '@genkit-ai/express';
+```bash
+npx tsx src/index.ts
+```
+
+You can also launch it through the Developer UI:
+
+```bash
+genkit start -- npx tsx --watch src/index.ts
+```
+
+## Test your flow
+
+With the server running, call your flow over HTTP:
+
+```bash
+curl -X POST http://localhost:8080/recipeGeneratorFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
+```
+
+You should receive a structured recipe in the response.
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+### Start the Developer UI
+
+The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
+
+Run the following command from your project root:
+
+```bash
+genkit start -- npx tsx --watch src/index.ts
+```
+
+This starts your app and launches the Developer UI at `http://localhost:4000` by default.
+
+:::note
+The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/devtools).
+:::
+
+##### Optional: Add an npm script
+
+To make starting the Developer UI easier, add the following to your `package.json` scripts:
+
+```json
+"scripts": {
+  "genkit:ui": "genkit start -- npx tsx --watch src/index.ts"
+}
+```
+
+Then run it with:
+
+```bash
+npm run genkit:ui
+```
+
+### Run and inspect flows
+
+In the Developer UI:
+
+1. Select `recipeGeneratorFlow` from the list of flows.
+2. Enter sample input:
+
+   ```json
+   {
+     "ingredient": "avocado",
+     "dietaryRestrictions": "vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the recipe generator flow
+     with input parameters and the resulting structured output.
+   </video>
+
+## Serving models
+
+You can also expose a model directly with `expressHandler` so other Genkit apps can consume it as a remote model. For example:
+
+```ts title="src/index.ts"
 import express from 'express';
+import { expressHandler } from '@genkit-ai/express';
+import { openAI } from '@genkit-ai/compat-oai/openai';
 
 (async () => {
   const oai = openAI();
@@ -73,314 +248,15 @@ import express from 'express';
 
   const app = express();
   app.use(express.json());
-
   app.post('/models/gpt5', expressHandler(gpt5));
-
   app.listen(8080);
 })();
 ```
 
-### Durable Streaming (Beta)
+## Next steps
 
-You can enable durable streaming for your flows, which allows clients to reconnect to a stream and replay the content. This is useful for long-running operations or unreliable networks.
-
-To enable durable streaming, pass a `streamManager` to `expressHandler`. See the [Durable Streaming documentation](/docs/durable-streaming#express) for configuration and usage details.
-
-### Accessing flows from the client
-
-Flows and actions exposed using the `expressHandler` function can be accessed using the `genkit/beta/client` library:
-
-```typescript
-import { runFlow, streamFlow } from 'genkit/beta/client';
-
-// Example: Running a flow
-const result = await runFlow({
-  url: `http://localhost:8080/simpleFlow`,
-  input: { input: 'say hello' },
-});
-console.log(result); // { output: "hello" }
-
-// Example: Streaming a flow
-const streamResult = streamFlow({
-  url: `http://localhost:8080/simpleFlow`,
-  input: { input: 'say hello' },
-});
-for await (const chunk of streamResult.stream) {
-  console.log(chunk);
-}
-console.log(await streamResult.output);
-```
-
-## Authentication
-
-You can handle authentication for your Express endpoints using context providers with `expressHandler`. This allows you to implement custom authorization logic based on incoming request data.
-
-```typescript
-import { UserFacingError } from 'genkit';
-import { ContextProvider, RequestData } from 'genkit/context';
-import { expressHandler } from '@genkit-ai/express';
-import express from 'express';
-
-// Define a custom context provider for authentication
-const authContext: ContextProvider<any> = (req: RequestData) => {
-  if (req.headers['authorization'] !== 'open sesame') {
-    throw new UserFacingError('PERMISSION_DENIED', 'not authorized');
-  }
-  return {
-    auth: {
-      user: 'Ali Baba',
-    },
-  };
-};
-
-// Example middleware for authentication (optional, can be integrated directly into context provider)
-const authMiddleware = (
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-) => {
-  if (req.headers['authorization'] !== 'open sesame') {
-    return res.status(403).send('Unauthorized');
-  }
-  next();
-};
-
-const app = express();
-app.use(express.json());
-
-// Expose the flow with authentication middleware and context provider
-app.post(
-  '/simpleFlow',
-  authMiddleware, // Optional: Express middleware for early auth checks
-  expressHandler(simpleFlow, { contextProvider: authContext }),
-);
-
-app.listen(8080, () => {
-  console.log('Express server with auth listening on port 8080');
-});
-```
-
-When using authentication policies, you can pass headers with the client library:
-
-```typescript
-import { runFlow } from 'genkit/beta/client';
-
-// set auth headers (when using auth policies)
-const result = await runFlow({
-  url: `http://localhost:8080/simpleFlow`,
-  headers: {
-    Authorization: 'open sesame',
-  },
-  input: { input: 'say hello' },
-});
-
-console.log(result); // { output: "hello" }
-```
-
-### Using `withFlowOptions`
-
-For more advanced authentication scenarios, you can use `withFlowOptions` to wrap your flows with a `ContextProvider`. This allows you to inject custom context, such as authentication details, into your flows.
-
-Here's an example of a custom context provider that checks for a specific header:
-
-```typescript
-import type { ContextProvider, RequestData } from 'genkit/context';
-import { UserFacingError } from 'genkit';
-import { startFlowServer, withFlowOptions } from '@genkit-ai/express';
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
-
-const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
-});
-
-// Define a custom context type
-interface CustomAuthContext {
-  auth?: {
-    user: string;
-    role: string;
-  };
-}
-
-// Define a custom context provider
-const customContextProvider: ContextProvider<CustomAuthContext> = async (
-  req: RequestData,
-) => {
-  const customHeader = req.headers['x-custom-auth'];
-  if (customHeader === 'my-secret-token') {
-    return {
-      auth: {
-        user: 'authorized-user',
-        role: 'admin',
-      },
-    };
-  }
-  throw new UserFacingError(
-    'UNAUTHENTICATED',
-    'Invalid or missing custom authentication header.',
-  );
-};
-
-export const protectedFlow = ai.defineFlow(
-  {
-    name: 'protectedFlow',
-    inputSchema: z.object({ input: z.string() }),
-    outputSchema: z.object({ output: z.string() }),
-  },
-  async ({ input }, { context }) => {
-    // Access context.auth populated by the CustomContextProvider
-    if (!context?.auth || context.auth.role !== 'admin') {
-      throw new Error('Unauthorized access: Admin role required.');
-    }
-    return {
-      output: `Hello, ${context.auth.user}! Your role is ${context.auth.role}. You said: ${input}`,
-    };
-  },
-);
-
-// Secure the flow with the custom context provider
-startFlowServer({
-  flows: [
-    withFlowOptions(protectedFlow, { contextProvider: customContextProvider }),
-  ],
-});
-```
-
-To call this secured flow from the client, include the custom header:
-
-```typescript
-import { runFlow } from 'genkit/beta/client';
-
-const result = await runFlow({
-  url: `http://localhost:8080/protectedFlow`,
-  headers: {
-    'X-Custom-Auth': 'my-secret-token', // Replace with your actual custom token
-  },
-  input: { input: 'sensitive data' },
-});
-
-console.log(result);
-```
-
-#### `apiKey` Context Provider
-
-The `apiKey` context provider is a built-in `ContextProvider` that allows you to perform API key-based access checks. It can be used with `withFlowOptions` to secure your flows.
-
-To use it, you provide the expected API key. The `apiKey` provider will then check the `Authorization` header of incoming requests against the provided key. If it matches, it populates `context.auth` with `{ apiKey: 'api-key' }`.
-
-:::caution
-**Warning:** This type of API key authentication should only be used with trusted clients (e.g., server-to-server communication or internal applications). Since the API key is sent directly in the `Authorization` header, it can be easily intercepted if used in untrusted environments like client-side web applications. For public-facing applications, consider more robust authentication mechanisms like OAuth 2.0 or Firebase Authentication.
-:::
-
-```typescript
-import { apiKey } from 'genkit/context';
-import { startFlowServer, withFlowOptions } from '@genkit-ai/express';
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
-
-const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
-});
-
-export const securedFlow = ai.defineFlow(
-  {
-    name: 'securedFlow',
-    inputSchema: z.object({ sensitiveData: z.string() }),
-    outputSchema: z.object({ output: z.string() }),
-  },
-  async ({ sensitiveData }, { context }) => {
-    return { output: 'this is protected by API Key check' };
-  },
-);
-
-// Secure the flow with an API key from environment variables
-startFlowServer({
-  flows: [
-    withFlowOptions(securedFlow, {
-      contextProvider: apiKey(process.env.MY_API_KEY),
-    }),
-  ],
-});
-```
-
-To call this secured flow from the client, include the API key in the `Authorization` header:
-
-```typescript
-import { runFlow } from 'genkit/beta/client';
-
-const result = await runFlow({
-  url: `http://localhost:8080/securedFlow`,
-  headers: {
-    Authorization: `${process.env.MY_API_KEY}`, // Replace with your actual API key
-  },
-  input: { sensitiveData: 'sensitive data' },
-});
-
-console.log(result);
-```
-
-## Using `startFlowServer`
-
-You can also use `startFlowServer` to quickly expose multiple flows and actions:
-
-```typescript
-import { startFlowServer } from '@genkit-ai/express';
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
-
-const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
-});
-
-export const menuSuggestionFlow = ai.defineFlow(
-  {
-    name: 'menuSuggestionFlow',
-    inputSchema: z.object({ theme: z.string() }),
-    outputSchema: z.object({ menu: z.string() }),
-  },
-  async ({ theme }) => {
-    // ... your flow logic here
-    return { menu: `Suggested menu for ${theme}` };
-  },
-);
-
-startFlowServer({
-  flows: [menuSuggestionFlow],
-});
-```
-
-You can also configure the server with options like `port` and `cors`:
-
-```typescript
-startFlowServer({
-  flows: [menuSuggestionFlow],
-  port: 4567,
-  cors: {
-    origin: '*',
-  },
-});
-```
-
-`startFlowServer` options:
-
-```ts
-export interface FlowServerOptions {
-  /** List of flows to expose via the flow server. */
-  flows: (
-    | Flow<any, any, any>
-    | FlowWithContextProvider<any, any, any>
-    | FlowWithOptions<any, any, any>
-  )[];
-  /** Port to run the server on. Defaults to env.PORT or 3400. */
-  port?: number;
-  /** CORS options for the server. */
-  cors?: CorsOptions;
-  /** HTTP method path prefix for the exposed flows. */
-  pathPrefix?: string;
-  /** JSON body parser options. */
-  jsonParserOptions?: bodyParser.OptionsJson;
-}
-```
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/frameworks/web-client)
+- [Connect a Flutter app](/docs/frameworks/flutter)
+- [Developer tools](/docs/devtools)

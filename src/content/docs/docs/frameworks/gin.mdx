@@ -1,0 +1,196 @@
+---
+title: Gin
+description: Start from a Gin server and expose the same recipe flow from the main quickstart as an HTTP API.
+supportedLanguages:
+  - go
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide when you're starting from a Gin backend and want the quickest path to a working Genkit integration.
+
+## Before you begin
+
+- Go 1.24 or later ([Download and install](https://go.dev/doc/install))
+
+This guide assumes you're already familiar with building Go applications.
+
+## Create a project
+
+If you don't already have a Go project, create one:
+
+```bash
+mkdir my-genkit-gin && cd my-genkit-gin
+go mod init example/my-genkit-gin
+```
+
+## Project layout
+
+<FileTree>
+
+- go.mod
+- go.sum
+- **main.go**
+
+</FileTree>
+
+## Install Genkit packages
+
+First, install the Genkit CLI:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+Then install the Go packages you need:
+
+```bash
+go get github.com/firebase/genkit/go
+go get github.com/gin-gonic/gin
+go get github.com/gin-contrib/cors
+```
+
+## Configure your model API key
+
+This guide uses the Gemini API from Google AI Studio.
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+## Create your application
+
+Create a `main.go` file with the same recipe flow used in the main quickstart, then expose it through Gin:
+
+```go title="main.go"
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+)
+
+type RecipeInput struct {
+	Ingredient          string `json:"ingredient" jsonschema:"description=Main ingredient or cuisine type"`
+	DietaryRestrictions string `json:"dietaryRestrictions,omitempty" jsonschema:"description=Any dietary restrictions"`
+}
+
+type Recipe struct {
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	PrepTime     string   `json:"prepTime"`
+	CookTime     string   `json:"cookTime"`
+	Servings     int      `json:"servings"`
+	Ingredients  []string `json:"ingredients"`
+	Instructions []string `json:"instructions"`
+	Tips         []string `json:"tips,omitempty"`
+}
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+	)
+
+	recipeGeneratorFlow := genkit.DefineFlow(g, "recipeGeneratorFlow", func(ctx context.Context, input *RecipeInput) (*Recipe, error) {
+		dietaryRestrictions := input.DietaryRestrictions
+		if dietaryRestrictions == "" {
+			dietaryRestrictions = "none"
+		}
+
+		prompt := fmt.Sprintf(`Create a recipe with the following requirements:
+			Main ingredient: %s
+			Dietary restrictions: %s`, input.Ingredient, dietaryRestrictions)
+
+		recipe, _, err := genkit.GenerateData[Recipe](ctx, g, ai.WithPrompt(prompt))
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate recipe: %w", err)
+		}
+
+		return recipe, nil
+	})
+
+	r := gin.Default()
+	r.Use(cors.Default())
+	r.POST("/recipeGeneratorFlow", gin.WrapH(genkit.Handler(recipeGeneratorFlow)))
+
+	log.Println("Gin server listening on http://localhost:8080")
+	if err := r.Run(":8080"); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server error: %v", err)
+	}
+}
+```
+
+## Run your application
+
+Run your app locally:
+
+```bash
+go run .
+```
+
+You can also launch it through the Developer UI:
+
+```bash
+genkit start -- go run .
+```
+
+## Test your flow
+
+With the server running, call your flow over HTTP:
+
+```bash
+curl -X POST http://localhost:8080/recipeGeneratorFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
+```
+
+You should receive a structured recipe in the response.
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+Run the following command from your project root:
+
+```bash
+genkit start -- go run .
+```
+
+This starts your app and launches the Developer UI at `http://localhost:4000` by default.
+
+### Run and inspect flows
+
+In the Developer UI:
+
+1. Select `recipeGeneratorFlow` from the list of flows.
+2. Enter sample input:
+
+   ```json
+   {
+     "ingredient": "avocado",
+     "dietaryRestrictions": "vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
+
+## Next steps
+
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/frameworks/web-client)
+- [Connect a Flutter app](/docs/frameworks/flutter)
+- [Developer tools](/docs/devtools)

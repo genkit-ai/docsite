@@ -1,74 +1,79 @@
 ---
-title: FastAPI integration
-description: Learn how to integrate Genkit with FastAPI applications for Python, including REST API endpoints, streaming responses, and deployment strategies.
+title: FastAPI
+description: Start from a FastAPI app and expose the same recipe flow from the main quickstart as an HTTP endpoint.
 supportedLanguages:
   - python
 ---
 
-FastAPI is a modern, high-performance Python web framework that's perfect for building REST APIs with Genkit. This guide shows you how to integrate Genkit flows with FastAPI applications.
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide when you're starting from a FastAPI app and want the fastest path to serving a Genkit flow from a Python API.
 
 ## Before you begin
 
-You should be familiar with Genkit's concept of [flows](/docs/flows), and how to write them.
+- Python 3.10 or later
+- uv package manager
+
+This guide assumes you're already familiar with building FastAPI applications.
 
 ## Create a project
 
-Create a new Python project with uv:
+Create a new project with uv:
 
 ```bash
-uv init my-genkit-app
-cd my-genkit-app
+# Create and navigate to a new directory
+mkdir my-genkit-fastapi
+cd my-genkit-fastapi
+
+# Initialize the project with uv
+uv init --no-readme --python 3.10
 ```
 
-## Installation
+## Project layout
 
-Install FastAPI and Genkit dependencies:
+<FileTree>
+
+- pyproject.toml
+- **main.py**
+
+</FileTree>
+
+## Install Genkit packages
+
+Install the Genkit CLI:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+Then install the packages you need in your project:
 
 ```bash
 uv add fastapi uvicorn genkit genkit-plugin-google-genai genkit-plugin-fastapi
 ```
 
-## Define Genkit flows and FastAPI routes
+## Configure your model API key
 
-To expose your Genkit flows as FastAPI endpoints, you should use standard FastAPI custom endpoints. For simplicity in this example, we'll create a single file (for example, `main.py`) to initialize Genkit, define your flows, and expose them.
+This guide uses the Gemini API from Google AI Studio.
 
-### FastAPI handler plugin
-
-To serve a flow with Genkit’s HTTP protocol (streaming chunks, structured errors, and compatibility with Genkit clients), decorate the flow with `genkit_fastapi_handler` and set `response_model=None` on the route so FastAPI does not try to validate or coerce Genkit’s JSON payloads:
-
-```python
-from fastapi import FastAPI
-from genkit import Genkit
-from genkit.plugins.fastapi import genkit_fastapi_handler
-
-app = FastAPI()
-ai = Genkit(...)
-
-@app.post('/chat', response_model=None)
-@genkit_fastapi_handler(ai)
-@ai.flow()
-async def chat(prompt: str) -> str:
-    return 'Hello world'
+```bash
+export GEMINI_API_KEY=<your API key>
 ```
 
-The handlers stack bottom-up: FastAPI route, then `genkit_fastapi_handler`, then `@ai.flow()`.
+## Create your application
 
-The examples below show other patterns when you need custom request or response shapes.
+Create `main.py` with the same recipe flow used in the main quickstart, then expose it through FastAPI:
 
-### 1. Genkit Client Compatible API (Recommended)
+```python title="main.py"
+from typing import Optional
 
-If you want your FastAPI server to work with the official Genkit Client SDKs for Web or Dart (see [Accessing flows from the client](/docs/client)), your endpoint must consume and produce messages that match Genkit's network protocol.
-
-The Genkit client sends a JSON payload wrapped in a `{"data": ...}` envelope. You can map this easily by defining a wrapping Pydantic endpoint:
-
-```python
-from typing import Any
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 from genkit import Genkit
+from genkit.plugins.fastapi import genkit_fastapi_handler
 from genkit.plugins.google_genai import GoogleAI
 
-# Initialize Genkit
 ai = Genkit(
     plugins=[GoogleAI()],
     model='googleai/gemini-2.5-flash',
@@ -76,192 +81,130 @@ ai = Genkit(
 
 app = FastAPI()
 
-# Pydantic model matching Genkit's envelope format
-class GenkitEnvelope(BaseModel):
-    data: Any # can be a string, dict, etc.
 
-@app.post("/menuSuggestionGenkit")
-async def menu_suggestion_genkit(payload: GenkitEnvelope):
-    """Generate a menu suggestion compatible with standard Genkit clients."""
-    # Unpack payload.data (which will be a string 'pirate')
-    theme = payload.data
-
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {theme} themed restaurant.',
+class RecipeInput(BaseModel):
+    ingredient: str = Field(description='Main ingredient or cuisine type')
+    dietary_restrictions: Optional[str] = Field(
+        default=None,
+        description='Any dietary restrictions',
     )
-    return {"result": response.text} # Return structure Genkit expects
-```
 
-### 2. Streaming to Clients
 
-To stream content to Genkit Web or Dart clients, you must yield Server-Sent Events (SSE) that conform to Genkit's protocol (using `event: chunk`). In Python, you can achieve this by passing an `ActionRunContext` to your flow and using `.stream()` on the server.
+class Recipe(BaseModel):
+    title: str
+    description: str
+    prep_time: str
+    cook_time: str
+    servings: int
+    ingredients: list[str]
+    instructions: list[str]
+    tips: list[str] | None = None
 
-```python
-import json
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from genkit import Genkit, ActionRunContext
 
-app = FastAPI()
-ai = Genkit(...)
-
-# Define flow with ctx for streaming
+@app.post('/recipeGeneratorFlow')
+@genkit_fastapi_handler(ai)
 @ai.flow()
-async def streaming_menu_flow(theme: str, ctx: ActionRunContext) -> str:
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {theme} themed restaurant.',
-        on_chunk=lambda chunk: ctx.send_chunk(chunk.text) if chunk.text else None
+async def recipe_generator_flow(input_data: RecipeInput) -> Recipe:
+    dietary_restrictions = input_data.dietary_restrictions or 'none'
+
+    prompt = f"""Create a recipe with the following requirements:
+        Main ingredient: {input_data.ingredient}
+        Dietary restrictions: {dietary_restrictions}"""
+
+    result = await ai.generate(
+        prompt=prompt,
+        output_schema=Recipe,
     )
-    return response.text
 
-class GenkitEnvelope(BaseModel):
-    data: Any
+    if not result.output:
+        raise ValueError('Failed to generate recipe')
 
-@app.post("/menuSuggestionStream")
-async def menu_suggestion_stream(payload: GenkitEnvelope):
-    theme = payload.data
-
-    async def sse_generator():
-        flow_stream = streaming_menu_flow.stream(theme)
-
-        # In current PyPI Genkit (0.5.2), stream() returns a tuple (stream, future).
-        # We use flow_stream[0] if it is a tuple, otherwise we assume it is the stream itself.
-        fs = flow_stream[0] if isinstance(flow_stream, tuple) else flow_stream
-
-        async for chunk in fs:
-            # Yield as expected by standard Genkit clients: data: {"message": chunk}\n\n
-            yield f'data: {json.dumps({"message": chunk})}\n\n'
-
-        # Yield final answer
-        final_output = await flow_stream[1] if isinstance(flow_stream, tuple) else await flow_stream.response
-        res = final_output.result if hasattr(final_output, 'result') else final_output
-        yield f'data: {json.dumps({"result": res})}\n\n'
-
-    return StreamingResponse(sse_generator(), media_type="text/event-stream")
-```
-
-### 3. Standard API (Idiomatic FastAPI)
-
-If you do NOT need to support standard Genkit client libraries and are building your own custom REST API, use standard Pydantic models for your own domain types.
-
-```python
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-app = FastAPI()
-
-class MenuRequest(BaseModel):
-    theme: str
-
-@app.post("/menuSuggestion")
-async def menu_suggestion(request: MenuRequest):
-    """Generate a menu suggestion."""
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {request.theme} themed restaurant.',
-    )
-    return {"menuItem": response.text}
-```
-
-## Call your flows
-
-### Standard API Client
-
-If you used the **Standard API (Idiomatic FastAPI)** approach, you can call it using any standard HTTP client like `requests` in Python or standard `fetch` in JavaScript:
-
-```python
-import requests
-
-response = requests.post(
-    'http://localhost:8000/menuSuggestion',
-    json={'theme': 'pirate'}
-)
-print(response.json())
-```
-
-### Genkit Client SDK Client
-
-If you used the **Genkit Client Compatible API** approach, it will play nicely with standard `runFlow()` from `@genkit-ai/client`:
-
-```javascript
-import { runFlow } from '@genkit-ai/client';
-
-const result = await runFlow({
-  url: 'http://localhost:8000/menuSuggestionGenkit',
-  input: 'pirate', // Input sent as 'pirate', client automatic wraps in 'data'
-});
-console.log(result);
-```
-
-## Authentication (Optional)
-
-You can secure your endpoints using FastAPI's standard dependency injection (`Depends`), checking tokens before running your Genkit logic:
-
-```python
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-security = HTTPBearer()
-
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    # Token verification logic here...
-    return {"user_id": "123", "email": "user@example.com"}
-
-@app.post("/protectedMenu")
-async def protected_menu(
-    request: MenuRequest,
-    user: dict = Depends(verify_token)
-):
-    response = await ai.generate(
-        prompt=f'Invent a menu item for a {request.theme} themed restaurant.',
-    )
-    return {"menuItem": response.text, "user": user}
+    return result.output
 ```
 
 ## Run your application
 
-### Development
+Run your app locally:
 
 ```bash
 uv run uvicorn main:app --reload
 ```
 
-### With Genkit Developer UI
+You can also launch it through the Developer UI:
 
 ```bash
 genkit start -- uv run uvicorn main:app --reload
 ```
 
-## Test your app locally
+## Test your flow
 
-Set up credentials for your model provider:
-
-**Gemini (Google AI)**
+With the server running, call your flow over HTTP:
 
 ```bash
-export GEMINI_API_KEY=<your API key>
-uv run uvicorn main:app --reload
+curl -X POST http://localhost:8000/recipeGeneratorFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"ingredient":"avocado","dietary_restrictions":"vegetarian"}}'
 ```
 
-**Gemini (Vertex AI)**
+You should receive a structured recipe in the response.
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+### Start the Developer UI
+
+The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
+
+To inspect your app with Genkit Dev UI, run:
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=<your project ID>
-export GOOGLE_CLOUD_LOCATION=us-central1
-gcloud auth application-default login
-uv run uvicorn main:app --reload
+genkit start -- uv run uvicorn main:app --reload
 ```
 
-## Deploy your app
+The command will print the Dev UI URL:
 
-When you deploy your app, you'll need to make credentials available. See:
+```
+Genkit Developer UI: http://localhost:4000
+```
 
-- [Cloud Run deployment guide](/docs/deployment/cloud-run)
-- [Any platform deployment guide](/docs/deployment/any-platform)
+### Run and inspect flows
 
-## API Documentation
+In the Developer UI:
 
-FastAPI automatically generates interactive API documentation:
+1. Select `recipe_generator_flow` from the list of flows.
+2. Enter sample input:
 
-- **Swagger UI**: Visit `http://localhost:8000/docs`
-- **ReDoc**: Visit `http://localhost:8000/redoc`
+   ```json
+   {
+     "ingredient": "avocado",
+     "dietary_restrictions": "vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the recipe generator flow
+     with input parameters and the resulting structured output.
+   </video>
+
+## Next steps
+
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/frameworks/web-client)
+- [Connect a Flutter app](/docs/frameworks/flutter)
+- [Developer tools](/docs/devtools)
