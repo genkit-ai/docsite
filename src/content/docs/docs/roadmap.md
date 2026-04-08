@@ -25,7 +25,7 @@ To support the next generation of interactive experiences, we are building nativ
 
 ### **Observability for your AI and agentic features**
 
-As agents become more autonomous, debugging them becomes significantly more difficult. In 2026, we are evolving the Genkit Dev UI into a full-scale agent playground. Developers will be able to inspect multi-turn states, replay tool loops, and observe the "thought process" of their agents in real-time.
+As agents become more autonomous, debugging them becomes significantly more difficult. In 2026, we are evolving our tooling into a full-scale agent playground. Developers will be able to locally inspect multi-turn states, replay tool loops, and observe the "thought process" of their agents in real-time.
 
 ### **Embracing and expanding our community**
 
