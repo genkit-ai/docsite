@@ -329,7 +329,8 @@ Use Vertex AI Vector Search for enterprise-grade vector operations:
 
 1. Create a Vector Search index in the [Google Cloud Console](https://console.cloud.google.com/vertex-ai/matching-engine/indexes)
 2. Configure dimensions based on your embedding model:
-   - `gemini-embedding-001`: 768 dimensions
+   - `gemini-embedding-001` / `gemini-embedding-2-preview`: **default 3072** dimensions; you can set **`output_dimensionality`** on embed calls (for example **768**, **1536**, or **3072** per Google). Size the index to the length you actually use.
+   - `text-embedding-005`: 768 dimensions
    - `text-multilingual-embedding-002`: 768 dimensions
    - `multimodalEmbedding001`: 128, 256, 512, or 1408 dimensions
 3. Deploy the index to a standard endpoint
@@ -566,13 +567,21 @@ ai = Genkit(
 - **Vertex AI Express Mode:** A streamlined way to try out many Vertex AI features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
 
 ```python
-# Using Vertex AI Express Mode (Easy to start, some limitations)
+# Using Vertex AI Express Mode (easy to start; some limitations).
 # Get an API key from the Vertex AI Studio Express Mode setup.
 import os
-VertexAI(api_key=os.environ.get('VERTEX_EXPRESS_API_KEY'))
+
+from genkit import Genkit
+from genkit.plugins.google_genai import VertexAI
+
+ai = Genkit(
+    plugins=[
+        VertexAI(api_key=os.environ['VERTEX_EXPRESS_API_KEY']),
+    ],
+)
 ```
 
-_Note: When using Express Mode, you do not provide `project` and `location` in the plugin config._
+_Note: When using Express Mode, you typically omit `project` and `location` on `VertexAI` (see the [Express Mode docs](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview))._
 
 ### Basic Usage
 
@@ -600,6 +609,20 @@ embeddings = await ai.embed(
     content='Embed this text.',
 )
 ```
+
+:::note[Embedding vector sizes]
+Size Vector Search indexes (and any application-side buffers) to the **length of vectors your app actually produces**. **`gemini-embedding-001`** and **`gemini-embedding-2-preview`** default to **3072** dimensions; pass **`output_dimensionality`** in **`options`** on **`embed`** / **`embed_many`** to use a shorter vector (Google documents common choices such as **768**, **1536**, or **3072**). Example:
+
+```python
+embeddings = await ai.embed(
+    embedder='vertexai/gemini-embedding-001',
+    content='Your text here.',
+    options={'output_dimensionality': 768},
+)
+```
+
+**`vertexai/text-embedding-005`** and **`vertexai/text-multilingual-embedding-002`** typically use **768** dimensions. See [Embedding models](/docs/integrations/google-genai#embedding-models) and the [Gemini embedding documentation](https://ai.google.dev/gemini-api/docs/embeddings).
+:::
 
 ### Image Generation (Imagen)
 
@@ -799,7 +822,7 @@ llm_response = await ai.generate(
 
 ### Model Garden Integration
 
-Access third-party models through Vertex AI Model Garden using the separate `vertex_ai` plugin:
+Access third-party models through Vertex AI Model Garden using the `genkit-plugin-vertex-ai` package (`ModelGardenPlugin`). The plugin requires a Google Cloud project ID: pass `project_id`, or set `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`. Model IDs must use the publisher-qualified names shown in the Google Cloud console (for example `meta/...` for Llama, `anthropic/...` for Claude on Vertex). Pass them to `model_garden_name()` so Genkit resolves the action as `modelgarden/<model-id>`.
 
 **Installation:**
 
@@ -807,62 +830,57 @@ Access third-party models through Vertex AI Model Garden using the separate `ver
 uv add genkit-plugin-vertex-ai
 ```
 
-#### Claude 3 Models
+#### Llama (Meta) models
 
 ```python
 from genkit import Genkit
 from genkit.plugins.vertex_ai import ModelGardenPlugin
+from genkit.plugins.vertex_ai.model_garden import model_garden_name
 
 ai = Genkit(
     plugins=[
         ModelGardenPlugin(
+            project_id='my-gcp-project',
             location='us-central1',
-            models=['claude-3-haiku', 'claude-3-sonnet', 'claude-3-opus'],
         ),
     ],
 )
 
 response = await ai.generate(
-    model='claude-3-sonnet',
-    prompt='What should I do when I visit Melbourne?',
-)
-```
-
-#### Llama 3.1 405b
-
-```python
-ai = Genkit(
-    plugins=[
-        ModelGardenPlugin(
-            location='us-central1',
-            models=['llama3-405b-instruct-maas'],
-        ),
-    ],
-)
-
-response = await ai.generate(
-    model='llama3-405b-instruct-maas',
+    model=model_garden_name('meta/llama-3.1-405b-instruct-maas'),
     prompt='Write a function that adds two numbers together',
 )
 ```
 
-#### Mistral Models
+Another identifier shipped in the Python SDK registry is `meta/llama-3.2-90b-vision-instruct-maas`. Always confirm the exact model resource name for your project in the [Vertex AI Model Garden](https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models) console.
+
+#### Anthropic (Claude) models on Vertex
+
+Claude on Vertex uses `anthropic/...` model IDs. Version strings often include dates or `@` — use the exact ID from the console:
 
 ```python
+from genkit import Genkit
+from genkit.plugins.vertex_ai import ModelGardenPlugin
+from genkit.plugins.vertex_ai.model_garden import model_garden_name
+
 ai = Genkit(
     plugins=[
         ModelGardenPlugin(
+            project_id='my-gcp-project',
             location='us-central1',
-            models=['mistral-large', 'mistral-small'],
         ),
     ],
 )
 
 response = await ai.generate(
-    model='mistral-large',
-    prompt='Explain quantum computing',
+    model=model_garden_name('anthropic/claude-3-5-haiku-20241022'),
+    prompt='What should I do when I visit Melbourne?',
 )
 ```
+
+#### Other OpenAI-compatible Model Garden endpoints
+
+For additional publishers (for example Mistral), use the same `model_garden_name()` pattern with the full Model Garden model ID. Models not in the built-in registry still resolve via the generic OpenAI-compatible Model Garden path.
 
 Vertex AI provides access to various third-party models through Model Garden. Consult the [Vertex AI Model Garden documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models) for the full list of supported models and their capabilities.
 

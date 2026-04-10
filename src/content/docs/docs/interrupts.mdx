@@ -925,7 +925,7 @@ the user, for example by asking a multiple-choice question.
 For this use case, use the Genkit instance's `tool()` decorator with `ctx.interrupt()`:
 
 ```python
-from genkit import Genkit, ToolRunContext, tool_response
+from genkit import FinishReason, Genkit, Part, tool_response, ToolRunContext
 from genkit.plugins.google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
@@ -941,7 +941,7 @@ class QuestionInput(BaseModel):
     allow_other: bool = Field(default=False, description='when true, allow write-ins')
 
 @ai.tool()
-def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
+async def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
     """Use this to ask the user a clarifying question."""
     # Interrupt with metadata that the caller can use.
     ctx.interrupt({
@@ -954,6 +954,9 @@ def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
 Note that the output type of an interrupt tool corresponds to the response data
 you will provide when resuming, as opposed to something that will be automatically
 populated by the tool function.
+
+To resume, build each entry in `tool_responses` with `tool_response` from `genkit`,
+wrapping the interrupted `ToolRequestPart` in `Part(root=...)` (see below).
 
 ### Use interrupts
 
@@ -976,8 +979,8 @@ If you've passed one or more interrupts to your generate call, you
 need to check the response for interrupts so that you can handle them:
 
 ```python
-# You can check the 'finish_reason' attribute of the response
-if response.finish_reason == 'interrupted':
+# You can check the finish_reason (use the enum for comparisons)
+if response.finish_reason == FinishReason.INTERRUPTED:
     print("Generation interrupted.")
 
 # Or you can check if any interrupt requests are on the response
@@ -991,19 +994,19 @@ if response.interrupts:
 ```
 
 Responding to an interrupt is done using the `tool_responses` option on a subsequent
-`generate` call, making sure to pass in the existing message history. Use the
-`tool_response` helper function to construct the response:
+`generate` call, making sure to pass in the existing message history. Use `tool_response`
+with `Part(root=interrupt_part)` for each interrupted request:
 
 ```python
-from genkit import tool_response
-
 # Get the user's answer (e.g., from user input)
 user_answer = 'b'  # User selected option b
+
+interrupt_part = response.interrupts[0]
 
 # Resume generation with the tool response
 response = await ai.generate(
     messages=response.messages,
-    tool_responses=[tool_response(response.interrupts[0], user_answer)],
+    tool_responses=[tool_response(Part(root=interrupt_part), user_answer)],
     tools=['ask_question'],
 )
 ```
@@ -1014,6 +1017,8 @@ For interactive applications, you'll often need to handle multiple interrupts
 in a loop until the model completes its task:
 
 ```python
+from genkit import Part, tool_response
+
 async def interactive_session():
     response = await ai.generate(
         prompt='Help me plan a backyard BBQ.',
@@ -1037,7 +1042,7 @@ async def interactive_session():
                 print(f"  {i + 1}. {choice}")
 
             user_input = input("Your answer: ")
-            answers.append(tool_response(interrupt, user_input))
+            answers.append(tool_response(Part(root=interrupt), user_input))
 
         # Resume generation with all answers
         response = await ai.generate(
@@ -1055,7 +1060,7 @@ async def interactive_session():
 You can also use interrupts within flows for more structured applications:
 
 ```python
-from genkit import Genkit, ToolRunContext, tool_response
+from genkit import Genkit, ToolRunContext
 from genkit.plugins.google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
@@ -1067,7 +1072,7 @@ class TriviaQuestion(BaseModel):
     answers: list[str] = Field(description='multiple choice answers')
 
 @ai.tool()
-def present_question(input: TriviaQuestion, ctx: ToolRunContext) -> None:
+async def present_question(input: TriviaQuestion, ctx: ToolRunContext) -> None:
     """Presents a trivia question to the user."""
     ctx.interrupt(input.model_dump())
 
