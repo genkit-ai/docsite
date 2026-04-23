@@ -291,6 +291,10 @@ function generateMainLlmsTxt(): string {
   return content;
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export async function generateLlmsDirectly(): Promise<void> {
   console.log('Generating llms.txt files directly from source files...');
   
@@ -307,13 +311,13 @@ export async function generateLlmsDirectly(): Promise<void> {
   
   // Generate main llms.txt
   const mainContent = generateMainLlmsTxt();
-  await writeFile(path.join(outputDir, 'llms.txt'), mainContent);
+  await writeFile(path.join(outputDir, 'llms.txt'), escapeHtml(mainContent));
   console.log('Generated main llms.txt');
   
   // Generate complete unfiltered documentation (llms-full.txt)
   console.log('Generating complete unfiltered documentation...');
   const fullContent = generateFullDocumentation(docs);
-  await writeFile(path.join(outputDir, 'llms-full.txt'), fullContent);
+  await writeFile(path.join(outputDir, 'llms-full.txt'), escapeHtml(fullContent));
   console.log('Generated llms-full.txt');
   
   // Generate language-specific complete documentation
@@ -322,7 +326,7 @@ export async function generateLlmsDirectly(): Promise<void> {
   for (const lang of languages) {
     console.log(`Generating complete documentation for ${lang}...`);
     const content = generateLanguageSpecificContent(docs, lang);
-    await writeFile(path.join(outputDir, `llms-${lang}.txt`), content);
+    await writeFile(path.join(outputDir, `llms-${lang}.txt`), escapeHtml(content));
     console.log(`Generated llms-${lang}.txt`);
   }
   
