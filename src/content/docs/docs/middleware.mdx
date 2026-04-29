@@ -217,24 +217,214 @@ For more complex examples of building custom middleware, you can refer to the so
 
 <Lang lang="dart">
 
-## Middleware
+## Middleware in Dart
 
-Genkit supports middleware for intercepting and modifying requests. A common use case is retrying failed requests.
+Genkit Dart uses a **registry-based system** for middleware, similar to plugins. This allows middleware to be resolved by name and configured via schemas, enabling support for the Genkit Developer UI.
 
-### Retry middleware
+## Available middleware
+
+The following middleware is available in Genkit Dart:
+
+### 1. FileSystem middleware (`filesystem`)
+
+Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory.
 
 ```dart
+import 'package:genkit/genkit.dart';
+
+final response = await ai.generate(
+  model: googleAI.gemini('gemini-2.5-flash'),
+  prompt: 'Create a hello world node app in the workspace',
+  use: [
+    filesystem(rootDirectory: './workspace'),
+  ],
+);
+```
+
+**Configuration options:**
+- `rootDirectory` (required): The root directory to which all filesystem operations are restricted.
+
+*Note: Unlike the JavaScript version, the Dart FileSystem middleware does not currently support `allowWriteAccess` or `toolNamePrefix` options and always enables write operations.*
+
+### 2. Skills middleware (`skills`)
+
+Automatically scans a directory for `SKILL.md` files and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
+
+```dart
+import 'package:genkit/genkit.dart';
+
+final response = await ai.generate(
+  prompt: 'How do I run tests in this repo?',
+  use: [
+    skills(skillPaths: ['./skills']),
+  ],
+);
+```
+
+**Configuration options:**
+- `skillPaths` (optional): Paths to directories containing skills (defaults to `['skills']`).
+
+### 3. Tool approval middleware (`toolApproval`)
+
+Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptException` allowing you to prompt the user for manual confirmation before resuming.
+
+```dart
+import 'package:genkit/genkit.dart';
+
+final response = await ai.generate(
+  prompt: 'write a file',
+  tools: [writeFileTool],
+  use: [
+    toolApproval(approved: []), // Empty list means call triggers interrupt
+  ],
+);
+```
+
+**Configuration options:**
+- `approved` (optional): List of approved tool names.
+
+### 4. Retry middleware (`retry`)
+
+Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
+
+```dart
+import 'package:genkit/genkit.dart';
+
 final response = await ai.generate(
   model: googleAI.gemini('gemini-2.5-flash'),
   prompt: 'Reliable request',
   use: [
-    RetryMiddleware(
-      maxRetries: 3,
-      retryModel: true,
-      statuses: [StatusName.UNAVAILABLE],
-    ),
+    retry(maxRetries: 3),
   ],
 );
 ```
+
+**Configuration options:**
+- `maxRetries` (optional): Maximum number of retry attempts (default: 3).
+- `statuses` (optional): A list of `StatusCodes` constants that should trigger a retry. Defaults to `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, `INTERNAL`.
+- `initialDelayMs` (optional): The initial delay before the first retry (default: 1000).
+- `maxDelayMs` (optional): The maximum capped delay between retries (default: 60000).
+- `backoffFactor` (optional): Exponential backoff multiplier (default: 2.0).
+- `noJitter` (optional): If false, adds a random factor (Full Jitter) to the delay (default: false).
+- `retryModel` (optional): Whether to retry model calls (default: true).
+- `retryTools` (optional): Whether to retry tool calls (default: false).
+
+*Note: The `onError` callback is available when instantiating `RetryMiddleware` directly (e.g., for Lite API usage), but cannot be passed via the `retry()` helper.*
+
+To use the `retry()` helper, you must register the `RetryPlugin` when initializing Genkit:
+
+```dart
+final ai = Genkit(
+  plugins: [
+    RetryPlugin(),
+  ],
+);
+```
+
+## Building your own custom middleware
+
+To build a production-ready middleware in Dart that integrates with the Genkit UI, you should follow the registered middleware pattern, which consists of four parts:
+
+### 1. Define the configuration schema
+
+Use the `@Schema()` annotation to define the configuration options for your middleware.
+
+```dart
+import 'package:schemantic/schemantic.dart';
+
+part 'logger.g.dart';
+
+@Schema()
+abstract class LoggerOptions {
+  bool? get enableColor;
+  int? get maxLogLength;
+}
+```
+
+### 2. Implement the middleware logic
+
+Create a class that extends `GenerateMiddleware` and override the hooks you need (`model`, `tool`, or `generate`).
+
+```dart
+class LoggerMiddleware extends GenerateMiddleware {
+  final bool enableColor;
+  final int maxLogLength;
+
+  LoggerMiddleware({
+    this.enableColor = false,
+    this.maxLogLength = 1000,
+  });
+
+  @override
+  Future model(
+    ModelRequest request,
+    dynamic ctx,
+    dynamic next,
+  ) async {
+    // Custom interception logic here...
+    return next(request, ctx);
+  }
+}
+```
+
+### 3. Define the middleware and plugin
+
+Use `defineMiddleware` to link your schema and implementation, and expose it via a `GenkitPlugin`.
+
+```dart
+class LoggerPlugin extends GenkitPlugin {
+  @override
+  String get name => 'logger';
+
+  @override
+  List middleware() => [
+    defineMiddleware(
+      name: 'logger',
+      configSchema: LoggerOptions.schema,
+      create: ([LoggerOptions? config]) => LoggerMiddleware(
+        enableColor: config?.enableColor ?? false,
+        maxLogLength: config?.maxLogLength ?? 1000,
+      ),
+    ),
+  ];
+}
+```
+
+### 4. Create the DX helper function
+
+Create a factory function that returns a `GenerateMiddlewareRef` for ergonomic use.
+
+```dart
+dynamic logger({
+  bool? enableColor,
+  int? maxLogLength,
+}) {
+  return middlewareRef(
+    name: 'logger',
+    config: LoggerOptions(
+      enableColor: enableColor,
+      maxLogLength: maxLogLength,
+    ),
+  );
+}
+```
+
+To use your custom middleware:
+
+```dart
+final ai = Genkit(
+  plugins: [LoggerPlugin()],
+);
+
+final response = await ai.generate(
+  model: customModel,
+  prompt: 'Hello world',
+  use: [
+    logger(enableColor: true, maxLogLength: 500),
+  ],
+);
+```
+
+For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit Dart GitHub repository](https://github.com/genkit-ai/genkit-dart/tree/main/packages/genkit_middleware).
 
 </Lang>
