@@ -1,0 +1,240 @@
+---
+title: Middleware
+description: Learn how to use and create middleware in Genkit to enhance model execution and agentic workflows.
+supportedLanguages:
+  - js
+  - dart
+---
+
+import Lang from '../../../components/Lang.astro';
+
+Genkit allows you to use middleware to modify the behavior of `generate()` calls. Middleware can be used for various purposes, such as retrying failed requests, falling back to different models, or injecting tools and context.
+
+You can use pre-packaged middleware or build your own custom middleware. The official Genkit middleware for JavaScript is available in the `@genkit-ai/middleware` package.
+
+<Lang lang="js">
+
+## Installation
+
+```bash
+npm install @genkit-ai/middleware
+# or
+pnpm add @genkit-ai/middleware
+```
+
+## Available middleware
+
+The `@genkit-ai/middleware` package provides several useful middleware options out of the box. This list represents the middleware built and maintained by the Genkit team, but there may also be community-built middleware available.
+
+### 1. FileSystem middleware (`filesystem`)
+
+Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory.
+
+```typescript
+import { genkit } from 'genkit';
+import { filesystem } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Create a hello world node app in the workspace',
+  use: [
+    filesystem({ rootDirectory: './workspace' })
+  ]
+});
+```
+
+**Configuration options:**
+- `rootDirectory` (required): The root directory to which all filesystem operations are restricted.
+- `allowWriteAccess` (optional): If true, allows write access to the filesystem (defaults to `false`).
+- `toolNamePrefix` (optional): Prefix to add to the name of the injected tools.
+
+### 2. Skills middleware (`skills`)
+
+Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
+
+```typescript
+import { genkit } from 'genkit';
+import { skills } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  prompt: 'How do I run tests in this repo?',
+  use: [
+    skills({ skillPaths: ['./skills'] })
+  ]
+});
+```
+
+### 3. Tool approval middleware (`toolApproval`)
+
+Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptError` allowing you to prompt the user for manual confirmation before resuming.
+
+```typescript
+import { genkit, restartTool } from 'genkit';
+import { toolApproval } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+// 1. Initial attempt
+const response = await ai.generate({
+  prompt: 'write a file',
+  tools: [writeFileTool],
+  use: [
+    toolApproval({ approved: [] }) // Empty list means call triggers interrupt
+  ]
+});
+
+if (response.finishReason === 'interrupted') {
+  const interrupt = response.interrupts[0];
+  
+  // 2. Ask user for approval, then recreate the tool request with approval
+  const approvedPart = restartTool(interrupt, { toolApproved: true });
+
+  // 3. Resume execution
+  const resumedResponse = await ai.generate({
+    messages: response.messages,
+    resume: { restart: [approvedPart] }, 
+    use: [
+      toolApproval({ approved: [] })
+    ]
+  });
+}
+```
+
+### 4. Retry middleware (`retry`)
+
+Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
+
+```typescript
+import { genkit } from 'genkit';
+import { retry } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-pro-latest'),
+  prompt: 'Heavy reasoning task...',
+  use: [
+    retry({
+      maxRetries: 3,
+      initialDelayMs: 1000,
+      backoffFactor: 2
+    })
+  ]
+});
+```
+
+**Configuration options:**
+- `maxRetries` (optional): The maximum number of times to retry a failed request (default: 3).
+- `statuses` (optional): An array of `StatusName` values that should trigger a retry (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']`).
+- `initialDelayMs` (optional): The initial delay between retries in milliseconds (default: 1000).
+- `maxDelayMs` (optional): The maximum delay between retries in milliseconds (default: 60000).
+- `backoffFactor` (optional): The factor by which the delay increases after each retry (exponential backoff, default: 2).
+- `noJitter` (optional): Whether to disable jitter on the delay (default: false).
+
+### 5. Fallback middleware (`fallback`)
+
+Automatically switches to a different model if the primary model fails on a specific set of error codes. Useful for falling back to a smaller/faster model when a large model exceeds quota limits.
+
+```typescript
+import { genkit } from 'genkit';
+import { fallback } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-pro-latest'),
+  prompt: 'Try the pro model first...',
+  use: [
+    fallback({
+      models: [googleAI.model('gemini-flash-latest')], // try flash if pro fails
+      statuses: ['RESOURCE_EXHAUSTED']
+    })
+  ]
+});
+```
+
+**Configuration options:**
+- `models` (required): An array of model references to try in order.
+- `statuses` (optional): An array of `StatusName` values that should trigger a fallback (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']`).
+- `isolateConfig` (optional): If true, the fallback model will not inherit the original request's configuration (default: false).
+
+## Building your own custom middleware
+
+You can implement your own custom middleware to extend Genkit's functionality. Genkit provides a `generateMiddleware` helper to create structured middleware with configuration schemas.
+
+Middleware can intercept different phases of execution by providing hooks:
+- `model`: Intercepts the call to the model.
+- `tool`: Intercepts tool execution.
+- `generate`: Intercepts the high-level generation loop.
+
+Here is an example of a custom middleware that logs requests and responses:
+
+```typescript
+import { generateMiddleware, z } from 'genkit';
+
+export const loggerMiddleware = generateMiddleware(
+  {
+    name: 'loggerMiddleware',
+    description: 'Logs requests and responses',
+    configSchema: z.object({
+      verbose: z.boolean().optional(),
+    }),
+  },
+  ({ config, ai }) => {
+    return {
+      model: async (req, ctx, next) => {
+        if (config?.verbose) {
+          console.log('Request:', JSON.stringify(req));
+        }
+        const resp = await next(req, ctx);
+        if (config?.verbose) {
+          console.log('Response:', JSON.stringify(resp));
+        }
+        return resp;
+      },
+    };
+  }
+);
+```
+
+To use it:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Hello',
+  use: [loggerMiddleware({ verbose: true })],
+});
+```
+
+For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/js/plugins/middleware).
+
+</Lang>
+
+<Lang lang="dart">
+
+## Middleware
+
+Genkit supports middleware for intercepting and modifying requests. A common use case is retrying failed requests.
+
+### Retry middleware
+
+```dart
+final response = await ai.generate(
+  model: googleAI.gemini('gemini-2.5-flash'),
+  prompt: 'Reliable request',
+  use: [
+    RetryMiddleware(
+      maxRetries: 3,
+      retryModel: true,
+      statuses: [StatusName.UNAVAILABLE],
+    ),
+  ],
+);
+```
+
+</Lang>
