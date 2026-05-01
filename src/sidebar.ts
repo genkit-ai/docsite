@@ -111,6 +111,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Creating flows", slug: "docs/flows" },
       { label: "Generating content", slug: "docs/models" },
+      { label: "Middleware", slug: "docs/middleware" },
       { label: "Tool calling", slug: "docs/tool-calling" },
       { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
