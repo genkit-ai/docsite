@@ -13,20 +13,16 @@ import Lang from '../../../components/Lang.astro';
 The Agents API is in **Beta.** APIs may change in minor version releases. Import from `genkit/beta`.
 :::
 
-Agents are multi-turn, session-managed LLM interactions with built-in tool
-execution, streaming, and persistence. An agent wraps a model configuration
-into a reusable unit that automatically handles message history, tool calling
-loops, and session state — so you can focus on building your application.
-
-Use agents to build chatbots, approval workflows, background report
-generators, multi-agent systems, and any AI-powered feature that requires
-conversation state. Every agent is served as an HTTP endpoint and consumed
-from your client app using the same `streamFlow()` and `runFlow()` helpers.
-
-Agents replace the deprecated [`ai.chat()`](/docs/chat) API and provide
-significantly more power: server-side persistence, session branching,
-custom state, artifacts, interrupts, background execution, and multi-agent
-delegation.
+Agents bundle a model, system prompt, tools, and session state into a
+single reusable unit that you define on the server and consume from your
+client app. They handle message history, tool-calling loops, streaming,
+and persistence automatically — so you can focus on building features like
+chatbots, approval workflows, background report generators, and
+multi-agent systems. Under the hood, agents are powered by prompts and the
+`generate()` API, so they have full access to
+[middleware](/docs/middleware) — add retries, fallbacks, tool approval,
+filesystem access, or your own custom hooks to any agent. Agents replace
+the deprecated [`ai.chat()`](/docs/chat) API.
 
 All of the code samples in this guide can be found in the [agents sample](https://github.com/genkit-ai/genkit/tree/main/js/testapps/agents) on GitHub.
 
@@ -35,7 +31,10 @@ All of the code samples in this guide can be found in the [agents sample](https:
 Before reading this page, you should be familiar with [generating content](/docs/models),
 [tool calling](/docs/tool-calling), and [prompts](/docs/dotprompt).
 
-All agent APIs are imported from `genkit/beta`:
+:::note[Beta import]
+All agent APIs are imported from **`genkit/beta`**, not `genkit`. This
+applies to `genkit()`, session stores, and client-side types.
+:::
 
 ```ts
 import { genkit } from 'genkit/beta';
@@ -66,14 +65,25 @@ const weatherAgent = ai.defineAgent({
 
 **With typed custom state:**
 
-```ts
-interface TaskState {
-  tasks: Array<{ id: number; title: string; done: boolean }>;
-  nextId: number;
-}
+Define your state shape with a Zod schema and pass it as `stateSchema`.
+This gives you TypeScript types, runtime validation, and JSON Schema
+for the developer UI:
 
-const taskAgent = ai.defineAgent<TaskState>({
+```ts
+const TaskStateSchema = z.object({
+  tasks: z.array(z.object({
+    id: z.number(),
+    title: z.string(),
+    done: z.boolean(),
+  })),
+  nextId: z.number(),
+});
+
+type TaskState = z.infer<typeof TaskStateSchema>;
+
+const taskAgent = ai.defineAgent({
   name: 'taskAgent',
+  stateSchema: TaskStateSchema,
   model: 'googleai/gemini-flash-latest',
   system: 'You are a task management assistant. Use the provided tools.',
   tools: [addTask, toggleTask, removeTask],
@@ -172,6 +182,37 @@ Use `defineCustomAgent` when you need:
 - Custom `status` streaming (not just model token chunks)
 - Direct session manipulation (`addMessages`, `updateCustom`)
 - Different models for different steps
+
+## State management strategies
+
+Every agent uses one of two strategies for maintaining session state across
+turns. This choice affects how the client continues a conversation, and
+**sending the wrong continuation token will throw an error** — so pick a
+strategy before building your client.
+
+| | Server-managed | Client-managed |
+|---|---|---|
+| **Setup** | Define the agent with a `store` | Omit `store` |
+| **Continue a turn** | Send `snapshotId` | Send the full `state` blob |
+| **Server stores state?** | Yes | No |
+| **Supports branching?** | Yes | Manual (client manages copies of `state`) |
+| **Supports background execution?** | Yes | No |
+
+See [Session persistence](#session-persistence) for detailed examples of
+each strategy, including session restoration, branching, and pruning.
+
+## Testing agents in the developer UI
+
+Before building a client, you can test and debug agents directly in the
+Genkit developer UI. Run your agent, send messages, and inspect every
+detail — session state, message history, tool calls, artifacts, and
+full execution traces — all without writing any client code.
+
+![Agent in the Genkit developer UI](/assets/agent-dev-ui-1.png)
+
+The developer UI is the fastest way to iterate on your agent's system
+prompt, tool configuration, and session behavior. See
+[Developer tools](/docs/devtools) for setup instructions.
 
 ## Serving agents over HTTP
 
@@ -307,6 +348,10 @@ const result = await runFlow<AgentOutput, AgentInit>({
 ```
 
 ## Session persistence
+
+This section covers each [state management strategy](#state-management-strategies)
+in detail — stores, session restoration, client-managed state, branching, and
+pruning.
 
 ### Server-side stores
 
@@ -452,7 +497,10 @@ const store = new FileSessionStore('./.snapshots', {
 
 ### Custom state
 
-Tools can read and mutate typed custom state via `ai.currentSession()`:
+Custom state is useful when your application needs a reliable source of
+truth that the model can't maintain in chat history alone — exact IDs,
+counters, structured records, or any data where precision matters. Tools
+can read and mutate typed custom state via `ai.currentSession()`:
 
 ```ts
 const addTask = ai.defineTool(
@@ -811,9 +859,11 @@ const session = weatherAgent.streamBidi({ snapshotId: previousSnapshotId });
 ## Next steps
 
 - Learn about [tool calling](/docs/tool-calling) to add capabilities to your agents
+- Add [middleware](/docs/middleware) for retries, fallbacks, tool approval, and custom hooks
 - Explore [interrupts](/docs/interrupts) for human-in-the-loop workflows
 - See [Dotprompt](/docs/dotprompt) for managing agent prompts in files
-- Read about [implementing agentic patterns](/docs/agentic-patterns) for workflow-level patterns
+- Understand [error types](/docs/error-types) for handling model and tool failures
+- Read about [agentic patterns](/docs/agentic-patterns) for lower-level composition using flows and `generate()`
 - Check out [client app integration](/docs/client) for serving agents from web applications
 
 </Lang>
