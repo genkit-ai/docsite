@@ -117,6 +117,7 @@ const DOCS_SIDEBAR = [
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
       { label: "Passing information through context", slug: "docs/context" },
       { label: "Pause generation using interrupts", slug: "docs/interrupts" },
+      { label: "Agents", slug: "docs/agents" },
       { label: "Creating persistent chat sessions", slug: "docs/chat" },
       {
         label: "Model Context Protocol (MCP)",
