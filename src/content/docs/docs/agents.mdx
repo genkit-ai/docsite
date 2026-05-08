@@ -1,6 +1,6 @@
 ---
 title: Agents
-description: Add AI-powered features to your app - chatbots, approval flows, background generators - with built-in session management, streaming, and persistence.
+description: Add agentic features to your app - chatbots, approval flows, background generators - with built-in session management, streaming, and persistence.
 supportedLanguages:
   - js
 ---
@@ -51,14 +51,16 @@ const ai = genkit({
 ### `ai.defineAgent()`
 
 The primary way to create an agent. Define a model, system prompt, tools, and
-optionally a session store - all in one place:
+optionally a session store (a persistence backend that saves message history
+and state between requests) - all in one place:
 
 ```ts
 const weatherAgent = ai.defineAgent({
   name: 'weatherAgent',
   model: 'googleai/gemini-flash-latest',
-  system: 'You are a helpful weather assistant. Use the getWeather tool.',
+  system: 'You are a helpful weather assistant. Answer weather queries.',
   tools: [getWeather],
+  // Persist session state between requests (see "Session persistence" section)
   store: new FileSessionStore('./.snapshots'),
 });
 ```
@@ -66,8 +68,10 @@ const weatherAgent = ai.defineAgent({
 **With typed custom state:**
 
 Define your state shape with a Zod schema and pass it as `stateSchema`.
-This gives you TypeScript types, runtime validation, and JSON Schema
-for the developer UI:
+This gives you TypeScript types and runtime validation. Genkit also
+generates JSON Schema from the Zod schema and uses it in the developer
+UI, where you can view and edit custom state directly while testing
+your agent:
 
 ```ts
 const TaskStateSchema = z.object({
@@ -92,8 +96,13 @@ const taskAgent = ai.defineAgent({
 
 ### `ai.definePromptAgent()`
 
-Wire an agent from a [Dotprompt](/docs/dotprompt) `.prompt` file. Useful when
-prompt authors (non-developers) edit templates separately from agent wiring:
+Wire an agent from a [Dotprompt](/docs/dotprompt) `.prompt` file. This
+separates the prompt template from agent wiring, which is useful when:
+
+- Non-developer prompt authors edit templates independently
+- You want versioned, reviewable prompt files in source control
+- Content teams manage prompt copy without touching application code
+- You need to A/B test different prompt variants
 
 ```
 ---
@@ -119,8 +128,21 @@ const tripPlannerAgent = ai.definePromptAgent({
 
 ### `ai.defineCustomAgent()`
 
-For full control over orchestration - multiple model calls, custom status
-streaming, and manual session management:
+Use `defineCustomAgent` when you need full control over the agent's
+orchestration logic. Unlike `defineAgent`, which runs a single model call
+with automatic tool-calling loops, `defineCustomAgent` lets you:
+
+- **Chain multiple model calls** with custom logic between them - for
+  example, decompose a question, research each part, then synthesize
+- **Stream custom status messages** to the client (not just model tokens),
+  so the UI can show progress like "Researching step 2 of 3…"
+- **Manipulate the session directly** with `addMessages` and `updateCustom`,
+  giving you control over exactly what gets persisted
+- **Use different models for different steps** - a fast model for
+  decomposition, a capable model for synthesis
+
+The following example shows a research agent that decomposes a question,
+researches each part in parallel, and streams status updates throughout:
 
 ```ts
 const researchAgent = ai.defineCustomAgent(
@@ -128,11 +150,13 @@ const researchAgent = ai.defineCustomAgent(
   async (sess, { sendChunk }) => {
     let lastMessage;
 
+    // sess.run() handles loading and saving session state around your logic
     await sess.run(async (input) => {
+      // Extract the user's question from the latest message
       const userText =
         input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
 
-      // Step 1: Decompose the question
+      // Step 1: Use a fast model to decompose the question into sub-questions
       sendChunk({ status: 'Decomposing question…' });
       const decompose = await ai.generate({
         model: 'googleai/gemini-flash-lite-latest',
@@ -141,9 +165,10 @@ const researchAgent = ai.defineCustomAgent(
       });
       const subQuestions = decompose.output ?? [userText];
 
-      // Step 2: Research each sub-question
+      // Step 2: Research each sub-question with the default model
       const subAnswers = [];
       for (let i = 0; i < subQuestions.length; i++) {
+        // Stream a status update so the client can show progress
         sendChunk({ status: `Researching (${i + 1}/${subQuestions.length})…` });
         const research = await ai.generate({
           prompt: `Answer concisely: ${subQuestions[i]}`,
@@ -151,7 +176,7 @@ const researchAgent = ai.defineCustomAgent(
         subAnswers.push({ question: subQuestions[i], answer: research.text });
       }
 
-      // Step 3: Synthesize - stream the final response
+      // Step 3: Synthesize findings - stream the final response token by token
       sendChunk({ status: 'Synthesizing…' });
       const synthesisStream = ai.generateStream({
         prompt: `Synthesize these findings into a cohesive answer:\n${
@@ -159,10 +184,12 @@ const researchAgent = ai.defineCustomAgent(
         }`,
       });
 
+      // Forward each model chunk to the client as it arrives
       for await (const chunk of synthesisStream.stream) {
         sendChunk({ modelChunk: chunk });
       }
 
+      // Persist the final model message in the session history
       lastMessage = (await synthesisStream.response).message;
       sess.addMessages([lastMessage]);
     });
@@ -176,12 +203,6 @@ const researchAgent = ai.defineCustomAgent(
   }
 );
 ```
-
-Use `defineCustomAgent` when you need:
-- Multiple sequential model calls with logic between them
-- Custom `status` streaming (not just model token chunks)
-- Direct session manipulation (`addMessages`, `updateCustom`)
-- Different models for different steps
 
 ## State management strategies
 
@@ -565,14 +586,14 @@ for (const task of tasks) {
 
 ### Artifacts
 
-Tools can emit artifacts (generated files, code, etc.) via
+Tools can produce artifacts (generated files, code, etc.) via
 `ai.currentSession().addArtifacts()`:
 
 ```ts
-const emitArtifact = ai.defineTool(
+const generateFile = ai.defineTool(
   {
-    name: 'emitArtifact',
-    description: 'Emit a generated code file to the workspace.',
+    name: 'generateFile',
+    description: 'Add a generated code file to the workspace.',
     inputSchema: z.object({ name: z.string(), content: z.string() }),
     outputSchema: z.object({ status: z.string() }),
   },
@@ -581,7 +602,7 @@ const emitArtifact = ai.defineTool(
       name: input.name,
       parts: [{ text: input.content }],
     }]);
-    return { status: `Artifact ${input.name} emitted.` };
+    return { status: `Artifact ${input.name} added.` };
   }
 );
 ```
@@ -686,11 +707,21 @@ The interrupt pattern uses tool calls as control flow - `userApproval`
 never executes server-side. It exists solely to pause the agent and hand
 control back to the client.
 
+Note that an arbitrary amount of time can pass between the interrupt and
+the resumption - seconds, hours, or even days. When the agent interrupts,
+the HTTP request completes normally and the server process is idle. All
+session state is persisted in the store. When the client sends the
+resumption request, it's a completely new HTTP request that loads the
+session from the `snapshotId` and continues where it left off.
+
 ## Background execution
 
 For long-running tasks (report generation, deep research), run the agent
 in the background. The client submits a request, receives a `snapshotId`
 immediately, and polls for the result.
+
+To implement background execution, you need to make changes on both the
+server and client:
 
 ### Server
 
@@ -758,7 +789,9 @@ await runFlow({ url: '/api/backgroundAgent/abort', input: snapshotId });
 ## Multi-agent delegation
 
 Use the `agents()` middleware from `@genkit-ai/middleware` to let an
-orchestrator agent delegate tasks to specialized sub-agents.
+orchestrator agent delegate tasks to specialized sub-agents. The setup
+involves defining sub-agents, wiring them into an orchestrator with the
+middleware, and exposing the orchestrator as an endpoint:
 
 ### Server
 
@@ -836,9 +869,11 @@ previousState = result.state;
 ## Bidirectional streaming
 
 `agent.streamBidi()` creates a bidirectional streaming session - you can send
-messages and receive streamed responses concurrently. This is useful for
-server-side scripts or advanced scenarios where you need to queue multiple
-messages before reading responses:
+messages and receive streamed responses concurrently. Today, `streamBidi` is
+a server-side API useful for testing, batch evaluation, CLI tools, or
+pipeline stages. A WebSocket-based deployment plugin (similar to
+`@genkit-ai/express`) is coming soon, which will let you expose `streamBidi`
+agents to browser and mobile clients over persistent connections.
 
 ```ts
 const session = weatherAgent.streamBidi({});
@@ -874,7 +909,7 @@ const session = weatherAgent.streamBidi({ snapshotId: previousSnapshotId });
 ## Next steps
 
 - Learn about [tool calling](/docs/tool-calling) to add capabilities to your agents
-- Add [middleware](/docs/middleware) for retries, fallbacks, tool approval, and custom hooks
+- Add [middleware](/docs/middleware) for retries, fallbacks, tool approval, sub-agent delegation, and custom hooks
 - Explore [interrupts](/docs/interrupts) for human-in-the-loop workflows
 - See [Dotprompt](/docs/dotprompt) for managing agent prompts in files
 - Understand [error types](/docs/error-types) for handling model and tool failures
