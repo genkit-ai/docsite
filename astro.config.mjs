@@ -109,6 +109,11 @@ export default defineConfig({
           label: 'LinkedIn',
           href: 'https://www.linkedin.com/company/genkit',
         },
+        {
+          icon: 'reddit',
+          label: 'Reddit',
+          href: 'https://reddit.com/r/GenkitFramework',
+        },
       ],
       sidebar,
       customCss: ['./src/tailwind.css'],
