@@ -113,6 +113,7 @@ const DOCS_SIDEBAR = [
       { label: "Generating content", slug: "docs/models" },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Tool calling", slug: "docs/tool-calling" },
+      { label: "Agents", slug: "docs/agents" },
       { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
       { label: "Passing information through context", slug: "docs/context" },
