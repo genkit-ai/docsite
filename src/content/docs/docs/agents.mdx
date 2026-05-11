@@ -614,41 +614,147 @@ in the session state.
 
 Agents work seamlessly with [interrupts](/docs/interrupts) for human-in-the-loop
 workflows - approvals, confirmations, or any time you need user input
-mid-flow.
+mid-flow. Genkit supports two interrupt resumption patterns:
 
-### Server
+| | Respond | Restart |
+|---|---|---|
+| **When to use** | [`defineInterrupt`](/docs/interrupts#define-manual-response-interrupts) tools — you provide the answer directly | [Approval-gated tools](/docs/interrupts#tools-with-restartable-interrupts) — the tool re-executes with metadata |
+| **Tool executes?** | No — you supply the output | Yes — re-runs with `resumed` metadata |
+| **Resume field** | `resume.respond` | `resume.restart` |
 
-Define an interrupt and include it in the agent's tools:
+See [Interrupts](/docs/interrupts) for full details on defining both kinds
+of interrupt tools. The examples below show both patterns with an agent.
+
+### Respond pattern (`resume.respond`)
+
+Use this for [`defineInterrupt`](/docs/interrupts#define-manual-response-interrupts)
+tools — the tool never executes server-side; you provide the output directly.
+This is useful for collecting user input (clarification, choices, feedback):
+
+**Server:**
 
 ```ts
-const userApproval = ai.defineInterrupt({
-  name: 'userApproval',
-  description: 'Ask the user for approval before proceeding.',
+const askUser = ai.defineInterrupt({
+  name: 'askUser',
+  description: 'Ask the user a question when you need clarification.',
   inputSchema: z.object({
-    action: z.string(),
-    details: z.string(),
+    question: z.string(),
+    options: z.array(z.string()).min(2).max(5),
   }),
   outputSchema: z.object({
-    approved: z.boolean(),
-    feedback: z.string().optional(),
+    answer: z.string(),
   }),
 });
 
-const bankingAgent = ai.defineAgent({
-  name: 'bankingAgent',
+const assistantAgent = ai.defineAgent({
+  name: 'assistantAgent',
   model: 'googleai/gemini-flash-latest',
-  system: 'You are a banking assistant. Always use userApproval before transfers.',
-  tools: [userApproval, transferMoney],
+  system: 'You are a helpful assistant. Use askUser when you need clarification.',
+  tools: [askUser],
   store: new InMemorySessionStore(),
 });
 ```
 
-### Client
+**Client — detect and resume:**
 
-The interrupt pattern has two phases: **detect** the interrupt in the
-response, then **resume** by sending a tool response.
+```ts
+const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+  url: '/api/assistantAgent',
+  input: {
+    messages: [{ role: 'user', content: [{ text: 'Help me plan a party' }] }],
+  },
+  init: previousSnapshotId ? { snapshotId: previousSnapshotId } : {},
+});
 
-**1. Send the initial request and detect the interrupt:**
+for await (const chunk of response.stream) {
+  // ... render streamed content
+}
+
+const result = await response.output;
+
+// Check if the agent paused to ask the user a question
+const question = result.message?.content.find(
+  (p) => p.toolRequest?.name === 'askUser'
+);
+
+if (question?.toolRequest) {
+  // Show the question and options in the UI, collect the user's answer,
+  // then resume with resume.respond:
+  const resumed = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+    url: '/api/assistantAgent',
+    input: {
+      resume: {
+        respond: [{
+          toolResponse: {
+            name: 'askUser',
+            ref: question.toolRequest.ref,
+            output: { answer: userSelectedAnswer },
+          },
+        }],
+      },
+    },
+    init: { snapshotId: result.snapshotId },
+  });
+
+  for await (const chunk of resumed.stream) {
+    // ... render the model's response
+  }
+}
+```
+
+### Restart pattern (`resume.restart`)
+
+Use this for approval-gated tools where the tool itself checks for
+explicit user approval before executing a sensitive action. This is
+**more secure** than the respond pattern because the `resumed` metadata
+can only be set by the client — the LLM can never forge it, so the
+model cannot bypass the approval gate through prompt injection or
+jailbreaking.
+
+**Server — define a tool with an approval gate:**
+
+```ts
+const transferMoney = ai.defineTool(
+  {
+    name: 'transferMoney',
+    description: 'Transfer money to a specified account.',
+    inputSchema: z.object({
+      amount: z.number(),
+      toAccount: z.string(),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      transactionId: z.string(),
+    }),
+  },
+  async (input, ctx) => {
+    // Check if this is a user-approved restart.
+    // ctx.metadata.resumed can only be set by the client, never by the LLM.
+    const isApproved = ctx.metadata?.resumed?.toolApproved === true;
+
+    if (!isApproved && input.amount > 100) {
+      // Interrupt — pause and return this tool request to the client
+      ctx.interrupt({
+        message: `Transfer $${input.amount} to ${input.toAccount}. Approve?`,
+        amount: input.amount,
+      });
+    }
+
+    // Only reached if approved or amount ≤ $100
+    return { success: true, transactionId: `txn-${Date.now()}` };
+  }
+);
+
+const bankingAgent = ai.defineAgent({
+  name: 'bankingAgent',
+  model: 'googleai/gemini-flash-latest',
+  system: 'You are a banking assistant that can transfer money.',
+  tools: [transferMoney],
+  store: new InMemorySessionStore(),
+});
+```
+
+**Client — detect and restart with approval:**
 
 ```ts
 const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
@@ -665,47 +771,42 @@ for await (const chunk of response.stream) {
 
 const result = await response.output;
 
-// Check if the agent paused for approval
-const approvalRequest = result.message?.content.find(
-  (p) => p.toolRequest?.name === 'userApproval'
+// Check if the agent interrupted for approval
+const transfer = result.message?.content.find(
+  (p) => p.toolRequest?.name === 'transferMoney'
 );
 
-if (approvalRequest?.toolRequest) {
-  // Show an approval dialog in the UI
-  // Save result.snapshotId and the toolRequest ref for resumption
+if (transfer?.toolRequest) {
+  // Show the transfer details and ask the user to approve.
+  // If approved, restart the tool with approval metadata:
+  const resumed = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+    url: '/api/bankingAgent',
+    input: {
+      resume: {
+        restart: [{
+          toolRequest: {
+            name: 'transferMoney',
+            ref: transfer.toolRequest.ref,
+            input: transfer.toolRequest.input,
+          },
+          metadata: { resumed: { toolApproved: true } },
+        }],
+      },
+    },
+    init: { snapshotId: result.snapshotId },
+  });
+
+  for await (const chunk of resumed.stream) {
+    // ... render the model's confirmation
+  }
 }
 ```
 
-**2. Resume after the user responds:**
-
-```ts
-// User clicked "Approve" - send a tool response to resume the flow
-const resumed = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/bankingAgent',
-  input: {
-    messages: [{
-      role: 'tool',
-      content: [{
-        toolResponse: {
-          name: 'userApproval',
-          ref: savedToolRequestRef,
-          output: { approved: true, feedback: 'Looks good' },
-        },
-      }],
-    }],
-  },
-  // Resume from the exact snapshot where the flow paused
-  init: { snapshotId: savedSnapshotId },
-});
-
-for await (const chunk of resumed.stream) {
-  // ... render the model's confirmation
-}
-```
-
-The interrupt pattern uses tool calls as control flow - `userApproval`
-never executes server-side. It exists solely to pause the agent and hand
-control back to the client.
+The key difference: with **respond**, you supply the tool's output and
+the tool never runs. With **restart**, the tool re-executes — but this
+time `ctx.metadata.resumed.toolApproved` is `true`, so it passes the
+approval gate. This ensures the approval check lives in server-side
+code that the LLM cannot circumvent.
 
 Note that an arbitrary amount of time can pass between the interrupt and
 the resumption - seconds, hours, or even days. When the agent interrupts,
