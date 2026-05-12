@@ -1,0 +1,286 @@
+---
+title: Fastify
+description: Start from a Fastify server and expose the same recipe flow from the main quickstart using the fetch plugin.
+supportedLanguages:
+  - js
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide when you're building with Fastify and want to expose Genkit flows over HTTP using `@genkit-ai/fetch`. This pattern works well when you want Fastify's routing and plugin model while keeping Genkit on its standard fetch-based protocol.
+
+## Before you begin
+
+- Node.js v20 or later
+- npm
+
+This guide assumes you're already familiar with building TypeScript server applications.
+
+## Create a project
+
+If you don't already have a Fastify project, create one:
+
+```bash
+# Generate a Fastify project
+npm init fastify my-genkit-fastify
+
+# Navigate to the project
+cd my-genkit-fastify
+
+# Install dependencies
+npm install
+```
+
+When prompted, choose a TypeScript-friendly setup so you can follow the code in this guide directly.
+
+## Project layout
+
+Your generated starter may include a few extra files, but for this guide you'll mainly work in your Fastify app entrypoint:
+
+<FileTree>
+
+- package.json
+- tsconfig.json
+- src
+  - **index.ts**
+
+</FileTree>
+
+## Install Genkit packages
+
+Install the Genkit CLI globally:
+
+```bash
+npm install -g genkit-cli
+```
+
+Then install the packages you need in your project:
+
+```bash
+npm install genkit @genkit-ai/google-genai @genkit-ai/fetch
+```
+
+## Configure your model API key
+
+This guide uses the Gemini API from Google AI Studio.
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+## Create your application
+
+Update your app entrypoint with the same recipe flow used in the main quickstart, then expose it through Fastify with `@genkit-ai/fetch`:
+
+If your generated starter uses a different file name, place this code there instead.
+
+```ts title="src/index.ts"
+import { Readable } from 'node:stream';
+import { fetchHandlers } from '@genkit-ai/fetch';
+import { googleAI } from '@genkit-ai/google-genai';
+import Fastify from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { genkit, z } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-2.5-flash', {
+    temperature: 0.8,
+  }),
+});
+
+const RecipeInputSchema = z.object({
+  ingredient: z.string().describe('Main ingredient or cuisine type'),
+  dietaryRestrictions: z
+    .string()
+    .optional()
+    .describe('Any dietary restrictions'),
+});
+
+const RecipeSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  prepTime: z.string(),
+  cookTime: z.string(),
+  servings: z.number(),
+  ingredients: z.array(z.string()),
+  instructions: z.array(z.string()),
+  tips: z.array(z.string()).optional(),
+});
+
+const recipeGeneratorFlow = ai.defineFlow(
+  {
+    name: 'recipeGeneratorFlow',
+    inputSchema: RecipeInputSchema,
+    outputSchema: RecipeSchema,
+  },
+  async (input) => {
+    const prompt = `Create a recipe with the following requirements:
+      Main ingredient: ${input.ingredient}
+      Dietary restrictions: ${input.dietaryRestrictions || 'none'}`;
+
+    const { output } = await ai.generate({
+      prompt,
+      output: { schema: RecipeSchema },
+    });
+
+    if (!output) throw new Error('Failed to generate recipe');
+    return output;
+  },
+);
+
+function toWebRequest(request: FastifyRequest): Request {
+  const protocol = request.protocol || 'http';
+  const host = request.headers.host || 'localhost:3000';
+  const url = new URL(request.raw.url || '/', `${protocol}://${host}`);
+  const headers = new Headers();
+
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => headers.append(key, entry));
+    } else {
+      headers.set(key, String(value));
+    }
+  }
+
+  const body =
+    request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : JSON.stringify(request.body ?? {});
+
+  const controller = new AbortController();
+  request.raw.on('close', () => controller.abort());
+
+  return new Request(url, {
+    method: request.method,
+    headers,
+    body,
+    duplex: 'half',
+    signal: controller.signal,
+  });
+}
+
+async function sendWebResponse(reply: FastifyReply, response: Response) {
+  reply.hijack();
+  reply.raw.statusCode = response.status;
+
+  response.headers.forEach((value, key) => {
+    reply.raw.setHeader(key, value);
+  });
+
+  if (!response.body) {
+    reply.raw.end();
+    return;
+  }
+
+  Readable.fromWeb(response.body).pipe(reply.raw);
+}
+
+const app = Fastify({ logger: true });
+const handleFlowRequest = fetchHandlers([recipeGeneratorFlow], '/api');
+
+app.post('/api/:flowName', async (request, reply) => {
+  const response = await handleFlowRequest(toWebRequest(request));
+  await sendWebResponse(reply, response);
+});
+
+await app.listen({ port: 3000, host: '0.0.0.0' });
+```
+
+## Run your application
+
+Run your app locally:
+
+```bash
+npx tsx src/index.ts
+```
+
+## Test your flow
+
+With the server running, call your flow over HTTP:
+
+```bash
+curl -X POST http://localhost:3000/api/recipeGeneratorFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
+```
+
+You should receive a structured recipe in the response.
+
+## Test in the Developer UI
+
+The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
+
+### Start the Developer UI
+
+The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
+
+Run the following command from your project root:
+
+```bash
+genkit start -- npx tsx --watch src/index.ts
+```
+
+This starts your app and launches the Developer UI at `http://localhost:4000` by default.
+
+:::note
+The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/devtools).
+:::
+
+##### Optional: Add an npm script
+
+To make starting the Developer UI easier, add the following to your `package.json` scripts:
+
+```json
+"scripts": {
+  "genkit:ui": "genkit start -- npx tsx --watch src/index.ts"
+}
+```
+
+Then run it with:
+
+```bash
+npm run genkit:ui
+```
+
+### Run and inspect flows
+
+In the Developer UI:
+
+1. Select `recipeGeneratorFlow` from the list of flows.
+2. Enter sample input:
+
+   ```json
+   {
+     "ingredient": "avocado",
+     "dietaryRestrictions": "vegetarian"
+   }
+   ```
+
+3. Click **Run**
+
+   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the recipe generator flow
+     with input parameters and the resulting structured output.
+   </video>
+
+## Next steps
+
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/guides/frontend/web-client)
+- [Connect a Flutter app](/guides/frontend/flutter)
+- [Developer tools](/docs/devtools)

@@ -23,13 +23,19 @@ export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\
 
 async function main() {
 	const documents: Record<string, Doc> = {};
+	const sourceRoots = [
+		{ dir: 'src/content/docs/docs', urlPrefix: '/docs/' },
+		{ dir: 'src/content/docs/guides', urlPrefix: '/guides/' },
+	];
 	for (const lang of ['js', 'go', 'dart', 'python']) {
-		const allDocs = await indexDocs('src/content/docs/docs', lang);
-		for (const doc of Object.keys(allDocs)) {
-			documents[`${lang}/${doc}`] = {
-				...allDocs[doc],
-				lang,
-			};
+		for (const { dir, urlPrefix } of sourceRoots) {
+			const allDocs = await indexDocs(dir, lang, urlPrefix);
+			for (const doc of Object.keys(allDocs)) {
+				documents[`${lang}/${doc}`] = {
+					...allDocs[doc],
+					lang,
+				};
+			}
 		}
 	}
 	await writeFile(`public/docs-bundle-experimental.json`, JSON.stringify(documents, undefined, 2));
@@ -44,7 +50,7 @@ interface Doc {
 	lang: string;
 }
 
-async function indexDocs(dir: string, lang: string) {
+async function indexDocs(dir: string, lang: string, urlPrefix: string = '/docs/') {
 	const allFiles = await readdir(dir, { recursive: true });
 	const docFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
 	const documents: Record<string, Omit<Doc, 'lang'>> = {};
@@ -66,8 +72,8 @@ async function indexDocs(dir: string, lang: string) {
 		documents[normalizedFileName] = {
 			text: renderContent(file, body, frontmatter.title || normalizedFileName, lang),
 			url: isLanguageAgnostic
-				? `https://genkit.dev/docs/${slugPath}/`
-				: `https://genkit.dev/docs/${lang}/${slugPath}/`,
+				? `https://genkit.dev${urlPrefix}${slugPath}/`
+				: `https://genkit.dev${urlPrefix}${lang}/${slugPath}/`,
 			title: frontmatter.title || normalizedFileName,
 			description: frontmatter.description,
 			headers,

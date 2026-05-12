@@ -101,9 +101,11 @@ const DOCS_SIDEBAR = [
   {
     label: "Get started",
     items: [
-      { label: "Overview", slug: "docs/overview" },
-      { label: "Get started", slug: "docs/get-started" },
+      { label: "Introduction", slug: "docs/overview" },
+      { label: "Choose your stack", slug: "docs/choose-your-stack" },
+      { label: "Quickstart", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
+      { label: "Work with Genkit in AI tools", slug: "docs/work-with-ai-tools" },
     ],
   },
   {
@@ -129,23 +131,6 @@ const DOCS_SIDEBAR = [
       {
         label: "Local observability and metrics",
         slug: "docs/local-observability",
-      },
-    ],
-  },
-  {
-    label: "Build with AI",
-    items: [
-      { label: "Genkit MCP server", slug: "docs/mcp-server" },
-      { label: "AI-assisted development", slug: "docs/develop-with-ai" },
-    ],
-  },
-  {
-    label: "Tutorials",
-    items: [
-      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
-      {
-        label: "Summarize YouTube videos",
-        slug: "docs/tutorials/summarize-youtube-videos",
       },
     ],
   },
@@ -198,40 +183,10 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Web framework integrations",
-    items: [
-      { label: "Express.js", slug: "docs/frameworks/express" },
-      { label: "Next.js", slug: "docs/frameworks/nextjs" },
-      { label: "Angular", slug: "docs/frameworks/angular" },
-      { label: "FastAPI", slug: "docs/frameworks/fastapi" },
-      { label: "Shelf", slug: "docs/frameworks/shelf" },
-      { label: "Flutter", slug: "docs/frameworks/flutter" },
-    ],
-  },
-  {
-    label: "Deployment",
-    items: [
-      { label: "Firebase", slug: "docs/deployment/firebase" },
-      { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
-      { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
-      { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
-      { label: "Any platform", slug: "docs/deployment/any-platform" },
-      { label: "Client app integration", slug: "docs/client" },
-    ],
-  },
-  {
     label: "Authorization",
     items: [
-      {
-        label: "Authorization & Integrity",
-        slug: "docs/deployment/authorization",
-      },
       { label: "Auth0 AI", slug: "docs/integrations/auth0" },
     ],
-  },
-  {
-    label: "Writing plugins",
-    items: [{ label: "Overview", slug: "docs/plugin-authoring/overview" }],
   },
   {
     label: "Observability and monitoring",
@@ -260,15 +215,95 @@ const DOCS_SIDEBAR = [
   },
 ];
 
-export const sidebar = [
-  ...DOCS_SIDEBAR,
+const GUIDES_SIDEBAR = [
+  {
+    label: "Guides",
+    items: [
+      { label: "Overview", slug: "guides/overview" },
+    ],
+  },
+  {
+    label: "Full-stack",
+    items: [
+      { label: "Next.js App Router", slug: "guides/frameworks/nextjs-app-router" },
+      { label: "Next.js Pages Router", slug: "guides/frameworks/nextjs-pages" },
+      { label: "SvelteKit", slug: "guides/frameworks/sveltekit" },
+      { label: "Nuxt", slug: "guides/frameworks/nuxt" },
+      { label: "Astro", slug: "guides/frameworks/astro" },
+      { label: "Angular", slug: "guides/frameworks/angular" },
+    ],
+  },
+  {
+    label: "Server",
+    items: [
+      { label: "Express", slug: "guides/frameworks/express" },
+      { label: "Hono", slug: "guides/frameworks/hono" },
+      { label: "Fastify", slug: "guides/frameworks/fastify" },
+      { label: "FastAPI", slug: "guides/frameworks/fastapi" },
+      { label: "Flask", slug: "guides/frameworks/flask" },
+      { label: "Django", slug: "guides/frameworks/django" },
+      { label: "Gin", slug: "guides/frameworks/gin" },
+      { label: "Echo", slug: "guides/frameworks/echo" },
+      { label: "Chi", slug: "guides/frameworks/chi" },
+      { label: "Shelf", slug: "guides/frameworks/shelf" },
+    ],
+  },
+  {
+    label: "Frontend",
+    items: [
+      { label: "Web client", slug: "guides/frontend/web-client" },
+      { label: "Flutter", slug: "guides/frontend/flutter" },
+    ],
+  },
+  {
+    label: "Deployment",
+    items: [
+      { label: "Firebase", slug: "guides/deployment/firebase" },
+      { label: "Cloud Run", slug: "guides/deployment/cloud-run" },
+      { label: "Azure Functions", slug: "guides/deployment/azure-functions" },
+      { label: "AWS Lambda", slug: "guides/deployment/aws-lambda" },
+      { label: "Any platform", slug: "guides/deployment/any-platform" },
+      {
+        label: "Authorization & Integrity",
+        slug: "guides/deployment/authorization",
+      },
+    ],
+  },
+  {
+    label: "Tutorials",
+    items: [
+      { label: "Chat with a PDF", slug: "guides/tutorials/chat-with-pdf" },
+      {
+        label: "Summarize YouTube videos",
+        slug: "guides/tutorials/summarize-youtube-videos",
+      },
+    ],
+  },
+  {
+    label: "Writing plugins",
+    items: [{ label: "Overview", slug: "guides/plugins/overview" }],
+  },
 ];
 
+// Starlight 0.34.x requires sidebar as a flat array.
+// We export both combined; the custom sidebar component filters by URL prefix.
+export const sidebar = [
+  ...DOCS_SIDEBAR,
+  ...GUIDES_SIDEBAR,
+];
+
+// Build language metadata maps for both sidebars
 const docsLanguageMetadataBySlug = createLanguageMetadataMap(DOCS_SIDEBAR);
+const guidesLanguageMetadataBySlug = createLanguageMetadataMap(GUIDES_SIDEBAR);
+const allLanguageMetadataBySlug = { ...docsLanguageMetadataBySlug, ...guidesLanguageMetadataBySlug };
+
 export const docsLanguageSupportBySlug = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.supportedLanguages]),
+  Object.entries(allLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.supportedLanguages]),
 ) as Record<string, SupportedLanguage[]>;
 export const docsLanguageAgnosticBySlug = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.isLanguageAgnostic]),
+  Object.entries(allLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.isLanguageAgnostic]),
 ) as Record<string, boolean>;
 export const docsAllLanguages = [...ALL_LANGUAGES];
+
+// Also export the individual sidebar arrays for tooling that needs them
+export { DOCS_SIDEBAR, GUIDES_SIDEBAR };
