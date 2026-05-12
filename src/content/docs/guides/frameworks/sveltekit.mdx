@@ -1,44 +1,47 @@
 ---
-title: Hono
-description: Start from a Hono server and expose the same recipe flow from the
-  main quickstart using the fetch plugin.
+title: SvelteKit
+description: Start from a SvelteKit app and expose the same recipe flow from the main quickstart using API routes and the Genkit fetch handler.
 supportedLanguages:
   - js
 ---
 
-{/* AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY. Edit the source document instead: src/content/docs/guides/frameworks/hono.mdx Then run: pnpm generate-language-pages */}
-
 import { FileTree } from '@astrojs/starlight/components';
 
-Use this guide when you're building with Hono and want to expose Genkit flows over HTTP using `@genkit-ai/fetch`. This pattern works well for Node.js and other fetch-based runtimes.
+Use this guide when you're starting from a SvelteKit app and want the fastest path to a working Genkit integration with server-side API routes and a Svelte frontend.
 
 ## Before you begin
 
 - Node.js v20 or later
 - npm
 
-This guide assumes you're already familiar with building TypeScript server applications.
+This guide assumes you're already familiar with building SvelteKit applications.
 
 ## Create a project
 
-If you don't already have a Hono project, create one:
+If you don't already have a SvelteKit project, create one:
 
 ```bash
-# Create a new Hono app with the Node.js template
-npm create hono@latest my-genkit-hono -- --template nodejs --pm npm --install
-
-# Navigate to the project
-cd my-genkit-hono
+npx sv create my-genkit-sveltekit
+cd my-genkit-sveltekit
 ```
+
+When prompted, select the **Minimal** template and enable TypeScript.
 
 ## Project layout
 
 <FileTree>
 
 - package.json
-- tsconfig.json
+- svelte.config.js
 - src
-  - **index.ts**
+  - routes
+    - api
+      - recipeGeneratorFlow
+        - **\[...path\]/+server.ts**
+    - **+page.svelte**
+  - lib
+    - genkit
+      - **recipeGeneratorFlow.ts**
 
 </FileTree>
 
@@ -53,8 +56,8 @@ npm install -g genkit-cli
 Then install the packages you need in your project:
 
 ```bash
-npm install genkit @genkit-ai/google-genai @genkit-ai/fetch hono
-npm install -D @hono/node-server
+npm install genkit @genkit-ai/google-genai
+npm install -D tsx
 ```
 
 ## Configure your model API key
@@ -65,16 +68,13 @@ This guide uses the Gemini API from Google AI Studio.
 export GEMINI_API_KEY=<your API key>
 ```
 
-## Create your application
+## Define your recipe flow
 
-Update `src/index.ts` with the same recipe flow used in the main quickstart, then expose it through Hono:
+Create `src/lib/genkit/recipeGeneratorFlow.ts`:
 
-```ts title="src/index.ts"
-import { serve } from '@hono/node-server';
-import { handleFlows } from '@genkit-ai/fetch';
+```ts title="src/lib/genkit/recipeGeneratorFlow.ts"
 import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
-import { Hono } from 'hono';
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -102,7 +102,7 @@ const RecipeSchema = z.object({
   tips: z.array(z.string()).optional(),
 });
 
-const recipeGeneratorFlow = ai.defineFlow(
+export const recipeGeneratorFlow = ai.defineFlow(
   {
     name: 'recipeGeneratorFlow',
     inputSchema: RecipeInputSchema,
@@ -122,23 +122,64 @@ const recipeGeneratorFlow = ai.defineFlow(
     return output;
   },
 );
+```
 
-const app = new Hono();
-const flows = [recipeGeneratorFlow];
+## Create an API route
 
-app.post('/api/:flowName', async (c) => {
-  return handleFlows(c.req.raw, flows, '/api/');
-});
+Create `src/routes/api/recipeGeneratorFlow/[...path]/+server.ts` to expose the flow using Genkit's fetch handler:
 
-serve(
-  {
-    fetch: app.fetch,
-    port: 3780,
-  },
-  (info) => {
-    console.log(`Hono server listening on http://localhost:${info.port}`);
-  },
+```ts title="src/routes/api/recipeGeneratorFlow/[...path]/+server.ts"
+import type { RequestHandler } from './$types';
+import { recipeGeneratorFlow } from '$lib/genkit/recipeGeneratorFlow';
+import { fetchHandlers } from 'genkit/beta/fetch';
+
+const handleFlow = fetchHandlers(
+  [recipeGeneratorFlow],
+  '/api/recipeGeneratorFlow',
 );
+
+export const POST: RequestHandler = async ({ request }) => {
+  return handleFlow(request);
+};
+```
+
+SvelteKit API routes receive a standard Web `Request` object, so `fetchHandlers` works directly without any adapter.
+
+## Call your flow from the frontend
+
+Update `src/routes/+page.svelte`:
+
+```svelte title="src/routes/+page.svelte"
+<script lang="ts">
+  import { runFlow } from 'genkit/beta/client';
+
+  let ingredient = 'avocado';
+  let dietaryRestrictions = 'vegetarian';
+  let recipe: any = null;
+
+  async function generateRecipe() {
+    recipe = await runFlow({
+      url: '/api/recipeGeneratorFlow',
+      input: { ingredient, dietaryRestrictions },
+    });
+  }
+</script>
+
+<main>
+  <h1>Recipe generator</h1>
+  <label>
+    Ingredient
+    <input bind:value={ingredient} />
+  </label>
+  <label>
+    Dietary restrictions
+    <input bind:value={dietaryRestrictions} />
+  </label>
+  <button on:click={generateRecipe}>Generate recipe</button>
+  {#if recipe}
+    <pre>{JSON.stringify(recipe, null, 2)}</pre>
+  {/if}
+</main>
 ```
 
 ## Run your application
@@ -146,13 +187,13 @@ serve(
 Run your app locally:
 
 ```bash
-npx tsx src/index.ts
+npm run dev
 ```
 
-You can also launch it through the Developer UI:
+You can also launch the Developer UI alongside your flow code:
 
 ```bash
-genkit start -- npx tsx --watch src/index.ts
+genkit start -- npx tsx --watch src/lib/genkit/recipeGeneratorFlow.ts
 ```
 
 ## Test your flow
@@ -160,7 +201,7 @@ genkit start -- npx tsx --watch src/index.ts
 With the server running, call your flow over HTTP:
 
 ```bash
-curl -X POST http://localhost:3780/api/recipeGeneratorFlow \
+curl -X POST http://localhost:5173/api/recipeGeneratorFlow \
   -H "Content-Type: application/json" \
   -d '{"data":{"ingredient":"avocado","dietaryRestrictions":"vegetarian"}}'
 ```
@@ -178,30 +219,14 @@ The Genkit CLI is required to run the Developer UI. If you followed the installa
 Run the following command from your project root:
 
 ```bash
-genkit start -- npx tsx --watch src/index.ts
+genkit start -- npx tsx --watch src/lib/genkit/recipeGeneratorFlow.ts
 ```
 
 This starts your app and launches the Developer UI at `http://localhost:4000` by default.
 
 :::note
-The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/js/devtools/).
+The command after `--` should run the file that defines or imports your Genkit components. You can use `tsx`, `node`, or other commands based on your setup. Learn more in [developer tools](/docs/devtools).
 :::
-
-##### Optional: Add an npm script
-
-To make starting the Developer UI easier, add the following to your `package.json` scripts:
-
-```json
-"scripts": {
-  "genkit:ui": "genkit start -- npx tsx --watch src/index.ts"
-}
-```
-
-Then run it with:
-
-```bash
-npm run genkit:ui
-```
 
 ### Run and inspect flows
 
@@ -238,8 +263,7 @@ In the Developer UI:
 
 ## Next steps
 
-- [Creating flows](/docs/js/flows/)
-- [Generating content](/docs/js/models/)
-- [Connect a web frontend](/guides/frontend/web-client/)
-- [Connect a Flutter app](/guides/frontend/flutter/)
-- [Developer tools](/docs/js/devtools/)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Accessing flows from the client](/docs/client)
+- [Developer tools](/docs/devtools)

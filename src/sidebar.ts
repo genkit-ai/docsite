@@ -223,12 +223,19 @@ const GUIDES_SIDEBAR = [
     ],
   },
   {
-    label: "Server & full-stack frameworks",
+    label: "Full-stack",
     items: [
       { label: "Next.js App Router", slug: "guides/frameworks/nextjs-app-router" },
       { label: "Next.js Pages Router", slug: "guides/frameworks/nextjs-pages" },
+      { label: "SvelteKit", slug: "guides/frameworks/sveltekit" },
+      { label: "Nuxt", slug: "guides/frameworks/nuxt" },
       { label: "Astro", slug: "guides/frameworks/astro" },
       { label: "Angular", slug: "guides/frameworks/angular" },
+    ],
+  },
+  {
+    label: "Server",
+    items: [
       { label: "Express", slug: "guides/frameworks/express" },
       { label: "Hono", slug: "guides/frameworks/hono" },
       { label: "Fastify", slug: "guides/frameworks/fastify" },
@@ -242,7 +249,7 @@ const GUIDES_SIDEBAR = [
     ],
   },
   {
-    label: "Frontend integration",
+    label: "Frontend",
     items: [
       { label: "Web client", slug: "guides/frontend/web-client" },
       { label: "Flutter", slug: "guides/frontend/flutter" },
