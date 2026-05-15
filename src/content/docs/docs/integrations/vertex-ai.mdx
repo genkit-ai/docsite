@@ -136,7 +136,7 @@ const ai = genkit({
 **Authentication Methods:**
 
 - **Application Default Credentials (ADC):** The standard method for most Vertex AI use cases, especially in production. It uses the credentials from the environment (e.g., service account on GCP, user credentials from `gcloud auth application-default login` locally). This method requires a Google Cloud Project with billing enabled and the Vertex AI API enabled.
-- **Vertex AI Express Mode:** A streamlined way to try out many Vertex AI features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
+- **Vertex AI Express Mode:** A streamlined way to try out many Vertex AI features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview).
 
 ```typescript
 // Using Vertex AI Express Mode (Easy to start, some limitations)
@@ -145,6 +145,21 @@ vertexAI({ apiKey: process.env.VERTEX_EXPRESS_API_KEY }),
 ```
 
 _Note: When using Express Mode, you do not provide `projectId` and `location` in the plugin config._
+
+### Available Models
+
+The following Gemini models are registered for use with the Vertex AI plugin:
+
+**Gemini 3+ Series:**
+- `gemini-3.1-pro-preview`
+- `gemini-3.1-flash-lite-preview`
+- `gemini-3-flash-preview`
+- `gemini-3.1-flash-image-preview`
+
+**Gemini 2.5 Series:**
+- `gemini-2.5-pro`
+- `gemini-2.5-flash`
+- `gemini-2.5-flash-lite`
 
 ### Basic Usage
 
@@ -157,11 +172,51 @@ const ai = genkit({
 });
 
 const response = await ai.generate({
-  model: vertexAI.model('gemini-pro-latest'),
+  model: vertexAI.model('gemini-3.1-pro-preview'),
   prompt: 'Explain Vertex AI in simple terms.',
 });
 
 console.log(response.text());
+```
+
+### Model Configuration (PayGo)
+
+You can specify the `payGo` option to use Flex or Priority routing on Vertex AI.
+
+```typescript
+const response = await ai.generate({
+  model: vertexAI.model('gemini-3.1-flash-lite-preview'),
+  prompt: 'Explain Vertex AI in simple terms.',
+  config: {
+    payGo: 'priority', // Can be 'priority', 'priority-only', 'flex', or 'flex-only'
+  },
+});
+```
+
+### Multimodal Input
+
+Gemini models can process multimodal inputs, including images and video. When using videos, you can use `videoMetadata` to specify specific timestamps or sampling rates.
+
+```typescript
+const response = await ai.generate({
+  model: vertexAI.model('gemini-2.5-flash'),
+  prompt: [
+    { text: 'transcribe this video' },
+    {
+      media: {
+        url: 'gs://cloud-samples-data/video/animals.mp4',
+        contentType: 'video/mp4',
+      },
+      metadata: {
+        videoMetadata: {
+          fps: 0.5,
+          startOffset: '3.5s',
+          endOffset: '10.2s',
+        },
+      },
+    },
+  ],
+});
 ```
 
 ### Text Embedding
@@ -175,13 +230,94 @@ const embeddings = await ai.embed({
 
 ### Image Generation (Imagen)
 
+**Available Models:**
+- `virtual-try-on-001`
+
 ```typescript
 const response = await ai.generate({
-  model: vertexAI.model('imagen-3.0-generate-002'),
+  model: vertexAI.model('virtual-try-on-001'),
   prompt: 'A beautiful watercolor painting of a castle in the mountains.',
 });
 
 const generatedImage = response.media();
+```
+
+### Video Generation (Veo)
+
+Generate videos from text prompts or manipulate existing images to create dynamic video content.
+
+**Available Models:**
+- `veo-3.1-generate-preview`
+- `veo-3.1-fast-generate-preview`
+- `veo-3.1-lite-generate-preview`
+- `veo-3.0-generate-001`
+- `veo-3.0-fast-generate-001`
+- `veo-2.0-generate-001`
+
+**Usage (Text-to-Video):**
+
+```typescript
+let { operation } = await ai.generate({
+  model: vertexAI.model('veo-3.1-lite-generate-preview'),
+  prompt: 'A majestic dragon soaring over a mystical forest at dawn.',
+  config: {
+    aspectRatio: '16:9',
+    durationSeconds: 8,
+    resolution: '1080p',
+    personGeneration: 'allow_adult',
+  },
+});
+
+if (!operation) throw new Error('No operation returned');
+
+while (!operation.done) {
+  operation = await ai.checkOperation(operation);
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+}
+
+const video = operation.output?.message?.content.find((p) => !!p.media);
+```
+
+**Video Extension:**
+
+You can extend an existing Veo-generated video by providing it as input to another generation request:
+
+```typescript
+let { operation } = await ai.generate({
+  model: vertexAI.model('veo-3.1-generate-preview'),
+  prompt: [
+    { text: 'Track the butterfly into the garden as it lands on a flower.' },
+    {
+      media: {
+        contentType: 'video/mp4',
+        url: previousVeoVideo.media.url,
+      },
+    },
+  ],
+  config: {
+    aspectRatio: '16:9', // Must match the original video
+  },
+});
+```
+
+### Music Generation (Lyria)
+
+Generate high-quality music and audio clips.
+
+**Available Models:**
+- `lyria-3-pro-preview`
+- `lyria-3-clip-preview`
+- `lyria-002` (Legacy)
+
+**Usage:**
+
+```typescript
+const response = await ai.generate({
+  model: vertexAI.model('lyria-3-pro-preview'),
+  prompt: 'A cheerful acoustic folk song with guitar and harmonica.',
+});
+
+const audioMedia = response.media;
 ```
 
 ### Thinking Config
@@ -216,13 +352,55 @@ const { message } = await ai.generate({
 });
 ```
 
+### Grounding (Vertex AI Search & Google Search)
+
+Enable Google Search or Vertex AI Search data stores to provide answers grounded in verifiable sources.
+
+```typescript
+// Google Search Grounding
+const searchResponse = await ai.generate({
+  model: vertexAI.model('gemini-2.5-flash'),
+  prompt: 'What are the top tech news stories this week?',
+  config: {
+    tools: [{ googleSearch: {} }],
+  },
+});
+
+// Vertex AI Search Grounding
+const vertexResponse = await ai.generate({
+  model: vertexAI.model('gemini-2.5-flash'),
+  prompt: 'Summarize our company policies.',
+  config: {
+    vertexRetrieval: {
+      datastore: {
+        projectId: 'your-project-id',
+        location: 'us-central1',
+        dataStoreId: 'your-data-store-id',
+      },
+      disableAttribution: false,
+    },
+  },
+});
+```
+
 ## Enterprise Features (JavaScript Only)
 
 ### Model Garden Integration
 
 Access third-party models through Vertex AI Model Garden:
 
-#### Claude 4.6 Models
+#### Anthropic (Claude) Models
+
+**Available Models:**
+- `claude-opus-4-7`
+- `claude-sonnet-4-6`
+- `claude-opus-4-6`
+- `claude-haiku-4-5@20251001`
+- `claude-sonnet-4-5@20250929`
+- `claude-sonnet-4@20250514`
+- `claude-opus-4-5@20251101`
+- `claude-opus-4-1@20250805`
+- `claude-opus-4@20250514`
 
 ```ts
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
@@ -237,9 +415,34 @@ const response = await ai.generate({
 });
 ```
 
-For the full list of available Claude models see: [Available Claude models](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude#available-claude-models)
+**Advanced Configuration (Optional):**
 
-#### Llama 4
+You can provide configuration options to tailor the model's behavior, such as enabling extended thinking features.
+
+```ts
+const response = await ai.generate({
+  model: vertexModelGarden.model('claude-sonnet-4-6'),
+  prompt: 'What should I do when I visit Melbourne?',
+  config: {
+    thinking: {
+      enabled: true,
+      budgetTokens: 2048,
+    },
+    output_config: {
+      effort: 'high', // Can be 'low', 'medium', 'high', or 'xhigh'
+    },
+  },
+});
+```
+
+For the full list of available Claude models see: [Available Claude models](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude)
+
+#### Llama (Meta) Models
+
+**Available Models:**
+- `meta/llama-4-maverick-17b-128e-instruct-maas`
+- `meta/llama-4-scout-17b-16e-instruct-maas`
+- `meta/llama-3.3-70b-instruct-maas`
 
 ```ts
 const ai = genkit({
@@ -254,9 +457,15 @@ const response = await ai.generate({
 });
 ```
 
-For the full list of available Llama models see: [Fully-managed Llama models](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama)
+For the full list of available Llama models see: [Fully-managed Llama models](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/llama)
 
 #### Mistral AI Models
+
+**Available Models:**
+- `mistral-medium-3`
+- `mistral-ocr-2505`
+- `mistral-small-2503`
+- `codestral-2`
 
 ```ts
 const ai = genkit({
@@ -275,7 +484,7 @@ const response = await ai.generate({
 });
 ```
 
-For the full list of available Mistral AI models see: [Mistral AI models](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral)
+For the full list of available Mistral AI models see: [Mistral AI models](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/mistral)
 
 ### Evaluation Metrics
 
@@ -420,7 +629,7 @@ import "github.com/firebase/genkit/go/plugins/googlegenai"
 g := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.VertexAI{}))
 ```
 
-The plugin requires you to specify your Google Cloud project ID, the [region](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) to which you want to make Vertex API requests, and your Google Cloud project credentials.
+The plugin requires you to specify your Google Cloud project ID, the [region](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations) to which you want to make Vertex API requests, and your Google Cloud project credentials.
 
 - By default, `googlegenai.VertexAI` gets your Google Cloud project ID from the `GOOGLE_CLOUD_PROJECT` environment variable.
 
@@ -452,7 +661,7 @@ gcloud auth application-default login
 
      - For other environments, see the [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) docs.
 
-2. In addition, make sure the account is granted the Vertex AI User IAM role (`roles/aiplatform.user`). See the Vertex AI [access control](https://cloud.google.com/vertex-ai/generative-ai/docs/access-control) docs.
+2. In addition, make sure the account is granted the Vertex AI User IAM role (`roles/aiplatform.user`). See the Vertex AI [access control](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/access-control) docs.
 
 ## Usage
 
