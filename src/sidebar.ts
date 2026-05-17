@@ -216,6 +216,7 @@ const DOCS_SIDEBAR = [
       { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
       { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
       { label: "Any platform", slug: "docs/deployment/any-platform" },
+      { label: "Temporal (Durable Flows)", slug: "docs/deployment/temporal" },
       { label: "Client app integration", slug: "docs/client" },
     ],
   },
