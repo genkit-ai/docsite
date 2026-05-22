@@ -1096,4 +1096,121 @@ async def play_trivia(theme: str) -> str:
     return response.text
 ```
 
+## Tools with restartable interrupts
+
+Another common pattern is the need to _confirm_ an action that the LLM suggests before actually performing it. For example, a payments app might want the user to confirm certain kinds of transfers before proceeding.
+
+### Define a restartable tool
+
+When defining a tool, you can check your application state or use `ctx.is_resumed()` to determine whether the action has already been approved. If it's the first execution, raise an `Interrupt` exception to pause the loop:
+
+```python
+from genkit import Interrupt, ToolRunContext
+from pydantic import BaseModel, Field
+
+class TransferInput(BaseModel):
+    to_account: str
+    amount: float
+
+@ai.tool()
+async def transfer_money(input: TransferInput, ctx: ToolRunContext) -> dict:
+    # Require confirmation for large transfers (only on first execution)
+    if not ctx.is_resumed() and input.amount > 100:
+        raise Interrupt({
+            'reason': 'confirm_large',
+            'to_account': input.to_account,
+            'amount': input.amount,
+        })
+
+    # Execute the transfer (runs when resumed after approval)
+    return {
+        'status': 'confirmed',
+        'message': f'Transferred ${input.amount} to {input.to_account}',
+    }
+```
+
+### Restart tools after interruption
+
+To restart the interrupted tool, use the `restart_tool()` function to construct a restarted tool request part, and pass it to the `resume_restart` parameter of `ai.generate()`.
+
+You can customize the restart behavior by providing optional arguments to `restart_tool()`:
+
+- **`resumed_metadata`**: Pass arbitrary state (e.g. `{'approved_by': 'user'}`) to the tool context. The tool function can retrieve this via `ctx.resumed_metadata`.
+- **`replace_input`**: Provide a new input payload (e.g. a modified Pydantic model or dictionary) to re-run the tool with modified arguments.
+
+```python
+from genkit import restart_tool, respond_to_interrupt
+
+response = await ai.generate(
+    prompt='Transfer $250 to account ABC123',
+    tools=[transfer_money],
+)
+
+messages = response.messages
+
+if response.interrupts:
+    interrupt = response.interrupts[0]
+
+    # Ask the user to confirm the transfer...
+    if user_approved:
+        # Rerun the tool by passing a restart part to resume_restart
+        restart = restart_tool(
+            interrupt,
+            resumed_metadata={'approved_by': 'user'}
+        )
+        response = await ai.generate(
+            messages=messages,
+            resume_restart=restart,
+            tools=[transfer_money],
+        )
+    else:
+        # Decline by providing a direct response without re-running the tool
+        decline = respond_to_interrupt(
+            {'status': 'cancelled'},
+            interrupt=interrupt,
+        )
+        response = await ai.generate(
+            messages=messages,
+            resume_respond=decline,
+            tools=[transfer_money],
+        )
+
+print(response.text)
+```
+
+### Replacing input and accessing original input on restart
+
+If you decide to adjust the tool arguments upon restart (for example, asking the user to lower a transfer amount that exceeded limits), pass the adjusted input payload to `replace_input`:
+
+```python
+# Inside your interrupt-handling loop:
+meta = interrupt.tool_request.input
+adjusted_input = TransferInput(to_account=meta.get('to_account'), amount=100.0)
+
+restart = restart_tool(
+    interrupt,
+    resumed_metadata={'approved_by': 'user'},
+    replace_input=adjusted_input,
+)
+```
+
+When a tool is restarted with a replaced input, the original input arguments are automatically stashed. Inside the tool function, you can retrieve the original arguments by checking `ctx.original_input` (which will be a dictionary):
+
+```python
+@ai.tool()
+async def transfer_money(input: TransferInput, ctx: ToolRunContext) -> dict:
+    # ... interrupt logic ...
+
+    # Check if the input was replaced upon restart
+    if ctx.original_input:
+        original = ctx.original_input
+        print(f"Adjusted transfer amount from {original.get('amount')} to {input.amount}")
+
+    # Execute the transfer with the current (possibly adjusted) input
+    return {
+        'status': 'confirmed',
+        'message': f"Transferred ${input.amount} to {input.to_account}",
+    }
+```
+
 </Lang>
