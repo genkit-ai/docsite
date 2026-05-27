@@ -4,8 +4,10 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
 
-const SOURCE_ROOT = path.resolve('src/content/docs/docs');
-const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
+const CONTENT_ROOTS = [
+  { sourceRoot: path.resolve('src/content/docs/docs'), outputRoot: path.resolve('src/content/docs/docs') },
+  { sourceRoot: path.resolve('src/content/docs/guides'), outputRoot: path.resolve('src/content/docs/guides') },
+] as const;
 const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const FALLBACK_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
@@ -67,15 +69,22 @@ function isPathInside(parent: string, child: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-function getRelativePathInsideSource(filePath: string): string | null {
+function findContentRoot(filePath: string): (typeof CONTENT_ROOTS)[number] | null {
   const resolvedPath = path.resolve(filePath);
-  if (resolvedPath === SOURCE_ROOT) {
-    return '';
+  for (const root of CONTENT_ROOTS) {
+    if (resolvedPath === root.sourceRoot || isPathInside(root.sourceRoot, resolvedPath)) {
+      return root;
+    }
   }
-  if (!isPathInside(SOURCE_ROOT, resolvedPath)) {
-    return null;
-  }
-  return path.relative(SOURCE_ROOT, resolvedPath).replace(/\\/g, '/');
+  return null;
+}
+
+function getRelativePathInsideSource(filePath: string): string | null {
+  const root = findContentRoot(filePath);
+  if (!root) return null;
+  const resolvedPath = path.resolve(filePath);
+  if (resolvedPath === root.sourceRoot) return '';
+  return path.relative(root.sourceRoot, resolvedPath).replace(/\\/g, '/');
 }
 
 function isGeneratedLanguagePath(filePath: string): boolean {
@@ -350,8 +359,23 @@ function getMeaningfulContentCharCount(content: string): number {
 }
 
 function slugFromSourcePath(filePath: string): string {
-  const rel = path.relative(SOURCE_ROOT, filePath).replace(/\\/g, '/');
+  const root = findContentRoot(filePath);
+  if (!root) {
+    // Fallback: try all roots
+    for (const r of CONTENT_ROOTS) {
+      if (isPathInside(r.sourceRoot, path.resolve(filePath))) {
+        return path.relative(r.sourceRoot, filePath).replace(/\\/g, '/').replace(/\.(md|mdx)$/, '');
+      }
+    }
+  }
+  const sourceRoot = root?.sourceRoot || CONTENT_ROOTS[0].sourceRoot;
+  const rel = path.relative(sourceRoot, filePath).replace(/\\/g, '/');
   return rel.replace(/\.(md|mdx)$/, '');
+}
+
+function outputRootForFile(filePath: string): string {
+  const root = findContentRoot(filePath);
+  return root?.outputRoot || CONTENT_ROOTS[0].outputRoot;
 }
 
 function rewriteRelativeAssetPaths(
@@ -438,15 +462,17 @@ function buildGeneratedFileNotice(sourceFilePath: string, extension: 'md' | 'mdx
 }
 
 async function ensureOutputLanguageDirs(): Promise<void> {
-  for (const language of LANGUAGES) {
-    await mkdir(path.join(OUTPUT_ROOT, language), { recursive: true });
+  for (const root of CONTENT_ROOTS) {
+    for (const language of LANGUAGES) {
+      await mkdir(path.join(root.outputRoot, language), { recursive: true });
+    }
   }
 }
 
-async function removeGeneratedForSlug(slug: string): Promise<void> {
+async function removeGeneratedForSlug(slug: string, outputRoot: string): Promise<void> {
   for (const language of LANGUAGES) {
-    await rm(path.join(OUTPUT_ROOT, language, `${slug}.md`), { force: true });
-    await rm(path.join(OUTPUT_ROOT, language, `${slug}.mdx`), { force: true });
+    await rm(path.join(outputRoot, language, `${slug}.md`), { force: true });
+    await rm(path.join(outputRoot, language, `${slug}.mdx`), { force: true });
   }
 }
 
@@ -479,7 +505,8 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
   }
 
   const slug = slugFromSourcePath(filePath);
-  await removeGeneratedForSlug(slug);
+  const outRoot = outputRootForFile(filePath);
+  await removeGeneratedForSlug(slug, outRoot);
 
   if (isLanguageAgnostic) {
     return;
@@ -487,7 +514,7 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
 
   const extension = filePath.endsWith('.mdx') ? 'mdx' : 'md';
   for (const language of supportedLanguages) {
-    const outputPath = path.join(OUTPUT_ROOT, language, `${slug}.${extension}`);
+    const outputPath = path.join(outRoot, language, `${slug}.${extension}`);
     const languageFrontmatter = rewriteRelativeAssetPaths(
       {
         ...frontmatter,
@@ -550,20 +577,25 @@ function throwValidationErrors(context: GenerateContext): void {
 }
 
 async function generateAll(): Promise<void> {
-  for (const language of LANGUAGES) {
-    await rm(path.join(OUTPUT_ROOT, language), { recursive: true, force: true });
+  for (const root of CONTENT_ROOTS) {
+    for (const language of LANGUAGES) {
+      await rm(path.join(root.outputRoot, language), { recursive: true, force: true });
+    }
   }
   await ensureOutputLanguageDirs();
 
   const context = createGenerateContext();
-  const sourceFiles = await walkSourceDocs(SOURCE_ROOT);
-  for (const filePath of sourceFiles) {
-    await generateForSourceFile(filePath, context);
+  for (const root of CONTENT_ROOTS) {
+    const sourceFiles = await walkSourceDocs(root.sourceRoot);
+    for (const filePath of sourceFiles) {
+      await generateForSourceFile(filePath, context);
+    }
   }
 
   throwValidationErrors(context);
   printGenerateWarnings(context);
-  console.log(`Generated language-specific pages in ${OUTPUT_ROOT}/{js,go,dart,python}`);
+  const rootLabels = CONTENT_ROOTS.map(r => r.outputRoot).join(', ');
+  console.log(`Generated language-specific pages in {${rootLabels}}/{js,go,dart,python}`);
 }
 
 async function generateSpecificFiles(files: string[], strictValidation: boolean): Promise<void> {
@@ -576,7 +608,7 @@ async function generateSpecificFiles(files: string[], strictValidation: boolean)
       continue;
     }
     if (!(await fileExists(absolutePath))) {
-      await removeGeneratedForSlug(slugFromSourcePath(absolutePath));
+      await removeGeneratedForSlug(slugFromSourcePath(absolutePath), outputRootForFile(absolutePath));
       continue;
     }
     if (!isSourceDocFile(absolutePath)) {
@@ -625,7 +657,8 @@ function parseCliOptions(argv: string[]): CliOptions {
 
 async function runWatchMode(): Promise<void> {
   await generateAll();
-  console.log(`Watching ${SOURCE_ROOT} for source doc changes...`);
+  const rootLabels = CONTENT_ROOTS.map(r => r.sourceRoot).join(', ');
+  console.log(`Watching ${rootLabels} for source doc changes...`);
 
   const pending = new Set<string>();
   let flushTimer: NodeJS.Timeout | null = null;
@@ -667,21 +700,23 @@ async function runWatchMode(): Promise<void> {
     }, WATCH_DEBOUNCE_MS);
   };
 
-  watch(
-    SOURCE_ROOT,
-    { recursive: true },
-    (_eventType, filename) => {
-      if (!filename) {
-        return;
-      }
-      const changedPath = path.resolve(SOURCE_ROOT, filename.toString());
-      if (!isSourceDocCandidate(changedPath)) {
-        return;
-      }
-      pending.add(changedPath);
-      queueFlush();
-    },
-  );
+  for (const root of CONTENT_ROOTS) {
+    watch(
+      root.sourceRoot,
+      { recursive: true },
+      (_eventType, filename) => {
+        if (!filename) {
+          return;
+        }
+        const changedPath = path.resolve(root.sourceRoot, filename.toString());
+        if (!isSourceDocCandidate(changedPath)) {
+          return;
+        }
+        pending.add(changedPath);
+        queueFlush();
+      },
+    );
+  }
 
   await new Promise(() => {});
 }

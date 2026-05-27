@@ -16,6 +16,7 @@ export type DocsPathMetadataMap = Record<string, DocsPathMetadata>;
 
 const INTERNAL_DOCS_URL_BASE = 'https://genkit.dev';
 const DOCS_SOURCE_ROOT = path.resolve(process.cwd(), 'src/content/docs/docs');
+const GUIDES_SOURCE_ROOT = path.resolve(process.cwd(), 'src/content/docs/guides');
 const GENERATED_LANGUAGE_DIRS = new Set(LANGUAGE_FALLBACK_ORDER);
 const LEGACY_PATH_PREFIXES: Array<[prefix: string, replacement: string]> = [
   ['/docs/plugins/', '/docs/integrations/'],
@@ -47,6 +48,7 @@ type ParsedDocsUrl = {
   hash: string;
   basePath: string;
   slugPath: string;
+  section: 'docs' | 'guides';
   explicitLanguage: SupportedLanguage | null;
 };
 
@@ -83,12 +85,17 @@ function parseDocsUrl(input: string): ParsedDocsUrl | null {
   }
 
   const normalizedPath = normalizeDocsPath(url.pathname);
-  if (!normalizedPath.startsWith('/docs/')) {
+  const isDocsPath = normalizedPath.startsWith('/docs/');
+  const isGuidesPath = normalizedPath.startsWith('/guides/');
+  if (!isDocsPath && !isGuidesPath) {
     return null;
   }
 
-  const langMatch = normalizedPath.match(/^\/docs\/(js|go|dart|python)\/(.+)$/);
-  const slugPath = langMatch ? langMatch[2].replace(/\/+$/, '') : normalizedPath.replace(/^\/docs\//, '');
+  const section: 'docs' | 'guides' = isGuidesPath ? 'guides' : 'docs';
+  const prefix = `/${section}/`;
+
+  const langMatch = normalizedPath.match(new RegExp(`^/${section}/(js|go|dart|python)/(.+)$`));
+  const slugPath = langMatch ? langMatch[2].replace(/\/+$/, '') : normalizedPath.replace(new RegExp(`^/${section}/`), '');
   if (!slugPath) {
     return null;
   }
@@ -98,8 +105,9 @@ function parseDocsUrl(input: string): ParsedDocsUrl | null {
     normalizedPath,
     search: url.search,
     hash: url.hash,
-    basePath: `/docs/${slugPath}`,
+    basePath: `/${section}/${slugPath}`,
     slugPath,
+    section,
     explicitLanguage: (langMatch?.[1] as SupportedLanguage | undefined) || null,
   };
 }
@@ -177,10 +185,20 @@ function parseIsLanguageAgnosticFromSource(source: string): boolean {
 }
 
 export function findMetadataFromSource(basePath: string): DocsPathMetadata | null {
-  const slugPath = basePath.replace(/^\/docs\//, '');
+  // Determine which source root to use based on path prefix
+  let sourceRoot: string;
+  let slugPath: string;
+  if (basePath.startsWith('/guides/')) {
+    sourceRoot = GUIDES_SOURCE_ROOT;
+    slugPath = basePath.replace(/^\/guides\//, '');
+  } else {
+    sourceRoot = DOCS_SOURCE_ROOT;
+    slugPath = basePath.replace(/^\/docs\//, '');
+  }
+
   const candidates = [
-    path.join(DOCS_SOURCE_ROOT, `${slugPath}.mdx`),
-    path.join(DOCS_SOURCE_ROOT, `${slugPath}.md`),
+    path.join(sourceRoot, `${slugPath}.mdx`),
+    path.join(sourceRoot, `${slugPath}.md`),
   ];
   const sourcePath = candidates.find((candidate) => fs.existsSync(candidate));
   if (!sourcePath) {
@@ -224,21 +242,37 @@ function collectSourceDocFiles(dir: string): string[] {
 }
 
 export function getAllSourceDocsPathMetadata(): DocsPathMetadataMap {
-  const metadataEntries = collectSourceDocFiles(DOCS_SOURCE_ROOT)
-    .map((filePath) => {
-      const relativePath = path.relative(DOCS_SOURCE_ROOT, filePath).replace(/\\/g, '/');
-      const slugPath = relativePath.replace(/\.(md|mdx)$/, '');
-      const source = fs.readFileSync(filePath, 'utf8');
-      return [
-        `/docs/${slugPath}`,
-        {
-          supportedLanguages: parseSupportedLanguagesFromSource(source),
-          isLanguageAgnostic: parseIsLanguageAgnosticFromSource(source),
-        },
-      ] as const;
-    })
-    .sort(([a], [b]) => a.localeCompare(b));
+  const metadataEntries: Array<readonly [string, DocsPathMetadata]> = [];
 
+  // Collect from docs source
+  for (const filePath of collectSourceDocFiles(DOCS_SOURCE_ROOT)) {
+    const relativePath = path.relative(DOCS_SOURCE_ROOT, filePath).replace(/\\/g, '/');
+    const slugPath = relativePath.replace(/\.(md|mdx)$/, '');
+    const source = fs.readFileSync(filePath, 'utf8');
+    metadataEntries.push([
+      `/docs/${slugPath}`,
+      {
+        supportedLanguages: parseSupportedLanguagesFromSource(source),
+        isLanguageAgnostic: parseIsLanguageAgnosticFromSource(source),
+      },
+    ]);
+  }
+
+  // Collect from guides source
+  for (const filePath of collectSourceDocFiles(GUIDES_SOURCE_ROOT)) {
+    const relativePath = path.relative(GUIDES_SOURCE_ROOT, filePath).replace(/\\/g, '/');
+    const slugPath = relativePath.replace(/\.(md|mdx)$/, '');
+    const source = fs.readFileSync(filePath, 'utf8');
+    metadataEntries.push([
+      `/guides/${slugPath}`,
+      {
+        supportedLanguages: parseSupportedLanguagesFromSource(source),
+        isLanguageAgnostic: parseIsLanguageAgnosticFromSource(source),
+      },
+    ]);
+  }
+
+  metadataEntries.sort(([a], [b]) => a.localeCompare(b));
   return Object.fromEntries(metadataEntries) as DocsPathMetadataMap;
 }
 
@@ -279,9 +313,11 @@ export function resolveDocsTarget(
     };
   }
 
+  const section = parsed.section;
+
   if (supportedLanguages.includes(activeLanguage)) {
-    const normalizedSlugPath = normalizedBasePath.replace(/^\/docs\//, '');
-    const targetPath = `/docs/${activeLanguage}/${normalizedSlugPath}/`;
+    const normalizedSlugPath = normalizedBasePath.replace(new RegExp(`^/${section}/`), '');
+    const targetPath = `/${section}/${activeLanguage}/${normalizedSlugPath}/`;
     return {
       resolvedUrl: formatResolvedUrl(parsed, targetPath),
       wasRewritten: normalizeDocsPath(targetPath) !== parsed.normalizedPath,
@@ -300,8 +336,8 @@ export function resolveDocsTarget(
     };
   }
 
-  const normalizedSlugPath = normalizedBasePath.replace(/^\/docs\//, '');
-  const targetPath = `/docs/${canonicalLanguage}/${normalizedSlugPath}/`;
+  const normalizedSlugPath = normalizedBasePath.replace(new RegExp(`^/${section}/`), '');
+  const targetPath = `/${section}/${canonicalLanguage}/${normalizedSlugPath}/`;
   return {
     resolvedUrl: formatResolvedUrl(parsed, targetPath),
     wasRewritten: normalizeDocsPath(targetPath) !== parsed.normalizedPath,
@@ -348,7 +384,7 @@ export function rewriteInternalDocsLinks(
     if (
       warnUnresolved &&
       (resolved.reason === 'unknown-target' || resolved.reason === 'non-docs')
-      && /^https?:\/\/genkit\.dev\/docs\/|^\/docs\//.test(originalUrl)
+      && /^https?:\/\/genkit\.dev\/(docs|guides)\/|^\/(docs|guides)\//.test(originalUrl)
     ) {
       warnings.push(originalUrl);
     }
@@ -357,9 +393,9 @@ export function rewriteInternalDocsLinks(
 
   let rewritten = content;
 
-  // Markdown links/images where target starts with /docs or https://genkit.dev/docs
+  // Markdown links/images where target starts with /docs, /guides, or https://genkit.dev/docs, https://genkit.dev/guides
   rewritten = rewritten.replace(
-    /(\]\()((?:https?:\/\/genkit\.dev)?\/docs\/[^)\s]+)(\))/g,
+    /(\]\()((?:https?:\/\/genkit\.dev)?\/(?:docs|guides)\/[^)\s]+)(\))/g,
     (_full, prefix: string, url: string, suffix: string) => {
       return `${prefix}${rewriteIfNeeded(url)}${suffix}`;
     },
@@ -367,7 +403,7 @@ export function rewriteInternalDocsLinks(
 
   // Inline HTML href attributes.
   rewritten = rewritten.replace(
-    /(href=['"])((?:https?:\/\/genkit\.dev)?\/docs\/[^'"]+)(['"])/g,
+    /(href=['"])((?:https?:\/\/genkit\.dev)?\/(?:docs|guides)\/[^'"]+)(['"])/g,
     (_full, prefix: string, url: string, suffix: string) => {
       return `${prefix}${rewriteIfNeeded(url)}${suffix}`;
     },

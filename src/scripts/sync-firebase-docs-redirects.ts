@@ -35,8 +35,11 @@ function buildCanonicalDocRedirects(): RedirectRule[] {
       continue;
     }
 
-    const slugPath = basePath.replace(/^\/docs\//, '');
-    const destination = `/docs/${canonicalLanguage}/${slugPath}/`;
+    // Determine the section prefix (docs or guides)
+    const sectionMatch = basePath.match(/^\/(docs|guides)\//);
+    const section = sectionMatch ? sectionMatch[1] : 'docs';
+    const slugPath = basePath.replace(new RegExp(`^/${section}/`), '');
+    const destination = `/${section}/${canonicalLanguage}/${slugPath}/`;
     redirects.push(
       { source: `${basePath}/`, destination, type: 301 },
       { source: basePath, destination, type: 301 },

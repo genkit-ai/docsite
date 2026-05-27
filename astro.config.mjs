@@ -124,11 +124,11 @@ export default defineConfig({
     sitemap({
       filter: (page) => {
         const pathname = new URL(page).pathname.replace(/\/$/, '');
-        // Always include language-prefixed docs and non-docs pages (homepage, etc.)
-        if (/^\/docs\/(js|go|dart|python)(\/|$)/.test(pathname)) return true;
-        if (!pathname.startsWith('/docs/')) return true;
-        // Language-neutral docs paths: only include if explicitly marked isLanguageAgnostic in frontmatter
-        const slug = pathname.replace(/^\//, ''); // e.g. 'docs/flows'
+        // Always include language-prefixed docs/guides and non-docs pages (homepage, etc.)
+        if (/^\/(docs|guides)\/(js|go|dart|python)(\/|$)/.test(pathname)) return true;
+        if (!pathname.startsWith('/docs/') && !pathname.startsWith('/guides/')) return true;
+        // Language-neutral docs/guides paths: only include if explicitly marked isLanguageAgnostic in frontmatter
+        const slug = pathname.replace(/^\//, ''); // e.g. 'docs/flows' or 'guides/overview'
         return docsLanguageAgnosticBySlug[slug] === true;
       },
     }),
