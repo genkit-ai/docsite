@@ -13,6 +13,16 @@ const ogUrl = new URL('ogimage.png?v=1', site).href;
 export default defineConfig({
   // TODO: Update to genkit.dev before launch
   site,
+  redirects: {
+    '/docs/js': '/docs/js/get-started/',
+    '/docs/js/': '/docs/js/get-started/',
+    '/docs/go': '/docs/go/get-started/',
+    '/docs/go/': '/docs/go/get-started/',
+    '/docs/python': '/docs/python/get-started/',
+    '/docs/python/': '/docs/python/get-started/',
+    '/docs/dart': '/docs/dart/get-started/',
+    '/docs/dart/': '/docs/dart/get-started/',
+  },
   markdown: {
     shikiConfig: {
       langAlias: { dotprompt: 'handlebars' },
