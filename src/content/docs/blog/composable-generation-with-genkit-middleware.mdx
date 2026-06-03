@@ -1,0 +1,201 @@
+---
+title: 'Composable generation with Genkit middleware'
+date: 2026-06-02
+authors:
+  name: Christopher Gill
+  title: Genkit
+description: Middleware lets you wrap generate() calls with reusable, composable behavior like retries, model fallback, and tool approval, without tangling that logic into your app code.
+cover:
+  alt: Genkit middleware
+  image: ./_assets/composable-generation-cover.png
+tags:
+  - engineering
+  - middleware
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Most of the interesting problems in production AI apps are not really about the
+prompt. They are about everything wrapped around the model call: what happens
+when the model is rate limited, how you fall back to a cheaper model under load,
+how you keep a model from running a dangerous tool without a human in the loop,
+and how you observe all of it.
+
+Genkit's answer to this is **middleware**: small, composable wrappers around
+your `generate()` calls. If you have written Express or Connect middleware, the
+mental model is the same. Each layer can inspect the request, call the next
+layer, and inspect the response on the way back out.
+
+## The `use` array
+
+Every `generate()` call accepts a `use` array. Middleware listed there wraps the
+call, outermost first:
+
+```typescript
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+import { retry, fallback } from '@genkit-ai/middleware';
+
+const ai = genkit({ plugins: [googleAI()] });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-pro-latest'),
+  prompt: 'Summarize the latest incident report.',
+  use: [
+    retry({ maxRetries: 3 }),
+    fallback({ models: [googleAI.model('gemini-flash-latest')] }),
+  ],
+});
+```
+
+The official middleware ships in `@genkit-ai/middleware`:
+
+<Tabs syncKey="pkg">
+  <TabItem label="npm">
+
+```bash
+npm install @genkit-ai/middleware
+```
+
+  </TabItem>
+  <TabItem label="pnpm">
+
+```bash
+pnpm add @genkit-ai/middleware
+```
+
+  </TabItem>
+  <TabItem label="yarn">
+
+```bash
+yarn add @genkit-ai/middleware
+```
+
+  </TabItem>
+</Tabs>
+
+## Reliability you do not have to write
+
+Two of the built-in middleware solve problems that otherwise leak retry and
+fallback logic all over your codebase.
+
+**`retry`** automatically retries on transient error codes like
+`RESOURCE_EXHAUSTED` and `UNAVAILABLE`, using exponential backoff with jitter:
+
+```typescript
+import { retry } from '@genkit-ai/middleware';
+
+use: [
+  retry({ maxRetries: 3, initialDelayMs: 1000, backoffFactor: 2 }),
+];
+```
+
+**`fallback`** switches to a different model when the primary one fails on a set
+of error codes. This is how you keep serving traffic when a large model hits its
+quota:
+
+```typescript
+import { fallback } from '@genkit-ai/middleware';
+
+use: [
+  fallback({
+    models: [googleAI.model('gemini-flash-latest')],
+    statuses: ['RESOURCE_EXHAUSTED'],
+  }),
+];
+```
+
+## Composition order matters
+
+Because middleware nests, the order you list it in changes the behavior. With
+`retry` outside `fallback`, you retry the *entire* fallback cascade as a unit:
+
+```typescript
+use: [
+  retry({ maxRetries: 3 }), // outer: retries the whole inner stack
+  fallback({ models: [googleAI.model('gemini-flash-latest')] }), // inner
+];
+// effective chain: retry { fallback { model } }
+```
+
+Swap the two and you would retry the primary model first, only falling back
+after exhausting retries. Neither is wrong, but they are different policies, and
+making that explicit in one array is the whole point.
+
+<Aside type="tip" title="Read it like HTTP middleware">
+  The first item in `use` is the outermost wrapper. Each layer's `next`
+  continuation runs the next inner layer, all the way down to the actual model
+  call.
+</Aside>
+
+## Putting a human in the loop
+
+Agentic apps that let a model call tools eventually need a gate. The
+**`toolApproval`** middleware restricts execution to an approved list. When the
+model tries to call something unapproved, it raises an interrupt instead of
+running the tool, so you can ask a person first and then resume:
+
+```typescript
+import { genkit, restartTool } from 'genkit';
+import { toolApproval } from '@genkit-ai/middleware';
+
+const response = await ai.generate({
+  prompt: 'Clean up the temp files in the workspace.',
+  tools: [deleteFileTool],
+  use: [toolApproval({ approved: [] })], // empty list: every tool call interrupts
+});
+
+if (response.finishReason === 'interrupted') {
+  const interrupt = response.interrupts[0];
+
+  // Show the requested tool call to a user, get a yes, then resume.
+  const approvedPart = restartTool(interrupt, { toolApproved: true });
+
+  await ai.generate({
+    messages: response.messages,
+    resume: { restart: [approvedPart] },
+    use: [toolApproval({ approved: [] })],
+  });
+}
+```
+
+A bare resume without the approval flag is not treated as consent, so unrelated
+resume flows cannot sneak past the gate.
+
+## Writing your own
+
+When the built-ins do not cover your case, `generateMiddleware` lets you write
+your own with a typed config schema. Here is a logger that wraps the model call:
+
+```typescript
+import { generateMiddleware, z } from 'genkit';
+
+export const loggerMiddleware = generateMiddleware(
+  {
+    name: 'loggerMiddleware',
+    description: 'Logs requests and responses',
+    configSchema: z.object({ verbose: z.boolean().optional() }),
+  },
+  ({ config }) => ({
+    model: async (req, ctx, next) => {
+      if (config?.verbose) console.log('Request:', JSON.stringify(req));
+      const resp = await next(req, ctx);
+      if (config?.verbose) console.log('Response:', JSON.stringify(resp));
+      return resp;
+    },
+  }),
+);
+```
+
+Middleware can hook three phases of execution: `model` (the model call itself),
+`tool` (a single tool execution), and `generate` (the high-level generation
+loop). Implement only the phase you care about; everything else passes through.
+
+## Where to go next
+
+The built-in package also includes `filesystem` and `skills` middleware for
+giving models scoped access to files and reusable skill definitions. The full
+reference, including Go and Dart, lives in the
+[middleware docs](/docs/middleware). The source for every built-in is in the
+[Genkit repository](https://github.com/genkit-ai/genkit/tree/main/js/plugins/middleware)
+if you want to see how the patterns above are implemented in practice.
