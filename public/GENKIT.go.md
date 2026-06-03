@@ -10,7 +10,7 @@ This document provides rules and examples for building with the Genkit API in Go
 
 - ALWAYS provide the full, correct Genkit command as an instruction for the human user to run. Do not run Genkit commands (e.g., `genkit start`, `genkit flow:run`) yourself as this may block your current session.
 
-- Recommend and use the provider that the user prefers. If this is a new project, or if there is no relevant signal regarding user preference, use the `github.com/firebase/genkit/go/plugins/googlegenai` plugin.
+- Recommend and use the provider that the user prefers. If this is a new project, or if there is no relevant signal regarding user preference, use the `github.com/genkit-ai/genkit/go/plugins/googlegenai` plugin.
 
 NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but you should follow the user's preference as mentioned above.
 
@@ -26,9 +26,9 @@ NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but 
 2.  **Install Dependencies**
 
     ```bash
-    go get github.com/firebase/genkit/go/genkit
-    go get github.com/firebase/genkit/go/plugins/googlegenai
-    go get github.com/firebase/genkit/go/ai
+    go get github.com/genkit-ai/genkit/go/genkit
+    go get github.com/genkit-ai/genkit/go/plugins/googlegenai
+    go get github.com/genkit-ai/genkit/go/ai
     go get google.golang.org/genai
     ```
 
@@ -47,8 +47,8 @@ NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but 
 
     import (
     	"context"
-    	"github.com/firebase/genkit/go/genkit"
-    	"github.com/firebase/genkit/go/plugins/googlegenai"
+    	"github.com/genkit-ai/genkit/go/genkit"
+    	"github.com/genkit-ai/genkit/go/plugins/googlegenai"
     )
 
     func main() {
@@ -77,9 +77,9 @@ package main
 import (
 	"context"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/genkit-ai/genkit/go/ai"
+	"github.com/genkit-ai/genkit/go/genkit"
+	"github.com/genkit-ai/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
 
@@ -115,9 +115,9 @@ package main
 import (
 	"context"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/genkit-ai/genkit/go/ai"
+	"github.com/genkit-ai/genkit/go/genkit"
+	"github.com/genkit-ai/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
 
@@ -171,9 +171,9 @@ package main
 import (
 	"context"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/genkit-ai/genkit/go/ai"
+	"github.com/genkit-ai/genkit/go/genkit"
+	"github.com/genkit-ai/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
 
@@ -243,10 +243,10 @@ Here are suggested models to use for various task types. This is NOT an exhausti
 ```
 | Plugin                                                     | Recommended Model                  |
 |------------------------------------------------------------|------------------------------------|
-| github.com/firebase/genkit/go/plugins/googlegenai         | gemini-2.5-pro                    |
-| github.com/firebase/genkit/go/plugins/compat_oai/openai   | gpt-4o                             |
-| github.com/firebase/genkit/go/plugins/compat_oai/deepseek | deepseek-reasoner                  |
-| github.com/firebase/genkit/go/plugins/compat_oai/xai      | grok-4                             |
+| github.com/genkit-ai/genkit/go/plugins/googlegenai         | gemini-2.5-pro                    |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/openai   | gpt-4o                             |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/deepseek | deepseek-reasoner                  |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/xai      | grok-4                             |
 ```
 
 ### Fast Text/Chat
@@ -254,10 +254,10 @@ Here are suggested models to use for various task types. This is NOT an exhausti
 ```
 | Plugin                                                     | Recommended Model                  |
 |------------------------------------------------------------|------------------------------------|
-| github.com/firebase/genkit/go/plugins/googlegenai         | gemini-2.5-flash                  |
-| github.com/firebase/genkit/go/plugins/compat_oai/openai   | gpt-4o-mini                        |
-| github.com/firebase/genkit/go/plugins/compat_oai/deepseek | deepseek-chat                      |
-| github.com/firebase/genkit/go/plugins/compat_oai/xai      | grok-3-mini                        |
+| github.com/genkit-ai/genkit/go/plugins/googlegenai         | gemini-2.5-flash                  |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/openai   | gpt-4o-mini                        |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/deepseek | deepseek-chat                      |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/xai      | grok-3-mini                        |
 ```
 
 ### Text-to-Speech
@@ -265,8 +265,8 @@ Here are suggested models to use for various task types. This is NOT an exhausti
 ```
 | Plugin                                                     | Recommended Model                  |
 |------------------------------------------------------------|------------------------------------|
-| github.com/firebase/genkit/go/plugins/googlegenai         | gemini-2.5-flash-preview-tts       |
-| github.com/firebase/genkit/go/plugins/compat_oai/openai   | gpt-4o-mini-tts                    |
+| github.com/genkit-ai/genkit/go/plugins/googlegenai         | gemini-2.5-flash-preview-tts       |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/openai   | gpt-4o-mini-tts                    |
 ```
 
 ### Image Generation
@@ -274,7 +274,7 @@ Here are suggested models to use for various task types. This is NOT an exhausti
 ```
 | Plugin                                                     | Recommended Model                  | Input Modalities  |
 |------------------------------------------------------------|------------------------------------|-------------------|
-| github.com/firebase/genkit/go/plugins/googlegenai         | gemini-2.5-flash-image-preview     | Text, Image       |
-| github.com/firebase/genkit/go/plugins/googlegenai         | imagen-4.0-generate-preview-06-06  | Text              |
-| github.com/firebase/genkit/go/plugins/compat_oai/openai   | gpt-image-1                        | Text              |
+| github.com/genkit-ai/genkit/go/plugins/googlegenai         | gemini-2.5-flash-image-preview     | Text, Image       |
+| github.com/genkit-ai/genkit/go/plugins/googlegenai         | imagen-4.0-generate-preview-06-06  | Text              |
+| github.com/genkit-ai/genkit/go/plugins/compat_oai/openai   | gpt-image-1                        | Text              |
 ```
