@@ -43,4 +43,5 @@ authors:
 
 Use a plain `.md` file for prose-only posts. Switch to `.mdx` when you want to
 import and render components. See the
-[welcome post](/blog/welcome-to-the-genkit-blog) for a component example.
+[middleware post](/blog/composable-generation-with-genkit-middleware) for a
+component example.
