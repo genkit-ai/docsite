@@ -1,0 +1,312 @@
+---
+title: 'Announcing Genkit Go 1.0 and enhanced AI-assisted development'
+date: 2025-09-10
+authors:
+  - name: Chris Gill
+    title: Product Manager at Google
+  - name: Cameron Balahan
+    title: Group Product Manager at Google
+description: Genkit Go 1.0 is the first stable, production-ready release of Google's open-source AI framework for Go, alongside the new genkit init:ai-tools command for AI-assisted development.
+cover:
+  alt: Genkit Go 1.0
+  image: ./_assets/announcing-genkit-go-1-0/Genkit-Go-1.0-Blog.png
+tags:
+  - go
+  - announcements
+---
+
+import devUiVideo from './_assets/announcing-genkit-go-1-0/devui-flow-runner-clipped.mp4';
+
+We're excited to announce the release of **Genkit Go 1.0**, the first stable, production-ready release of Google's open-source AI development framework for the Go ecosystem. Along with this release, we're also introducing the `genkit init:ai-tools` command to supercharge your AI-assisted development workflow.
+
+Genkit is an open-source framework for building full-stack AI-powered applications. It provides a unified interface for multiple model providers and streamlined APIs for multimodal content, structured outputs, tool calling, retrieval-augmented generation (RAG), and agentic workflows. With Genkit Go, you can now build and deploy production-ready AI applications with the speed, safety, and reliability of Go.
+
+## TL;DR
+
+**Genkit Go** is now stable and ready for production use!
+
+Key features:
+
+- **Type-safe AI flows** with Go structs and JSON schema validation
+- **Unified model interface** supporting Google AI, Vertex AI, OpenAI, Ollama, and more
+- **Tool calling, RAG, and multimodal support**
+- **Rich local development tools** with a standalone CLI binary and Developer UI
+- **AI coding assistant integration** via the `genkit init:ai-tools` command for tools like the Gemini CLI
+
+Ready to start coding? Check out our [get started guide](https://genkit.dev/docs/go/get-started/).
+
+## What's new in Genkit Go 1.0
+
+### Production-ready
+
+Genkit Go 1.0 represents our commitment to providing a stable, reliable foundation for building AI-powered applications in Go. With this release, you can deploy AI-powered applications to production with Genkit, knowing that the API is stable and well-tested.
+
+Like Go itself, it is intended that programs written with Genkit 1.\* will continue to compile and run correctly, unchanged, even as future "point" releases of Genkit arise (Genkit 1.1, Genkit 1.2, etc.).
+
+### Type-safe AI flows
+
+One of Genkit's most powerful features is **flows**: functions for AI use-cases that provide observability, easy testing, and simplified deployment. Here's how you can define a flow in Go for generating structured recipes:
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+// Define your data structures
+type RecipeInput struct {
+    Ingredient          string `json:"ingredient" jsonschema:"description=Main ingredient or cuisine type"`
+    DietaryRestrictions string `json:"dietaryRestrictions,omitempty" jsonschema:"description=Any dietary restrictions"`
+}
+
+type Recipe struct {
+    Title        string   `json:"title"`
+    Description  string   `json:"description"`
+    PrepTime     string   `json:"prepTime"`
+    CookTime     string   `json:"cookTime"`
+    Servings     int      `json:"servings"`
+    Ingredients  []string `json:"ingredients"`
+    Instructions []string `json:"instructions"`
+    Tips         []string `json:"tips,omitempty"`
+}
+
+func main() {
+    ctx := context.Background()
+
+    // Initialize Genkit with plugins
+    g := genkit.Init(ctx,
+        genkit.WithPlugins(&googlegenai.GoogleAI{}),
+        genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+    )
+
+    // Define a type-safe flow
+    recipeFlow := genkit.DefineFlow(g, "recipeGeneratorFlow",
+        func(ctx context.Context, input *RecipeInput) (*Recipe, error) {
+            dietaryRestrictions := input.DietaryRestrictions
+            if dietaryRestrictions == "" {
+                dietaryRestrictions = "none"
+            }
+
+            prompt := fmt.Sprintf(`Create a recipe with the following requirements:
+                Main ingredient: %s
+                Dietary restrictions: %s`, input.Ingredient, dietaryRestrictions)
+
+            // Generate structured data with type safety
+            recipe, _, err := genkit.GenerateData[Recipe](ctx, g,
+                ai.WithPrompt(prompt),
+            )
+            if err != nil {
+                return nil, fmt.Errorf("failed to generate recipe: %w", err)
+            }
+
+            return recipe, nil
+        })
+
+    // Run the flow
+    recipe, err := recipeFlow.Run(ctx, &RecipeInput{
+        Ingredient:          "avocado",
+        DietaryRestrictions: "vegetarian",
+    })
+    if err != nil {
+        log.Fatalf("could not generate recipe: %v", err)
+    }
+
+    // Print the structured recipe
+    recipeJSON, _ := json.MarshalIndent(recipe, "", "  ")
+    fmt.Println("Sample recipe generated:")
+    fmt.Println(string(recipeJSON))
+
+    <-ctx.Done() // Used for local testing only
+}
+```
+
+### Unified model interface
+
+Genkit Go provides a single, consistent interface for working with multiple AI model providers including Google AI, Vertex AI, OpenAI, Anthropic, and Ollama. Learn more about [generating content with AI models](https://genkit.dev/docs/go/models/):
+
+```go
+// Use Google AI models
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithPrompt("What is the weather like today?"),
+)
+
+// Use OpenAI models
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("openai/gpt-4o"),
+    ai.WithPrompt("How are you today?"),
+)
+
+// Switch to Ollama for local models
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("ollama/llama3"),
+    ai.WithPrompt("What is the meaning of life?"),
+)
+```
+
+### Tool calling
+
+Genkit Go makes it easy to give your AI models access to external functions and APIs. See the [complete tool calling guide](https://genkit.dev/docs/go/tool-calling/):
+
+```go
+// Define a tool
+type WeatherInput struct {
+    Location string `json:"location" jsonschema_description:"Location to get weather for"`
+}
+
+getWeatherTool := genkit.DefineTool(g, "getWeather",
+    "Gets the current weather in a given location",
+    func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
+        // Your weather API logic here
+        return fmt.Sprintf("The current weather in %s is 72°F and sunny.", input.Location), nil
+    })
+
+// Use the tool in generation
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("What's the weather in San Francisco?"),
+    ai.WithTools(getWeatherTool),
+)
+```
+
+### Easy deployment
+
+Deploy your flows as HTTP endpoints with minimal setup. See the [deployment guides](https://genkit.dev/docs/go/deployment/cloud-run/) for more options:
+
+```go
+// Create HTTP handlers for your flows
+mux := http.NewServeMux()
+mux.HandleFunc("POST /recipeGeneratorFlow", genkit.Handler(recipeFlow))
+
+// Start the server
+log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+```
+
+## Rich developer tooling
+
+Genkit Go comes with a comprehensive set of development tools designed to make building AI applications fast and intuitive. The entire local toolchain is available through a single CLI that works seamlessly with your Go development workflow.
+
+### Standalone CLI installation
+
+Get started quickly with our standalone CLI binary, with no other runtime installations required:
+
+**For macOS and Linux:**
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+**For Windows:** Download directly from [cli.genkit.dev](https://cli.genkit.dev).
+
+The CLI works with Genkit applications in any supported language (JavaScript, Go, Python) and provides you with several convenient commands to rapidly test and iterate such as running and evaluating your flows.
+
+### Interactive Developer UI
+
+The Developer UI provides a visual interface for testing and debugging your AI applications:
+
+- **Test flows interactively**: Run flows with different inputs and see cleanly rendered results
+- **Debug with detailed tracing**: Visualize exactly what your AI flows are doing step-by-step
+- **Monitor performance**: Track latency, token usage, and costs
+- **Experiment with prompts**: Test different prompts and model configurations
+
+Launch the Developer UI alongside your Go application through the CLI:
+
+```bash
+genkit start -- go run .
+```
+
+Here's what the experience looks like when running and inspecting the `recipeGenerator` flow from earlier:
+
+<video src={devUiVideo} controls autoplay loop muted playsinline style="width: 100%; border-radius: 8px;"></video>
+
+## Introducing `genkit init:ai-tools`
+
+We're also excited to introduce the `genkit init:ai-tools` command that revolutionizes how you work with AI assistants during development. This feature, now available for both JavaScript and **Go developers**, automatically configures popular AI coding assistants to work seamlessly with the Genkit framework and tooling. Learn more about [AI-assisted development in Genkit](https://genkit.dev/docs/go/mcp-server/).
+
+To use it, install the Genkit CLI and run:
+
+```bash
+genkit init:ai-tools
+```
+
+Running the command does the following:
+
+1. **Detects existing AI assistant configurations** and preserves your current settings
+2. **Installs the Genkit MCP server** with powerful development tools:
+   - `lookup_genkit_docs`: Search Genkit documentation from genkit.dev
+   - `list_flows`: List all flows in your current Genkit app
+   - `run_flow`: Execute flows with test inputs
+   - `get_trace`: Fetch execution traces for debugging and analysis
+3. **Creates a GENKIT.md file** with comprehensive language-specific instructions for AI assistants
+
+### Supported AI tools
+
+The command has built-in support for:
+
+- **Gemini CLI** - Google's CLI-based AI coding assistant
+- **Firebase Studio** - Firebase's agentic, cloud-based development environment
+- **Claude Code** - Anthropic's coding assistant
+- **Cursor** - AI-powered code editor
+
+For other tools, select the "generic" option to get a `GENKIT.md` file you can integrate manually.
+
+### Enhanced development experience
+
+With AI assistant integration, you can:
+
+- **Ask questions about Genkit Go APIs** and get accurate, up-to-date answers
+- **Generate Go-specific Genkit code** that follows best practices
+- **Debug flows** by having your AI assistant analyze traces
+- **Test your applications** with AI-generated inputs
+- **Get help with Go-specific patterns** and idiomatic code
+
+## Quick start
+
+**1. Create a new project:**
+
+```bash
+mkdir my-genkit-app && cd my-genkit-app
+go mod init example/my-genkit-app
+```
+
+**2. Install Genkit and CLI:**
+
+```bash
+go get github.com/firebase/genkit/go
+curl -sL cli.genkit.dev | bash
+```
+
+**3. Set up AI assistant integration:**
+
+```bash
+genkit init:ai-tools
+```
+
+**4. Create your first flow** using the examples above
+
+**5. Start the Developer UI:**
+
+```bash
+genkit start -- go run .
+```
+
+For a more detailed walkthrough, see the [get started guide](https://genkit.dev/docs/go/get-started/).
+
+## Learn more
+
+- **Documentation**: [genkit.dev](https://genkit.dev)
+- **Get started guide**: [Go quickstart](https://genkit.dev/docs/go/get-started/)
+- **Go API reference**: [pkg.go.dev](https://pkg.go.dev/github.com/firebase/genkit/go)
+- **Examples**: [GitHub samples](https://github.com/firebase/genkit/tree/main/go/samples)
+- **Community**: [Genkit Discord](https://discord.gg/qXt5zzQKpc)
+
+Genkit Go 1.0 combines Go's performance and reliability with Genkit's production-ready AI framework and tooling. We can't wait to see what you build!
+
+Happy coding! 🚀
