@@ -1,11 +1,19 @@
 import { defineCollection, z } from 'astro:content';
-import { docsLoader } from '@astrojs/starlight/loaders';
+import { glob } from 'astro/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 import { blogSchema } from 'starlight-blog/schema';
 
+// Mirrors Starlight's built-in `docsLoader()` (same base and extensions) but additionally
+// excludes any `README.md`, so contributor-facing READMEs (e.g. src/content/docs/blog/README.md)
+// live in the repo without being published as pages.
+const docsExtensions = 'markdown,mdown,mkdn,mkd,mdwn,md,mdx';
+
 export const collections = {
 	docs: defineCollection({
-		loader: docsLoader(),
+		loader: glob({
+			base: './src/content/docs',
+			pattern: [`**/[^_]*.{${docsExtensions}}`, '!**/README.md'],
+		}),
 		schema: (context) => {
 			const starlightBase = docsSchema()(context) as unknown as z.AnyZodObject;
 			return (

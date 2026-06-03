@@ -1,15 +1,12 @@
----
-title: How to author a blog post
-date: 2026-05-28
-authors: genkit
-description: A quick reference for adding new posts to the Genkit blog, including frontmatter fields and where files live.
-tags:
-  - guides
----
+# Authoring blog posts
 
-New blog posts live in `src/content/docs/blog/` in the docsite repo. Create a
-`.md` or `.mdx` file there and it will automatically appear in the blog index
-at `/blog`.
+New blog posts live in this directory (`src/content/docs/blog/`). Create a `.md`
+or `.mdx` file here and it will automatically appear in the blog index at
+`/blog`.
+
+> This README documents the workflow for contributors. It is excluded from the
+> built site (see the `README.md` exclusion in `src/content.config.ts`), so it
+> will not appear as a blog post.
 
 ## Frontmatter
 
@@ -28,9 +25,9 @@ Every post supports the following frontmatter fields:
 
 ## Authors
 
-Shared authors are defined once in `astro.config.mjs` under the
-`starlightBlog` plugin's `authors` option, then referenced by key. You can also
-specify a one-off author inline:
+Shared authors are defined once in `astro.config.mjs` under the `starlightBlog`
+plugin's `authors` option, then referenced by key. You can also specify a
+one-off author inline:
 
 ```yaml
 authors:
@@ -42,6 +39,12 @@ authors:
 ## Markdown vs. MDX
 
 Use a plain `.md` file for prose-only posts. Switch to `.mdx` when you want to
-import and render components. See the
-[middleware post](/blog/composable-generation-with-genkit-middleware) for a
-component example.
+import and render components. See
+`composable-generation-with-genkit-middleware.mdx` for a component example
+(Starlight `Tabs`, an embedded video, and more).
+
+## Assets
+
+Co-locate images and videos in `_assets/` (the leading underscore keeps them out
+of the content collection). Reference them with a relative path from the post,
+e.g. `./_assets/my-cover.png`.
