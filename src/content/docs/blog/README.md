@@ -40,7 +40,7 @@ authors:
 
 Use a plain `.md` file for prose-only posts. Switch to `.mdx` when you want to
 import and render components. See
-`composable-generation-with-genkit-middleware.mdx` for a component example
+`announcing-genkit-middleware.mdx` for a component example
 (Starlight `Tabs`, an embedded video, and more).
 
 ## Assets
