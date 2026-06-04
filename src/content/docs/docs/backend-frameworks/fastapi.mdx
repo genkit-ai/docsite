@@ -54,17 +54,38 @@ These packages include:
 
 ### Configure a model API key
 
-This tutorial uses the Gemini API from Google AI Studio. Get a key from [Google AI Studio](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable:
+This tutorial uses the Gemini API from Google AI Studio. Get a key from [Google AI Studio](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable to your key:
 
 ```bash
 export GEMINI_API_KEY=<your API key>
 ```
+
+:::note[Prefer a different model?]
+This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic), [OpenAI](/docs/integrations/openai), and many [other model providers](/docs/integrations/model-providers).
+:::
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
 
 ## Create the backend
 
 The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
 
 The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
 
 Replace the contents of `main.py` with the following:
 
@@ -186,12 +207,12 @@ async def bargain_chef_endpoint():
     return bargain_chef_flow
 ```
 
-The file builds the flow in four parts:
+A few details are worth noting before you run the backend:
 
-1. **Initialize Genkit.** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
-2. **Define a tool.** `get_ingredients_on_sale` is an async function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The typed `DayType` input forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** `Recipe` is a Pydantic model that defines the structure of the final response. The flow passes it as `output_schema` so Genkit validates the model's output against it. Declaring `chunk_type=Recipe` on the flow tells Genkit that streamed chunks share the same shape, with fields filling in progressively.
-4. **Define the flow.** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `ctx.send_chunk` forwards each chunk to the client so the response fills in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
+- **Final output and streamed chunks:** `Recipe` is the complete recipe the flow returns at the end, passed as `output_schema` so Genkit validates the model's output against it. Declaring `chunk_type=Recipe` on the flow tells Genkit that streamed chunks share the same shape, with fields filling in progressively as the model generates them.
+- **Shared Python types:** the Pydantic models (`Recipe`, `RecipeIngredient`, `CravingInput`) define the request and response shapes once, so the flow, the HTTP handler, and any client share a single source of truth.
+- **The `get_ingredients_on_sale` tool:** the model decides when to call it based on the prompt, and the typed `DayType` input forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`ctx.send_chunk`:** each call pushes the latest partial recipe to the client, giving it a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
 
 ### Expose the flow over HTTP
 

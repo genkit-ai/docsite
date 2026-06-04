@@ -5,7 +5,7 @@ supportedLanguages:
   - js
 ---
 
-import { Code, FileTree, LinkButton } from '@astrojs/starlight/components';
+import { Aside, Code, FileTree, LinkButton } from '@astrojs/starlight/components';
 import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
 import bargainChefFlowCode from './_snippets/bargainChefFlow.ts?raw';
 
@@ -19,8 +19,7 @@ For each request, your server prompts Gemini to draft a recipe, and the model ca
 
 - Node.js v20 or later
 - npm
-
-This tutorial assumes you're already familiar with building TypeScript server applications.
+- Familiarity with Fastify and TypeScript
 
 ## Set up the application
 
@@ -77,13 +76,24 @@ Set the `GEMINI_API_KEY` environment variable to your key:
 export GEMINI_API_KEY=<your API key>
 ```
 
-{/* TODO: add a note here pointing readers to alternative model providers (Vertex AI, Anthropic, OpenAI, Ollama). */}
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
 
 ## Create the backend
 
 The backend handles requests from any client that calls your HTTP endpoint. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
 
 The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Zod so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
 
 Create `src/genkit/bargainChefFlow.ts`:
 
@@ -93,12 +103,13 @@ Create `src/genkit/bargainChefFlow.ts`:
   meta='title="src/genkit/bargainChefFlow.ts"'
 />
 
-The file builds the flow in four parts:
+A few details are worth noting:
 
-1. **Initialize Genkit.** `genkit({ plugins: [googleAI()] })` sets up the SDK and registers Gemini as the model provider.
-2. **Define a tool.** `getIngredientsOnSale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The tool's typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** `RecipeSchema` is the structure of the final response. The flow declares it as `outputSchema` so Genkit validates the model's output against it, and `RecipeSchema.partial()` as `streamSchema` so fields can be absent in the in-progress chunks emitted during streaming.
-4. **Define the flow.** `bargainChefFlow` ties everything together. It calls `ai.generateStream`, which yields chunks as the model produces them; `sendChunk` forwards each chunk to the caller so the response fills in field by field. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe. The `use: [retry(...)]` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
+- **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape with every field optional (`RecipeSchema.partial()`), because early chunks might only include the title or description.
+- **Shared TypeScript types:** `Recipe`, `PartialRecipe`, and `BargainChefInput` are inferred from the Zod schemas with `z.infer<...>` and re-exported for a Fastify frontend to import, keeping the client and backend in sync.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`sendChunk`:** Each call forwards the latest partial recipe to the caller, so the response fills in field by field as the model generates it.
+- **`use: [retry(...)]`:** Applies retry middleware that recovers from transient errors like rate limits and timeouts.
 
 ### Add the server route
 
@@ -189,6 +200,16 @@ Verify that your project layout matches the structure below:
 
 </FileTree>
 
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
 ## Run the app
 
 Start the Fastify server:
@@ -272,12 +293,9 @@ You now have a standalone Genkit backend on Fastify that streams structured outp
 
 ## Next steps
 
-{/* TODO: rewrite Next steps with brief one-line descriptions per link and a short "what you just learned" recap framed for a first-time Genkit user. */}
-
-- [Connect an app framework](/docs/app-frameworks/overview)
-- [Deploy your app](/docs/deployment/overview)
-- [Creating flows](/docs/flows)
-- [Generating content](/docs/models)
-- [Connect a web frontend](/docs/web-client)
-- [Connect a Flutter app](/docs/frontend/flutter)
-- [Developer tools](/docs/devtools)
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
+- [Connect a web frontend](/docs/web-client): Wire a standalone web client up to this backend.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.

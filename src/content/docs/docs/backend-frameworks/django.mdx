@@ -5,7 +5,7 @@ supportedLanguages:
   - python
 ---
 
-import { FileTree, LinkButton } from '@astrojs/starlight/components';
+import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
 
 In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Django that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
@@ -76,7 +76,11 @@ Set the `GEMINI_API_KEY` environment variable to your key:
 export GEMINI_API_KEY=<your API key>
 ```
 
-{/* TODO: add a note here pointing readers to alternative model providers (Vertex AI, Anthropic, OpenAI, Ollama). */}
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
 
 ### Configure Django
 
@@ -108,6 +112,13 @@ DATABASES = {}
 The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back as it's generated.
 
 The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
 
 Create `recipes/views.py`:
 
@@ -239,12 +250,12 @@ async def bargain_chef_endpoint(request, payload: GenkitRequest):
     return {'result': result.model_dump()}
 ```
 
-The file builds the backend in four parts:
+A few details are worth noting before you run the backend:
 
-1. **Initialize Genkit.** `Genkit(plugins=[GoogleAI()])` sets up the SDK and registers Gemini as the model provider.
-2. **Define a tool.** `get_ingredients_on_sale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** `Recipe` is the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON that matches, and uses `chunk_type=Recipe` so streamed chunks are typed as partial recipes.
-4. **Define the flow.** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` parses the accumulated text into a partial `Recipe`, and `ctx.send_chunk` forwards each partial to the client so the UI can fill in field by field. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
+- **Final output and streamed chunks:** `output_schema` is the complete recipe the flow returns at the end. `chunk_type=Recipe` types the streamed chunks as partial recipes, because early chunks might only include the title or description.
+- **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are defined as Pydantic models, ready for the Django app to import and for Genkit to validate against.
+- **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
 
 The Django Ninja endpoint exposes the flow two ways. When the request sends `Accept: text/event-stream`, it returns a `StreamingHttpResponse` that emits each partial recipe as an SSE event. Otherwise, it awaits the flow once and returns the final recipe as JSON.
 
@@ -275,6 +286,16 @@ Verify that your project layout matches the structure below:
   - views.py
 
 </FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
 
 ## Run the app
 

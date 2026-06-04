@@ -5,7 +5,7 @@ supportedLanguages:
   - go
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
 In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Gin that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
@@ -62,11 +62,24 @@ This tutorial uses the Gemini API from Google AI Studio. Get a key at [https://a
 export GEMINI_API_KEY=<your API key>
 ```
 
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
 ## Create the backend
 
 The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
 
 The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Go structs so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the streaming flow** that ties everything together.
 
 Create a `main.go` file:
 
@@ -188,14 +201,13 @@ Call the getIngredientsOnSale tool with the dayType that matches today. Saturday
 }
 ```
 
-The file builds the backend in four parts:
+A few details are worth noting:
 
-1. **Initialize Genkit.** `genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))` sets up the SDK, registers Gemini as the model provider, and exposes the built-in middleware (retry, fallback, and more) to the Developer UI. The Google AI plugin reads `GEMINI_API_KEY` from the environment.
-2. **Define a tool.** `getIngredientsOnSale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The typed `IngredientsOnSaleInput` struct forces the model to pass `dayType: "weekday"` or `"weekend"`, and the `jsonschema` tags describe the schema to the model. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** The `Recipe` struct is the structure of the final response. `genkit.GenerateDataStream[*Recipe]` uses it both to validate the model's final output and as the type for each streamed partial chunk, so fields can be absent in the in-progress chunks emitted during streaming.
-4. **Define the streaming flow.** `bargainChefFlow` ties everything together. `genkit.DefineStreamingFlow` takes a function that receives a `sendChunk` callback. The flow calls `genkit.GenerateDataStream`, which yields chunks as the model produces them, and forwards each one through `sendChunk` so the caller's UI fills in field by field. When the stream is `Done`, the flow returns the final validated recipe. The `ai.WithUse(&middleware.Retry{MaxRetries: 3})` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
-
-The Gin server wraps the flow with `gin.WrapH(genkit.Handler(bargainChefFlow))`. `genkit.Handler` returns a standard `http.Handler` that knows how to parse the `{"data": ...}` envelope, validate input against the flow's schema, run the flow, and write either a JSON response or a `text/event-stream` of chunks based on the request's `Accept` header. `gin.WrapH` adapts that handler into a `gin.HandlerFunc` so it slots into Gin's routing and middleware (including `cors.Default()`) like any other route.
+- **Final output and streamed chunks:** `genkit.GenerateDataStream[*Recipe]` uses the `Recipe` struct both to validate the model's final output and as the type for each streamed partial chunk, so fields can be absent in the in-progress chunks emitted during streaming.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed `IngredientsOnSaleInput` struct forces the model to pass `dayType: "weekday"` or `"weekend"`. The `jsonschema` tags describe the schema to the model. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`sendChunk`:** `genkit.DefineStreamingFlow` takes a function that receives a `sendChunk` callback. The flow calls `genkit.GenerateDataStream`, which yields chunks as the model produces them, and forwards each one through `sendChunk` so the caller fills in field by field. When the stream is `Done`, the flow returns the final validated recipe.
+- **Retry middleware:** `genkit.Init` registers `&middleware.Middleware{}` so the built-in middleware (retry, fallback, and more) is available in the Developer UI, and the `ai.WithUse(&middleware.Retry{MaxRetries: 3})` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
+- **The Gin handler:** The server wraps the flow with `gin.WrapH(genkit.Handler(bargainChefFlow))`. `genkit.Handler` returns a standard `http.Handler` that parses the `{"data": ...}` envelope, validates input against the flow's schema, runs the flow, and writes either a JSON response or a `text/event-stream` of chunks based on the request's `Accept` header. `gin.WrapH` adapts that handler into a `gin.HandlerFunc` so it slots into Gin's routing and middleware (including `cors.Default()`) like any other route.
 
 ### Check the project layout
 
@@ -208,6 +220,16 @@ Verify that your project layout matches the structure below:
 - **main.go**
 
 </FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
 
 ## Run the app
 
@@ -271,6 +293,21 @@ The Developer UI is Genkit's local console for testing flows and inspecting exec
 
    You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
 
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
 :::tip[Inspect traces from your running app]
 While the Developer UI is running, any flow invocation triggered against your Gin server appears in the **Traces** tab alongside flows you run manually.
 :::
@@ -281,9 +318,9 @@ You now have a standalone Genkit backend on Gin that streams structured output f
 
 ## Next steps
 
-- [Connect an app framework](/docs/app-frameworks/overview)
-- [Deploy your app](/docs/deployment/overview)
-- [Creating flows](/docs/flows)
-- [Generating content](/docs/models)
-- [Connect a web frontend](/docs/web-client)
-- [Developer tools](/docs/devtools)
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
+- [Connect a web frontend](/docs/web-client): Wire a standalone web client up to this backend.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.

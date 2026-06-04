@@ -5,7 +5,7 @@ supportedLanguages:
   - python
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
 In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Flask that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
@@ -55,17 +55,30 @@ These packages include:
 
 ### Configure a model API key
 
-This tutorial uses the Gemini API from Google AI Studio. Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable:
+This tutorial uses the Gemini API from Google AI Studio. Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable to your key:
 
 ```bash
 export GEMINI_API_KEY=<your API key>
 ```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
 
 ## Create the backend
 
 The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the client as it's generated.
 
 The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
 
 Create `main.py`:
 
@@ -178,14 +191,13 @@ if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8080)
 ```
 
-The file builds the flow in four parts:
+A few details are worth noting:
 
-1. **Initialize Genkit.** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
-2. **Define a tool.** `get_ingredients_on_sale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
-4. **Define the flow.** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
-
-The three stacked decorators wire everything up: `@ai.flow()` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
+- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
+- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
+- **Describe the recipe shape:** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
+- **Define the flow:** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
+- **The three stacked decorators:** These wire everything up. `@ai.flow()` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
 
 ### Check the project layout
 
@@ -197,6 +209,16 @@ Verify that your project layout matches the structure below:
 - **main.py**
 
 </FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
 
 ## Run the app
 
