@@ -1,0 +1,222 @@
+---
+title: Hono quickstart
+description: Build a standalone Genkit backend with Hono that exposes a recipe flow over HTTP using the fetch plugin.
+supportedLanguages:
+  - js
+---
+
+import { Code, FileTree, LinkButton } from '@astrojs/starlight/components';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+import bargainChefFlowCode from './_snippets/bargainChefFlow.ts?raw';
+
+Use this guide to learn how to add agentic AI features to a Hono backend. You will build **Bargain Chef**: a Hono server that exposes a Genkit flow over HTTP. The flow prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to clients as it's generated.
+
+## Prerequisites
+
+- Node.js v20 or later
+- npm
+
+This guide assumes you're already familiar with building TypeScript server applications.
+
+## Set up the application
+
+### Create the Hono project
+
+```bash
+npm create hono@latest my-genkit-hono -- --template nodejs --pm npm --install
+cd my-genkit-hono
+```
+
+### Install packages
+
+<PackageManagerTabs
+  command={`
+npm install genkit @genkit-ai/google-genai @genkit-ai/fetch @genkit-ai/middleware @hono/node-server
+npm install -D genkit-cli tsx
+`}
+/>
+
+These packages include:
+
+- **`genkit`**: Core Genkit SDK.
+- **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`@genkit-ai/fetch`**: Provides fetch-based server integration for runtimes like Hono.
+- **`@genkit-ai/middleware`**: Production-ready generation middleware.
+- **`genkit-cli`**: CLI tool that enables Genkit testing and observability.
+
+### Configure a model API key
+
+This guide uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+{/* TODO: add a note here pointing readers to alternative model providers (Vertex AI, Anthropic, OpenAI, Ollama). */}
+
+## Create the backend
+
+The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the client as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+Create `src/genkit/bargainChefFlow.ts`:
+
+<Code
+  code={bargainChefFlowCode}
+  lang="ts"
+  meta='title="src/genkit/bargainChefFlow.ts"'
+/>
+
+The file builds the flow in four parts:
+
+1. **Initialize Genkit.** `genkit({ plugins: [googleAI()] })` sets up the SDK and registers Gemini as the model provider.
+2. **Define a tool.** `getIngredientsOnSale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The tool's typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, this would query a pricing database, inventory system, or third-party API.
+3. **Describe the recipe shape.** `RecipeSchema` is the structure of the final response. The flow declares it as `outputSchema` so Genkit validates the model's output against it, and `RecipeSchema.partial()` as `streamSchema` so fields can be absent in the in-progress chunks emitted during streaming.
+4. **Define the flow.** `bargainChefFlow` ties everything together. It calls `ai.generateStream`, which yields chunks as the model produces them; `sendChunk` forwards each chunk to the client so the response fills in field by field. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe. The `use: [retry(...)]` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
+
+### Add the server route
+
+Wire up the Genkit backend in `src/index.ts`. Replace the contents with the following:
+
+```ts title="src/index.ts"
+import { fetchHandlers } from '@genkit-ai/fetch';
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { bargainChefFlow } from './genkit/bargainChefFlow';
+
+const app = new Hono();
+app.use('*', cors());
+const handleFlow = fetchHandlers([bargainChefFlow], '/api');
+
+app.post('/api/:flowName', async (c) => {
+  return handleFlow(c.req.raw);
+});
+
+serve(
+  {
+    fetch: app.fetch,
+    port: 3780,
+  },
+  (info) => {
+    console.log(`Hono server listening on http://localhost:${info.port}`);
+  },
+);
+```
+
+`fetchHandlers` adapts your Genkit flows to the standard `Request`/`Response` shape that Hono passes around, so the same handler works in Node.js and other fetch-based runtimes. The `cors()` middleware lets browser frontends served from a different origin (a Vite or Next.js dev server, for example) call the endpoint.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- package.json
+- tsconfig.json
+- src
+  - genkit
+    - bargainChefFlow.ts
+  - **index.ts**
+
+</FileTree>
+
+## Run the app
+
+Start the Hono server:
+
+<PackageManagerTabs command="npx tsx src/index.ts" />
+
+You'll see `Hono server listening on http://localhost:3780`. The server is now ready to accept POST requests at `/api/bargainChefFlow`. Send it a craving like `something warm with chicken` and the recipe streams back field by field: title first, then description, then ingredients (with `onSale: true` on the ones the model picked from the tool), then steps.
+
+```bash
+curl -N -X POST http://localhost:3780/api/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+## Test and inspect the app
+
+You can test the endpoint directly with curl, and you can use the Developer UI to inspect both manual runs and requests from any client.
+
+### Send a request with curl
+
+Use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://localhost:3780/api/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far.
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   <PackageManagerTabs command="npx genkit start -- tsx --watch src/index.ts" />
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts such as in the `package.json`.
+   :::
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from connected clients]
+While the Developer UI is running, any flow invocation triggered against your Hono server appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## Next steps
+
+{/* TODO: rewrite Next steps with brief one-line descriptions per link and a short "what you just learned" recap framed for a first-time Genkit user. */}
+
+- [Connect an app framework](/docs/app-frameworks/overview)
+- [Deploy your app](/docs/deployment/overview)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/web-client)
+- [Connect a Flutter app](/docs/frontend/flutter)
+- [Developer tools](/docs/devtools)

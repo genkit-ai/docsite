@@ -1,0 +1,413 @@
+---
+title: React (Vite) quickstart
+description: Add Genkit AI features to a React app built with Vite by connecting to a standalone Genkit backend in any language.
+supportedLanguages:
+  - js
+  - go
+  - dart
+  - python
+---
+
+import {
+Aside,
+Code,
+FileTree,
+LinkButton,
+} from '@astrojs/starlight/components';
+import Lang from '../../../../components/Lang.astro';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+
+export const componentCode = (url) => `import { useState } from 'react';
+import { streamFlow } from 'genkit/beta/client';
+import './App.css';
+
+interface RecipeIngredient {
+  name?: string;
+  quantity?: string;
+  onSale?: boolean;
+}
+
+interface Recipe {
+  title?: string;
+  description?: string;
+  servings?: number;
+  ingredients?: RecipeIngredient[];
+  steps?: string[];
+}
+
+function App() {
+  const [craving, setCraving] = useState('something warm with chicken');
+  const [recipe, setRecipe] = useState<Recipe | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  async function generateRecipe(e: React.FormEvent) {
+    e.preventDefault();
+    if (!craving.trim()) return;
+    setRecipe(null);
+    setIsStreaming(true);
+    try {
+      const result = streamFlow({
+        url: '${url}',
+        input: { craving },
+      });
+      for await (const partial of result.stream) {
+        setRecipe(partial as Recipe);
+      }
+      await result.output;
+    } catch (err) {
+      console.error('Failed to generate recipe', err);
+    } finally {
+      setIsStreaming(false);
+    }
+  }
+
+  return (
+    <main>
+      <h1>Bargain Chef</h1>
+      <p className="tagline">
+        Tell me what you feel like eating and I'll suggest a recipe built around
+        today's grocery deals.
+      </p>
+
+      <form className="prompt" onSubmit={generateRecipe}>
+        <input
+          type="text"
+          value={craving}
+          onChange={(e) => setCraving(e.target.value)}
+          name="craving"
+          placeholder="What are you in the mood for?"
+          disabled={isStreaming}
+        />
+        <button type="submit" disabled={isStreaming}>
+          {isStreaming ? 'Cooking…' : 'Suggest a recipe'}
+        </button>
+      </form>
+
+      {recipe && (
+        <article>
+          {recipe.title && <h2>{recipe.title}</h2>}
+          {recipe.description && (
+            <p className="description">{recipe.description}</p>
+          )}
+          {recipe.servings && (
+            <p className="serves">
+              <strong>Serves:</strong> {recipe.servings}
+            </p>
+          )}
+
+          {recipe.ingredients && recipe.ingredients.length > 0 && (
+            <>
+              <h3>Ingredients</h3>
+              <ul className="ingredients">
+                {recipe.ingredients.map((ing, i) => (
+                  <li key={i}>
+                    {ing.quantity} {ing.name}
+                    {ing.onSale && <span className="badge">on sale</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {recipe.steps && recipe.steps.length > 0 && (
+            <>
+              <h3>Steps</h3>
+              <ol className="steps">
+                {recipe.steps.map((step, i) => (
+                  <li key={i}>{step}</li>
+                ))}
+              </ol>
+            </>
+          )}
+        </article>
+      )}
+    </main>
+  );
+}
+
+export default App;
+`;
+
+export const corsCallout = (
+  <Aside type="caution" title="Enable CORS on the backend">
+    Your React app (served by Vite) and Genkit backend run on different origins, so configure CORS on the backend or the browser will block the request.
+  </Aside>
+);
+
+Use this guide to learn how to add agentic AI features to a React app. You will build **Bargain Chef**: a React app that streams a recipe into the UI field-by-field as the model generates it, calling a tool to look up today's grocery sale prices and grounding the ingredients in the deals.
+
+React apps built with Vite run entirely in the browser, so the Genkit flow always runs on a separate backend server. You'll set up the backend and frontend independently.
+
+## Prerequisites
+
+<Lang lang="js">
+
+- Node.js v20 or later
+- npm
+- A standalone Genkit backend that exposes an HTTP endpoint. Use [Express](/docs/backend-frameworks/express), [Hono](/docs/backend-frameworks/hono), or another option from the [server integration guides](/docs/backend-frameworks/overview).
+
+</Lang>
+
+<Lang lang="go">
+
+- Node.js v20 or later
+- npm
+- A Genkit backend that exposes an HTTP endpoint. Use [Chi](/docs/backend-frameworks/chi), [Echo](/docs/backend-frameworks/echo), or another option from the [server integration guides](/docs/backend-frameworks/overview).
+
+</Lang>
+
+<Lang lang="dart">
+
+- Node.js v20 or later
+- npm
+- A Genkit backend that exposes an HTTP endpoint. Use [Shelf](/docs/backend-frameworks/shelf) or another option from the [server integration guides](/docs/backend-frameworks/overview).
+
+</Lang>
+
+<Lang lang="python">
+
+- Node.js v20 or later
+- npm
+- A Genkit backend that exposes an HTTP endpoint. Use [Flask](/docs/backend-frameworks/flask), [FastAPI](/docs/backend-frameworks/fastapi), or another option from the [server integration guides](/docs/backend-frameworks/overview).
+
+</Lang>
+
+This guide assumes you're already familiar with building React applications.
+
+## Set up the application
+
+### Create the React project
+
+Scaffold a new React project with Vite:
+
+<PackageManagerTabs
+  command={`
+npm create vite@latest my-genkit-react -- --template react-ts
+cd my-genkit-react
+npm install
+`}
+/>
+
+### Install the Genkit web client
+
+Install the Genkit web client, which lets the browser call your standalone backend:
+
+<PackageManagerTabs command="npm install genkit" />
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- package.json
+- vite.config.ts
+- ... other Vite config files
+- src
+  - App.tsx
+  - App.css
+  - main.tsx
+  - ... other React source files
+
+</FileTree>
+
+## Build the React UI
+
+Now update the React app so the browser can call your Genkit backend and render streamed output.
+
+### Update the App component
+
+Replace the contents of `src/App.tsx` with the following. The URL points to your standalone backend; `8080` is the default port for the Express integration, so adjust it if your backend uses a different port.
+
+<Code code={componentCode('http://localhost:8080/bargainChefFlow')} lang="tsx" meta='title="src/App.tsx"' />
+
+{corsCallout}
+
+The component uses three pieces to keep the UI in sync with the backend:
+
+1. **`streamFlow` from `genkit/beta/client`.** It opens a streaming request to your flow and returns both a `stream` async iterable and a final `output` promise. Each value yielded by `stream` is the accumulated structured output so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them.
+2. **`useState` for partial recipes.** The `recipe` state holds the latest partial object. Calling `setRecipe(partial)` for each chunk triggers a re-render, so React paints each new field as soon as it arrives.
+3. **Conditional rendering of each section.** Every recipe section is wrapped in a truthy check (for example, `recipe.title && ...`) so it only renders after that field exists in the stream. The result is a UI that fills in progressively: title first, then description, then ingredients, then steps.
+
+Wrapping the input and button in a `<form>` lets the user submit by pressing Enter. The `onSubmit` handler calls `preventDefault()` so the browser doesn't reload the page, then kicks off the streaming request.
+
+### Add styles
+
+Replace the contents of `src/App.css` with the following:
+
+```css title="src/App.css"
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 3rem 1.5rem;
+  background: #fafafa;
+}
+
+#root {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  margin: 0 0 0.25rem;
+  letter-spacing: -0.01em;
+}
+
+.tagline {
+  color: #555;
+  margin: 0 0 2rem;
+}
+
+.prompt {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2.5rem;
+}
+
+.prompt input {
+  flex: 1;
+  font: inherit;
+  font-size: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.prompt input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.prompt input:disabled {
+  background: #f1f1f1;
+  color: #888;
+}
+
+.prompt button {
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 0.75rem 1.25rem;
+  border: 0;
+  border-radius: 8px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  transition: background 120ms ease;
+  white-space: nowrap;
+}
+
+.prompt button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.prompt button:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+article {
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+}
+
+article h2 {
+  font-size: 1.5rem;
+  margin: 0 0 0.5rem;
+}
+
+article h3 {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #666;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.description {
+  color: #444;
+  margin: 0 0 1rem;
+}
+
+.serves {
+  color: #555;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ingredients,
+.steps {
+  padding-left: 1.25rem;
+  line-height: 1.6;
+}
+
+.ingredients li {
+  margin-bottom: 0.25rem;
+}
+
+.steps li {
+  margin-bottom: 0.5rem;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border-radius: 999px;
+}
+
+@media (max-width: 480px) {
+  .prompt {
+    flex-direction: column;
+  }
+  .prompt button {
+    width: 100%;
+  }
+}
+```
+
+## Run the app
+
+Start your Genkit backend in one terminal (follow the run instructions in the [server integration guide](/docs/backend-frameworks/overview) you used). Then start the Vite dev server in another terminal:
+
+<PackageManagerTabs command="npm run dev" />
+
+Open `http://localhost:5173`, input a craving like `something warm with chicken`, and submit. The recipe streams in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
+
+## Test and inspect the app
+
+If your backend is running under `genkit start`, every request from the React app appears in the Developer UI's **Traces** tab. Open one and you'll see the `getIngredientsOnSale` tool call (with the `dayType` the model chose), the model invocation, and each streamed chunk that the browser received, alongside any flows you ran manually.
+
+{/* TODO: add a video showing traces from the React app appearing in the standalone backend's Developer UI. */}
+
+## Next steps
+
+{/* TODO: rewrite Next steps with brief one-line descriptions per link and a short "what you just learned" recap framed for a first-time Genkit user. */}
+
+- [Deploy your app](/docs/deployment/overview)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Developer tools](/docs/devtools)

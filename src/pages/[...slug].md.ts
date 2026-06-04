@@ -5,77 +5,96 @@ import { filterContentByLanguage, processRawContent } from '../utils/content-pro
 
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
-  // Use flatMap to handle entries potentially generating multiple paths
+  const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+
+  // Build an index of generated language-specific entries so neutral-slug requests can
+  // prefer the canonical pre-filtered file over runtime filtering on the source.
+  const generatedByLangSlug = new Map<string, (typeof docs)[number]>();
+  for (const entry of docs) {
+    const id = entry.id.replace(/\.(md|mdx)$/, '');
+    const langPrefixMatch = id.match(/^(js|go|dart|python)\/(.+)$/);
+    if (langPrefixMatch) {
+      generatedByLangSlug.set(`${langPrefixMatch[1]}:${langPrefixMatch[2]}`, entry);
+    }
+  }
+
   const paths = (
     await Promise.all(
       docs.map(async (entry) => {
-        const filePath = entry.filePath; // Use provided absolute path
-        // Derive slug from entry.id
+        const filePath = entry.filePath;
         const slug = entry.id.replace(/\.(md|mdx)$/, '');
 
-        // --- Add check for filePath ---
         if (!filePath) {
           console.warn(`Skipping entry with missing filePath: ${entry.id}`);
-          // Return a structure that will be filtered out later
           return {
-            params: { slug: slug }, // Use derived slug
+            params: { slug },
             props: { processedContent: '' },
           };
         }
-        // --- End check ---
 
-        const entryPaths = []; // Array to hold paths generated for this entry
-        const title = entry.data.title; // Get title for reuse
+        // Skip generated language entries here; they emit their own slug-level paths via the
+        // ordinary loop below (slug is already `js/...` etc.), and we route neutral requests
+        // through generatedByLangSlug.
+        const isGenerated = /^(js|go|dart|python)\//.test(slug);
+
+        const entryPaths: Array<{ params: { slug: string }; props: any }> = [];
+        const title = entry.data.title;
 
         try {
           const rawContent = await fs.readFile(filePath, 'utf-8');
+          const standardProcessedContent = await processRawContent(rawContent, title, filePath);
 
-          // Use shared processing logic for all content (LLMSummary is now stripped automatically)
-          const standardProcessedContent = processRawContent(rawContent, title);
+          const supportedLanguages = entry.data.supportedLanguages || [...LANGUAGES];
 
-          // Add paths for each language
-          const languages = ['js', 'go', 'dart', 'python'];
-          const supportedLanguages = entry.data.supportedLanguages || languages;
-
-          // Default path (JavaScript)
+          // Default path emits this entry as-is at its own slug.
           entryPaths.push({
-            params: { slug: slug },
+            params: { slug },
             props: {
               processedContent: standardProcessedContent,
               rawContent: standardProcessedContent,
-              title: title,
-              language: 'js',
+              title,
+              language: isGenerated ? slug.split('/')[0] : 'js',
             },
           });
 
-          // Language-specific paths
-          languages.forEach((lang) => {
-            if (!supportedLanguages.includes(lang)) {
-              return;
+          // Only neutral (non-language-prefixed) entries fan out into `slug.{lang}.md` variants.
+          if (!isGenerated) {
+            for (const lang of LANGUAGES) {
+              if (!supportedLanguages.includes(lang)) continue;
+
+              // Prefer the canonical generated file when available; fall back to runtime filtering.
+              const generatedEntry = generatedByLangSlug.get(`${lang}:${slug}`);
+              let langContent: string;
+              if (generatedEntry?.filePath) {
+                const generatedRaw = await fs.readFile(generatedEntry.filePath, 'utf-8');
+                langContent = await processRawContent(
+                  generatedRaw,
+                  generatedEntry.data.title || title,
+                  generatedEntry.filePath,
+                );
+              } else {
+                langContent = filterContentByLanguage(standardProcessedContent, lang);
+              }
+              entryPaths.push({
+                params: { slug: `${slug}.${lang}` },
+                props: {
+                  processedContent: langContent,
+                  rawContent: langContent,
+                  title,
+                  language: lang,
+                },
+              });
             }
-            const filteredContent = filterContentByLanguage(standardProcessedContent, lang);
-            entryPaths.push({
-              params: { slug: `${slug}.${lang}` },
-              props: {
-                processedContent: filteredContent,
-                rawContent: filteredContent,
-                title: title,
-                language: lang,
-              },
-            });
-          });
-          // --- End Content Processing ---
+          }
         } catch (err) {
           console.error(`Error reading or processing file for slug ${slug} (${filePath}}):`, err);
-          // If error, entryPaths remains empty and gets filtered out later
         }
 
-        return entryPaths; // Return array of paths for this entry
+        return entryPaths;
       }),
     )
-  ).flatMap((paths) => paths); // Flatten the array of arrays
+  ).flatMap((paths) => paths);
 
-  // Filter out entries where processing failed (props.processedContent is empty or paths array is empty)
   return paths.filter((p) => p.props.processedContent);
 }
 

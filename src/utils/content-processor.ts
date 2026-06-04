@@ -109,7 +109,11 @@ export function normalizeLanguage(lang: string): string {
   return langMap[lang.toLowerCase()] || 'js';
 }
 
-export function processRawContent(rawContent: string, title: string): string {
+export async function processRawContent(
+  rawContent: string,
+  title: string,
+  sourceFilePath?: string,
+): Promise<string> {
   // Apply standard processing
   // 1. Remove frontmatter block
   let processedContent = rawContent.replace(/^---\s*[\s\S]*?---/, '').trim();
@@ -124,29 +128,189 @@ export function processRawContent(rawContent: string, title: string): string {
     '',
   );
 
-  // 2. Remove ONLY leading import statements
-  const lines = processedContent.split('\n');
-  let firstNonImportIndex = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmedLine = lines[i].trim();
-    if (trimmedLine.startsWith('import ')) {
-      firstNonImportIndex = i + 1;
-    } else if (trimmedLine === '') {
-      firstNonImportIndex = i + 1;
-    } else {
-      break;
-    }
+  // 2. Resolve <Code code={...} /> references to fenced blocks BEFORE stripping imports
+  //    (the resolver needs to see the import statements to find snippet paths).
+  if (sourceFilePath) {
+    processedContent = await resolveCodeReferences(processedContent, sourceFilePath);
   }
-  processedContent = lines.slice(firstNonImportIndex).join('\n').trim();
 
-  // 3. Remove LLMSummary blocks (like other Astro-specific syntax)
+  // 3. Remove leading ESM declarations (imports + top-level export const expressions).
+  //    Handles both single-line and multi-line forms by tracking bracket depth.
+  processedContent = stripLeadingEsm(processedContent);
+
+  // 4. Remove LLMSummary blocks (like other Astro-specific syntax)
   processedContent = processedContent.replace(/<LLMSummary>([\s\S]*?)<\/LLMSummary>/g, '');
 
-  // 4. Clean up extra whitespace
+  // 5. Clean up extra whitespace
   processedContent = processedContent.replace(/\n{3,}/g, '\n\n').trim();
 
-  // 5. Prepend H1 title
+  // 6. Prepend H1 title
   return `# ${title}\n\n${processedContent}`;
+}
+
+function stripLeadingEsm(content: string): string {
+  const lines = content.split('\n');
+  let i = 0;
+  let depth = 0;
+  let inEsm = false;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!inEsm) {
+      if (trimmed === '') {
+        i++;
+        continue;
+      }
+      if (!/^(import|export)\b/.test(trimmed)) break;
+      inEsm = true;
+      depth = 0;
+    }
+
+    for (const ch of line) {
+      if (ch === '(' || ch === '{' || ch === '[') depth++;
+      else if (ch === ')' || ch === '}' || ch === ']') depth--;
+    }
+    i++;
+
+    // Statement ends when depth is balanced AND the line terminates with ; or a from-clause
+    // (optionally followed by a trailing // or /* */ comment).
+    if (depth <= 0 && /(?:;|from\s+['"][^'"]+['"]\??(?:raw)?['"]?\s*;?)\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)?\s*$/.test(line)) {
+      inEsm = false;
+      depth = 0;
+    }
+  }
+  return lines.slice(i).join('\n').trim();
+}
+
+interface SnippetImports {
+  raw: Record<string, string>; // identifier -> path (no ?raw suffix)
+  named: Record<string, string>; // identifier -> path
+}
+
+function collectSnippetImports(content: string): SnippetImports {
+  const raw: Record<string, string> = {};
+  const named: Record<string, string> = {};
+
+  // import X from './path?raw';
+  const rawRegex = /import\s+(\w+)\s+from\s+['"]([^'"]+?)\?raw['"];?/g;
+  for (const m of content.matchAll(rawRegex)) {
+    raw[m[1]] = m[2];
+  }
+
+  // import { A, B as C } from './path';  (local-relative only)
+  const namedRegex = /import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"](\.[^'"]+?)['"];?/g;
+  for (const m of content.matchAll(namedRegex)) {
+    const importPath = m[2];
+    if (importPath.includes('?raw')) continue;
+    for (const entry of m[1].split(',')) {
+      const name = entry.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) named[name] = importPath;
+    }
+  }
+  return { raw, named };
+}
+
+function resolveImportPath(sourceFilePath: string, importPath: string): string {
+  return path.resolve(path.dirname(sourceFilePath), importPath.replace(/\?raw$/, ''));
+}
+
+async function readSnippetFile(basePath: string): Promise<string | null> {
+  for (const candidate of [basePath, `${basePath}.ts`, `${basePath}.tsx`]) {
+    try {
+      return await fs.readFile(candidate, 'utf-8');
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function resolveCodeExpression(
+  expr: string,
+  imports: SnippetImports,
+  sourceFilePath: string,
+): Promise<string | null> {
+  expr = expr.trim();
+
+  // Case 1: bare identifier — must be a `?raw` import.
+  const idMatch = expr.match(/^(\w+)$/);
+  if (idMatch) {
+    const importPath = imports.raw[idMatch[1]];
+    if (!importPath) return null;
+    return await readSnippetFile(resolveImportPath(sourceFilePath, importPath));
+  }
+
+  // Case 2: function call: fn('arg') — call a named export with a string literal.
+  const fnMatch = expr.match(/^(\w+)\(\s*(['"])([^'"]*)\2\s*\)$/);
+  if (fnMatch) {
+    const [, fnName, , arg] = fnMatch;
+    const importPath = imports.named[fnName];
+    if (!importPath) return null;
+    const fileContent = await readSnippetFile(resolveImportPath(sourceFilePath, importPath));
+    if (!fileContent) return null;
+
+    // Find: export const fnName = (paramName: type, ...) => `template body`;
+    const fnRegex = new RegExp(
+      `export\\s+const\\s+${fnName}\\s*=\\s*\\(\\s*(\\w+)[^)]*\\)\\s*=>\\s*\`([\\s\\S]*?)\`;`,
+    );
+    const m = fileContent.match(fnRegex);
+    if (!m) return null;
+    const [, paramName, rawBody] = m;
+    // Substitute ${paramName} → arg; preserve the template literal's escapes
+    // (since the snippet file is real TS, ${...} interpolations are unescaped).
+    const escapedParam = paramName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return rawBody.replace(new RegExp('\\$\\{\\s*' + escapedParam + '\\s*\\}', 'g'), arg);
+  }
+
+  return null;
+}
+
+async function resolveCodeReferences(content: string, sourceFilePath: string): Promise<string> {
+  const imports = collectSnippetImports(content);
+  if (Object.keys(imports.raw).length === 0 && Object.keys(imports.named).length === 0) {
+    return content;
+  }
+
+  // Match <Code ... /> tags (single or multi-line). The closing /> is unambiguous since
+  // attribute values like `meta='title="path/to/file"'` don't contain />.
+  const codeTagRegex = /<Code\b([\s\S]*?)\/>/g;
+  const replacements: { match: string; replacement: string }[] = [];
+
+  for (const match of content.matchAll(codeTagRegex)) {
+    const [full, attrs] = match;
+    const codeExpr = extractBraceAttr(attrs, 'code');
+    const lang = extractStringAttr(attrs, 'lang');
+    const meta = extractStringAttr(attrs, 'meta');
+    if (!codeExpr || !lang) continue;
+
+    const resolved = await resolveCodeExpression(codeExpr, imports, sourceFilePath);
+    if (resolved == null) continue;
+
+    const trimmed = resolved.replace(/\n+$/, '');
+    const fence = '```' + lang + (meta ? ' ' + meta : '') + '\n' + trimmed + '\n```';
+    replacements.push({ match: full, replacement: fence });
+  }
+
+  let result = content;
+  for (const { match, replacement } of replacements) {
+    result = result.replace(match, replacement);
+  }
+  return result;
+}
+
+function extractStringAttr(attrs: string, name: string): string | null {
+  // name="value with possible 'inner' quotes" or name='value with possible "inner" quotes'
+  const regex = new RegExp(`\\b${name}\\s*=\\s*(['"])((?:(?!\\1).)*)\\1`);
+  const m = attrs.match(regex);
+  return m ? m[2] : null;
+}
+
+function extractBraceAttr(attrs: string, name: string): string | null {
+  const regex = new RegExp(`\\b${name}\\s*=\\s*\\{([^}]*)\\}`);
+  const m = attrs.match(regex);
+  return m ? m[1].trim() : null;
 }
 
 export async function processDocumentEntry(entry: any): Promise<ProcessedDocument | null> {
@@ -161,7 +325,7 @@ export async function processDocumentEntry(entry: any): Promise<ProcessedDocumen
 
   try {
     const rawContent = await fs.readFile(filePath, 'utf-8');
-    const baseContent = processRawContent(rawContent, title);
+    const baseContent = await processRawContent(rawContent, title, filePath);
 
     // Generate language-specific versions
     const content = {
@@ -246,7 +410,7 @@ export async function getAllProcessedDocuments(): Promise<ProcessedDocument[]> {
       const relativePath = path.relative(contentDir, filePath);
       const slug = relativePath.replace(/\.(md|mdx)$/, '');
 
-      const baseContent = processRawContent(rawContent, frontmatter.title);
+      const baseContent = await processRawContent(rawContent, frontmatter.title, filePath);
 
       // Generate language-specific versions
       const content = {

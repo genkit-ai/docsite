@@ -16,7 +16,10 @@ export default defineConfig({
   site,
   markdown: {
     shikiConfig: {
-      langAlias: { dotprompt: 'handlebars' },
+      langAlias: {
+        dotprompt: 'handlebars',
+        angular: 'html',
+      },
     },
   },
   integrations: [

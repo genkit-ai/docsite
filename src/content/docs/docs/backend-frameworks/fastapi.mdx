@@ -1,0 +1,303 @@
+---
+title: FastAPI quickstart
+description: Add Genkit AI features to a FastAPI app and stream a recipe over an async HTTP endpoint.
+supportedLanguages:
+  - python
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Use this guide to learn how to add agentic AI features to a FastAPI app. You will build **Bargain Chef**: a FastAPI service that streams a recipe field-by-field as the model generates it, calling a tool to look up today's grocery sale prices and grounding the ingredients in the deals.
+
+## Prerequisites
+
+- Python 3.10 or later
+- uv package manager
+
+This guide assumes you're already familiar with building FastAPI applications.
+
+## Set up the application
+
+### Create the FastAPI project
+
+```bash
+mkdir bargain-chef
+cd bargain-chef
+uv init --no-readme --python 3.10
+```
+
+### Install packages
+
+Install the Genkit CLI:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+Then install the packages you need in your project:
+
+```bash
+uv add fastapi uvicorn genkit genkit-plugin-google-genai genkit-plugin-fastapi
+```
+
+These packages include:
+
+- **`fastapi`**: The async Python web framework that serves your endpoint.
+- **`uvicorn`**: The ASGI server that runs your FastAPI app.
+- **`genkit`**: Core Genkit SDK.
+- **`genkit-plugin-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`genkit-plugin-fastapi`**: Serves Genkit flows as FastAPI endpoints, including streaming.
+
+### Configure a model API key
+
+This guide uses the Gemini API from Google AI Studio. Get a key from [Google AI Studio](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+## Create the backend
+
+The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+Replace the contents of `main.py` with the following:
+
+```python title="main.py"
+from datetime import datetime
+from typing import Literal
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from genkit import ActionRunContext, Genkit
+from genkit.plugins.fastapi import genkit_fastapi_handler
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
+)
+
+
+class SaleItem(BaseModel):
+    name: str
+    price: str
+
+
+class DayType(BaseModel):
+    day_type: Literal['weekday', 'weekend'] = Field(
+        description='Whether to fetch weekday or weekend sale prices.',
+    )
+
+
+@ai.tool(
+    description=(
+        "Returns the ingredients on sale at the local grocery store, with prices. "
+        "The sale set differs between weekdays and weekends."
+    ),
+)
+async def get_ingredients_on_sale(input: DayType) -> list[SaleItem]:
+    # Mock data: in a real app, query a pricing database.
+    if input.day_type == 'weekend':
+        return [
+            SaleItem(name='chicken breast', price='$2.99/lb'),
+            SaleItem(name='pasta', price='$0.79'),
+            SaleItem(name='canned tomatoes', price='$0.99'),
+            SaleItem(name='garlic', price='$0.50 / head'),
+            SaleItem(name='olive oil', price='$6.99'),
+        ]
+    return [
+        SaleItem(name='eggs', price='$3.49 / dozen'),
+        SaleItem(name='spinach', price='$1.99'),
+        SaleItem(name='parmesan', price='$4.99'),
+        SaleItem(name='lemons', price='$0.50 each'),
+        SaleItem(name='rice', price='$2.49'),
+        SaleItem(name='butter', price='$3.99'),
+    ]
+
+
+class RecipeIngredient(BaseModel):
+    name: str
+    quantity: str
+    on_sale: bool
+
+
+class Recipe(BaseModel):
+    title: str
+    description: str
+    servings: int
+    ingredients: list[RecipeIngredient]
+    steps: list[str]
+
+
+class CravingInput(BaseModel):
+    craving: str = Field(description='What the user feels like eating right now.')
+
+
+@ai.flow(chunk_type=Recipe)
+async def bargain_chef_flow(input: CravingInput, ctx: ActionRunContext) -> Recipe:
+    today = datetime.now().strftime('%A')
+
+    stream_response = ai.generate_stream(
+        prompt=(
+            f'Today is {today}. The user is craving: {input.craving}.\n\n'
+            'Call the get_ingredients_on_sale tool with the day_type that matches today. '
+            'Saturday and Sunday are weekends; all other days are weekdays. '
+            "Then propose ONE recipe that takes advantage of those deals. For each "
+            'ingredient, set on_sale=true if it appears in the tool\'s response, '
+            'false otherwise.'
+        ),
+        tools=[get_ingredients_on_sale],
+        output_schema=Recipe,
+        config={'temperature': 0.7},
+    )
+
+    async for chunk in stream_response.stream:
+        if chunk.output:
+            ctx.send_chunk(chunk.output)
+
+    response = await stream_response.response
+    if not response.output:
+        raise ValueError('Failed to generate recipe')
+    return response.output
+
+
+app = FastAPI()
+
+# Lets browser frontends served from a different origin call the endpoint.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+
+@app.post('/bargainChefFlow', response_model=None)
+@genkit_fastapi_handler(ai)
+async def bargain_chef_endpoint():
+    return bargain_chef_flow
+```
+
+The file builds the flow in four parts:
+
+1. **Initialize Genkit.** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
+2. **Define a tool.** `get_ingredients_on_sale` is an async function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The typed `DayType` input forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, this would query a pricing database, inventory system, or third-party API.
+3. **Describe the recipe shape.** `Recipe` is a Pydantic model that defines the structure of the final response. The flow passes it as `output_schema` so Genkit validates the model's output against it. Declaring `chunk_type=Recipe` on the flow tells Genkit that streamed chunks share the same shape, with fields filling in progressively.
+4. **Define the flow.** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `ctx.send_chunk` forwards each chunk to the client so the response fills in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
+
+### Expose the flow over HTTP
+
+The `@genkit_fastapi_handler(ai)` decorator wraps the flow as a FastAPI route. The handler inspects the incoming request: when the client sends `Accept: text/event-stream`, it streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- pyproject.toml
+- **main.py**
+
+</FileTree>
+
+## Run the app
+
+Start the FastAPI server with the Genkit CLI so the Developer UI can attach to it:
+
+```bash
+genkit start -- uv run uvicorn main:app --reload
+```
+
+This launches the FastAPI app at `http://localhost:8000` and the Developer UI at `http://localhost:4000`.
+
+You can also run the FastAPI server on its own:
+
+```bash
+uv run uvicorn main:app --reload
+```
+
+With the server running, send a streaming request from another terminal:
+
+```bash
+curl -N -X POST http://localhost:8000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far: title first, then description, then ingredients (with `on_sale` flags on the ones the model picked from the tool), then steps.
+
+## Test and inspect the app
+
+You can test the endpoint directly with curl, and you can use the Developer UI to inspect both manual runs and live requests.
+
+### Send a request with curl
+
+For a non-streaming response, drop the `Accept: text/event-stream` header:
+
+```bash
+curl -X POST http://localhost:8000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+You'll receive the final structured recipe as a single JSON response.
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   ```bash
+   genkit start -- uv run uvicorn main:app --reload
+   ```
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts in `pyproject.toml`.
+   :::
+
+2. Select `bargain_chef_flow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargain_chef_flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargain_chef_flow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from your running app]
+While the Developer UI is running, any flow invocation triggered by an HTTP request appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## Next steps
+
+- [Connect an app framework](/docs/app-frameworks/overview)
+- [Deploy your app](/docs/deployment/overview)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/web-client)
+- [Developer tools](/docs/devtools)
