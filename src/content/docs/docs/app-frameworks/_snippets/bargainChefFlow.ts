@@ -61,7 +61,7 @@ const RecipeSchema = z.object({
   steps: z.array(z.string()),
 });
 
-// Exported for the Angular component to import as types.
+// Exported for the frontend to import as types.
 export type BargainChefInput = z.infer<typeof BargainChefInputSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type PartialRecipe = Partial<Recipe>;
