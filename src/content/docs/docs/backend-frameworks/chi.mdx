@@ -42,7 +42,6 @@ Then install the Go packages you need:
 ```bash
 go get github.com/firebase/genkit/go
 go get github.com/firebase/genkit/go/plugins/googlegenai
-go get github.com/firebase/genkit/go/plugins/middleware
 go get github.com/go-chi/chi/v5
 go get github.com/go-chi/cors
 ```
@@ -51,7 +50,6 @@ These packages include:
 
 - **`github.com/firebase/genkit/go`**: Core Genkit SDK.
 - **`github.com/firebase/genkit/go/plugins/googlegenai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`github.com/firebase/genkit/go/plugins/middleware`**: Production-ready generation middleware, including retry.
 - **`github.com/go-chi/chi/v5`**: Chi router.
 - **`github.com/go-chi/cors`**: CORS middleware for Chi.
 
@@ -108,7 +106,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -152,7 +149,7 @@ func main() {
 	ctx := context.Background()
 
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
 
 	getIngredientsOnSale := genkit.DefineTool(g, "getIngredientsOnSale",
@@ -192,7 +189,6 @@ func main() {
 				ai.WithModelName("googleai/gemini-flash-latest"),
 				ai.WithPrompt(prompt),
 				ai.WithTools(getIngredientsOnSale),
-				ai.WithUse(&middleware.Retry{MaxRetries: 3}),
 			) {
 				if err != nil {
 					return nil, err
@@ -233,11 +229,10 @@ func main() {
 
 A few details are worth noting:
 
-- **Initialize Genkit:** `genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))` sets up the SDK, registers Gemini as the model provider, and exposes the built-in middleware (retry, fallback, and more) to the Developer UI.
+- **Initialize Genkit:** `genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))` sets up the SDK and registers Gemini as the model provider.
 - **Final output and streamed chunks:** The `Recipe` struct (with `json` tags) is the structure of the final response. Genkit reflects on the type passed to `GenerateDataStream[*Recipe]` to derive a JSON schema, then validates the model's output against it. Because the parser handles partial JSON, the same struct describes both the final response and each in-progress chunk emitted during streaming. The flow streams `*Recipe` values so an in-progress chunk can be `nil` until the first fields arrive.
 - **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, letting it reach outside its training data and into your code to fetch live sale prices before finalizing the recipe. The `SaleQuery` input struct forces the model to pass `dayType: "weekday"` or `"weekend"`; Genkit derives the JSON schema from the Go type, including the enum constraint declared in the `jsonschema` tag. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`sendChunk`:** `genkit.DefineStreamingFlow` registers a flow that accepts a `sendChunk` callback. Inside, `genkit.GenerateDataStream[*Recipe]` yields typed partial recipes as the model produces them, and the loop forwards each chunk to the caller so a client UI can fill in field by field. When the iterator reports `Done`, the flow reads the validated final recipe from the response and returns it so the HTTP request still resolves with a complete value.
-- **Retry middleware:** The `ai.WithUse(&middleware.Retry{MaxRetries: 3})` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
 
 ### Check the project layout
 
