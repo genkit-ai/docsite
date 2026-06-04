@@ -159,15 +159,15 @@ func main() {
 	)
 
 	bargainChefFlow := genkit.DefineStreamingFlow(g, "bargainChefFlow",
-		func(ctx context.Context, input BargainChefInput, sendChunk func(context.Context, Recipe) error) (Recipe, error) {
+		func(ctx context.Context, input BargainChefInput, sendChunk func(context.Context, *Recipe) error) (*Recipe, error) {
 			today := time.Now().Weekday().String()
 
 			prompt := fmt.Sprintf(`Today is %s. The user is craving: %s.
 
 Call the getIngredientsOnSale tool with the dayType that matches today. Saturday and Sunday are weekends; all other days are weekdays. Then propose ONE recipe that takes advantage of those deals. For each ingredient, set onSale=true if it appears in the tool's response, false otherwise.`, today, input.Craving)
 
-			var final Recipe
-			stream := genkit.GenerateDataStream[Recipe](ctx, g,
+			var final *Recipe
+			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
 				ai.WithModelName("googleai/gemini-flash-latest"),
 				ai.WithPrompt(prompt),
 				ai.WithTools(getIngredientsOnSale),
@@ -175,7 +175,7 @@ Call the getIngredientsOnSale tool with the dayType that matches today. Saturday
 			)
 			for result, err := range stream {
 				if err != nil {
-					return Recipe{}, fmt.Errorf("failed to generate recipe: %w", err)
+					return nil, fmt.Errorf("failed to generate recipe: %w", err)
 				}
 				if result.Done {
 					final = result.Output
@@ -183,7 +183,7 @@ Call the getIngredientsOnSale tool with the dayType that matches today. Saturday
 				}
 				if result.Chunk != nil {
 					if err := sendChunk(ctx, result.Chunk); err != nil {
-						return Recipe{}, err
+						return nil, err
 					}
 				}
 			}
@@ -208,8 +208,8 @@ The file builds the flow in four parts:
 
 1. **Initialize Genkit.** `genkit.Init` with the `googlegenai.GoogleAI` plugin sets up the SDK, registers Gemini as the model provider, and exposes the built-in middleware (retry, fallback, and more) to the Developer UI.
 2. **Define a tool.** `getIngredientsOnSale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The `SaleInput` struct, with its `jsonschema` tags, forces the model to pass `dayType: "weekday"` or `"weekend"`. In a real app, this would query a pricing database, inventory system, or third-party API.
-3. **Describe the recipe shape.** The `Recipe` struct is the structure of the final response. Genkit derives a JSON schema from it via `jsonschema` tags so the model knows what to produce, and `GenerateDataStream[Recipe]` validates the output against that shape.
-4. **Define the flow.** `bargainChefFlow` ties everything together. It uses `genkit.DefineStreamingFlow`, which gives the flow a `sendChunk` callback so partial results can stream out as the model generates them. Inside, `genkit.GenerateDataStream[Recipe]` yields a typed partial `Recipe` for each chunk; the flow forwards each partial to `sendChunk` and returns the final, validated `Recipe` from the `Done` result. The `ai.WithUse(&genkitmw.Retry{MaxRetries: 3})` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
+3. **Describe the recipe shape.** The `Recipe` struct is the structure of the final response. Genkit derives a JSON schema from it via `jsonschema` tags so the model knows what to produce, and `GenerateDataStream[*Recipe]` validates the output against that shape.
+4. **Define the flow.** `bargainChefFlow` ties everything together. It uses `genkit.DefineStreamingFlow`, which gives the flow a `sendChunk` callback so partial results can stream out as the model generates them. Inside, `genkit.GenerateDataStream[*Recipe]` yields a typed partial `Recipe` for each chunk; the flow forwards each partial to `sendChunk` and returns the final, validated `Recipe` from the `Done` result. The `ai.WithUse(&genkitmw.Retry{MaxRetries: 3})` line applies retry middleware that recovers from transient errors like rate limits and timeouts.
 
 The Echo wiring at the bottom mounts the flow as a single HTTP route. `genkit.Handler` returns a standard `http.HandlerFunc`, and `echo.WrapHandler` adapts it to Echo's handler signature. The handler emits server-sent events when the client requests them and returns a regular JSON response otherwise.
 

@@ -1,5 +1,4 @@
 import { googleAI } from '@genkit-ai/google-genai';
-import { retry } from '@genkit-ai/middleware';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
@@ -62,7 +61,7 @@ const RecipeSchema = z.object({
   steps: z.array(z.string()),
 });
 
-// Exported so a frontend client can import these as types.
+// Exported for the frontend to import as types.
 export type BargainChefInput = z.infer<typeof BargainChefInputSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type PartialRecipe = Partial<Recipe>;
@@ -84,7 +83,6 @@ export const bargainChefFlow = ai.defineFlow(
 Call the getIngredientsOnSale tool with the dayType that matches today. Saturday and Sunday are weekends; all other days are weekdays. Then propose ONE recipe that takes advantage of those deals. For each ingredient, set onSale=true if it appears in the tool's response, false otherwise.`,
       tools: [getIngredientsOnSale],
       output: { schema: RecipeSchema },
-      use: [retry({ maxRetries: 3 })],
     });
 
     for await (const chunk of stream) {
