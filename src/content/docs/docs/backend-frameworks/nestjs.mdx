@@ -1,6 +1,6 @@
 ---
 title: NestJS tutorial
-description: Add Genkit AI features to a NestJS app and expose flows as HTTP endpoints using a controller and the fetch handler.
+description: Add Genkit AI features to a NestJS app and expose flows as HTTP endpoints using a controller and the Genkit Express handler.
 supportedLanguages:
   - js
 ---
@@ -40,7 +40,7 @@ Install the packages you need:
 
 <PackageManagerTabs
   command={`
-npm install genkit @genkit-ai/google-genai @genkit-ai/fetch
+npm install genkit @genkit-ai/google-genai @genkit-ai/express
 npm install -D tsx genkit-cli
 `}
 />
@@ -49,7 +49,7 @@ These packages include:
 
 - **`genkit`**: Core Genkit SDK.
 - **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`@genkit-ai/fetch`**: Web-standard fetch handler for exposing flows over HTTP.
+- **`@genkit-ai/express`**: Express handler for exposing flows over HTTP.
 - **`genkit-cli`**: CLI tool that enables Genkit testing and observability.
 
 ### Configure a model API key
@@ -119,60 +119,26 @@ A few details are worth noting before you expose the flow:
 
 ### Add the controller
 
-Create `src/genkit/genkit.controller.ts` to expose the flow over HTTP using Genkit's fetch handler:
+Create `src/genkit/genkit.controller.ts` to expose the flow over HTTP using Genkit's Express handler:
 
 ```ts title="src/genkit/genkit.controller.ts"
 import { Controller, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { fetchHandlers } from '@genkit-ai/fetch';
-import { Readable } from 'node:stream';
+import { expressHandler } from '@genkit-ai/express';
 import { bargainChefFlow } from './bargainChefFlow';
 
-const handleFlow = fetchHandlers([bargainChefFlow], '/genkit');
-
-@Controller('genkit')
+@Controller()
 export class GenkitController {
-  @Post('*')
-  async handleGenkit(@Req() req: Request, @Res() res: Response) {
-    // Convert the Express request to a Web Request.
-    const url = new URL(req.url, `${req.protocol}://${req.get('host')}`);
-    const headers = new Headers();
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value === undefined) continue;
-      if (Array.isArray(value)) {
-        value.forEach((v) => headers.append(key, v));
-      } else {
-        headers.set(key, String(value));
-      }
-    }
+  private readonly handleBargainChef = expressHandler(bargainChefFlow);
 
-    const webRequest = new Request(url, {
-      method: req.method,
-      headers,
-      body:
-        req.method !== 'GET' && req.method !== 'HEAD'
-          ? JSON.stringify(req.body)
-          : undefined,
-    });
-
-    const webResponse = await handleFlow(webRequest);
-    res.status(webResponse.status);
-    webResponse.headers.forEach((value, key) => {
-      res.setHeader(key, value);
-    });
-
-    if (webResponse.body) {
-      Readable.fromWeb(
-        webResponse.body as import('node:stream/web').ReadableStream,
-      ).pipe(res);
-    } else {
-      res.end();
-    }
+  @Post('bargainChefFlow')
+  bargainChef(@Req() req: Request, @Res() res: Response) {
+    return this.handleBargainChef(req, res);
   }
 }
 ```
 
-NestJS uses Express under the hood. The controller adapts each Express `Request` to a Web `Request` (which is what `fetchHandlers` expects), then pipes the streamed Web `Response` back through Express so chunks reach the client as they arrive.
+NestJS runs on Express under the hood, so the `@Req()` and `@Res()` objects are Express's own request and response. That lets you pass them straight to Genkit's `expressHandler`, which reads the input, runs the flow, and streams the response back as chunks arrive. Injecting `@Res()` puts the controller in manual-response mode, so the handler owns sending the reply.
 
 ### Register the controller
 
@@ -227,7 +193,7 @@ Start the NestJS development server:
 
 <PackageManagerTabs command="npm run start:dev" />
 
-By default, NestJS listens on `http://localhost:3000`. The flow is mounted at `/genkit/bargainChefFlow` through the controller. In the next section, you'll send a request and watch the recipe stream in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
+By default, NestJS listens on `http://localhost:3000`. The flow is mounted at `/bargainChefFlow` through the controller. In the next section, you'll send a request and watch the recipe stream in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
 
 ## Test and inspect the app
 
@@ -238,7 +204,7 @@ You can test the flow directly with curl, and you can use the Developer UI to in
 With the server running, use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
 
 ```bash
-curl -N -X POST http://localhost:3000/genkit/bargainChefFlow \
+curl -N -X POST http://localhost:3000/bargainChefFlow \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"data":{"craving":"something warm with chicken"}}'

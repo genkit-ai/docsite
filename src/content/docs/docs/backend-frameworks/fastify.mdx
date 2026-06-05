@@ -160,6 +160,14 @@ async function sendWebResponse(reply: FastifyReply, response: Response) {
   reply.hijack();
   reply.raw.statusCode = response.status;
 
+  // Headers set by earlier hooks/plugins (like @fastify/cors) live on the
+  // Fastify reply. hijack() stops Fastify from flushing them, so copy them
+  // onto the raw response first, or the browser rejects the streamed response
+  // for missing CORS headers even though the preflight passed.
+  for (const [key, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(key, value);
+  }
+
   response.headers.forEach((value, key) => {
     reply.raw.setHeader(key, value);
   });
@@ -185,6 +193,8 @@ await app.listen({ port: 3000, host: '0.0.0.0' });
 ```
 
 `fetchHandlers([bargainChefFlow], '/api')` returns a single handler that dispatches incoming fetch `Request` objects to the matching flow based on the URL path. The Fastify route forwards every `POST /api/:flowName` request through the adapter so the handler can stream chunks back as they're produced.
+
+Because the streamed response uses `reply.hijack()`, the adapter copies the headers that plugins like `@fastify/cors` set on the reply onto the raw response before piping. Without that step, a streamed response would arrive without its CORS headers, and a browser would reject it even though the preflight request succeeded.
 
 ### Check the project layout
 
