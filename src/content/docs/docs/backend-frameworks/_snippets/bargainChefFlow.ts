@@ -72,7 +72,10 @@ export const bargainChefFlow = ai.defineFlow(
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
     const { stream, response } = ai.generateStream({
-      model: googleAI.model('gemini-flash-latest', { temperature: 0.7 }),
+      model: googleAI.model('gemini-flash-latest', {
+        temperature: 0.7,
+        thinkingConfig: { thinkingLevel: 'minimal' },
+      }),
       prompt: `Today is ${today}. The user is craving: ${craving}.
 
 Call the getIngredientsOnSale tool with the dayType that matches today. Saturday and Sunday are weekends; all other days are weekdays. Then propose ONE recipe that takes advantage of those deals. For each ingredient, set onSale=true if it appears in the tool's response, false otherwise.`,
