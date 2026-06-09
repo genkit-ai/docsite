@@ -1,0 +1,112 @@
+---
+title: 'Dotprompt comes to Genkit Dart: Manage your prompts as code'
+date: 2026-06-09
+authors:
+  name: Pavel Jbanov
+  title: Genkit Technical Lead
+description: Genkit Dart 0.14.0 adds Dotprompt support, letting you manage prompts, models, and parameters in version-controlled .prompt files and iterate on them in the Developer UI.
+tags:
+  - dart
+  - flutter
+  - dotprompt
+---
+
+Prompt engineering is iterative. Getting the model, its parameters, and the prompt text working together usually takes a lot of back-and-forth, and burying all of that inside your application code makes each tweak slower than it should be.
+
+With the **Genkit Dart 0.14.0** release, [Dotprompt](https://github.com/google/dotprompt) is now available for Dart and Flutter developers. Dotprompt is built on a simple idea: **prompts are code**. You define your prompts, along with the model and parameters they target, in `.prompt` files that live alongside your app, iterate on them in the Developer UI, and run them from Dart.
+
+## A prompt in a file
+
+A `.prompt` file is YAML front matter (the model and its config) followed by a [Handlebars](https://handlebarsjs.com/guide/) template. Drop this into your `prompts/` directory as `greeting.prompt`:
+
+```dotprompt
+---
+model: googleai/gemini-flash-latest
+config:
+  temperature: 0.7
+input:
+  schema:
+    name: string, the person to greet
+    style: string, the greeting style (e.g. cheerful, casual, pirate)
+---
+{{role "system"}}
+You are a friendly greeter. Greet the user warmly.
+{{role "user"}}
+Say hello to {{name}} in a {{style}} way.
+```
+
+Then load and run it from your app. By default Genkit looks for prompts in `./prompts`:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+
+void main() async {
+  final ai = Genkit(plugins: [googleAI()]);
+
+  final greeting = await ai.prompt('greeting');
+  final response = await greeting({'name': 'Ada', 'style': 'cheerful'});
+  print(response.text);
+}
+```
+
+That's it: no prompt text in your Dart, and the model and temperature live next to the wording where they belong.
+
+## What shipped
+
+This release brings the full Dotprompt feature set to Dart:
+
+- **`.prompt` files** with YAML front matter, Handlebars templates, and the `{{role}}` and `{{media}}` helpers for multi-message and multimodal prompts.
+- **Structured I/O** via input and output schemas, including Picoschema and schemas defined in code with [schemantic](https://pub.dev/packages/schemantic).
+- **Streaming** with `prompt.stream()`, plus `render()` to inspect the final messages without calling the model.
+- **Variants** for side-by-side experimentation. Add a `greeting.formal.prompt` file and load it with `await ai.prompt('greeting', variant: 'formal')`.
+- **Partials** for reusable snippets. A file like `_signature.prompt` can be included in any prompt with `{{> signature}}`.
+
+Prefer to keep prompts in code? Define a strongly-typed input schema with [schemantic](https://pub.dev/packages/schemantic):
+
+```dart
+@Schema()
+abstract class $JokeInput {
+  @Field(description: 'The joke topic (e.g. programming, cats, cooking)')
+  String get topic;
+
+  @Field(description: 'The joke style (e.g. punny, dry, dad)')
+  String get style;
+}
+```
+
+Then `definePrompt()` takes the same metadata as a `.prompt` file with a Handlebars template and the generated schema:
+
+```dart
+final jokePrompt = ai.definePrompt(
+  name: 'joke',
+  model: modelRef('googleai/gemini-flash-latest'),
+  config: {'temperature': 0.9},
+  inputSchema: JokeInput.$schema,
+  system: 'You are a witty comedian. Keep jokes family-friendly.',
+  prompt: 'Tell me a {{style}} joke about {{topic}}.',
+);
+
+final response = await jokePrompt(JokeInput(topic: 'cats', style: 'punny'));
+print(response.text);
+```
+
+And when you need to build messages programmatically, `defineCustomPrompt()` lets you return a `GenerateActionOptions` describing the request yourself.
+
+## Iterate in the Developer UI
+
+Because prompts are just files, you can commit them to version control and review changes over time. Even better, they load straight into the [Genkit Developer UI](/docs/dart/devtools), where you (or a teammate who never touches Dart) can tweak the wording and parameters, run them against live input, and compare variants in traces.
+
+Start the UI alongside your app:
+
+```bash
+genkit start -- dart run
+```
+
+When a prompt looks right, hit **Export** to save it back into your project.
+
+## Get started
+
+Update to Genkit Dart 0.14.0 and dive into the [Dotprompt documentation](/docs/dart/dotprompt) to see everything you can do. New to Genkit Dart? Start with the [quickstart guide](/docs/dart/get-started).
+
+We can't wait to see what you build. Happy prompting! 🚀
