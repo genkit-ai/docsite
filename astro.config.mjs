@@ -49,42 +49,6 @@ export default defineConfig({
             height: '377',
           },
         },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.gstatic.com',
-            rel: 'preconnect',
-            crossorigin: true,
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Text:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Symbols&display=block',
-            rel: 'stylesheet',
-          },
-        },
       ],
       plugins: [
         starlightBlog({
@@ -140,7 +104,7 @@ export default defineConfig({
         },
       ],
       sidebar,
-      customCss: ['./src/tailwind.css'],
+      customCss: ['./src/styles/tailwind.css'],
       editLink: {
         baseUrl: 'https://github.com/genkit-ai/docsite/edit/main/',
       },
