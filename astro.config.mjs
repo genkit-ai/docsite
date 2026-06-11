@@ -33,7 +33,7 @@ export default defineConfig({
       title: 'Genkit',
       components: {
         Sidebar: './src/components/sidebar.astro',
-        Header: './src/content/custom/header.astro',
+        Header: './src/components/Header.astro',
         Head: './src/content/custom/head.astro',
         PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
@@ -52,7 +52,7 @@ export default defineConfig({
       plugins: [
         starlightBlog({
           title: 'Blog',
-          // We add our own "Blog" link in the custom header (src/content/custom/header.astro).
+          // The "Blog" link is rendered by our shared header (src/components/Header.astro).
           navigation: 'none',
           prefix: 'blog',
           metrics: { readingTime: true },
@@ -70,11 +70,6 @@ export default defineConfig({
           exclude: ['/'],
         }),
       ],
-      logo: {
-        dark: './src/assets/lockup_white_tight2.png',
-        light: './src/assets/lockup_dark_tight.png',
-        replacesTitle: true,
-      },
       social: [
         {
           icon: 'github',
