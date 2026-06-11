@@ -102,7 +102,10 @@ export default defineConfig({
             },
           },
         }),
-        starlightLinksValidatorPlugin(),
+        starlightLinksValidatorPlugin({
+          // The landing page at `/` is a custom Astro page outside Starlight routes.
+          exclude: ['/'],
+        }),
       ],
       logo: {
         dark: './src/assets/lockup_white_tight2.png',
