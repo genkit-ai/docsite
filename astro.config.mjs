@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig, fontProviders } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidatorPlugin from 'starlight-links-validator';
 import starlightBlog from 'starlight-blog';
@@ -22,6 +22,32 @@ export default defineConfig({
       },
     },
   },
+  fonts: [
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans',
+      cssVariable: '--font-google-sans',
+      weights: [300, 400, 500],
+      styles: ['normal'],
+      fallbacks: ['Arial', 'sans-serif'],
+    },
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans Flex',
+      cssVariable: '--font-google-sans-text',
+      weights: [400, 500],
+      styles: ['normal'],
+      fallbacks: ['Arial', 'sans-serif'],
+    },
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans Code',
+      cssVariable: '--font-google-sans-mono',
+      weights: [400, 500],
+      styles: ['normal'],
+      fallbacks: ['monospace'],
+    },
+  ],
   integrations: [
     starlight({
       favicon: 'favicon.ico',
