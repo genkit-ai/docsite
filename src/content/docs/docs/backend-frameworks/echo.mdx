@@ -1,0 +1,330 @@
+---
+title: Echo tutorial
+description: Build a streaming Genkit backend on Echo that powers the Bargain Chef recipe flow.
+supportedLanguages:
+  - go
+---
+
+import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on [Echo](https://echo.labstack.com/) that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/go/echo).
+
+## Prerequisites
+
+- Go 1.24 or later ([download and install](https://go.dev/doc/install))
+
+This tutorial assumes you're already familiar with building Go applications.
+
+## Set up the application
+
+Create a new Go module for the project:
+
+```bash
+mkdir bargain-chef && cd bargain-chef
+go mod init example/bargain-chef
+```
+
+Install the Genkit CLI, which powers local testing and the Developer UI:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+Install the Go packages you'll need:
+
+```bash
+go get github.com/firebase/genkit/go
+go get github.com/firebase/genkit/go/plugins/googlegenai
+go get github.com/labstack/echo/v4
+```
+
+These packages include:
+
+- **`github.com/firebase/genkit/go`**: Core Genkit SDK.
+- **`github.com/firebase/genkit/go/plugins/googlegenai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`github.com/labstack/echo/v4`**: Echo web framework.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+## Create the backend
+
+The backend handles requests from your clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration. Echo exposes the flow as an HTTP endpoint by wrapping the standard handler that Genkit produces.
+
+Create `main.go`:
+
+```go title="main.go"
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"google.golang.org/genai"
+)
+
+type BargainChefInput struct {
+	Craving string `json:"craving" jsonschema:"description=What the user feels like eating right now."`
+}
+
+type RecipeIngredient struct {
+	Name     string `json:"name"`
+	Quantity string `json:"quantity"`
+	OnSale   bool   `json:"onSale"`
+}
+
+type Recipe struct {
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Servings    int                `json:"servings"`
+	Ingredients []RecipeIngredient `json:"ingredients"`
+	Steps       []string           `json:"steps"`
+}
+
+type SaleIngredient struct {
+	Name  string `json:"name"`
+	Price string `json:"price"`
+}
+
+type SaleInput struct {
+	DayType string `json:"dayType" jsonschema:"enum=weekday,enum=weekend,description=Whether to fetch weekday or weekend sale prices."`
+}
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+	)
+
+	getIngredientsOnSale := genkit.DefineTool(g, "getIngredientsOnSale",
+		"Returns the ingredients on sale at the local grocery store, with prices. The sale set differs between weekdays and weekends.",
+		func(ctx *ai.ToolContext, input SaleInput) ([]SaleIngredient, error) {
+			// Mock data: in a real app, query a pricing database.
+			if input.DayType == "weekend" {
+				return []SaleIngredient{
+					{Name: "chicken breast", Price: "$2.99/lb"},
+					{Name: "pasta", Price: "$0.79"},
+					{Name: "canned tomatoes", Price: "$0.99"},
+					{Name: "garlic", Price: "$0.50 / head"},
+					{Name: "olive oil", Price: "$6.99"},
+				}, nil
+			}
+			return []SaleIngredient{
+				{Name: "eggs", Price: "$3.49 / dozen"},
+				{Name: "spinach", Price: "$1.99"},
+				{Name: "parmesan", Price: "$4.99"},
+				{Name: "lemons", Price: "$0.50 each"},
+				{Name: "rice", Price: "$2.49"},
+				{Name: "butter", Price: "$3.99"},
+			}, nil
+		},
+	)
+
+	bargainChefFlow := genkit.DefineStreamingFlow(g, "bargainChefFlow",
+		func(ctx context.Context, input BargainChefInput, sendChunk func(context.Context, *Recipe) error) (*Recipe, error) {
+			today := time.Now().Weekday().String()
+
+			prompt := fmt.Sprintf(`Today is %s. The user is craving: %s.
+
+Call the getIngredientsOnSale tool with the dayType that matches today. Saturday and Sunday are weekends; all other days are weekdays. Then propose ONE recipe that takes advantage of those deals. For each ingredient, set onSale=true if it appears in the tool's response, false otherwise.`, today, input.Craving)
+
+			var final *Recipe
+			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
+				ai.WithModelName("googleai/gemini-flash-latest"),
+				ai.WithConfig(&genai.GenerateContentConfig{
+					ThinkingConfig: &genai.ThinkingConfig{
+						ThinkingLevel: genai.ThinkingLevelMinimal,
+					},
+				}),
+				ai.WithPrompt(prompt),
+				ai.WithTools(getIngredientsOnSale),
+			)
+			for result, err := range stream {
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate recipe: %w", err)
+				}
+				if result.Done {
+					final = result.Output
+					break
+				}
+				if result.Chunk != nil {
+					if err := sendChunk(ctx, result.Chunk); err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			return final, nil
+		},
+	)
+
+	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(middleware.CORS())
+	e.POST("/bargainChefFlow", echo.WrapHandler(genkit.Handler(bargainChefFlow)))
+
+	log.Println("Echo server listening on http://localhost:8080")
+	if err := e.Start(":8080"); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
+}
+```
+
+The file builds the flow in four parts:
+
+1. **Initialize Genkit.** `genkit.Init` with the `googlegenai.GoogleAI` plugin sets up the SDK and registers Gemini as the model provider.
+2. **Define a tool.** `getIngredientsOnSale` is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The `SaleInput` struct, with its `jsonschema` tags, forces the model to pass `dayType: "weekday"` or `"weekend"`. In a real app, this would query a pricing database, inventory system, or third-party API.
+3. **Describe the recipe shape.** The `Recipe` struct is the structure of the final response. Genkit derives a JSON schema from it via `jsonschema` tags so the model knows what to produce, and `GenerateDataStream[*Recipe]` validates the output against that shape.
+4. **Define the flow.** `bargainChefFlow` ties everything together. It uses `genkit.DefineStreamingFlow`, which gives the flow a `sendChunk` callback so partial results can stream out as the model generates them. Inside, `genkit.GenerateDataStream[*Recipe]` yields a typed partial `Recipe` for each chunk; the flow forwards each partial to `sendChunk` and returns the final, validated `Recipe` from the `Done` result.
+
+The Echo wiring at the bottom mounts the flow as a single HTTP route. `genkit.Handler` returns a standard `http.HandlerFunc`, and `echo.WrapHandler` adapts it to Echo's handler signature. The handler emits server-sent events when the client requests them and returns a regular JSON response otherwise. `middleware.CORS()` allows **all origins**, so any browser frontend can call this endpoint during development; before deploying, use `middleware.CORSWithConfig(...)` to restrict it to the origins you actually serve.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- go.mod
+- go.sum
+- **main.go**
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Run the app
+
+Start the server:
+
+```bash
+go run .
+```
+
+You should see `Echo server listening on http://localhost:8080`. The server now exposes `POST /bargainChefFlow`, ready to stream recipes back to any client (browser app, Flutter app, curl, or the Developer UI).
+
+## Test and inspect the app
+
+You can call the flow directly with curl, and you can use the Developer UI to inspect both manual runs and requests from any connected client.
+
+### Send a request with curl
+
+With the server running, stream the response with curl. The `-N` flag disables output buffering, and the `Accept: text/event-stream` header tells the handler to stream chunks:
+
+```bash
+curl -N -X POST http://localhost:8080/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them. The final event contains the complete, validated recipe.
+
+To get a single JSON response instead, drop the `Accept` header:
+
+```bash
+curl -X POST http://localhost:8080/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start your app under the Developer UI:
+
+   ```bash
+   genkit start -- go run .
+   ```
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from connected clients]
+While the Developer UI is running, any flow invocation triggered from a connected client (such as a web app, mobile app, or another service) appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on Echo that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Connect an app framework](/docs/app-frameworks/overview)
+- [Connect a web frontend](/docs/web-client)
+- [Connect a Flutter app](/docs/frontend/flutter)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Developer tools](/docs/devtools)

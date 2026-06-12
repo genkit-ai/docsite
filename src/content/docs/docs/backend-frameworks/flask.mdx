@@ -1,0 +1,319 @@
+---
+title: Flask tutorial
+description: Add a streaming Genkit flow to a Flask app and expose it as an HTTP endpoint.
+supportedLanguages:
+  - python
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Flask that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/py/flask).
+
+## Prerequisites
+
+- Python 3.10 or later
+- uv (or pip) for package management
+
+This tutorial assumes you're already familiar with building Flask applications.
+
+## Set up the application
+
+### Create the project
+
+Create a new project directory and initialize it:
+
+```bash
+mkdir my-genkit-flask
+cd my-genkit-flask
+uv init --no-readme --python 3.10
+```
+
+### Install packages
+
+Install the Genkit CLI:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+Then install the packages you need in your project:
+
+```bash
+uv add flask flask-cors genkit genkit-plugin-google-genai genkit-plugin-flask
+```
+
+These packages include:
+
+- **`flask`**: The Flask web framework.
+- **`genkit`**: Core Genkit SDK for Python.
+- **`genkit-plugin-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`genkit-plugin-flask`**: Helper that exposes Genkit flows as Flask routes, including server-sent events for streaming.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio. Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+## Create the backend
+
+The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the client as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
+
+Create `main.py`:
+
+```python title="main.py"
+from datetime import datetime
+from typing import Literal
+
+from flask import Flask
+from flask_cors import CORS
+from pydantic import BaseModel, Field
+
+from genkit import ActionRunContext, Genkit
+from genkit.plugins.flask import genkit_flask_handler
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
+)
+
+app = Flask(__name__)
+# Allows all origins so any browser frontend can call the endpoint during
+# development. Before deploying, restrict it: CORS(app, origins=['https://your-app.com']).
+CORS(app)
+
+
+class SaleIngredient(BaseModel):
+    name: str
+    price: str
+
+
+class GetIngredientsInput(BaseModel):
+    day_type: Literal['weekday', 'weekend'] = Field(
+        description='Whether to fetch weekday or weekend sale prices.',
+    )
+
+
+@ai.tool()
+async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleIngredient]:
+    """Returns the ingredients on sale at the local grocery store, with prices.
+    The sale set differs between weekdays and weekends.
+    """
+    # Mock data: in a real app, query a pricing database.
+    if input.day_type == 'weekend':
+        return [
+            SaleIngredient(name='chicken breast', price='$2.99/lb'),
+            SaleIngredient(name='pasta', price='$0.79'),
+            SaleIngredient(name='canned tomatoes', price='$0.99'),
+            SaleIngredient(name='garlic', price='$0.50 / head'),
+            SaleIngredient(name='olive oil', price='$6.99'),
+        ]
+    return [
+        SaleIngredient(name='eggs', price='$3.49 / dozen'),
+        SaleIngredient(name='spinach', price='$1.99'),
+        SaleIngredient(name='parmesan', price='$4.99'),
+        SaleIngredient(name='lemons', price='$0.50 each'),
+        SaleIngredient(name='rice', price='$2.49'),
+        SaleIngredient(name='butter', price='$3.99'),
+    ]
+
+
+class RecipeIngredient(BaseModel):
+    name: str
+    quantity: str
+    on_sale: bool
+
+
+class Recipe(BaseModel):
+    title: str
+    description: str
+    servings: int
+    ingredients: list[RecipeIngredient]
+    steps: list[str]
+
+
+class BargainChefInput(BaseModel):
+    craving: str = Field(description='What the user feels like eating right now.')
+
+
+@app.post('/bargainChefFlow')
+@genkit_flask_handler(ai)
+@ai.flow()
+async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
+    today = datetime.now().strftime('%A')
+
+    stream_response = ai.generate_stream(
+        prompt=(
+            f'Today is {today}. The user is craving: {input.craving}.\n\n'
+            'Call the get_ingredients_on_sale tool with the day_type that matches '
+            'today. Saturday and Sunday are weekends; all other days are weekdays. '
+            "Then propose ONE recipe that takes advantage of those deals. For each "
+            "ingredient, set on_sale=true if it appears in the tool's response, "
+            'false otherwise.'
+        ),
+        tools=['get_ingredients_on_sale'],
+        output_schema=Recipe,
+        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+    )
+
+    async for chunk in stream_response.stream:
+        if chunk.output:
+            ctx.send_chunk(chunk.output)
+
+    response = await stream_response.response
+    if not response.output:
+        raise ValueError('Failed to generate recipe')
+    return response.output
+
+
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=8080)
+```
+
+A few details are worth noting:
+
+- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
+- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
+- **Describe the recipe shape:** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
+- **Define the flow:** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
+- **The three stacked decorators:** These wire everything up. `@ai.flow()` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- pyproject.toml
+- **main.py**
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Run the app
+
+Start the Flask server:
+
+```bash
+uv run python main.py
+```
+
+The server listens on `http://127.0.0.1:8080`. Send a request with a craving and the flow will pick today's sale list, propose a recipe, and stream the partial recipe back to the client field by field, title first, then description, then ingredients (with `on_sale=true` on the ones the model picked from the tool), then steps.
+
+## Test and inspect the app
+
+You can test the endpoint directly with curl, and you can use the Developer UI to inspect both manual runs and requests sent to your Flask app.
+
+### Send a request with curl
+
+With the server running, use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://127.0.0.1:8080/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, and the final event contains the validated result.
+
+For a non-streaming request, drop the `Accept` header and you'll get a single JSON response:
+
+```bash
+curl -X POST http://127.0.0.1:8080/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   ```bash
+   genkit start -- uv run python main.py
+   ```
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts (for example, in a Makefile or a `[tool.uv]` script entry).
+   :::
+
+2. Select `bargain_chef_flow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargain_chef_flow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargain_chef_flow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from your running app]
+While the Developer UI is running, any flow invocation triggered by a request to your Flask app appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on Flask that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Connect an app framework](/docs/app-frameworks/overview)
+- [Deploy your app](/docs/deployment/overview)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Connect a web frontend](/docs/web-client)
+- [Connect a Flutter app](/docs/frontend/flutter)
+- [Developer tools](/docs/devtools)

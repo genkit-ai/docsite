@@ -1,0 +1,394 @@
+---
+title: Django tutorial
+description: Add Genkit AI features to a Django app, exposing a streaming Bargain Chef flow as an HTTP endpoint with Django Ninja.
+supportedLanguages:
+  - python
+---
+
+import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Django that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+This tutorial uses [Django Ninja](https://django-ninja.dev) for the HTTP layer. It's async-first and Pydantic-native, which aligns naturally with how Genkit flows are typed. The flow exposes both a JSON endpoint and a Server-Sent Events stream so any client can consume the partial recipe as it arrives.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/py/django).
+
+## Prerequisites
+
+- Python 3.10 or later
+- uv package manager
+
+This tutorial assumes you're already familiar with building Django applications.
+
+## Set up the application
+
+### Create the project
+
+Create a new project with uv and bootstrap Django:
+
+```bash
+mkdir my-genkit-django
+cd my-genkit-django
+uv init --no-readme --python 3.10
+uv run django-admin startproject myproject .
+uv run python manage.py startapp recipes
+```
+
+### Install packages
+
+```bash
+uv add django django-ninja django-cors-headers uvicorn genkit genkit-plugin-google-genai
+```
+
+These packages include:
+
+- **`django`**: The Django web framework.
+- **`django-ninja`**: Async-first API framework built on Django with Pydantic validation.
+- **`django-cors-headers`**: CORS middleware. Lets browser frontends served from a different origin call the Genkit endpoint.
+- **`uvicorn`**: ASGI server that runs Django with async support.
+- **`genkit`**: Core Genkit SDK.
+- **`genkit-plugin-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+
+Install the Genkit CLI, which enables Genkit testing and observability:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+### Configure Django
+
+Update `myproject/settings.py` so Django loads the `recipes` app and runs without the default database and admin middleware that Bargain Chef doesn't need:
+
+```python title="myproject/settings.py"
+INSTALLED_APPS = [
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'corsheaders',
+    'recipes',
+]
+
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.common.CommonMiddleware',
+]
+
+# Allows all origins so any browser frontend can call the endpoint during
+# development. Before deploying, set CORS_ALLOWED_ORIGINS to the origins you serve instead.
+CORS_ALLOW_ALL_ORIGINS = True
+
+ROOT_URLCONF = 'myproject.urls'
+
+DATABASES = {}
+```
+
+## Create the backend
+
+The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
+
+Create `recipes/views.py`:
+
+```python title="recipes/views.py"
+import json
+from datetime import datetime
+from typing import Literal
+
+from django.http import StreamingHttpResponse
+from ninja import NinjaAPI, Schema
+from pydantic import BaseModel, Field
+
+from genkit import ActionRunContext, Genkit
+from genkit.plugins.google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+
+class IngredientOnSale(BaseModel):
+    name: str
+    price: str
+
+
+class GetIngredientsInput(BaseModel):
+    day_type: Literal['weekday', 'weekend'] = Field(
+        description='Whether to fetch weekday or weekend sale prices.'
+    )
+
+
+@ai.tool(
+    name='get_ingredients_on_sale',
+    description=(
+        'Returns the ingredients on sale at the local grocery store, with prices. '
+        'The sale set differs between weekdays and weekends.'
+    ),
+)
+async def get_ingredients_on_sale(
+    input: GetIngredientsInput,
+) -> list[IngredientOnSale]:
+    # Mock data: in a real app, query a pricing database.
+    if input.day_type == 'weekend':
+        return [
+            IngredientOnSale(name='chicken breast', price='$2.99/lb'),
+            IngredientOnSale(name='pasta', price='$0.79'),
+            IngredientOnSale(name='canned tomatoes', price='$0.99'),
+            IngredientOnSale(name='garlic', price='$0.50 / head'),
+            IngredientOnSale(name='olive oil', price='$6.99'),
+        ]
+    return [
+        IngredientOnSale(name='eggs', price='$3.49 / dozen'),
+        IngredientOnSale(name='spinach', price='$1.99'),
+        IngredientOnSale(name='parmesan', price='$4.99'),
+        IngredientOnSale(name='lemons', price='$0.50 each'),
+        IngredientOnSale(name='rice', price='$2.49'),
+        IngredientOnSale(name='butter', price='$3.99'),
+    ]
+
+
+class RecipeIngredient(BaseModel):
+    name: str
+    quantity: str
+    on_sale: bool
+
+
+class Recipe(BaseModel):
+    title: str
+    description: str
+    servings: int
+    ingredients: list[RecipeIngredient]
+    steps: list[str]
+
+
+class BargainChefInput(BaseModel):
+    craving: str = Field(description='What the user feels like eating right now.')
+
+
+@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: ActionRunContext,
+) -> Recipe:
+    today = datetime.now().strftime('%A')
+
+    stream_response = ai.generate_stream(
+        model='googleai/gemini-flash-latest',
+        prompt=(
+            f'Today is {today}. The user is craving: {input.craving}.\n\n'
+            'Call the get_ingredients_on_sale tool with the day_type that matches '
+            'today. Saturday and Sunday are weekends; all other days are weekdays. '
+            'Then propose ONE recipe that takes advantage of those deals. For each '
+            'ingredient, set on_sale=true if it appears in the tool\'s response, '
+            'false otherwise.'
+        ),
+        tools=['get_ingredients_on_sale'],
+        output_schema=Recipe,
+        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+    )
+
+    async for chunk in stream_response.stream:
+        if chunk.output:
+            ctx.send_chunk(chunk.output)
+
+    response = await stream_response.response
+    if not response.output:
+        raise ValueError('Failed to generate recipe')
+    return response.output
+
+
+api = NinjaAPI()
+
+
+class GenkitRequest(Schema):
+    data: BargainChefInput
+
+
+@api.post('/bargainChefFlow')
+async def bargain_chef_endpoint(request, payload: GenkitRequest):
+    if request.headers.get('Accept') == 'text/event-stream':
+        async def event_stream():
+            stream_response = bargain_chef_flow.stream(payload.data)
+            async for chunk in stream_response.stream:
+                yield f'data: {json.dumps({"message": chunk.model_dump()})}\n\n'
+            result = await stream_response.response
+            yield f'data: {json.dumps({"result": result.model_dump()})}\n\n'
+
+        return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+
+    result = await bargain_chef_flow(payload.data)
+    return {'result': result.model_dump()}
+```
+
+A few details are worth noting before you run the backend:
+
+- **Final output and streamed chunks:** `output_schema` is the complete recipe the flow returns at the end. `chunk_type=Recipe` types the streamed chunks as partial recipes, because early chunks might only include the title or description.
+- **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are defined as Pydantic models, ready for the Django app to import and for Genkit to validate against.
+- **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
+
+The Django Ninja endpoint exposes the flow two ways. When the request sends `Accept: text/event-stream`, it returns a `StreamingHttpResponse` that emits each partial recipe as an SSE event. Otherwise, it awaits the flow once and returns the final recipe as JSON.
+
+### Wire up the URL
+
+```python title="myproject/urls.py"
+from django.urls import path
+from recipes.views import api
+
+urlpatterns = [
+    path('', api.urls),
+]
+```
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- pyproject.toml
+- manage.py
+- myproject
+  - settings.py
+  - urls.py
+  - asgi.py
+- recipes
+  - views.py
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Run the app
+
+Start the Django app with Uvicorn so it can serve async requests and streaming responses:
+
+```bash
+uv run uvicorn myproject.asgi:application --reload
+```
+
+The server listens on `http://localhost:8000`.
+
+## Test and inspect the app
+
+You can test the flow directly with curl, and you can use the Developer UI to inspect both manual runs and requests from clients.
+
+### Send a request with curl
+
+Once the server is running, use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://localhost:8000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them.
+
+To get a single non-streamed JSON response instead, omit the `Accept` header:
+
+```bash
+curl -X POST http://localhost:8000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   ```bash
+   genkit start -- uv run uvicorn myproject.asgi:application --reload
+   ```
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts in `pyproject.toml`.
+   :::
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll watch the recipe stream in, field by field, with a trace showing each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from your running app]
+While the Developer UI is running, any flow invocation triggered from a client appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on Django that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Connect an app framework](/docs/app-frameworks/overview)
+- [Deploy your app](/docs/deployment/overview)
+- [Creating flows](/docs/flows)
+- [Generating content](/docs/models)
+- [Developer tools](/docs/devtools)
