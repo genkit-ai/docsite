@@ -15,7 +15,7 @@ The Agents API is in **Beta.** APIs may change in minor version releases. Import
 
 Genkit Agents let you add AI-powered features - conversational assistants,
 approval workflows, background report generators - to your application
-with a single server definition and standard client helpers. Define a
+with a single server definition and a unified client API. Define a
 model, system prompt, tools, and session state once; Genkit handles
 message history, tool-calling loops, streaming, and persistence so you
 can focus on your product. Under the hood, agents are powered by prompts
@@ -23,6 +23,13 @@ and the `generate()` API, so they have full access to
 [middleware](/docs/middleware) - add retries, fallbacks, tool approval,
 filesystem access, or your own custom hooks to any agent. Agents replace
 the deprecated [`ai.chat()`](/docs/chat) API.
+
+Agents are built around a **unified API**. The object returned by
+`ai.defineAgent()` on the server and the object returned by `remoteAgent()`
+on the client expose the *exact same interface*. You call `.chat()` to start
+a conversation, `.sendStream()` to stream a turn, and read `.response` for
+the result - whether you're calling an agent in-process or over HTTP. No
+agent-specific SDK, no custom protocol, no manual state threading.
 
 All of the code samples in this guide can be found in the [agents sample](https://github.com/genkit-ai/genkit/tree/main/js/testapps/agents) on GitHub.
 
@@ -32,8 +39,9 @@ Before reading this page, you should be familiar with [generating content](/docs
 [tool calling](/docs/tool-calling), and [prompts](/docs/dotprompt).
 
 :::note[Beta import]
-All agent APIs are imported from **`genkit/beta`**, not `genkit`. This
-applies to `genkit()`, session stores, and client-side types.
+All agent APIs are imported from **`genkit/beta`** (server) and
+**`genkit/beta/client`** (client), not `genkit`. This applies to
+`genkit()`, session stores, `remoteAgent()`, and the shared agent types.
 :::
 
 ```ts
@@ -55,15 +63,19 @@ optionally a session store (a persistence backend that saves message history
 and state between requests) - all in one place:
 
 ```ts
+import { FileSessionStore } from 'genkit/beta';
+
 const weatherAgent = ai.defineAgent({
   name: 'weatherAgent',
-  model: 'googleai/gemini-flash-latest',
   system: 'You are a helpful weather assistant. Answer weather queries.',
   tools: [getWeather],
   // Persist session state between requests (see "Session persistence" section)
   store: new FileSessionStore('./.snapshots'),
 });
 ```
+
+The `model` is optional - it defaults to the model configured in `genkit()`.
+Pass `model` to override it per-agent.
 
 **With typed custom state:**
 
@@ -88,7 +100,6 @@ type TaskState = z.infer<typeof TaskStateSchema>;
 const taskAgent = ai.defineAgent({
   name: 'taskAgent',
   stateSchema: TaskStateSchema,
-  model: 'googleai/gemini-flash-latest',
   system: 'You are a task management assistant. Use the provided tools.',
   tools: [addTask, toggleTask, removeTask],
 });
@@ -104,7 +115,7 @@ separates the prompt template from agent wiring, which is useful when:
 - Content teams manage prompt copy without touching application code
 - You need to A/B test different prompt variants
 
-```
+```none
 ---
 model: googleai/gemini-flash-latest
 tools:
@@ -134,30 +145,42 @@ with automatic tool-calling loops, `defineCustomAgent` lets you:
 
 - **Chain multiple model calls** with custom logic between them - for
   example, decompose a question, research each part, then synthesize
-- **Stream custom status messages** to the client (not just model tokens),
-  so the UI can show progress like "Researching step 2 of 3…"
+- **Stream custom status to the client** by mutating typed custom state -
+  the runtime auto-emits the change so the UI can show progress like
+  "Researching step 2 of 3…"
 - **Manipulate the session directly** with `addMessages` and `updateCustom`,
   giving you control over exactly what gets persisted
 - **Use different models for different steps** - a fast model for
   decomposition, a capable model for synthesis
 
 The following example shows a research agent that decomposes a question,
-researches each part in parallel, and streams status updates throughout:
+researches each part, and streams status updates throughout. Notice that
+status is streamed by mutating custom state with
+`session.updateCustom()` - the runtime auto-emits a `customPatch` chunk
+that the client receives as `chunk.custom`:
 
 ```ts
+interface ResearchState {
+  status?: string;
+  subQuestions: string[];
+  subAnswers: Array<{ question: string; answer: string }>;
+}
+
 const researchAgent = ai.defineCustomAgent(
   { name: 'researchAgent' },
   async (sess, { sendChunk }) => {
     let lastMessage;
+    const session = ai.currentSession<ResearchState>();
 
-    // sess.run() handles loading and saving session state around your logic
+    // sess.run() handles loading and saving session state around your logic.
     await sess.run(async (input) => {
-      // Extract the user's question from the latest message
+      // Extract the user's question from the latest message.
       const userText =
         input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
 
-      // Step 1: Use a fast model to decompose the question into sub-questions
-      sendChunk({ status: 'Decomposing question…' });
+      // Step 1: Use a fast model to decompose the question into sub-questions.
+      // Mutating custom state auto-emits a `customPatch` chunk to the client.
+      session.updateCustom((s) => ({ ...s!, status: 'Decomposing question…' }));
       const decompose = await ai.generate({
         model: 'googleai/gemini-flash-lite-latest',
         prompt: `Break this into 2-3 sub-questions as a JSON array: "${userText}"`,
@@ -165,31 +188,33 @@ const researchAgent = ai.defineCustomAgent(
       });
       const subQuestions = decompose.output ?? [userText];
 
-      // Step 2: Research each sub-question with the default model
+      // Step 2: Research each sub-question with the default model.
       const subAnswers = [];
       for (let i = 0; i < subQuestions.length; i++) {
-        // Stream a status update so the client can show progress
-        sendChunk({ status: `Researching (${i + 1}/${subQuestions.length})…` });
+        session.updateCustom((s) => ({
+          ...s!,
+          status: `Researching (${i + 1}/${subQuestions.length})…`,
+        }));
         const research = await ai.generate({
           prompt: `Answer concisely: ${subQuestions[i]}`,
         });
         subAnswers.push({ question: subQuestions[i], answer: research.text });
       }
 
-      // Step 3: Synthesize findings - stream the final response token by token
-      sendChunk({ status: 'Synthesizing…' });
+      // Step 3: Synthesize findings - stream the final response token by token.
+      session.updateCustom((s) => ({ ...s!, status: 'Synthesizing…' }));
       const synthesisStream = ai.generateStream({
         prompt: `Synthesize these findings into a cohesive answer:\n${
           subAnswers.map((sa) => `Q: ${sa.question}\nA: ${sa.answer}`).join('\n\n')
         }`,
       });
 
-      // Forward each model chunk to the client as it arrives
+      // Forward each model chunk to the client as it arrives.
       for await (const chunk of synthesisStream.stream) {
         sendChunk({ modelChunk: chunk });
       }
 
-      // Persist the final model message in the session history
+      // Persist the final model message in the session history.
       lastMessage = (await synthesisStream.response).message;
       sess.addMessages([lastMessage]);
     });
@@ -204,23 +229,72 @@ const researchAgent = ai.defineCustomAgent(
 );
 ```
 
+A custom agent's `sendChunk` only accepts the agent stream-chunk shape
+(`modelChunk`, `customPatch`, `artifact`, `turnEnd`). To stream
+human-readable progress, mutate custom state with `session.updateCustom()`
+as shown above rather than sending an ad-hoc status field.
+
+## The unified agent API
+
+Every agent - whether defined in-process with `ai.defineAgent()` or
+accessed over HTTP with `remoteAgent()` - exposes the same surface. Once
+you have an agent, you start a `chat` and send turns:
+
+```ts
+// `weatherAgent` is the object returned by ai.defineAgent(...)
+const chat = weatherAgent.chat();
+
+// Streaming turn
+const turn = chat.sendStream('What is the weather in Tokyo?');
+for await (const chunk of turn.stream) {
+  if (chunk.text) process.stdout.write(chunk.text); // streamed model text
+}
+const res = await turn.response;
+console.log(res.text);        // final text
+console.log(res.snapshotId);  // snapshot id (server-managed agents)
+console.log(res.state);       // custom state
+
+// Non-streaming follow-up turn - state is carried forward automatically.
+const res2 = await chat.send('What about Paris?');
+```
+
+The chat tracks session continuity for you - no manual `snapshotId`/`state`
+threading. The same object is returned by `remoteAgent()` on the client, so
+client code looks identical (see [Serving agents over HTTP](#serving-agents-over-http)).
+
+The core types:
+
+| Type | What it is | Key members |
+|---|---|---|
+| `AgentAPI` | The agent itself | `chat()`, `loadChat()`, `getSnapshot()`, `abort()` |
+| `AgentChat` | A stateful conversation | `send()`, `sendStream()`, `resume()`, `resumeStream()`, `detach()`, `abort()`, `snapshotId`, `state`, `messages`, `artifacts` |
+| `AgentTurn` | One in-flight turn | `stream`, `response`, `abort()` |
+| `AgentResponse` | A completed turn | `text`, `message`, `messages`, `toolRequests`, `interrupts`, `finishReason`, `snapshotId`, `state`, `artifacts`, `raw` |
+| `AgentChunk` | A streamed chunk | `text`, `accumulatedText`, `reasoning`, `toolRequests`, `artifact`, `custom`, `raw` |
+| `AgentInterrupt` | A paused tool request | `name`, `input`, `respond(output)`, `restart()` |
+| `DetachedTask` | A background task handle | `snapshotId`, `poll()`, `wait()`, `abort()` |
+
+`res.state` returns the **custom** state directly, while `res.raw.state`
+holds the full `SessionState` (messages + custom + artifacts).
+
 ## State management strategies
 
 Every agent uses one of two strategies for maintaining session state across
-turns. This choice affects how the client continues a conversation, and
-**sending the wrong continuation token will throw an error** - so pick a
-strategy before building your client.
+turns. This choice affects how the client continues a conversation - so pick
+a strategy before building your client.
 
 | | Server-managed | Client-managed |
 |---|---|---|
 | **Setup** | Define the agent with a `store` | Omit `store` |
-| **Continue a turn** | Send `snapshotId` | Send the full `state` blob |
+| **How a turn continues** | The chat tracks `snapshotId`; resume with a `snapshotId` or `sessionId` | The chat tracks and round-trips the full `state` blob |
 | **Server stores state?** | Yes | No |
-| **Supports branching?** | Yes | Manual (client manages copies of `state`) |
+| **Supports branching?** | Yes | Manual (open multiple chats from the same `state`) |
 | **Supports background execution?** | Yes | No |
 
-See [Session persistence](#session-persistence) for detailed examples of
-each strategy, including session restoration, branching, and pruning.
+In both cases the `chat` object carries continuity automatically; the
+difference is *where* the state lives. See
+[Session persistence](#session-persistence) for detailed examples of each
+strategy, including session restoration, branching, and pruning.
 
 ## Testing agents in the developer UI
 
@@ -247,11 +321,14 @@ import express from 'express';
 const app = express();
 app.use(express.json());
 
-// Main agent endpoint - handles run, streaming, and multi-turn
+// Main agent endpoint - handles run, streaming, and multi-turn.
 app.post('/api/weatherAgent', expressHandler(weatherAgent));
 
-// Snapshot endpoint - lets clients restore a session from a snapshotId
+// Snapshot endpoint - lets clients restore/inspect a session.
 app.post('/api/weatherAgent/state', expressHandler(weatherAgent.getSnapshotDataAction));
+
+// Abort endpoint - only needed for background execution.
+app.post('/api/weatherAgent/abort', expressHandler(weatherAgent.abortAgentAction));
 
 app.listen(8080);
 ```
@@ -260,20 +337,34 @@ Every agent gets one primary endpoint. Agents that use a store also expose a
 `getSnapshotDataAction` for session restoration, and agents that support
 background execution expose an `abortAgentAction`.
 
-On the **client side**, use `streamFlow()` and `runFlow()` from
-`genkit/beta/client`, along with the shared types:
+On the **client side**, create a typed client with `remoteAgent()` from
+`genkit/beta/client`:
 
 ```ts
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
-import { streamFlow, runFlow } from 'genkit/beta/client';
+import { remoteAgent } from 'genkit/beta/client';
+
+const agent = remoteAgent({ url: '/api/weatherAgent' });
+
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+console.log(res.text);
 ```
 
-Agents are designed as HTTP endpoints from the start - they slot into your
-Express, Next.js, or Cloud Functions app like any other route. Your client
-code is just `streamFlow()` with standard types - no agent-specific SDK,
-no WebSocket setup, no custom protocol.
+`remoteAgent()` defaults the state and abort URLs to `${url}/state` and
+`${url}/abort`. Override them (or add request headers) if your routes differ:
 
-The rest of this page shows both the server and client sides of each pattern.
+```ts
+const agent = remoteAgent({
+  url: '/api/weatherAgent',
+  stateUrl: '/api/weatherAgent/state',   // optional
+  abortUrl: '/api/weatherAgent/abort',   // optional
+  headers: { Authorization: `Bearer ${token}` }, // static or async function
+});
+```
+
+Because `remoteAgent()` returns the same `AgentAPI` as the in-process agent,
+**your client code is the same code you'd write on the server** - just
+pointed at a URL. The rest of this page shows both sides of each pattern.
 
 ## Multi-turn streaming chat
 
@@ -283,94 +374,61 @@ continuity across turns.
 
 ### Server
 
-Use `agent.run()` with an `onChunk` callback for streaming:
+Use `chat.sendStream()` and iterate the stream, then await the response:
 
 ```ts
-const result = await weatherAgent.run(
-  {
-    messages: [{ role: 'user', content: [{ text: 'Weather in London?' }] }],
-  },
-  { onChunk: (chunk) => console.log(chunk) }
-);
+const chat = weatherAgent.chat();
 
-console.log(result.result.message);    // Model's response message
-console.log(result.result.state);      // Session state (for next turn)
-console.log(result.result.snapshotId); // Snapshot ID (if using a store)
-```
+const turn = chat.sendStream('Weather in London?');
+for await (const chunk of turn.stream) {
+  if (chunk.text) process.stdout.write(chunk.text);
+}
+const res = await turn.response;
 
-Continue a conversation by passing state from the previous turn:
+console.log(res.message);    // Model's response message
+console.log(res.state);      // Custom state
+console.log(res.snapshotId); // Snapshot ID (if using a store)
 
-```ts
-// Turn 2 - resume with state
-const turn2 = await weatherAgent.run(
-  {
-    messages: [{ role: 'user', content: [{ text: 'What about Paris?' }] }],
-  },
-  { init: { state: turn1.result.state } }
-);
-
-// Or resume with snapshotId (requires a store)
-const turn2Alt = await weatherAgent.run(
-  {
-    messages: [{ role: 'user', content: [{ text: 'What about Paris?' }] }],
-  },
-  { init: { snapshotId: turn1.result.snapshotId } }
-);
+// Continue the conversation - the same chat carries state forward.
+const res2 = await chat.send('What about Paris?');
 ```
 
 ### Client
 
-Use `streamFlow()` to stream the agent's response. Each chunk can contain
-model text, tool calls, and tool responses - giving your UI full visibility
-into what the agent is doing:
+The client code mirrors the server. Use `chat.sendStream()`. Each chunk
+exposes streamed text via `chunk.text`, and you can read tool calls and
+responses off the raw model chunk:
 
 ```ts
-// Build the request
-const input: AgentInput = {
-  messages: [{ role: 'user', content: [{ text: userMessage }] }],
-};
+import { remoteAgent } from 'genkit/beta/client';
 
-// On subsequent turns, send back state or snapshotId from the previous turn
-const init: AgentInit = previousState
-  ? { state: previousState }
-  : previousSnapshotId
-    ? { snapshotId: previousSnapshotId }
-    : {};
+const agent = remoteAgent({ url: '/api/weatherAgent' });
+const chat = agent.chat();
 
-// Stream the response
-const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/weatherAgent',
-  input,
-  init,
-});
+const turn = chat.sendStream(userMessage);
 
-for await (const chunk of response.stream) {
-  if (chunk.modelChunk) {
-    for (const part of chunk.modelChunk.content || []) {
-      if (part.text) appendToUI(part.text);           // Stream text to UI
-      if (part.toolRequest) showToolCall(part.toolRequest);   // Show tool invocation
-      if (part.toolResponse) showToolResult(part.toolResponse); // Show tool result
-    }
+for await (const chunk of turn.stream) {
+  if (chunk.text) appendToUI(chunk.text); // streamed model text
+
+  // Tool calls and responses arrive on the raw model chunk.
+  for (const part of chunk.raw.modelChunk?.content ?? []) {
+    if (part.toolRequest) showToolCall(part.toolRequest);
+    if (part.toolResponse) showToolResult(part.toolResponse);
   }
 }
 
-// Read the final result
-const result = await response.output;
-
-// Save for the next turn
-previousState = result.state;
-previousSnapshotId = result.snapshotId;
+const res = await turn.response;
+// chat.snapshotId / chat.state are updated automatically for the next turn.
 ```
 
-For non-streaming requests, use `runFlow()`:
+`chunk.accumulatedText` gives you the running text so far, which is handy
+for rendering a growing message bubble.
+
+For non-streaming requests, use `chat.send()`:
 
 ```ts
-const result = await runFlow<AgentOutput, AgentInit>({
-  url: '/api/weatherAgent',
-  input: {
-    messages: [{ role: 'user', content: [{ text: 'Weather in London?' }] }],
-  },
-});
+const res = await chat.send('Weather in London?');
+console.log(res.text);
 ```
 
 ## Session persistence
@@ -402,57 +460,60 @@ const agent = ai.defineAgent({
 });
 ```
 
-With a store, each turn returns a `snapshotId` that you can use to restore
-the session later - for example, when a user bookmarks a chat URL or
-returns to a page.
+With a store, each turn produces a `snapshotId` (available as
+`chat.snapshotId` and `res.snapshotId`) that you can use to restore the
+session later - for example, when a user bookmarks a chat URL or returns to
+a page.
 
-**Server - retrieve snapshot data:**
+**Restore a chat with `loadChat()`:**
 
-```ts
-const snapshot = await agent.getSnapshotDataAction(snapshotId);
-// snapshot.state.messages - full message history
-// snapshot.state.custom - custom state
-// snapshot.state.artifacts - artifacts
-```
-
-**Client - restore a session on page load:**
-
-Expose the `getSnapshotDataAction` as an endpoint, then call it from the
-client to rebuild the conversation UI:
-
-```ts
-// Server
-app.post('/api/myAgent/state', expressHandler(agent.getSnapshotDataAction));
-```
+`loadChat()` reads a snapshot and returns a ready-to-use chat with history
+restored. Accept either a `snapshotId` (an exact snapshot) or a `sessionId`
+(the session's latest snapshot):
 
 ```ts
 // Client - restore from a snapshotId (e.g., from the URL)
-const snapshot = await runFlow({
-  url: '/api/myAgent/state',
-  input: snapshotId,
-});
+const chat = await agent.loadChat({ snapshotId });
 
-// Rebuild the chat UI from the message history
-for (const msg of snapshot.state.messages) {
+// History is restored - rebuild the UI from chat.messages
+for (const msg of chat.messages) {
   for (const part of msg.content) {
     if (part.text) renderMessage(msg.role, part.text);
   }
 }
+
+// Continue the conversation right where it left off.
+const res = await chat.send('And what about tomorrow?');
+```
+
+**Read a snapshot without starting a chat:**
+
+When you only need the data (not a live chat), use `getSnapshot()`:
+
+```ts
+const snapshot = await agent.getSnapshot(snapshotId);
+// snapshot.state.messages  - full message history
+// snapshot.state.custom    - custom state
+// snapshot.state.artifacts - artifacts
+// snapshot.status          - 'pending' | 'done' | 'failed' | 'aborted'
 ```
 
 This lets you store the `snapshotId` in the URL, a cookie, or a database,
-and fully restore the conversation later.
+and fully restore the conversation later. The same `loadChat()` /
+`getSnapshot()` methods work in-process on the server and over HTTP via
+`remoteAgent()`.
 
 ### Client-managed state
 
-If you don't provide a `store`, the agent is stateless on the server. The
-client must round-trip the full `state` blob on every turn:
+If you don't provide a `store`, the agent is stateless on the server and the
+client owns the session `state`. The `chat` object still tracks state for you
+and round-trips it on every turn - the only difference is that there's no
+`snapshotId`:
 
 ```ts
 // Server - no store
 const clientAgent = ai.defineAgent({
   name: 'clientAgent',
-  model: 'googleai/gemini-flash-latest',
   system: 'You are a helpful assistant.',
   tools: [getWeather],
   // No `store` property
@@ -460,52 +521,64 @@ const clientAgent = ai.defineAgent({
 ```
 
 ```ts
-// Client - round-trip the state blob
-const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/clientAgent',
-  input: {
-    messages: [{ role: 'user', content: [{ text: userMessage }] }],
-  },
-  // On the first turn, init is empty. On subsequent turns, send back the
-  // state blob from the previous response.
-  init: previousState ? { state: previousState } : {},
-});
+// Client - the chat round-trips the state blob automatically.
+const agent = remoteAgent({ url: '/api/clientAgent' });
+const chat = agent.chat();
 
-for await (const chunk of response.stream) {
-  // ... render streamed content
-}
+await chat.send('Weather in Tokyo?');
+await chat.send('What about Paris?'); // state carried forward automatically
 
-const result = await response.output;
-// Store the state blob for the next turn
-previousState = result.state;
+// The full client-owned state blob:
+console.log(chat.state);          // custom state
+// res.raw.state holds the entire SessionState (messages + custom + artifacts)
 ```
 
-The trade-off: no server storage needed, but the client sends the full
-message history on every request. This works well for short conversations
-or when you want a fully stateless server.
+The trade-off: no server storage needed, but the client holds (and the
+transport sends) the full message history on every request. This works well
+for short conversations or when you want a fully stateless server.
+
+To seed initial custom state, pass it to `chat()`:
+
+```ts
+const chat = agent.chat({
+  state: { custom: { tasks: [], nextId: 1 }, messages: [], artifacts: [] },
+});
+```
 
 ### Session branching
 
 With a store, you can branch conversations from any snapshot point - creating
-parallel conversation threads from the same starting point:
+parallel conversation threads from the same starting point. Open multiple
+chats from the same `snapshotId`:
 
 ```ts
-const turn1 = await agent.run({
-  messages: [{ role: 'user', content: [{ text: 'Hello!' }] }],
-});
-const branchPoint = turn1.result.snapshotId;
+const root = agent.chat();
+const res1 = await root.send('Hello!');
+const branchPoint = res1.snapshotId;
 
 // Branch A
-const branchA = await agent.run(
-  { messages: [{ role: 'user', content: [{ text: 'My name is Alice.' }] }] },
-  { init: { snapshotId: branchPoint } }
-);
+const branchA = agent.chat({ snapshotId: branchPoint });
+await branchA.send('My name is Alice.');
 
-// Branch B - from the same point
-const branchB = await agent.run(
-  { messages: [{ role: 'user', content: [{ text: 'My name is Bob.' }] }] },
-  { init: { snapshotId: branchPoint } }
-);
+// Branch B - forks from the SAME snapshot
+const branchB = agent.chat({ snapshotId: branchPoint });
+await branchB.send('My name is Bob.');
+```
+
+A `snapshotId` is an immutable checkpoint - like a git commit, the original
+doesn't change when you branch from it. Each branch creates new, independent
+snapshots. This works identically with `remoteAgent()` on the client, which
+is how you can, for example, generate two response variants in parallel and
+let the user pick one:
+
+```ts
+// Client - two parallel turns from the same branch point
+const makeChat = () => agent.chat({ snapshotId });
+const [a, b] = await Promise.all([
+  makeChat().send(text),
+  makeChat().send(text),
+]);
+// a.snapshotId !== b.snapshotId - pick one to continue from.
 ```
 
 ### Snapshot chain pruning
@@ -553,34 +626,44 @@ const addTask = ai.defineTool(
 );
 ```
 
-Access custom state from the result:
+Access custom state from the response or the chat - both return the custom
+state directly:
 
 ```ts
-const result = await taskAgent.run(
-  { messages: [{ role: 'user', content: [{ text: 'Add: buy groceries' }] }] },
-  {
-    init: {
-      state: {
-        custom: { tasks: [], nextId: 1 },
-        messages: [],
-        artifacts: [],
-      },
-    },
-  }
-);
+const chat = taskAgent.chat({
+  state: { custom: { tasks: [], nextId: 1 }, messages: [], artifacts: [] },
+});
+const res = await chat.send('Add: buy groceries');
 
-console.log(result.result.state?.custom); // { tasks: [...], nextId: 2 }
+console.log(res.state);   // { tasks: [...], nextId: 2 }
+console.log(chat.state);  // same - the latest custom state
 ```
 
-On the client, custom state is available in `result.state.custom` - use it
-to render application-specific UI alongside the chat. For example, render
-a task list driven entirely by agent state:
+On the client, use custom state to render application-specific UI alongside
+the chat. For example, render a task list driven entirely by agent state:
 
 ```ts
 // Client - render a task list from custom state
-const tasks = result.state?.custom?.tasks ?? [];
+await chat.send(userMessage);
+const tasks = chat.state?.tasks ?? [];
 for (const task of tasks) {
   renderTaskItem(task.id, task.title, task.done);
+}
+```
+
+For agents that mutate custom state mid-turn (like the
+[custom research agent](#aidefinecustomagent)), the client receives live
+updates: each streamed `chunk.custom` carries the full, post-patch custom
+state with a fresh object reference, so you can use it for `===`-based change
+detection:
+
+```ts
+for await (const chunk of turn.stream) {
+  if (chunk.custom) {
+    updateProgressUI(chunk.custom.status); // live status updates
+  } else if (chunk.text) {
+    appendToUI(chunk.text);
+  }
 }
 ```
 
@@ -607,25 +690,29 @@ const generateFile = ai.defineTool(
 );
 ```
 
-Artifacts are returned in `result.artifacts` on the client and also persisted
-in the session state.
+Artifacts are available as `res.artifacts` and `chat.artifacts` on the
+client, stream in as `chunk.artifact`, and are persisted in the session
+state.
 
 ## Agents with interrupts
 
 Agents work seamlessly with [interrupts](/docs/interrupts) for human-in-the-loop
 workflows - approvals, confirmations, or any time you need user input
-mid-flow. Genkit supports two interrupt resumption patterns:
+mid-flow. When a turn pauses on an interrupt, the paused tool requests are
+surfaced on `res.interrupts` as `AgentInterrupt` objects with `respond()`
+and `restart()` builders. Genkit supports two interrupt resumption patterns:
 
 | | Respond | Restart |
 |---|---|---|
 | **When to use** | [`defineInterrupt`](/docs/interrupts#define-manual-response-interrupts) tools - you provide the answer directly | [Approval-gated tools](/docs/interrupts#tools-with-restartable-interrupts) - the tool re-executes with metadata |
 | **Tool executes?** | No - you supply the output | Yes - re-runs with `resumed` metadata |
-| **Resume field** | `resume.respond` | `resume.restart` |
+| **Builder** | `interrupt.respond(output)` | `interrupt.restart()` |
+| **Resume with** | `chat.resume({ respond: [...] })` | `chat.resume({ restart: [...] })` |
 
 See [Interrupts](/docs/interrupts) for full details on defining both kinds
 of interrupt tools. The examples below show both patterns with an agent.
 
-### Respond pattern (`resume.respond`)
+### Respond pattern
 
 Use this for [`defineInterrupt`](/docs/interrupts#define-manual-response-interrupts)
 tools - the tool never executes server-side; you provide the output directly.
@@ -634,23 +721,25 @@ This is useful for collecting user input (clarification, choices, feedback):
 **Server:**
 
 ```ts
-const askUser = ai.defineInterrupt({
-  name: 'askUser',
-  description: 'Ask the user a question when you need clarification.',
+const userApproval = ai.defineInterrupt({
+  name: 'userApproval',
+  description: 'Ask the user for approval before a sensitive action.',
   inputSchema: z.object({
-    question: z.string(),
-    options: z.array(z.string()).min(2).max(5),
+    action: z.string(),
+    details: z.string(),
   }),
   outputSchema: z.object({
-    answer: z.string(),
+    approved: z.boolean(),
+    feedback: z.string().optional(),
   }),
 });
 
-const assistantAgent = ai.defineAgent({
-  name: 'assistantAgent',
-  model: 'googleai/gemini-flash-latest',
-  system: 'You are a helpful assistant. Use askUser when you need clarification.',
-  tools: [askUser],
+const bankingAgent = ai.defineAgent({
+  name: 'bankingAgent',
+  system:
+    'You are a banking assistant. ALWAYS use the userApproval interrupt to ' +
+    'confirm details before executing the transferMoney tool.',
+  tools: [userApproval, transferMoney],
   store: new InMemorySessionStore(),
 });
 ```
@@ -658,51 +747,27 @@ const assistantAgent = ai.defineAgent({
 **Client - detect and resume:**
 
 ```ts
-const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/assistantAgent',
-  input: {
-    messages: [{ role: 'user', content: [{ text: 'Help me plan a party' }] }],
-  },
-  init: previousSnapshotId ? { snapshotId: previousSnapshotId } : {},
-});
+const agent = remoteAgent({ url: '/api/bankingAgent' });
+const chat = agent.chat();
 
-for await (const chunk of response.stream) {
-  // ... render streamed content
-}
+let res = await chat.send('Transfer $500 to my savings account');
 
-const result = await response.output;
+// Check if the agent paused on the userApproval interrupt.
+const approval = res.interrupts.find((i) => i.name === 'userApproval');
 
-// Check if the agent paused to ask the user a question
-const question = result.message?.content.find(
-  (p) => p.toolRequest?.name === 'askUser'
-);
-
-if (question?.toolRequest) {
-  // Show the question and options in the UI, collect the user's answer,
-  // then resume with resume.respond:
-  const resumed = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-    url: '/api/assistantAgent',
-    input: {
-      resume: {
-        respond: [{
-          toolResponse: {
-            name: 'askUser',
-            ref: question.toolRequest.ref,
-            output: { answer: userSelectedAnswer },
-          },
-        }],
-      },
-    },
-    init: { snapshotId: result.snapshotId },
+if (approval) {
+  // Show approval.input in the UI, collect the user's decision, then resume.
+  // `respond()` builds the toolResponse part for you - the tool never runs.
+  res = await chat.resume({
+    respond: [approval.respond({ approved: true, feedback: 'Looks good' })],
   });
-
-  for await (const chunk of resumed.stream) {
-    // ... render the model's response
-  }
+  console.log(res.text); // model's confirmation
 }
 ```
 
-### Restart pattern (`resume.restart`)
+Use `chat.resumeStream({ respond: [...] })` for a streamed resumption.
+
+### Restart pattern
 
 Use this for approval-gated tools where the tool itself checks for
 explicit user approval before executing a sensitive action. This is
@@ -718,87 +783,45 @@ const transferMoney = ai.defineTool(
   {
     name: 'transferMoney',
     description: 'Transfer money to a specified account.',
-    inputSchema: z.object({
-      amount: z.number(),
-      toAccount: z.string(),
-    }),
-    outputSchema: z.object({
-      success: z.boolean(),
-      transactionId: z.string(),
-    }),
+    inputSchema: z.object({ amount: z.number(), toAccount: z.string() }),
+    outputSchema: z.object({ success: z.boolean(), transactionId: z.string() }),
   },
   async (input, ctx) => {
-    // Check if this is a user-approved restart.
     // ctx.metadata.resumed can only be set by the client, never by the LLM.
     const isApproved = ctx.metadata?.resumed?.toolApproved === true;
 
     if (!isApproved && input.amount > 100) {
-      // Interrupt - pause and return this tool request to the client
+      // Interrupt - pause and return this tool request to the client.
       ctx.interrupt({
         message: `Transfer $${input.amount} to ${input.toAccount}. Approve?`,
         amount: input.amount,
       });
     }
 
-    // Only reached if approved or amount ≤ $100
+    // Only reached if approved or amount ≤ $100.
     return { success: true, transactionId: `txn-${Date.now()}` };
   }
 );
-
-const bankingAgent = ai.defineAgent({
-  name: 'bankingAgent',
-  model: 'googleai/gemini-flash-latest',
-  system: 'You are a banking assistant that can transfer money.',
-  tools: [transferMoney],
-  store: new InMemorySessionStore(),
-});
 ```
 
 **Client - detect and restart with approval:**
 
 ```ts
-const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/bankingAgent',
-  input: {
-    messages: [{ role: 'user', content: [{ text: 'Transfer $500 to savings' }] }],
-  },
-  init: previousSnapshotId ? { snapshotId: previousSnapshotId } : {},
-});
+let res = await chat.send('Transfer $500 to savings');
 
-for await (const chunk of response.stream) {
-  // ... render streamed content
-}
+const transfer = res.interrupts.find((i) => i.name === 'transferMoney');
 
-const result = await response.output;
-
-// Check if the agent interrupted for approval
-const transfer = result.message?.content.find(
-  (p) => p.toolRequest?.name === 'transferMoney'
-);
-
-if (transfer?.toolRequest) {
-  // Show the transfer details and ask the user to approve.
-  // If approved, restart the tool with approval metadata:
-  const resumed = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-    url: '/api/bankingAgent',
-    input: {
-      resume: {
-        restart: [{
-          toolRequest: {
-            name: 'transferMoney',
-            ref: transfer.toolRequest.ref,
-            input: transfer.toolRequest.input,
-          },
-          metadata: { resumed: { toolApproved: true } },
-        }],
-      },
-    },
-    init: { snapshotId: result.snapshotId },
+if (transfer) {
+  // Show the transfer details and ask the user to approve. If approved,
+  // restart the tool, attaching approval metadata. `restart()` re-issues the
+  // original tool request; spread it and add the trusted `resumed` metadata.
+  res = await chat.resume({
+    restart: [{
+      ...transfer.restart(),
+      metadata: { resumed: { toolApproved: true } },
+    }],
   });
-
-  for await (const chunk of resumed.stream) {
-    // ... render the model's confirmation
-  }
+  console.log(res.text); // model's confirmation
 }
 ```
 
@@ -813,16 +836,14 @@ the resumption - seconds, hours, or even days. When the agent interrupts,
 the HTTP request completes normally and the server process is idle. All
 session state is persisted in the store. When the client sends the
 resumption request, it's a completely new HTTP request that loads the
-session from the `snapshotId` and continues where it left off.
+session and continues where it left off. (To resume after a full page
+reload, restore the chat first with `agent.loadChat({ snapshotId })`.)
 
 ## Background execution
 
 For long-running tasks (report generation, deep research), run the agent
-in the background. The client submits a request, receives a `snapshotId`
-immediately, and polls for the result.
-
-To implement background execution, you need to make changes on both the
-server and client:
+in the background. The client submits a request, receives a handle with a
+`snapshotId` immediately, and polls for the result.
 
 ### Server
 
@@ -832,7 +853,6 @@ expose the state and abort endpoints:
 ```ts
 const backgroundAgent = ai.defineAgent({
   name: 'reportAgent',
-  model: 'googleai/gemini-flash-latest',
   system: 'You are a research analyst. Write comprehensive reports.',
   store: new InMemorySessionStore(), // Required for detach
 });
@@ -846,45 +866,37 @@ app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortAgent
 
 ### Client
 
-**1. Submit with `detach: true`** - the server returns immediately:
+**1. Submit with `chat.detach()`** - the server returns a `DetachedTask`
+handle immediately:
 
 ```ts
-const result = await runFlow<AgentOutput, AgentInit>({
-  url: '/api/backgroundAgent',
-  input: {
-    messages: [{ role: 'user', content: [{ text: 'Write a report on AI trends' }] }],
-    detach: true,
-  },
-  init: {},
-});
+const agent = remoteAgent({ url: '/api/backgroundAgent' });
 
-const snapshotId = result.snapshotId; // Save for polling
+const task = await agent.chat().detach('Write a report on AI trends');
+console.log(task.snapshotId); // available right away
 ```
 
-**2. Poll the `/state` endpoint** until the status is `done`:
+**2. Poll for completion** with `task.poll()`, which yields snapshots until
+a terminal status, or `task.wait()`, which resolves with the final snapshot:
 
 ```ts
-const poll = setInterval(async () => {
-  const snapshot = await runFlow({
-    url: '/api/backgroundAgent/state',
-    input: snapshotId,
-  });
-
+for await (const snapshot of task.poll({ intervalMs: 2000 })) {
   // snapshot.status: 'pending' | 'done' | 'failed' | 'aborted'
   if (snapshot.status === 'done') {
-    clearInterval(poll);
-    // Extract the report from the snapshot's message history
     const messages = snapshot.state.messages;
     const modelReply = messages.filter((m) => m.role === 'model').pop();
     displayReport(modelReply);
   }
-}, 2000);
+}
+
+// Or, simply await the terminal snapshot:
+const finalSnapshot = await task.wait({ intervalMs: 2000 });
 ```
 
 **3. Abort if needed:**
 
 ```ts
-await runFlow({ url: '/api/backgroundAgent/abort', input: snapshotId });
+await task.abort();
 ```
 
 ## Multi-agent delegation
@@ -899,36 +911,43 @@ middleware, and exposing the orchestrator as an endpoint:
 ```ts
 import { agents } from '@genkit-ai/middleware';
 
-// Define specialized sub-agents
+// Define specialized sub-agents. The `description` is used by the
+// orchestrator to decide when to delegate.
 const researcher = ai.defineAgent({
   name: 'researcher',
-  model: 'googleai/gemini-flash-latest',
-  system: 'You are a thorough research assistant. Use getWebResults to find information.',
+  description: 'A thorough research assistant that finds well-sourced answers.',
+  system: 'You are a thorough research assistant.',
   tools: [getWebResults],
 });
 
 const coder = ai.defineAgent({
   name: 'coder',
-  model: 'googleai/gemini-flash-latest',
+  description: 'An expert programmer that writes clean, well-commented code.',
   system: 'You are an expert programmer. Write clean, well-commented code.',
 });
 
-// Orchestrator delegates to sub-agents via the `agents` middleware
+// Orchestrator delegates to sub-agents via the `agents` middleware.
 const orchestratorAgent = ai.defineAgent({
   name: 'orchestrator',
-  model: 'googleai/gemini-flash-latest',
-  system: `You are a project assistant with access to sub-agents:
-- **researcher**: research questions, fact-finding
-- **coder**: writing code, debugging
-
-Delegate to the appropriate sub-agent using the call_agent tool.`,
-  use: [agents({ agents: ['researcher', 'coder'] })],
+  system: `You are a project assistant. Analyze the user's request and
+delegate to the appropriate sub-agent, then synthesize a final answer.`,
+  use: [
+    agents({
+      agents: [
+        'researcher', // description auto-discovered from the agent
+        { name: 'coder', description: 'Writes and debugs code.' }, // override
+      ],
+      maxDelegations: 5,  // guard rail against runaway loops
+      historyLength: 4,   // forward conversation context to sub-agents
+    }),
+  ],
 });
 ```
 
 The middleware injects a `call_agent` tool. When the orchestrator model
-calls it, the middleware runs the sub-agent and returns the response
-as the tool result.
+calls it, the middleware runs the sub-agent (via its `.run()` method) and
+returns the response as the tool result. Interrupts from sub-agents
+propagate up automatically.
 
 ### Client
 
@@ -937,75 +956,58 @@ The client consumes the orchestrator exactly like any other agent. The
 status in the UI:
 
 ```ts
-const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-  url: '/api/orchestratorAgent',
-  input: {
-    messages: [{
-      role: 'user',
-      content: [{ text: 'Research sorting algorithms then write a quicksort in TypeScript.' }],
-    }],
-  },
-  init: previousState ? { state: previousState } : {},
-});
+const agent = remoteAgent({ url: '/api/orchestratorAgent' });
+const chat = agent.chat();
 
-for await (const chunk of response.stream) {
-  if (chunk.modelChunk) {
-    for (const part of chunk.modelChunk.content || []) {
-      if (part.text) appendToUI(part.text);
-      if (part.toolRequest?.name === 'call_agent') {
-        // Show which sub-agent is being called
-        showStatus(`Delegating to ${part.toolRequest.input.agent}…`);
-      }
-      if (part.toolResponse?.name === 'call_agent') {
-        showStatus(`Sub-agent responded`);
-      }
+const turn = chat.sendStream(
+  'Research sorting algorithms then write a quicksort in TypeScript.'
+);
+
+for await (const chunk of turn.stream) {
+  if (chunk.text) appendToUI(chunk.text);
+
+  for (const part of chunk.raw.modelChunk?.content ?? []) {
+    if (part.toolRequest?.name === 'call_agent') {
+      showStatus(`Delegating to ${part.toolRequest.input.agent}…`);
+    }
+    if (part.toolResponse?.name === 'call_agent') {
+      showStatus('Sub-agent responded');
     }
   }
 }
 
-const result = await response.output;
-previousState = result.state;
+const res = await turn.response;
 ```
 
-## Bidirectional streaming
+## Error handling
 
-`agent.streamBidi()` creates a bidirectional streaming session - you can send
-messages and receive streamed responses concurrently. Today, `streamBidi` is
-a server-side API useful for testing, batch evaluation, CLI tools, or
-pipeline stages. A WebSocket-based deployment plugin (similar to
-`@genkit-ai/express`) is coming soon, which will let you expose `streamBidi`
-agents to browser and mobile clients over persistent connections.
+When a turn fails, the chat throws an `AgentError`. It carries the failure
+details plus the **last-good state**, so the session stays recoverable - the
+user can keep chatting after an error:
 
 ```ts
-const session = weatherAgent.streamBidi({});
+import { AgentError } from 'genkit/beta/client';
 
-// Send messages
-session.send({
-  messages: [{ role: 'user', content: [{ text: 'Weather in Paris?' }] }],
-});
-session.send({
-  messages: [{ role: 'user', content: [{ text: 'Now say that in French' }] }],
-});
-session.close(); // Signal no more input
-
-// Read streamed responses
-for await (const chunk of session.stream) {
-  if (chunk.modelChunk) {
-    for (const part of chunk.modelChunk.content || []) {
-      if (part.text) process.stdout.write(part.text);
-    }
+try {
+  const res = await chat.send(userMessage);
+  // ...
+} catch (err) {
+  if (err instanceof AgentError) {
+    console.log(err.status);     // e.g. 'INTERNAL', 'NOT_FOUND'
+    console.log(err.message);
+    console.log(err.snapshotId); // last-good snapshot (server-managed)
+    console.log(err.state);      // last-good custom state (client-managed)
+    // The chat is still usable - the next send() resumes from last-good state.
+  } else {
+    throw err;
   }
 }
-
-// Get the final result
-const output = await session.output;
 ```
 
-Resume a `streamBidi` session from a snapshot:
-
-```ts
-const session = weatherAgent.streamBidi({ snapshotId: previousSnapshotId });
-```
+Because the last-good snapshot/state is preserved, you can surface the error
+in the UI and let the user retry without losing the conversation. The same
+`AgentError` is thrown by the in-process server agent and the HTTP
+`remoteAgent()` client.
 
 ## Next steps
 
@@ -1018,3 +1020,10 @@ const session = weatherAgent.streamBidi({ snapshotId: previousSnapshotId });
 - Check out [client app integration](/docs/client) for serving agents from web applications
 
 </Lang>
+
+</file_content>
+<parameter name="task_progress">- [x] Explore agents testapp samples (server + web)
+- [x] Read key server samples in full
+- [x] Read key web client samples in full
+- [x] Rewrite agents.mdx to use new unified API
+- [ ] Verify consistency and completeness
