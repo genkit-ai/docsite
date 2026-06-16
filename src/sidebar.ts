@@ -103,7 +103,6 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Overview", slug: "docs/overview" },
       { label: "Get started", slug: "docs/get-started" },
-      { label: "Choose your stack", slug: "docs/choose-your-stack" },
       { label: "Developer tools", slug: "docs/devtools" },
     ],
   },
