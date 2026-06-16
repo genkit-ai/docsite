@@ -24,13 +24,10 @@ and the `generate()` API, so they have full access to
 filesystem access, or your own custom hooks to any agent. Agents replace
 the deprecated [`ai.chat()`](/docs/chat) API.
 
-Agents are built around a **unified API**. The object returned by
-`ai.defineAgent()` on the server and the one returned by `remoteAgent()` -
-the typed HTTP client you create to call an agent from your app - expose the
-*exact same interface*. You call `.chat()` to start a conversation,
-`.sendStream()` to stream a turn, and read `.response` for the result -
-whether you're calling an agent in-process or over HTTP. No agent-specific
-SDK, no custom protocol, no manual state threading.
+The same agent object behaves identically whether you call it in-process or
+over HTTP, so you can start with a few lines of code and grow into tools,
+custom state, streaming, persistence, and multi-agent systems as you need
+them.
 
 All of the code samples in this guide can be found in the [agents sample](https://github.com/genkit-ai/genkit/tree/main/js/testapps/agents) on GitHub.
 
@@ -45,29 +42,113 @@ All agent APIs are imported from **`genkit/beta`** (server) and
 `genkit()`, session stores, `remoteAgent()`, and the shared agent types.
 :::
 
+## Your first agent
+
+The simplest agent is just a name and a system prompt. Define it, start a chat,
+and send a message:
+
 ```ts
-import { genkit, z } from 'genkit/beta';
+import { genkit } from 'genkit/beta';
 import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   plugins: [googleAI()],
   model: googleAI.model('gemini-flash-latest'),
 });
+
+const assistant = ai.defineAgent({
+  name: 'assistant',
+  system: 'You are a helpful assistant.',
+});
+
+async function main() {
+  const chat = assistant.chat();
+  const res = await chat.send('Hello! What can you do?');
+  console.log(res.text);
+}
+
+main();
 ```
+
+That's a complete, working agent. Everything else on this page is about adding
+capabilities to this foundation as you need them.
+
+## Add tools and serve over HTTP
+
+Most agents do two more things: call **tools** to take actions, and run as an
+HTTP **endpoint** your app can reach. Here's the same kind of agent with a tool
+added and served over HTTP - still a single file.
+
+You'll need the `genkit`, `@genkit-ai/google-genai`, `@genkit-ai/express`, and
+`express` packages, plus a Gemini API key set as `GEMINI_API_KEY` (you can get
+one from [Google AI Studio](https://aistudio.google.com/apikey)).
+
+```ts
+import { genkit, z } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});
+
+// A tool the agent can call.
+const getWeather = ai.defineTool(
+  {
+    name: 'getWeather',
+    description: 'Get the current weather for a location.',
+    inputSchema: z.object({ location: z.string() }),
+    outputSchema: z.object({ temperatureF: z.number(), conditions: z.string() }),
+  },
+  async ({ location }) => {
+    // Replace with a real weather API call.
+    return { temperatureF: 72, conditions: `sunny in ${location}` };
+  }
+);
+
+// Define the agent.
+const weatherAgent = ai.defineAgent({
+  name: 'weatherAgent',
+  system: 'You are a helpful weather assistant. Answer weather queries.',
+  tools: [getWeather],
+});
+
+// Serve it over HTTP.
+const app = express();
+app.use(express.json());
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
+app.listen(8080, () => console.log('Agent listening on http://localhost:8080'));
+```
+
+That's a working, tool-using agent served over HTTP - and you can test it in
+the [developer UI](#testing-agents-in-the-developer-ui) without writing any
+client code. From here, Genkit grows with what you need:
+
+- **Persist conversations** so users can resume them later → [Session persistence](#session-persistence)
+- **Stream responses** token by token to your UI → [Multi-turn streaming chat](#multi-turn-streaming-chat)
+- **Track structured app state** like lists, counters, or records → [Custom state and artifacts](#custom-state-and-artifacts)
+- **Pause for human approval** mid-turn → [Agents with interrupts](#agents-with-interrupts)
+- **Run long tasks in the background** → [Background execution](#background-execution)
+- **Coordinate multiple specialized agents** → [Multi-agent delegation](#multi-agent-delegation)
+
+Each of these builds on the same agent you just wrote; add only what you need.
 
 ## Defining agents
 
-Genkit offers three ways to define an agent. Use this quick guide to pick one:
+`ai.defineAgent()` is how you'll define almost every agent - it's what you used
+above. Give it a system prompt and, optionally, tools, and Genkit runs the
+model and tool-calling loop for you.
 
-- **`ai.defineAgent()`** - the right choice for most agents. Define a model,
-  system prompt, and tools inline; Genkit runs the model and tool-calling
-  loop for you.
+Two variants exist for when you need more:
+
 - **`ai.definePromptAgent()`** - same as `defineAgent`, but the prompt lives
-  in a [Dotprompt](/docs/dotprompt) `.prompt` file instead of inline. Use it
-  when prompts are authored/versioned separately from code.
-- **`ai.defineCustomAgent()`** - for full control of the orchestration logic
-  (multiple model calls per turn, custom progress streaming, direct session
-  manipulation). Use it only when `defineAgent` isn't flexible enough.
+  in a [Dotprompt](/docs/dotprompt) `.prompt` file instead of inline. Reach for
+  it when prompts are authored or versioned separately from code.
+- **`ai.defineCustomAgent()`** - full control over orchestration (multiple
+  model calls per turn, custom progress streaming, direct session
+  manipulation). Reach for it only when `defineAgent` isn't flexible enough.
 
 ### `ai.defineAgent()`
 
@@ -293,6 +374,18 @@ The core types:
 `res.state` returns the **custom** state directly, while `res.raw.state`
 holds the full `SessionState` (messages + custom + artifacts).
 
+**Options for `chat()`.** Calling `chat()` with no arguments starts a fresh
+conversation. You can also pass any of the following (they can be combined):
+
+| Option | Type | Use it to |
+|---|---|---|
+| `state` | `{ custom, messages, artifacts }` | Seed initial state - custom state, prior messages, or artifacts (see [Custom state](#custom-state)) |
+| `snapshotId` | `string` | Branch from an existing snapshot (server-managed; see [Session branching](#session-branching)) |
+| `sessionId` | `string` | Continue a session from its latest snapshot (server-managed) |
+
+To restore a full conversation (with history) rather than start one, use
+`loadChat()` instead - see [Session persistence](#session-persistence).
+
 ## State management strategies
 
 Every agent uses one of two strategies for maintaining session state across
@@ -454,6 +547,12 @@ for await (const chunk of turn.stream) {
 const res = await turn.response;
 // chat.snapshotId / chat.state are updated automatically for the next turn.
 ```
+
+`chunk.raw` is the underlying transport chunk - everything Genkit received
+for that step before it was normalized into the convenience fields
+(`chunk.text`, `chunk.custom`, etc.). Its `modelChunk` holds the raw model
+response, including `content` parts like `toolRequest` and `toolResponse`,
+which is why the loop above reads tool calls from `chunk.raw.modelChunk`.
 
 `chunk.accumulatedText` gives you the running text so far, which is handy
 for rendering a growing message bubble.
@@ -1017,6 +1116,14 @@ calls it, the middleware runs the sub-agent (via its `.run()` method) and
 returns the response as the tool result. Interrupts from sub-agents
 propagate up automatically.
 
+:::note[`.run()` vs `.chat()`]
+`.run()` is the agent's low-level execution entry point - it runs a single
+turn and is used internally by the runtime (for example, by the `agents()`
+middleware to invoke a sub-agent). In your own application code, use
+`.chat()` instead: it manages session continuity, state, and streaming for
+you. You generally never need to call `.run()` directly.
+:::
+
 ### Client
 
 The client consumes the orchestrator exactly like any other agent. The
@@ -1076,6 +1183,45 @@ Because the last-good snapshot/state is preserved, you can surface the error
 in the UI and let the user retry without losing the conversation. The same
 `AgentError` is thrown by the in-process server agent and the HTTP
 `remoteAgent()` client.
+
+### When a tool throws
+
+A tool that throws an unhandled error aborts the turn the same way any other
+failure does: it propagates out as an `AgentError`, and the session is left at
+its last-good state (handle it with the `try`/`catch` above). The error does
+**not** get fed back to the model, so the model won't see it or attempt to
+recover on its own.
+
+If instead you want the model to react to a failure - for example, retry with
+different arguments or tell the user an item wasn't found - don't throw.
+Return a normal result that describes the outcome so the model can act on it:
+
+```ts
+const checkInHabit = ai.defineTool(
+  {
+    name: 'checkInHabit',
+    description: 'Mark a habit as completed for today.',
+    inputSchema: z.object({ id: z.number() }),
+    // Model the failure case in the output schema instead of throwing.
+    outputSchema: z.object({
+      ok: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+  async ({ id }) => {
+    const habit = findHabit(id);
+    if (!habit) {
+      // The model sees this and can tell the user the id wasn't found.
+      return { ok: false, error: `No habit with id ${id}.` };
+    }
+    habit.checkedInToday = true;
+    return { ok: true };
+  }
+);
+```
+
+Reserve `throw` for genuinely unrecoverable conditions where you want the
+whole turn to fail; model expected, recoverable outcomes as tool output.
 
 ## Next steps
 
