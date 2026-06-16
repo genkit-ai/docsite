@@ -13,21 +13,20 @@ import Lang from '../../../components/Lang.astro';
 The Agents API is in **Beta.** APIs may change in minor version releases. Import from `genkit/beta`.
 :::
 
-Genkit Agents let you add AI-powered features - conversational assistants,
-approval workflows, background report generators - to your application
-with a single server definition and a unified client API. Define a
-model, system prompt, tools, and session state once; Genkit handles
-message history, tool-calling loops, streaming, and persistence so you
-can focus on your product. Under the hood, agents are powered by prompts
-and the `generate()` API, so they have full access to
-[middleware](/docs/middleware) - add retries, fallbacks, tool approval,
-filesystem access, or your own custom hooks to any agent. Agents replace
-the deprecated [`ai.chat()`](/docs/chat) API.
+Build chatbots, approval flows, and background generators with Genkit
+Agents. You define a prompt, tools, and state once, and Genkit handles
+the loop - message history, tool calls, streaming, and persistence - so
+you can focus on your product.
 
-The same agent object behaves identically whether you call it in-process or
-over HTTP, so you can start with a few lines of code and grow into tools,
-custom state, streaming, persistence, and multi-agent systems as you need
-them.
+You start with a few lines of code and grow into tools, custom state,
+streaming, persistence, and multi-agent systems only as you need them.
+The same agent object behaves identically whether you call it in-process
+or over HTTP, so your server and client code look the same.
+
+Agents are built on prompts and the `generate()` API, so they have full
+access to [middleware](/docs/middleware) - retries, fallbacks, tool
+approval, and custom hooks. They replace the deprecated
+[`ai.chat()`](/docs/chat) API.
 
 All of the code samples in this guide can be found in the [agents sample](https://github.com/genkit-ai/genkit/tree/main/js/testapps/agents) on GitHub.
 
@@ -72,6 +71,13 @@ main();
 
 That's a complete, working agent. Everything else on this page is about adding
 capabilities to this foundation as you need them.
+
+:::note[Referencing models]
+You can reference a model either with the plugin helper
+(`googleAI.model('gemini-flash-latest')`) or with its string ID
+(`'googleai/gemini-flash-latest'`). The two are interchangeable; this page
+uses both.
+:::
 
 ## Add tools and serve over HTTP
 
@@ -233,102 +239,10 @@ const tripPlannerAgent = ai.definePromptAgent({
 });
 ```
 
-### `ai.defineCustomAgent()`
-
-Use `defineCustomAgent` when you need full control over the agent's
-orchestration logic. Unlike `defineAgent`, which runs a single model call
-with automatic tool-calling loops, `defineCustomAgent` lets you:
-
-- **Chain multiple model calls** with custom logic between them - for
-  example, decompose a question, research each part, then synthesize
-- **Stream custom status to the client** by mutating typed custom state -
-  the runtime auto-emits the change so the UI can show progress like
-  "Researching step 2 of 3…"
-- **Manipulate the session directly** with `addMessages` and `updateCustom`,
-  giving you control over exactly what gets persisted
-- **Use different models for different steps** - a fast model for
-  decomposition, a capable model for synthesis
-
-The following example shows a research agent that decomposes a question,
-researches each part, and streams status updates throughout. Notice that
-status is streamed by mutating custom state with
-`session.updateCustom()` - the runtime auto-emits a `customPatch` chunk
-that the client receives as `chunk.custom`:
-
-```ts
-interface ResearchState {
-  status?: string;
-  subQuestions: string[];
-  subAnswers: Array<{ question: string; answer: string }>;
-}
-
-const researchAgent = ai.defineCustomAgent(
-  { name: 'researchAgent' },
-  async (sess, { sendChunk }) => {
-    let lastMessage;
-    const session = ai.currentSession<ResearchState>();
-
-    // sess.run() handles loading and saving session state around your logic.
-    await sess.run(async (input) => {
-      // Extract the user's question from the latest message.
-      const userText =
-        input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
-
-      // Step 1: Use a fast model to decompose the question into sub-questions.
-      // Mutating custom state auto-emits a `customPatch` chunk to the client.
-      session.updateCustom((s) => ({ ...s!, status: 'Decomposing question…' }));
-      const decompose = await ai.generate({
-        model: 'googleai/gemini-flash-lite-latest',
-        prompt: `Break this into 2-3 sub-questions as a JSON array: "${userText}"`,
-        output: { format: 'json', schema: z.array(z.string()).min(2).max(3) },
-      });
-      const subQuestions = decompose.output ?? [userText];
-
-      // Step 2: Research each sub-question with the default model.
-      const subAnswers = [];
-      for (let i = 0; i < subQuestions.length; i++) {
-        session.updateCustom((s) => ({
-          ...s!,
-          status: `Researching (${i + 1}/${subQuestions.length})…`,
-        }));
-        const research = await ai.generate({
-          prompt: `Answer concisely: ${subQuestions[i]}`,
-        });
-        subAnswers.push({ question: subQuestions[i], answer: research.text });
-      }
-
-      // Step 3: Synthesize findings - stream the final response token by token.
-      session.updateCustom((s) => ({ ...s!, status: 'Synthesizing…' }));
-      const synthesisStream = ai.generateStream({
-        prompt: `Synthesize these findings into a cohesive answer:\n${
-          subAnswers.map((sa) => `Q: ${sa.question}\nA: ${sa.answer}`).join('\n\n')
-        }`,
-      });
-
-      // Forward each model chunk to the client as it arrives.
-      for await (const chunk of synthesisStream.stream) {
-        sendChunk({ modelChunk: chunk });
-      }
-
-      // Persist the final model message in the session history.
-      lastMessage = (await synthesisStream.response).message;
-      sess.addMessages([lastMessage]);
-    });
-
-    return {
-      message: lastMessage || {
-        role: 'model',
-        content: [{ text: 'Research complete.' }],
-      },
-    };
-  }
-);
-```
-
-A custom agent's `sendChunk` only accepts the agent stream-chunk shape
-(`modelChunk`, `customPatch`, `artifact`, `turnEnd`). To stream
-human-readable progress, mutate custom state with `session.updateCustom()`
-as shown above rather than sending an ad-hoc status field.
+For full control over orchestration - multiple model calls per turn, custom
+progress streaming, and direct session manipulation - see
+[Advanced: custom orchestration](#advanced-custom-orchestration) near the end
+of this page. Most agents never need it; reach for `defineAgent` first.
 
 ## The unified agent API
 
@@ -819,7 +733,7 @@ for (const task of tasks) {
 ```
 
 For agents that mutate custom state mid-turn (like the
-[custom research agent](#aidefinecustomagent)), the client receives live
+[custom research agent](#advanced-custom-orchestration)), the client receives live
 updates: each streamed `chunk.custom` carries the full, post-patch custom
 state with a fresh object reference, so you can use it for `===`-based change
 detection:
@@ -1153,6 +1067,103 @@ for await (const chunk of turn.stream) {
 
 const res = await turn.response;
 ```
+
+## Advanced: custom orchestration
+
+Most agents are well served by `ai.defineAgent()`, which runs one model call
+with an automatic tool-calling loop. When you need full control over what
+happens within a turn, use `ai.defineCustomAgent()`. It lets you:
+
+- **Chain multiple model calls** with custom logic between them - for
+  example, decompose a question, research each part, then synthesize
+- **Stream custom status to the client** by mutating typed custom state -
+  the runtime auto-emits the change so the UI can show progress like
+  "Researching step 2 of 3…"
+- **Manipulate the session directly** with `addMessages` and `updateCustom`,
+  giving you control over exactly what gets persisted
+- **Use different models for different steps** - a fast model for
+  decomposition, a capable model for synthesis
+
+The following example shows a research agent that decomposes a question,
+researches each part, and streams status updates throughout. Notice that
+status is streamed by mutating custom state with
+`session.updateCustom()` - the runtime auto-emits a `customPatch` chunk
+that the client receives as `chunk.custom`:
+
+```ts
+interface ResearchState {
+  status?: string;
+  subQuestions: string[];
+  subAnswers: Array<{ question: string; answer: string }>;
+}
+
+const researchAgent = ai.defineCustomAgent(
+  { name: 'researchAgent' },
+  async (sess, { sendChunk }) => {
+    let lastMessage;
+    const session = ai.currentSession<ResearchState>();
+
+    // sess.run() handles loading and saving session state around your logic.
+    await sess.run(async (input) => {
+      // Extract the user's question from the latest message.
+      const userText =
+        input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
+
+      // Step 1: Use a fast model to decompose the question into sub-questions.
+      // Mutating custom state auto-emits a `customPatch` chunk to the client.
+      session.updateCustom((s) => ({ ...s!, status: 'Decomposing question…' }));
+      const decompose = await ai.generate({
+        model: 'googleai/gemini-flash-lite-latest',
+        prompt: `Break this into 2-3 sub-questions as a JSON array: "${userText}"`,
+        output: { format: 'json', schema: z.array(z.string()).min(2).max(3) },
+      });
+      const subQuestions = decompose.output ?? [userText];
+
+      // Step 2: Research each sub-question with the default model.
+      const subAnswers = [];
+      for (let i = 0; i < subQuestions.length; i++) {
+        session.updateCustom((s) => ({
+          ...s!,
+          status: `Researching (${i + 1}/${subQuestions.length})…`,
+        }));
+        const research = await ai.generate({
+          prompt: `Answer concisely: ${subQuestions[i]}`,
+        });
+        subAnswers.push({ question: subQuestions[i], answer: research.text });
+      }
+
+      // Step 3: Synthesize findings - stream the final response token by token.
+      session.updateCustom((s) => ({ ...s!, status: 'Synthesizing…' }));
+      const synthesisStream = ai.generateStream({
+        prompt: `Synthesize these findings into a cohesive answer:\n${
+          subAnswers.map((sa) => `Q: ${sa.question}\nA: ${sa.answer}`).join('\n\n')
+        }`,
+      });
+
+      // Forward each model chunk to the client as it arrives.
+      for await (const chunk of synthesisStream.stream) {
+        sendChunk({ modelChunk: chunk });
+      }
+
+      // Persist the final model message in the session history.
+      lastMessage = (await synthesisStream.response).message;
+      sess.addMessages([lastMessage]);
+    });
+
+    return {
+      message: lastMessage || {
+        role: 'model',
+        content: [{ text: 'Research complete.' }],
+      },
+    };
+  }
+);
+```
+
+A custom agent's `sendChunk` only accepts the agent stream-chunk shape
+(`modelChunk`, `customPatch`, `artifact`, `turnEnd`). To stream
+human-readable progress, mutate custom state with `session.updateCustom()`
+as shown above rather than sending an ad-hoc status field.
 
 ## Error handling
 
