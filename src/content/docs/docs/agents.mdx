@@ -46,7 +46,7 @@ All agent APIs are imported from **`genkit/beta`** (server) and
 :::
 
 ```ts
-import { genkit } from 'genkit/beta';
+import { genkit, z } from 'genkit/beta';
 import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
@@ -366,6 +366,10 @@ optional and only matter in specific cases:
   in-flight detached task. Regular foreground turns are aborted client-side
   (see `AgentTurn.abort()`) and don't require this endpoint.
 
+Both `getSnapshotDataAction` and `abortAgentAction` are **properties on the
+agent object** returned by `ai.defineAgent()` (server-side only) - they're
+part of the agent's serving surface, not the shared `AgentAPI` interface
+that mirrors across server and client.
 
 On the **client side**, create a typed client with `remoteAgent()` from
 `genkit/beta/client`:
@@ -632,7 +636,10 @@ reliable source of truth that the model can't maintain in chat history
 alone - exact IDs, counters, structured records, or any data where
 precision matters. Tools can read and mutate typed custom state via
 `ai.currentSession()` (reusing the `TaskState` schema from
-[`ai.defineAgent()`](#aidefineagent) above):
+[`ai.defineAgent()`](#aidefineagent) above).
+
+To **mutate** state, call `session.updateCustom()` with a function that
+receives the current state and returns the new state:
 
 ```ts
 // Types inferred from the TaskStateSchema defined earlier.
@@ -650,19 +657,45 @@ const addTask = ai.defineTool(
     const session = ai.currentSession<TaskState>();
     let newTask!: TaskItem;
     session.updateCustom((state) => {
-      const s = state || { tasks: [], nextId: 1 };
-      newTask = { id: s.nextId, title: input.title, done: false };
-      s.tasks.push(newTask);
-      s.nextId++;
-      return s;
+      // Normalize each field. On a fresh session custom state is an empty
+      // object `{}` (see note below), so `state.tasks` may be undefined -
+      // default per-field rather than relying on `state || defaults`.
+      const tasks = state?.tasks ?? [];
+      const nextId = state?.nextId ?? 1;
+      newTask = { id: nextId, title: input.title, done: false };
+      return { tasks: [...tasks, newTask], nextId: nextId + 1 };
     });
     return newTask;
   }
 );
 ```
 
-Access custom state from the response or the chat - both return the custom
-state directly:
+To **read** state without mutating it - for example in a "list tasks" tool -
+call `session.getCustom()`, which returns the current custom state (or
+`undefined` if nothing has been set yet):
+
+```ts
+const listTasks = ai.defineTool(
+  {
+    name: 'listTasks',
+    description: 'List all tasks.',
+    inputSchema: z.object({}),
+    outputSchema: z.object({
+      tasks: z.array(
+        z.object({ id: z.number(), title: z.string(), done: z.boolean() })
+      ),
+    }),
+  },
+  async () => {
+    const session = ai.currentSession<TaskState>();
+    const state = session.getCustom();
+    return { tasks: state?.tasks ?? [] };
+  }
+);
+```
+
+Access custom state from the response or the chat - both return the same
+custom state directly (it's the same blob `getCustom()` reads server-side):
 
 ```ts
 const chat = taskAgent.chat({
