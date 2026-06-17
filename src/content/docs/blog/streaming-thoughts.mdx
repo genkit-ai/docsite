@@ -1,0 +1,147 @@
+---
+title: Is it thinking or is it broken? Building transparent AI chat UIs with Genkit
+date: 2026-06-17
+authors:
+  - name: Nohe
+    title: Developer Relations Engineer at Google
+  - name: Alex Duan
+    title: Engineer at Google
+description: Learn how to extract and stream model thought processes using Genkit and server-sent events, and render them in a custom React component to create a highly responsive user experience.
+cover:
+  alt: Streaming thoughts in Genkit
+  image: ./_assets/streaming-thoughts/cover.png
+tags:
+  - typescript
+  - agents
+  - ux
+---
+
+import ThoughtBoxDemo from '../../../components/ThoughtBoxDemo.astro';
+
+One of the worst user experiences imaginable is that your users are convinced <span class="text-gradient-pop">your app is 
+broken while your app is working correctly</span>. This is even more apparent with AI powered apps 
+since processing takes some time to occur with AI models. Your user sends a chat message and 
+then they are stuck waiting on a response with no insight into whether or not the app is 
+doing anything. In this post, we are going to break down how to <span class="text-gradient-pop">give your users insights 
+into your agents' thought process</span> to make sure your users aren’t left hanging.
+
+## Streaming thoughts
+Genkit has the capability through server sent events to emit a stream of data to clients connecting to your agent. Some of 
+the things that can be streamed include the regular text responses but most models now include things 
+like [thinking](https://ai.google.dev/gemini-api/docs/thinking) to improve their reasoning and responses to users. 
+The following is an example of the experience you can create with Genkit 
+that visualizes your thinking process for your model.
+
+<ThoughtBoxDemo />
+
+This not only gives you insight into what the agent is doing but also improves the output of the response. 
+By using thinking, we can <span class="text-gradient-pop">improve our agents' responses and also provide a better user experience</span>. 
+Below is a Genkit code snippet on how to extract a thought from an agent and then by using a server sent events 
+stream that thought process down to the user.
+
+```ts
+// 1. Generate a stream with thinking config enabled
+const { stream, response } = await ai.generateStream({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Why is Genkit so cool?',
+  config: {
+    thinkingConfig: {
+      includeThoughts: true,
+      thinkingLevel: 'MEDIUM',
+    },
+  },
+});
+
+// 2. Consume the stream and separate reasoning from the final response
+for await (const chunk of stream) {
+  // Extract reasoning (thinking process)
+  const thoughtText = chunk.reasoning || '';
+  if (thoughtText) {
+    sendChunk({ type: 'thought', content: thoughtText });
+  }
+
+  // Extract standard text response
+  const text = chunk.text;
+  if (text) {
+    sendChunk({ type: 'text', content: text });
+  }
+}
+```
+
+After looking at this sample, you may be wondering what `sendChunk` is returning. This is the 
+Output Schema that we defined for our Genkit flow. In this example, it looks something like this:
+
+```ts
+const StreamChunkSchema = z.object({
+  messageId: z.string(),
+  type: z.enum(['thought', 'text']),
+  content: z.string(),
+  currentStep: z.string().optional(),
+});
+```
+
+## Rendering the thoughts in the chat window
+
+By having the thoughts being streamed from the server, we can now put together responses that our 
+client would receive to give some clarity to our users. We designed a React component that is a 
+thought box that uses CSS to show an animation as new thoughts are streamed down. We also provided 
+an option to then receive those thoughts and store all of them in a smaller text box that is 
+collapsible so users can inspect the full thought contents as they are received giving the user a 
+choice <span class="text-gradient-pop">to see what exactly the model is doing or to continue to recieve high level updates</span>. 
+
+```tsx
+import React, { useState } from 'react';
+
+interface ThoughtBoxProps {
+  content: string;    // The full accumulated thought content
+  stepName?: string;  // The current step description (e.g. "Analyzing input")
+}
+
+export const ThoughtBox: React.FC<ThoughtBoxProps> = ({ content, stepName }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const activeStep = stepName || 'Thinking';
+
+  return (
+    <div className="message thought-message">
+      <div className="thought-box">
+        {/* Animated header showing the current step */}
+        <div className="thought-header">
+          <div key={`indicator-${activeStep}`} className="thought-indicator indicator-animate" />
+          <div key={`label-${activeStep}`} className="thought-step-label step-animate">
+            Thinking: {activeStep}
+          </div>
+        </div>
+
+        {/* Collapsible details wrapper for the full thought content */}
+        <details
+          className="thought-details"
+          onToggle={(e) => setIsOpen(e.currentTarget.open)}
+        >
+          <summary className="thought-summary">
+            <span className="summary-text">
+              {isOpen ? 'Hide Full Reasoning' : 'Show Full Reasoning'}
+            </span>
+          </summary>
+          <div className="thought-body">{content}</div>
+        </details>
+      </div>
+    </div>
+  );
+};
+```
+
+With this component, we can easily add it to other apps that are not strictly 
+chat based apps but other apps that might want to have a thought component 
+rendered while the models are thinking.
+
+## Putting it all together
+
+Using a small React component with our Genkit flow allows us to 
+<span class="text-gradient-pop">keep the user informed of what is going on while our models are thinking</span>. 
+This makes it appear that the model is working and processing information keeping the user informed 
+and limiting their impression that the app has stalled or is broken. 
+
+If you want to try out the React component and Genkit streaming server-sent 
+events yourself, you can check out the [streaming thoughts sample](https://github.com/firebase/genkit/tree/main/js/samples) 
+in our samples repository.
+
