@@ -29,10 +29,15 @@ export const collections = {
 					// Author posts the same way as docs: with `description`. Starlight emits the meta/OG
 					// description from it natively, and we default the blog card's `excerpt` to it so the
 					// summary is written once. A post may still set `excerpt` explicitly to override.
-					.transform((data) => ({
-						...data,
-						excerpt: data.excerpt ?? data.description,
-					}))
+					.transform((data) => {
+						const date = new Date(data.date);
+						date.setUTCHours(12);
+						return {
+							...data,
+							date,
+							excerpt: data.excerpt ?? data.description,
+						};
+					})
 			);
 		},
 	}),
