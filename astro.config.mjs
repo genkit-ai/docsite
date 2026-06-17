@@ -19,7 +19,6 @@ const blogAuthors = Object.fromEntries(
     {
       name: author.name,
       title: author.title,
-      url: `${site}/blog/authors/${author.slug}`,
     }
   ])
 );
