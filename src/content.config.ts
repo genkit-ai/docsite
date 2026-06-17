@@ -30,8 +30,14 @@ export const collections = {
 					// description from it natively, and we default the blog card's `excerpt` to it so the
 					// summary is written once. A post may still set `excerpt` explicitly to override.
 					.transform((data) => {
-						const date = new Date(data.date);
-						date.setUTCHours(12);
+						let date = data.date;
+						if (date) {
+							const d = new Date(date);
+							if (!isNaN(d.getTime())) {
+								d.setUTCHours(12);
+								date = d;
+							}
+						}
 						return {
 							...data,
 							date,
