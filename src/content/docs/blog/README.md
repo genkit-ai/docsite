@@ -1,8 +1,6 @@
 # Authoring blog posts
 
-New blog posts live in this directory (`src/content/docs/blog/`). Create a `.md`
-or `.mdx` file here and it will automatically appear in the blog index at
-`/blog`.
+New blog posts live under `src/content/docs/blog/` structured by date: `YEAR/MONTH/post-slug.mdx` (e.g. `2026/05/announcing-genkit-middleware.mdx`). Posts automatically appear in the blog index at `/blog`.
 
 > This README documents the workflow for contributors. It is excluded from the
 > built site (see the `README.md` exclusion in `src/content.config.ts`), so it
@@ -40,11 +38,9 @@ authors:
 
 Use a plain `.md` file for prose-only posts. Switch to `.mdx` when you want to
 import and render components. See
-`announcing-genkit-middleware.mdx` for a component example
+`2026/05/announcing-genkit-middleware.mdx` for a component example
 (Starlight `Tabs`, an embedded video, and more).
 
 ## Assets
 
-Co-locate images and videos in `_assets/` (the leading underscore keeps them out
-of the content collection). Reference them with a relative path from the post,
-e.g. `./_assets/my-cover.png`.
+Co-locate images and videos inside an `_assets/` subdirectory alongside the post in its `YEAR/MONTH/` folder (the leading underscore keeps them out of the content collection). Reference them with a relative path from the post, e.g. `./_assets/my-cover.png`.
