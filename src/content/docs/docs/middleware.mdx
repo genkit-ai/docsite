@@ -4,6 +4,7 @@ description: Learn how to use and create middleware in Genkit to enhance model e
 supportedLanguages:
   - js
   - go
+  - python
   - dart
 ---
 
@@ -615,6 +616,227 @@ ai.WithUse(
 Order matters. `Retry` outside `Fallback` retries the entire fallback cascade as a unit. Swap them and you'd retry the primary first and fall back only after exhausting retries.
 
 For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/go/plugins/middleware).
+
+</Lang>
+
+<Lang lang="python">
+
+## Installation
+
+The official Genkit middleware for Python is available in the `genkit-plugin-middleware` package.
+
+```bash
+pip install genkit-plugin-middleware
+```
+
+Register the `Middleware` plugin during initialization to expose the built-ins to the Dev UI:
+
+```python
+from genkit import Genkit
+from genkit.plugins.middleware import Middleware
+
+ai = Genkit(
+    plugins=[
+        Middleware(),
+    ]
+)
+```
+
+## Available middleware
+
+The `genkit-plugin-middleware` package provides several useful middleware options out of the box.
+
+### 1. FileSystem middleware (`Filesystem`)
+
+Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `edit_file`). All operations are safely restricted to a specified root directory.
+
+```python
+from genkit import Genkit
+from genkit.plugins.middleware import Filesystem
+
+ai = Genkit(...)
+
+response = await ai.generate(
+    model='googleai/gemini-flash-latest',
+    prompt='Create a hello world node app in the workspace',
+    use=[
+        Filesystem(root_dir='./workspace', allow_write_access=True)
+    ]
+)
+```
+
+**Configuration options:**
+- `root_dir` (required): The root directory to which all filesystem operations are restricted.
+- `allow_write_access` (optional): If `True`, allows write access to the filesystem (defaults to `False`).
+- `tool_name_prefix` (optional): Prefix to add to the name of the injected tools.
+
+### 2. Skills middleware (`Skills`)
+
+Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
+
+```python
+from genkit import Genkit
+from genkit.plugins.middleware import Skills
+
+ai = Genkit(...)
+
+response = await ai.generate(
+    prompt='How do I run tests in this repo?',
+    use=[
+        Skills(skill_paths=['./skills'])
+    ]
+)
+```
+
+**Configuration options:**
+- `skill_paths` (optional): Paths to directories containing skills (defaults to `['skills']`).
+
+### 3. Tool approval middleware (`ToolApproval`)
+
+Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptError` allowing you to prompt the user for manual confirmation before resuming.
+
+```python
+from genkit import Genkit, restart_tool
+from genkit.plugins.middleware import ToolApproval
+
+ai = Genkit(...)
+
+# 1. Initial attempt
+response = await ai.generate(
+    prompt='write a file',
+    tools=[write_file_tool],
+    use=[
+        ToolApproval(allowed_tools=[]) # Empty list means all tool calls trigger interrupt
+    ]
+)
+
+if response.finish_reason == 'interrupted':
+    interrupt = response.interrupts[0]
+    
+    # 2. Ask user for approval, then recreate the tool request with approval
+    approved_part = restart_tool(
+        interrupt=interrupt,
+        resumed_metadata={'tool_approved': True}
+    )
+
+    # 3. Resume execution
+    resumed_response = await ai.generate(
+        messages=list(response.messages),
+        use=[
+            ToolApproval(allowed_tools=[])
+        ],
+        resume_restart=approved_part
+    )
+```
+
+**Configuration options:**
+- `allowed_tools` (optional): List of approved tool names that can run without interruption.
+
+### 4. Retry middleware (`Retry`)
+
+Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
+
+```python
+from genkit import Genkit
+from genkit.plugins.middleware import Retry
+
+ai = Genkit(...)
+
+response = await ai.generate(
+    model='googleai/gemini-pro-latest',
+    prompt='Heavy reasoning task...',
+    use=[
+        Retry(
+            max_retries=3,
+            initial_delay_ms=1000,
+            backoff_factor=2.0
+        )
+    ]
+)
+```
+
+**Configuration options:**
+- `max_retries` (optional): The maximum number of times to retry a failed request (default: 3).
+- `statuses` (optional): An array of status names that should trigger a retry (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']`).
+- `initial_delay_ms` (optional): The initial delay between retries in milliseconds (default: 1000).
+- `max_delay_ms` (optional): The maximum delay between retries in milliseconds (default: 60000).
+- `backoff_factor` (optional): The factor by which the delay increases after each retry (exponential backoff, default: 2.0).
+- `no_jitter` (optional): Whether to disable jitter on the delay (default: `False`).
+
+### 5. Fallback middleware (`Fallback`)
+
+Automatically switches to a different model if the primary model fails on a specific set of error codes. Useful for falling back to a smaller/faster model when a large model exceeds quota limits.
+
+```python
+from genkit import Genkit
+from genkit.plugins.middleware import Fallback
+
+ai = Genkit(...)
+
+response = await ai.generate(
+    model='googleai/gemini-pro-latest',
+    prompt='Try the pro model first...',
+    use=[
+        Fallback(
+            models=['googleai/gemini-flash-latest'], # try flash if pro fails
+            statuses=['RESOURCE_EXHAUSTED']
+        )
+    ]
+)
+```
+
+**Configuration options:**
+- `models` (required): A list of model names to try in order.
+- `statuses` (optional): A list of status names that should trigger a fallback (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']`).
+
+## Building your own custom middleware
+
+You can implement your own custom middleware to extend Genkit's functionality by subclassing `BaseMiddleware`. Registering your subclass with the `@ai.middleware` decorator registers it on the registry so it displays in the Developer UI.
+
+Middleware can intercept different phases of execution by overriding these hooks:
+- `wrap_generate`: Intercepts the high-level generation loop.
+- `wrap_model`: Intercepts the call to the model.
+- `wrap_tool`: Intercepts tool execution.
+
+Here is an example of a custom middleware that logs requests and responses:
+
+```python
+from pydantic import BaseModel
+from genkit import Genkit
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+
+ai = Genkit()
+
+class LoggerConfig(BaseModel):
+    verbose: bool = False
+
+@ai.middleware(name='logger_middleware')
+class LoggerMiddleware(BaseMiddleware[LoggerConfig]):
+    """Logs requests and responses"""
+
+    async def wrap_model(self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn):
+        if self.config.verbose:
+            print(f"Request: {params.request}")
+        
+        resp = await next_fn(params, ctx)
+        
+        if self.config.verbose:
+            print(f"Response: {resp}")
+        
+        return resp
+```
+
+To use it:
+
+```python
+response = await ai.generate(
+    model='googleai/gemini-flash-latest',
+    prompt='Hello',
+    use=[LoggerMiddleware(verbose=True)],
+)
+```
+
+For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/py/plugins/middleware).
 
 </Lang>
 

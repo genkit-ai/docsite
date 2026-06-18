@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidatorPlugin from 'starlight-links-validator';
+import starlightBlog from 'starlight-blog';
 import sitemap from '@astrojs/sitemap';
 import { sidebar, docsLanguageAgnosticBySlug } from './src/sidebar.ts';
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from './src/google-theme';
@@ -82,7 +83,24 @@ export default defineConfig({
           },
         },
       ],
-      plugins: [starlightLinksValidatorPlugin()],
+      plugins: [
+        starlightBlog({
+          title: 'Blog',
+          // We add our own "Blog" link in the custom header (src/content/custom/header.astro).
+          navigation: 'none',
+          prefix: 'blog',
+          metrics: { readingTime: true },
+          // Global authors, referenceable by key from a post's `authors` frontmatter.
+          authors: {
+            genkit: {
+              name: 'The Genkit Team',
+              title: 'Genkit',
+              url: 'https://genkit.dev',
+            },
+          },
+        }),
+        starlightLinksValidatorPlugin(),
+      ],
       logo: {
         dark: './src/assets/lockup_white_tight2.png',
         light: './src/assets/lockup_dark_tight.png',
@@ -108,6 +126,11 @@ export default defineConfig({
           icon: 'linkedin',
           label: 'LinkedIn',
           href: 'https://www.linkedin.com/company/genkit',
+        },
+        {
+          icon: 'reddit',
+          label: 'Reddit',
+          href: 'https://reddit.com/r/GenkitFramework',
         },
       ],
       sidebar,

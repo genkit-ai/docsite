@@ -1,14 +1,87 @@
 ---
-const { head } = Astro.locals.starlightRoute;
 import { docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../../sidebar';
+import blogConfig from 'virtual:starlight-blog-config';
+
+const route = Astro.locals.starlightRoute;
+const { head } = route;
 const docsLanguageSupportByPath = Object.fromEntries(
   Object.entries(docsLanguageSupportBySlug).map(([slug, langs]) => [`/${slug}`, langs]),
 );
 const docsLanguageAgnosticByPath = Object.fromEntries(
   Object.entries(docsLanguageAgnosticBySlug).map(([slug, isAgnostic]) => [`/${slug}`, isAgnostic]),
 );
+
+// --- Blog SEO enrichments (not provided by Starlight or starlight-blog) ---------------
+// 1. Use a post's `cover` as its OpenGraph image (else the site-wide default applies).
+// 2. Emit BlogPosting JSON-LD so search engines get author/date/headline attribution.
+const entry = route.entry;
+const isBlogPost = Boolean(entry?.id?.startsWith('blog/') && entry?.data?.date);
+
+type BlogCover =
+  | { image: string | { src: string }; alt?: string }
+  | { light: string | { src: string }; dark?: string | { src: string }; alt?: string }
+  | undefined;
+
+function imageSrc(img: string | { src: string } | undefined): string | undefined {
+  if (!img) return undefined;
+  return typeof img === 'string' ? img : img.src;
+}
+
+function resolveCoverUrl(cover: BlogCover): string | undefined {
+  if (!cover || typeof cover !== 'object') return undefined;
+  const src = imageSrc('image' in cover ? cover.image : cover.light);
+  return src && Astro.site ? new URL(src, Astro.site).href : src;
+}
+
+function resolveAuthors(raw: unknown): Array<{ name: string; url?: string }> {
+  const configAuthors = (blogConfig.authors ?? {}) as Record<string, { name: string; url?: string }>;
+  if (!raw) return Object.values(configAuthors);
+  const toAuthor = (a: unknown) =>
+    typeof a === 'string' ? configAuthors[a] : (a as { name: string; url?: string });
+  return (Array.isArray(raw) ? raw.map(toAuthor) : [toAuthor(raw)]).filter(Boolean);
+}
+
+let resolvedHead = head;
+let jsonLd: string | undefined;
+
+if (isBlogPost && entry) {
+  const pageUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : Astro.url.pathname;
+  const coverUrl = resolveCoverUrl(entry.data.cover as BlogCover);
+  const description = (entry.data.description ?? entry.data.excerpt) as string | undefined;
+  const authors = resolveAuthors(entry.data.authors);
+  const publishedDate = entry.data.date as Date;
+
+  // 1. Override the site-wide og:image with the post cover when one is set.
+  if (coverUrl) {
+    resolvedHead = head.map((item) =>
+      item.attrs?.property === 'og:image'
+        ? // Drop the global image's width/height; they don't match the cover.
+          { ...item, attrs: { property: 'og:image', content: coverUrl } }
+        : item,
+    );
+  }
+
+  // 2. BlogPosting structured data.
+  jsonLd = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    headline: entry.data.title,
+    ...(description ? { description } : {}),
+    datePublished: publishedDate.toISOString(),
+    author: authors.map((a) => ({ '@type': 'Person', name: a.name, ...(a.url ? { url: a.url } : {}) })),
+    image: coverUrl ?? (Astro.site ? new URL('ogimage.png?v=1', Astro.site).href : undefined),
+    url: pageUrl,
+    mainEntityOfPage: pageUrl,
+    publisher: {
+      '@type': 'Organization',
+      name: 'Genkit',
+      ...(Astro.site ? { logo: { '@type': 'ImageObject', url: new URL('genkit_logo.png', Astro.site).href } } : {}),
+    },
+  });
+}
 ---
-{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+{resolvedHead.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+{jsonLd && <script type="application/ld+json" is:inline set:html={jsonLd} />}
 
 <script
   is:inline
