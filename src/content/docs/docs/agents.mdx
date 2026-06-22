@@ -1264,7 +1264,7 @@ you can focus on your product.
 You start with a few lines of code and grow into tools, custom state,
 streaming, persistence, and multi-agent systems only as you need them. The
 same agent runs two ways: **in-process** for CLIs and embedded apps (the
-typed `Run` / `RunText` / `StreamBidi` methods), or **served over HTTP** for
+typed `Run` / `RunText` / `Connect` methods), or **served over HTTP** for
 clients in another process or browser (consumed from the
 [JavaScript client SDK](#serving-agents-over-http) or any HTTP client). Both
 go through the same agent definition.
@@ -1560,10 +1560,10 @@ fmt.Println(out.SnapshotID)       // snapshot id (server-managed agents)
 out, err = weatherAgent.Run(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("...")})
 
 // Streaming and/or multi-turn: open a connection and drive it.
-conn, err := weatherAgent.StreamBidi(ctx)
+conn, err := weatherAgent.Connect(ctx)
 ```
 
-`RunText` and `Run` send one turn and block for the result. `StreamBidi`
+`RunText` and `Run` send one turn and block for the result. `Connect`
 returns an `*aix.AgentConnection` you can stream from and send follow-up turns
 to (covered in [Multi-turn streaming chat](#multi-turn-streaming-chat)). The
 connection carries session continuity across turns for you.
@@ -1572,7 +1572,7 @@ The core types:
 
 | Type | What it is | Key members |
 |---|---|---|
-| `*aix.Agent[State]` | The agent itself | `RunText()`, `Run()`, `StreamBidi()`, `Name()`, `Store()` |
+| `*aix.Agent[State]` | The agent itself | `RunText()`, `Run()`, `Connect()`, `GetSnapshot()`, `GetLatestSnapshot()`, `AbortSnapshot()`, `Store()`, `Name()` |
 | `*aix.AgentConnection[State]` | An active invocation (one or many turns) | `SendText()`, `Send()`, `SendResume()`, `Detach()`, `Receive()`, `Output()`, `Custom()`, `Close()` |
 | `*aix.AgentInput` | One turn's input | `Message`, `Resume`, `Detach` |
 | `*aix.AgentOutput[State]` | A resolved invocation | `Message`, `FinishReason`, `SnapshotID`, `SessionID`, `State`, `Artifacts`, `Error` |
@@ -1720,11 +1720,11 @@ The `init` field is the wire counterpart of the invocation options:
 
 The most common in-process pattern: a streaming chat that sends messages,
 receives streamed tokens and tool-call events, and keeps session continuity
-across turns. Open a connection with `StreamBidi`, then for each turn send
+across turns. Open a connection with `Connect`, then for each turn send
 input and range over `conn.Receive()` until a `TurnEnd` chunk:
 
 ```go
-conn, err := weatherAgent.StreamBidi(ctx)
+conn, err := weatherAgent.Connect(ctx)
 if err != nil {
 	log.Fatal(err)
 }
@@ -1766,7 +1766,7 @@ func streamTurn(conn *aix.AgentConnection[any]) {
 Breaking out of `Receive()` does not cancel the connection; multi-turn callers
 routinely return at the `TurnEnd`, send the next input, and range `Receive()`
 again. Call `conn.Output()` to finish the invocation, or cancel the context
-passed to `StreamBidi` to abort it.
+passed to `Connect` to abort it.
 
 `chunk.ModelChunk` is the raw model response chunk: `chunk.ModelChunk.Text()`
 gives streamed text, and tool requests and responses are in its `Content`
@@ -1802,24 +1802,25 @@ snapshot) or by a specific snapshot:
 
 ```go
 // Continue where the session left off.
-conn, err := agent.StreamBidi(ctx, aix.WithSessionID[any](sessionID))
+conn, err := agent.Connect(ctx, aix.WithSessionID[any](sessionID))
 
 // Or resume from an exact snapshot.
-conn, err = agent.StreamBidi(ctx, aix.WithSnapshotID[any](snapshotID))
+conn, err = agent.Connect(ctx, aix.WithSnapshotID[any](snapshotID))
 ```
 
-**Read a snapshot without starting a turn.** Given an agent reference, reach
-its store directly to inspect history or render a UI:
+**Read a snapshot without starting a turn.** Given an agent reference, read
+through the agent to inspect history or render a UI. The agent applies any
+configured state transform (a direct `agent.Store()` read returns raw state):
 
 ```go
-snap, err := agent.Store().GetSnapshot(ctx, snapshotID)
+snap, err := agent.GetSnapshot(ctx, snapshotID)
 // snap.State.Messages   - full message history
 // snap.State.Custom     - custom state
 // snap.State.Artifacts  - artifacts
-// snap.Status           - pending | completed | aborted | failed
+// snap.Status           - pending | completed | aborted | failed | expired
 
 // Or the session's latest snapshot, whatever its status:
-latest, err := agent.Store().GetLatestSnapshot(ctx, sessionID)
+latest, err := agent.GetLatestSnapshot(ctx, sessionID)
 ```
 
 Over HTTP, the same data is reachable through the `getSnapshot` companion
@@ -1919,7 +1920,7 @@ client-managed ones.
 ```go
 // Server-managed: read it back from the snapshot.
 out, _ := taskAgent.RunText(ctx, "Add: buy groceries")
-snap, _ := taskAgent.Store().GetSnapshot(ctx, out.SnapshotID)
+snap, _ := taskAgent.GetSnapshot(ctx, out.SnapshotID)
 fmt.Println(snap.State.Custom.Tasks)
 ```
 
@@ -2027,7 +2028,7 @@ When a turn pauses, the model's chunks carry interrupted tool requests
 decision, and resume with `conn.SendResume`:
 
 ```go
-conn, _ := bankingAgent.StreamBidi(ctx)
+conn, _ := bankingAgent.Connect(ctx)
 conn.SendText("Transfer $500 to my savings account")
 
 var interrupts []*ai.Part
@@ -2103,7 +2104,7 @@ agent** (a store). Send a turn with `Detach` set, then read the pending ID off
 the output:
 
 ```go
-conn, _ := backgroundAgent.StreamBidi(ctx)
+conn, _ := backgroundAgent.Connect(ctx)
 conn.Send(&aix.AgentInput{
 	Detach:  true,
 	Message: ai.NewUserTextMessage("Write a report on AI trends."),
@@ -2114,30 +2115,29 @@ pendingID := out.SnapshotID // available right away; FinishReason is "detached"
 ```
 
 **Poll for completion.** If the store supports status subscriptions (the
-`SnapshotAborter` capability, which `localstore` implements), subscribe to
+`SnapshotSubscriber` capability, which `localstore` implements), subscribe to
 status changes; otherwise read the snapshot on an interval:
 
 ```go
 store := backgroundAgent.Store()
 
-if aborter, ok := store.(aix.SnapshotAborter); ok {
-	for status := range aborter.OnSnapshotStatusChange(ctx, pendingID) {
+if sub, ok := store.(aix.SnapshotSubscriber); ok {
+	for status := range sub.OnSnapshotStatusChange(ctx, pendingID) {
 		if status != aix.SnapshotStatusPending {
 			break
 		}
 	}
 }
 
-final, _ := store.GetSnapshot(ctx, pendingID)
-// final.Status is completed | failed | aborted; final.State holds the result.
+final, _ := backgroundAgent.GetSnapshot(ctx, pendingID)
+// final.Status is completed | failed | aborted (expired if the worker died);
+// final.State holds the result.
 ```
 
-**Abort** the background work via the same `SnapshotAborter`:
+**Abort** the background work through the agent:
 
 ```go
-if aborter, ok := store.(aix.SnapshotAborter); ok {
-	aborter.AbortSnapshot(ctx, pendingID)
-}
+backgroundAgent.AbortSnapshot(ctx, pendingID)
 ```
 
 Over HTTP, the `getSnapshot` and `abortSnapshot` companion routes expose the
@@ -2318,7 +2318,7 @@ if out.FinishReason == aix.AgentFinishReasonFailed {
 fmt.Println(out.Message.Text())
 ```
 
-With `StreamBidi`, the same failure surfaces as `TurnEnd.FinishReason ==
+With `Connect`, the same failure surfaces as `TurnEnd.FinishReason ==
 aix.AgentFinishReasonFailed` during streaming, and on `conn.Output()` after.
 
 ### When a tool returns an error
