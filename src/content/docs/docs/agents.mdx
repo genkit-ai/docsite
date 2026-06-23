@@ -1323,9 +1323,9 @@ func main() {
 	)
 
 	assistant := genkit.DefineAgent[any](g, "assistant",
-		aix.InlinePrompt(
+		aix.InlinePrompt{
 			ai.WithSystem("You are a helpful assistant."),
-		),
+		},
 	)
 
 	out, err := assistant.RunText(ctx, "Hello! What can you do?")
@@ -1397,10 +1397,10 @@ func main() {
 
 	// Define the agent, attaching the tool to its inline prompt.
 	weatherAgent := genkit.DefineAgent[any](g, "weatherAgent",
-		aix.InlinePrompt(
+		aix.InlinePrompt{
 			ai.WithSystem("You are a helpful weather assistant. Answer weather queries."),
 			ai.WithTools(getWeather),
-		),
+		},
 	)
 
 	// Serve it over HTTP: range over the agent's default route layout and
@@ -1428,29 +1428,26 @@ Each of these builds on the same agent you just wrote; add only what you need.
 
 ## Defining agents
 
-`genkit.DefineAgent` is how you'll define almost every agent. Its third
-argument is an **agent source** that selects where the prompt comes from:
+`genkit.DefineAgent` is how you'll define almost every agent - it's what you
+used above. Give it an inline prompt (`aix.InlinePrompt`) with a system prompt
+and, optionally, tools, and Genkit runs the model and tool-calling loop for you.
 
-- **`aix.InlinePrompt(...)`** declares the prompt inline from a set of
-  [prompt options](/docs/dotprompt) (`ai.WithSystem`, `ai.WithModel`,
-  `ai.WithTools`, ...). This is the shortest path to a working agent.
-- **`aix.SameNamedPrompt()`** references the [Dotprompt](/docs/dotprompt)
-  `.prompt` file registered under the agent's own name. Reach for it when
-  prompts are authored or versioned separately from code.
-- **`aix.NamedPrompt(name, input)`** references any registered prompt by
-  name and renders it with an input from code, so one prompt can back many
-  agents with different inputs.
+Two variants exist for when you need more:
 
-For full control over the per-turn loop (multiple model calls, custom
-streaming, direct session manipulation), use `genkit.DefineCustomAgent`,
-covered in [Advanced: custom orchestration](#advanced-custom-orchestration).
+- **`genkit.DefinePromptAgent`** - same as `DefineAgent`, but the prompt lives
+  in a [Dotprompt](/docs/dotprompt) `.prompt` file instead of inline. Reach for
+  it when prompts are authored or versioned separately from code.
+- **`genkit.DefineCustomAgent`** - full control over orchestration (multiple
+  model calls per turn, custom progress streaming, direct session
+  manipulation). Reach for it only when `DefineAgent` isn't flexible enough.
 
-### `aix.InlinePrompt`
+### `genkit.DefineAgent`
 
-Pass the prompt options directly. The `model` is optional; it defaults to the
-model configured with `genkit.WithDefaultModel`. Add a `store` to persist the
-conversation (see [Session persistence](#session-persistence)) and a
-description for the Dev UI:
+The primary way to create an agent. Its third argument is an `aix.InlinePrompt`
+- a list of prompt options (model, system prompt, tools) that defines the prompt
+inline. The `model` is optional; it defaults to the model configured with
+`genkit.WithDefaultModel`. Add a `store` to persist the conversation (see
+[Session persistence](#session-persistence)) and a description for the Dev UI:
 
 ```go
 store, err := localstore.NewFileSessionStore[any]("./.genkit/snapshots/weatherAgent")
@@ -1459,10 +1456,10 @@ if err != nil {
 }
 
 weatherAgent := genkit.DefineAgent(g, "weatherAgent",
-	aix.InlinePrompt(
+	aix.InlinePrompt{
 		ai.WithSystem("You are a helpful weather assistant. Answer weather queries."),
 		ai.WithTools(getWeather),
-	),
+	},
 	// Persist session state between requests (see "Session persistence").
 	aix.WithSessionStore(store),
 	aix.WithDescription[any]("Answers weather queries."),
@@ -1473,12 +1470,13 @@ Note that once a typed option such as `WithSessionStore(store)` is present, Go
 infers the state type from it, so the `[any]` on `DefineAgent` is no longer
 needed.
 
-### `aix.SameNamedPrompt` and `aix.NamedPrompt`
+### `genkit.DefinePromptAgent`
 
-Load the prompt from a `.prompt` file. This separates the prompt template from
-agent wiring, which is useful when prompt authors are not the people writing
-the Go code, when you want versioned and reviewable prompt files, or when you
-want to A/B test prompt variants.
+Wire an agent from a [Dotprompt](/docs/dotprompt) `.prompt` file instead of an
+inline prompt. This separates the prompt template from agent wiring, which is
+useful when prompt authors are not the people writing the Go code, when you want
+versioned and reviewable prompt files, or when you want to A/B test prompt
+variants.
 
 ```handlebars
 ---
@@ -1496,18 +1494,18 @@ suggesting attractions and looking up flight information.
 ```
 
 ```go
-// Loads ./prompts/tripPlanner.prompt by the agent's name.
-tripPlanner := genkit.DefineAgent[any](g, "tripPlanner",
-	aix.SameNamedPrompt(),
+// With no source option, DefinePromptAgent loads the prompt registered under
+// the agent's own name: ./prompts/tripPlanner.prompt.
+tripPlanner := genkit.DefinePromptAgent[any](g, "tripPlanner",
 	aix.WithSessionStore(store),
 )
 ```
 
-`aix.SameNamedPrompt()` renders the prompt registered under the agent's own
-name, using the prompt's own default input each turn.
+By default `DefinePromptAgent` renders the prompt registered under the agent's
+own name, using the prompt's own default input each turn.
 
-To back several agents with one shared prompt, reference it by name with
-`aix.NamedPrompt(name, input)` and give each its own input. The prompt name
+To back several agents with one shared prompt, point each at it with
+`aix.WithNamedPrompt(name, input)` and give each its own input. The prompt name
 need not match the agent name:
 
 ```go
@@ -1516,12 +1514,17 @@ for _, p := range []struct{ name, persona string }{
 	{"pirate", "a sarcastic pirate"},
 	{"chef", "a Michelin-starred chef"},
 } {
-	genkit.DefineAgent(g, p.name,
-		aix.NamedPrompt("chat", ChatInput{Personality: p.persona}),
+	genkit.DefinePromptAgent(g, p.name,
+		aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
 		aix.WithSessionStore(store),
 	)
 }
 ```
+
+For full control over orchestration - multiple model calls per turn, custom
+progress streaming, and direct session manipulation - see
+[Advanced: custom orchestration](#advanced-custom-orchestration) near the end
+of this page. Most agents never need it; reach for `DefineAgent` first.
 
 ### Typed custom state
 
@@ -1546,10 +1549,10 @@ type TaskState struct {
 store := localstore.NewInMemorySessionStore[TaskState]()
 
 taskAgent := genkit.DefineAgent(g, "taskAgent",
-	aix.InlinePrompt(
+	aix.InlinePrompt{
 		ai.WithSystem("You are a task management assistant. Use the provided tools."),
 		ai.WithTools(addTask, toggleTask, removeTask),
-	),
+	},
 	aix.WithSessionStore(store),
 )
 ```
@@ -1644,8 +1647,9 @@ Start the UI with the Genkit CLI pointed at your program:
 genkit start -- go run .
 ```
 
-Agents you registered with `genkit.DefineAgent` / `genkit.DefineCustomAgent`
-appear in the UI's agent list. See [Developer tools](/docs/devtools) for setup.
+Agents you registered with `genkit.DefineAgent`, `genkit.DefinePromptAgent`, or
+`genkit.DefineCustomAgent` appear in the UI's agent list. See
+[Developer tools](/docs/devtools) for setup.
 
 ## Serving agents over HTTP
 
@@ -2033,10 +2037,10 @@ transferMoney := genkit.DefineInterruptibleTool(g, "transferMoney",
 )
 
 bankingAgent := genkit.DefineAgent[any](g, "bankingAgent",
-	aix.InlinePrompt(
+	aix.InlinePrompt{
 		ai.WithSystem("You are a banking assistant. Use transferMoney to move money."),
 		ai.WithTools(transferMoney),
-	),
+	},
 	aix.WithSessionStore(store),
 )
 ```
@@ -2174,10 +2178,10 @@ tool-calling loop:
 ```go
 // A specialized sub-agent.
 researcher := genkit.DefineAgent[any](g, "researcher",
-	aix.InlinePrompt(
+	aix.InlinePrompt{
 		ai.WithSystem("You are a thorough research assistant."),
 		ai.WithTools(getWebResults),
-	),
+	},
 	aix.WithDescription[any]("Finds well-sourced answers."),
 )
 
@@ -2197,10 +2201,10 @@ askResearcher := genkit.DefineTool(g, "askResearcher",
 
 // The orchestrator delegates by calling the tool.
 orchestrator := genkit.DefineAgent[any](g, "orchestrator",
-	aix.InlinePrompt(
+	aix.InlinePrompt{
 		ai.WithSystem("Analyze the request, delegate to a specialist when useful, then synthesize a final answer."),
 		ai.WithTools(askResearcher),
-	),
+	},
 )
 ```
 
