@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig, fontProviders } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidatorPlugin from 'starlight-links-validator';
 import starlightBlog from 'starlight-blog';
@@ -22,6 +22,32 @@ export default defineConfig({
       },
     },
   },
+  fonts: [
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans',
+      cssVariable: '--font-google-sans',
+      weights: [300, 400, 500],
+      styles: ['normal'],
+      fallbacks: ['Arial', 'sans-serif'],
+    },
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans Flex',
+      cssVariable: '--font-google-sans-text',
+      weights: [400, 500],
+      styles: ['normal'],
+      fallbacks: ['Arial', 'sans-serif'],
+    },
+    {
+      provider: fontProviders.google(),
+      name: 'Google Sans Code',
+      cssVariable: '--font-google-sans-mono',
+      weights: [400, 500],
+      styles: ['normal'],
+      fallbacks: ['monospace'],
+    },
+  ],
   integrations: [
     starlight({
       favicon: 'favicon.ico',
@@ -33,9 +59,10 @@ export default defineConfig({
       title: 'Genkit',
       components: {
         Sidebar: './src/components/sidebar.astro',
-        Header: './src/content/custom/header.astro',
+        Header: './src/components/Header.astro',
         Hero: './src/content/custom/hero.astro',
         Head: './src/content/custom/head.astro',
+        Footer: './src/content/custom/footer.astro',
         PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
       },
@@ -49,47 +76,11 @@ export default defineConfig({
             height: '377',
           },
         },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.gstatic.com',
-            rel: 'preconnect',
-            crossorigin: true,
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Text:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Symbols&display=block',
-            rel: 'stylesheet',
-          },
-        },
       ],
       plugins: [
         starlightBlog({
           title: 'Blog',
-          // We add our own "Blog" link in the custom header (src/content/custom/header.astro).
+          // The "Blog" link is rendered by our shared header (src/components/Header.astro).
           navigation: 'none',
           prefix: 'blog',
           metrics: { readingTime: true },
@@ -102,13 +93,11 @@ export default defineConfig({
             },
           },
         }),
-        starlightLinksValidatorPlugin(),
+        starlightLinksValidatorPlugin({
+          // The landing page at `/` is a custom Astro page outside Starlight routes.
+          exclude: ['/'],
+        }),
       ],
-      logo: {
-        dark: './src/assets/lockup_white_tight2.png',
-        light: './src/assets/lockup_dark_tight.png',
-        replacesTitle: true,
-      },
       social: [
         {
           icon: 'github',
@@ -137,7 +126,7 @@ export default defineConfig({
         },
       ],
       sidebar,
-      customCss: ['./src/tailwind.css'],
+      customCss: ['./src/styles/tailwind.css'],
       editLink: {
         baseUrl: 'https://github.com/genkit-ai/docsite/edit/main/',
       },
