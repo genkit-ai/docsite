@@ -150,6 +150,7 @@ const DOCS_SIDEBAR = [
       { label: "Run and stream", slug: "docs/agents/run" },
       { label: "Serve over HTTP", slug: "docs/agents/http" },
       { label: "Sessions and state", slug: "docs/agents/state" },
+      { label: "Session stores", slug: "docs/agents/session-stores" },
       { label: "Interrupts", slug: "docs/agents/interrupts" },
       { label: "Background execution", slug: "docs/agents/background" },
       { label: "Multi-agent delegation", slug: "docs/agents/multi-agent" },
