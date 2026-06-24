@@ -164,7 +164,7 @@ const DOCS_SIDEBAR = [
       { label: "Overview", slug: "docs/app-frameworks/overview" },
       { label: "Angular", slug: "docs/app-frameworks/angular" },
       { label: "Astro", slug: "docs/app-frameworks/astro" },
-      { label: "Flutter", slug: "docs/frontend/flutter" },
+      { label: "Flutter", slug: "docs/app-frameworks/flutter" },
       { label: "Next.js", slug: "docs/app-frameworks/nextjs" },
       { label: "Nuxt", slug: "docs/app-frameworks/nuxt" },
       { label: "React (Vite)", slug: "docs/app-frameworks/react" },
