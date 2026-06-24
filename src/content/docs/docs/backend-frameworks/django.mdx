@@ -1,6 +1,6 @@
 ---
 title: Django tutorial
-description: Add Genkit AI features to a Django app, exposing a streaming Bargain Chef flow as an HTTP endpoint with Django Ninja.
+description: Add Genkit AI features to a Django app, exposing a streaming Bargain Chef flow as an HTTP endpoint.
 supportedLanguages:
   - python
 ---
@@ -9,7 +9,7 @@ import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
 
 In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Django that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
-This tutorial uses [Django Ninja](https://django-ninja.dev) for the HTTP layer. It's async-first and Pydantic-native, which aligns naturally with how Genkit flows are typed. The flow exposes both a JSON endpoint and a Server-Sent Events stream so any client can consume the partial recipe as it arrives.
+The `genkit-plugin-django` package wires the flow into Django's async (ASGI) stack with a single decorator, exposing both a JSON endpoint and a Server-Sent Events stream so any client can consume the partial recipe as it arrives, no manual request parsing or streaming code required.
 
 ## What you'll build
 
@@ -41,16 +41,16 @@ uv run python manage.py startapp recipes
 ### Install packages
 
 ```bash
-uv add django django-ninja django-cors-headers uvicorn genkit genkit-plugin-google-genai
+uv add django django-cors-headers uvicorn genkit genkit-plugin-django genkit-plugin-google-genai
 ```
 
 These packages include:
 
 - **`django`**: The Django web framework.
-- **`django-ninja`**: Async-first API framework built on Django with Pydantic validation.
 - **`django-cors-headers`**: CORS middleware. Lets browser frontends served from a different origin call the Genkit endpoint.
 - **`uvicorn`**: ASGI server that runs Django with async support.
 - **`genkit`**: Core Genkit SDK.
+- **`genkit-plugin-django`**: Helper that exposes Genkit flows as Django views, including server-sent events for streaming.
 - **`genkit-plugin-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
 
 Install the Genkit CLI, which enables Genkit testing and observability:
@@ -126,15 +126,13 @@ You'll build the backend in four parts:
 Create `recipes/views.py`:
 
 ```python title="recipes/views.py"
-import json
 from datetime import datetime
 from typing import Literal
 
-from django.http import StreamingHttpResponse
-from ninja import NinjaAPI, Schema
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, Genkit
+from genkit.plugins.django import genkit_django_handler
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -198,6 +196,7 @@ class BargainChefInput(BaseModel):
     craving: str = Field(description='What the user feels like eating right now.')
 
 
+@genkit_django_handler(ai)
 @ai.flow(name='bargainChefFlow', chunk_type=Recipe)
 async def bargain_chef_flow(
     input: BargainChefInput,
@@ -228,29 +227,6 @@ async def bargain_chef_flow(
     if not response.output:
         raise ValueError('Failed to generate recipe')
     return response.output
-
-
-api = NinjaAPI()
-
-
-class GenkitRequest(Schema):
-    data: BargainChefInput
-
-
-@api.post('/bargainChefFlow')
-async def bargain_chef_endpoint(request, payload: GenkitRequest):
-    if request.headers.get('Accept') == 'text/event-stream':
-        async def event_stream():
-            stream_response = bargain_chef_flow.stream(payload.data)
-            async for chunk in stream_response.stream:
-                yield f'data: {json.dumps({"message": chunk.model_dump()})}\n\n'
-            result = await stream_response.response
-            yield f'data: {json.dumps({"result": result.model_dump()})}\n\n'
-
-        return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
-
-    result = await bargain_chef_flow(payload.data)
-    return {'result': result.model_dump()}
 ```
 
 A few details are worth noting before you run the backend:
@@ -259,19 +235,20 @@ A few details are worth noting before you run the backend:
 - **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are defined as Pydantic models, ready for the Django app to import and for Genkit to validate against.
 - **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
-
-The Django Ninja endpoint exposes the flow two ways. When the request sends `Accept: text/event-stream`, it returns a `StreamingHttpResponse` that emits each partial recipe as an SSE event. Otherwise, it awaits the flow once and returns the final recipe as JSON.
+- **The `@genkit_django_handler(ai)` decorator:** Stacked on top of `@ai.flow`, it adapts the flow into an async Django view that parses JSON requests, runs the flow, and emits server-sent events when the client sends `Accept: text/event-stream`. It handles both the streaming and non-streaming responses for you, so there's no request parsing or `StreamingHttpResponse` plumbing to write.
 
 ### Wire up the URL
 
 ```python title="myproject/urls.py"
 from django.urls import path
-from recipes.views import api
+from recipes.views import bargain_chef_flow
 
 urlpatterns = [
-    path('', api.urls),
+    path('bargainChefFlow', bargain_chef_flow),
 ]
 ```
+
+The `@genkit_django_handler` decorator turns `bargain_chef_flow` into a Django view, so you can point a URL straight at it.
 
 ### Check the project layout
 
