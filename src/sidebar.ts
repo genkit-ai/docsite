@@ -111,7 +111,6 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Flows", slug: "docs/flows" },
       { label: "Frontend integration", slug: "docs/client" },
-      { label: "Web client", slug: "docs/web-client" },
       { label: "Generating content", slug: "docs/models" },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Tool calling", slug: "docs/tool-calling" },
