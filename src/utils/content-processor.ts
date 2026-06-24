@@ -83,7 +83,7 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
 
   // Apply replacements
   for (const { original, replacement } of replacements) {
-    filteredContent = filteredContent.replace(original, replacement);
+    filteredContent = filteredContent.replace(original, () => replacement);
   }
 
   // Clean up extra whitespace
@@ -295,7 +295,7 @@ async function resolveCodeReferences(content: string, sourceFilePath: string): P
 
   let result = content;
   for (const { match, replacement } of replacements) {
-    result = result.replace(match, replacement);
+    result = result.replace(match, () => replacement);
   }
   return result;
 }
