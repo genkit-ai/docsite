@@ -14,7 +14,7 @@ The Agents API is in **Beta.** It can introduce breaking changes in minor versio
 
 In Genkit, agents are actions with conversation state. A standard agent renders a prompt on each turn, appends conversation history, calls the model, streams chunks, updates state, and optionally persists a snapshot. A custom agent keeps that runtime shell, but replaces the prompt-backed loop with your own code.
 
-Choose an agent when the application should feel like an ongoing conversation or workspace rather than a single backend call. Persistent chat, iterative generation, resumable approvals, and frontend clients that need streamed state all benefit from the agent runtime. Choose a flow or a direct `generate()` call when you want to define every orchestration, storage, and transport detail yourself.
+This page covers defining the agent itself. For when to choose an agent over a plain flow, see [Full-stack agents](/docs/agents).
 
 <Lang lang="js">
 
@@ -74,13 +74,11 @@ export const weatherAgent = ai.defineAgent({
 });
 ```
 
-The `description` is surfaced in action metadata, the developer UI, and the multi-agent middleware. Write it as an operational summary of when another agent should delegate to this one.
-
 ## Agent-specific options
 
 `name` registers the prompt and agent action. Use a stable, descriptive name because it appears in action metadata, route helpers, and delegation tools.
 
-`description` is used by tooling and by multi-agent delegation. Write it as a short operational description of what the agent can handle.
+`description` is surfaced in action metadata, the developer UI, and the multi-agent middleware. Write it as an operational summary of when another agent should delegate to this one.
 
 `stateSchema` validates custom state when loading from a snapshot or client state. Add it when custom state crosses a trust boundary or when schema metadata helps tools inspect the agent.
 
@@ -165,7 +163,7 @@ Custom-state mutations automatically emit streamed JSON Patch chunks. That keeps
 
 ## Define a custom agent implementation
 
-Use `defineCustomAgent()` when the standard prompt loop is too narrow. A custom agent receives a `SessionRunner` and helpers for streaming chunks. It still gets snapshot management, client-managed state, server-managed state, background execution, and HTTP serving.
+Use `defineCustomAgent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, planner and executor loops, or manual history management. A custom agent receives a `SessionRunner` and helpers for streaming chunks, and still gets snapshot management, client-managed and server-managed state, background execution, and HTTP serving.
 
 ```ts
 export const researchAgent = ai.defineCustomAgent(
@@ -176,55 +174,12 @@ export const researchAgent = ai.defineCustomAgent(
     store,
   },
   async (sess, { sendChunk, abortSignal }) => {
-    let finalMessage;
-
-    await sess.run(async (input) => {
-      const userText =
-        input.message?.content.find((part) => part.text)?.text ?? '';
-
-      sess.updateCustom((state) => ({
-        ...state,
-        status: 'Planning research',
-      }));
-
-      const outline = await ai.generate({
-        prompt: `Create three research questions for: ${userText}`,
-        abortSignal,
-      });
-
-      sess.updateCustom((state) => ({
-        ...state,
-        status: 'Writing answer',
-      }));
-
-      const stream = ai.generateStream({
-        prompt: `Answer the user using this outline:\n${outline.text}`,
-        abortSignal,
-      });
-
-      for await (const chunk of stream.stream) {
-        sendChunk({ modelChunk: chunk });
-      }
-
-      const response = await stream.response;
-      finalMessage = response.message;
-
-      if (response.message) {
-        sess.addMessages([response.message]);
-      }
-
-      return { finishReason: response.finishReason };
-    });
-
-    return {
-      message: finalMessage,
-      artifacts: sess.getArtifacts(),
-    };
+    // Your own per-turn loop. See Custom orchestration for the full pattern.
   },
 );
 ```
 
-Call `sess.run()` to process each turn. It adds the incoming user message to history before your callback runs, reserves a snapshot ID before the turn starts when a store is configured, and snapshots successful turn state at the end. If your callback throws, the runtime records a failed turn and returns the last-good state or snapshot to the caller.
+See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete multi-step example, and failure handling.
 
 </Lang>
 
@@ -232,13 +187,13 @@ Call `sess.run()` to process each turn. It adds the incoming user message to his
 
 ## Constructor choices
 
-Use `genkit.DefineAgent` for most prompt-backed Go agents. It keeps inline prompt configuration beside the agent wiring.
+Use `genkit.DefineAgent` for most prompt-backed agents. It keeps inline prompt configuration beside the agent wiring.
 
 Use `genkit.DefinePromptAgent` when the prompt is already registered, including prompts loaded from Dotprompt files.
 
 Use `genkit.DefineCustomAgent` when the agent needs a custom per-turn loop, direct session control, or multiple model calls.
 
-All Go agents implement `api.BidiAction`, so transports and route helpers can serve them directly. Server-managed agents also expose typed snapshot helpers and companion actions.
+All agents implement `api.BidiAction`, so transports and route helpers can serve them directly. Server-managed agents also expose typed snapshot helpers and companion actions.
 
 ## Define a prompt-backed agent
 
@@ -303,59 +258,18 @@ The prompt input is rendered at definition time as a smoke test. If it does not 
 
 ## Define a custom agent implementation
 
-`DefineCustomAgent` gives you the agent runtime without the built-in prompt loop. The function receives a `Responder` for streaming and a `SessionRunner` for turn processing, messages, custom state, artifacts, and snapshots.
+`DefineCustomAgent` gives you the agent runtime without the built-in prompt loop. Use it for a custom per-turn loop, multiple model calls in one turn, or direct session control. The function receives a `Responder` for streaming and a `SessionRunner` for turn processing, messages, custom state, artifacts, and snapshots.
 
 ```go
 coder := genkit.DefineCustomAgent(g, "coder",
 	func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[CoderState]) (*aix.AgentResult, error) {
-		err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-			for chunk, err := range genkit.GenerateStream(ctx, g,
-				ai.WithSystem("You are a concise coding assistant."),
-				ai.WithMessages(sess.Messages()...),
-			) {
-				if err != nil {
-					return nil, err
-				}
-				if chunk.Done {
-					sess.AddMessages(chunk.Response.Message)
-					return &aix.TurnResult{
-						FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
-					}, nil
-				}
-				resp.SendModelChunk(chunk.Chunk)
-			}
-			return nil, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return sess.Result(), nil
+		// Your own per-turn loop. See Custom orchestration for the full pattern.
 	},
 	aix.WithSessionStore(store),
 	aix.WithDescription[CoderState]("Concise code helper"),
 )
 ```
 
-Use `aix.TurnContextFromContext(ctx)` inside the per-turn callback when you need the reserved `SnapshotID`, parent snapshot ID, or zero-based turn index. The snapshot ID is minted before the turn runs for server-managed agents, which is useful when external resources need to be correlated with the snapshot that will later be persisted.
-
-## Current session and artifacts
-
-`SessionRunner` embeds `Session`, so custom agents can read messages, update typed custom state, and add artifacts directly:
-
-```go
-sess.UpdateCustom(func(state CoderState) CoderState {
-	state.Status = "Generating patch"
-	return state
-})
-
-resp.SendArtifact(&aix.Artifact{
-	Name: "patch.diff",
-	Parts: []*ai.Part{
-		ai.NewTextPart(diffText),
-	},
-})
-```
-
-`Responder.SendArtifact` streams the artifact to the client and records it in the session. The side effect is applied before `SendArtifact` returns, so a later snapshot or `sess.Result()` can see it.
+See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, turn context, responder behavior, and failure handling.
 
 </Lang>
