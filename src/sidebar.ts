@@ -110,6 +110,7 @@ const DOCS_SIDEBAR = [
     label: "Core concepts",
     items: [
       { label: "Flows", slug: "docs/flows" },
+      { label: "Frontend integration", slug: "docs/client" },
       { label: "Web client", slug: "docs/web-client" },
       { label: "Generating content", slug: "docs/models" },
       { label: "Middleware", slug: "docs/middleware" },
@@ -231,7 +232,6 @@ const DOCS_SIDEBAR = [
       { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
       { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
       { label: "Any platform", slug: "docs/deployment/any-platform" },
-      { label: "Client app integration", slug: "docs/client" },
     ],
   },
   {
