@@ -22,7 +22,8 @@ Use the [Sessions and state](/docs/agents/state) guide first when you are decidi
 
 - **In-memory store** for tests, demos, local examples, and single-process experiments.
 - **File store** for local development, prototypes, CLIs, and single-host apps that need snapshots to survive process restarts.
-- **Custom store** for production web apps that need a database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence.
+- **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
+- **Custom store** for production apps that need a different database, centralized authorization, or retention policies that the built-in stores do not cover.
 
 Most applications only configure a store on the agent. The agent runtime calls the store when it creates a snapshot, resumes with `sessionId` or `snapshotId`, serves `loadChat()`, reads a snapshot, starts detached work, or aborts an in-flight turn.
 
@@ -85,9 +86,52 @@ Use `snapshotWatchPollIntervalMs` to control the polling fallback for file watch
 
 The file store serializes writes per snapshot file and writes by renaming a temporary file into place. That helps avoid torn JSON files when concurrent reads happen during a write. It does not turn the filesystem into a multi-instance production database, so use a custom store when many app instances need to coordinate durable sessions.
 
+## Use a Firestore store
+
+`FirestoreSessionStore` persists snapshots in Cloud Firestore. It is a managed, multi-instance store, so it is the built-in option for production apps where several server instances share sessions, and it supports snapshot watching for background execution and abort.
+
+It ships in two packages with the same API. Use `@genkit-ai/google-cloud` on Google Cloud, or `@genkit-ai/firebase` when you already have a Firebase Admin app. Both export from the `/beta` entry point.
+
+```ts
+import { FirestoreSessionStore } from '@genkit-ai/google-cloud/beta';
+
+const store = new FirestoreSessionStore<SupportState>({
+  collection: 'genkit-sessions',
+  snapshotPathPrefix: (options) => options?.context?.auth?.uid ?? 'global',
+});
+
+export const supportAgent = ai.defineAgent({
+  name: 'supportAgent',
+  system: 'Help customers understand their order status.',
+  stateSchema: SupportStateSchema,
+  store,
+});
+```
+
+All options are optional:
+
+- **`db`** is an explicit `Firestore` instance. It defaults to a new client that picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable.
+- **`collection`** is the collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-pointers` and `<collection>-shards`, are derived from it for per-session pointers and sharded state.
+- **`snapshotPathPrefix`** returns a per-tenant prefix from the call's `SessionStoreOptions`, such as the authenticated user ID from `options.context`. When set, snapshots, pointers, and shards are nested under a tenant-scoped subcollection, so one tenant can never read another tenant's snapshots even with a `snapshotId`. It defaults to `global`.
+- **`checkpointInterval`** is the number of turns between full-state checkpoints. Between checkpoints the store writes diffs. A larger value writes fewer full snapshots but reconstructs over more diffs. It defaults to `25`.
+- **`shardSize`** is the maximum size in bytes of a single shard or diff document. State is split into chunks of this size so no document approaches Firestore's 1 MiB limit. It defaults to 512 KiB.
+
+On Firebase, import from `@genkit-ai/firebase/beta` instead and pass `firebaseApp` to derive the Firestore instance from an existing Admin app:
+
+```ts
+import { FirestoreSessionStore } from '@genkit-ai/firebase/beta';
+
+const store = new FirestoreSessionStore<SupportState>({
+  firebaseApp: app,
+  collection: 'genkit-sessions',
+});
+```
+
+The Firestore store watches snapshot documents to observe status changes, so background execution and aborts work across instances without polling. It does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+
 ## Implement a production store
 
-Implement a custom `SessionStore` when snapshots should live in your production data layer. This is the right approach for Cloud SQL, Firestore, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
+When the built-in Firestore store does not fit, implement a custom `SessionStore` so snapshots live in your own production data layer. This is the right approach for Cloud SQL, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
 
 A custom store implements three capabilities:
 
