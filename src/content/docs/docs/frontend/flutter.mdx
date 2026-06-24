@@ -1,222 +1,447 @@
 ---
-title: Flutter
-description: Call Genkit flows from a Flutter app using the Genkit Dart client library. Works with any Genkit backend.
+title: Flutter tutorial
+description: Connect a Flutter web UI to a standalone Genkit backend and stream structured output into your app.
 isLanguageAgnostic: true
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Use this guide when you have a Genkit backend exposing flows as HTTP endpoints and want to call them from a Flutter app.
+export const corsCallout = (
+  <Aside type="caution" title="Enable CORS on the backend">
+    Your Flutter web app runs on a different port than your Genkit backend, so
+    the browser will block requests unless the backend explicitly allows that
+    origin. If you haven't configured CORS on your backend yet, do that before
+    running the Flutter app. See your backend framework's CORS documentation for
+    the exact configuration.
+  </Aside>
+);
 
-This is the recommended architecture for production apps: your model API keys stay on the server, and Flutter calls the backend over HTTP. Your backend can be written in any language — Node.js, Go, Python, or Dart.
+In this tutorial, you'll build the Flutter web UI for **Bargain Chef** and connect it to your existing Genkit backend. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
-## Before you begin
+Flutter web apps run entirely in the browser, so the Genkit flow always runs on a separate backend server. You'll connect the UI to a standalone backend that exposes `bargainChefFlow`.
+
+## What you'll build
+
+The user types what they're craving, Gemini drafts a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The recipe streams into the UI incrementally, so users see progress before the full recipe is ready.
+
+<video
+  controls
+  preload="metadata"
+  muted
+  width="100%"
+  poster="/videos/bargain-chef-demo-poster.png"
+  style="max-width: 800px; display: block; margin: 2rem auto; border: none; border-radius: 8px;"
+  aria-label="Preview of the Bargain Chef app that you will build in this Flutter tutorial"
+>
+  <source src="/videos/bargain-chef-demo.mp4" type="video/mp4" />
+  Your browser does not support the video tag. This video previews the Bargain
+  Chef app that you will build in this Flutter tutorial.
+</video>
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/app-frameworks/flutter).
+
+You'll call the existing `bargainChefFlow` over HTTP and render the streamed recipe as fields arrive.
+
+## Prerequisites
 
 - Flutter SDK
 - Dart SDK 3.10.0 or later
-- A Genkit backend with at least one flow exposed as an HTTP endpoint. See [Get started](/docs/get-started) to set one up.
+- Familiarity with Flutter and Dart
 
-## Create a project
+**You should have already completed the [Express](/docs/backend-frameworks/express), [Hono](/docs/backend-frameworks/hono), or other [backend tutorial](/docs/backend-frameworks/overview).** This tutorial picks up where those leave off and adds a Flutter UI to the `bargainChefFlow` you already built there. Make sure your backend is running and note the port it serves on, since you'll need it later.
 
-Create a new Flutter app if you don't already have one:
+## Set up the application
+
+### Create the Flutter project
+
+Scaffold a new Flutter app:
 
 ```bash
 flutter create my_genkit_flutter
 cd my_genkit_flutter
 ```
 
-## Project layout
+### Install the Genkit Dart client
 
-<FileTree>
-
-- lib
-  - **main.dart**
-- pubspec.yaml
-
-</FileTree>
-
-## Install Genkit packages
-
-Add the Genkit Dart client package:
+Install the Genkit Dart client, which lets the browser call your standalone backend:
 
 ```bash
 flutter pub add genkit
 ```
 
-## Configure your backend
+### Check the project layout
 
-Start your Genkit backend and make sure it exposes the recipe flow as an HTTP endpoint. The URL depends on which framework and port your backend uses — for example:
+Verify that your project layout matches the structure below:
 
-```text
-http://localhost:8080/recipeGeneratorFlow
+<FileTree>
+
+- pubspec.yaml
+- web
+  - index.html
+  - ... other Flutter web files
+- lib
+  - main.dart
+
+</FileTree>
+
+Your backend should already expose `bargainChefFlow`. For reference, here's the shape the Flutter app expects:
+
+```dart
+// Input
+{'craving': 'something warm with chicken'}
+
+// Streamed output (partial: fields fill in over time)
+{
+  'title': String?,
+  'description': String?,
+  'servings': num?,
+  'ingredients': [
+    {'name': String?, 'quantity': String?, 'onSale': bool?}
+  ],
+  'steps': [String]
+}
 ```
 
-See [Get started](/docs/get-started) if you need to set up a backend first.
+If your backend exposes a flow with a different name or shape, adjust the URL and the `Recipe` model in the next section accordingly.
 
-## Call the recipe flow from Flutter
+At this point, your Flutter app is ready to call the backend flow you already created.
 
-Replace `lib/main.dart` with:
+## Build the Flutter UI
+
+Now update the Flutter app so the browser can call your Genkit backend and render streamed output.
+
+### Update the main app
+
+Replace the contents of `lib/main.dart` with the following. The default `backendUrl` points to your standalone backend; `8080` is a common default backend port, so adjust it if your backend uses a different port.
 
 ```dart title="lib/main.dart"
 import 'package:flutter/material.dart';
 import 'package:genkit/client.dart';
 
-// Replace this URL with the address of your Genkit backend
-final recipeGeneratorFlow = defineRemoteAction<Map<String, dynamic>>(
-  url: 'http://localhost:8080/recipeGeneratorFlow',
-  fromResponse: (data) => Map<String, dynamic>.from(data),
+const backendUrl = String.fromEnvironment(
+  'BARGAIN_CHEF_URL',
+  defaultValue: 'http://localhost:8080/bargainChefFlow',
 );
 
 void main() {
-  runApp(const MyApp());
+  runApp(const BargainChefApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class BargainChefApp extends StatelessWidget {
+  const BargainChefApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(home: RecipePage());
+    return MaterialApp(
+      title: 'Bargain Chef',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorSchemeSeed: const Color(0xFF1A1A1A),
+        scaffoldBackgroundColor: const Color(0xFFFAFAFA),
+        useMaterial3: true,
+      ),
+      home: const BargainChefPage(),
+    );
   }
 }
 
-class RecipePage extends StatefulWidget {
-  const RecipePage({super.key});
+class BargainChefPage extends StatefulWidget {
+  const BargainChefPage({super.key});
 
   @override
-  State<RecipePage> createState() => _RecipePageState();
+  State<BargainChefPage> createState() => _BargainChefPageState();
 }
 
-class _RecipePageState extends State<RecipePage> {
-  final ingredientController = TextEditingController(text: 'avocado');
-  final dietaryRestrictionsController =
-      TextEditingController(text: 'vegetarian');
-  Map<String, dynamic>? recipe;
-  bool isLoading = false;
+class _BargainChefPageState extends State<BargainChefPage> {
+  final _cravingController = TextEditingController(
+    text: 'something warm with chicken',
+  );
+  final RemoteAction<Map<String, dynamic>, Recipe, Recipe, void>
+      _bargainChefFlow = defineRemoteAction(
+    url: backendUrl,
+    fromResponse: Recipe.fromJson,
+    fromStreamChunk: Recipe.fromJson,
+  );
 
-  Future<void> generateRecipe() async {
-    setState(() => isLoading = true);
+  Recipe? _recipe;
+  bool _isStreaming = false;
 
-    final result = await recipeGeneratorFlow(input: {
-      'ingredient': ingredientController.text,
-      'dietaryRestrictions': dietaryRestrictionsController.text,
-    });
+  @override
+  void dispose() {
+    _cravingController.dispose();
+    _bargainChefFlow.dispose();
+    super.dispose();
+  }
+
+  Future<void> _generateRecipe() async {
+    final craving = _cravingController.text.trim();
+    if (craving.isEmpty || _isStreaming) return;
 
     setState(() {
-      recipe = result;
-      isLoading = false;
+      _recipe = null;
+      _isStreaming = true;
     });
+
+    try {
+      final stream = _bargainChefFlow.stream(input: {'craving': craving});
+      await for (final partial in stream) {
+        if (!mounted) return;
+        setState(() => _recipe = partial);
+      }
+      await stream.onResult;
+    } on GenkitException catch (err) {
+      _showError('Failed to generate recipe: ${err.message}');
+    } catch (err) {
+      _showError('Failed to generate recipe: $err');
+    } finally {
+      if (mounted) setState(() => _isStreaming = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
+    final recipe = _recipe;
+    final textTheme = Theme.of(context).textTheme;
+    final sectionStyle =
+        textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Recipe generator')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(
-              controller: ingredientController,
-              decoration: const InputDecoration(labelText: 'Ingredient'),
-            ),
-            TextField(
-              controller: dietaryRestrictionsController,
-              decoration: const InputDecoration(labelText: 'Dietary restrictions'),
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: isLoading ? null : generateRecipe,
-              child: const Text('Generate recipe'),
-            ),
-            const SizedBox(height: 16),
-            if (recipe != null) Expanded(child: SingleChildScrollView(child: Text(recipe.toString()))),
-          ],
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: ListView(
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                'Bargain Chef',
+                style: textTheme.headlineMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text.rich(
+                TextSpan(
+                  text: 'Backend: ',
+                  children: [
+                    TextSpan(
+                      text: backendUrl,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                  ],
+                ),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Tell me what you feel like eating and I'll suggest a recipe "
+                'built around today\'s grocery deals.',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _cravingController,
+                      enabled: !_isStreaming,
+                      onSubmitted: (_) => _generateRecipe(),
+                      decoration: const InputDecoration(
+                        hintText: 'What are you in the mood for?',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _isStreaming ? null : _generateRecipe,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1A1A1A),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(0, 56),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(_isStreaming ? 'Cooking...' : 'Suggest a recipe'),
+                  ),
+                ],
+              ),
+              if (recipe != null) ...[
+                const SizedBox(height: 24),
+                Card(
+                  elevation: 0,
+                  color: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    side: const BorderSide(color: Color(0xFFE5E5E5)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (recipe.title?.isNotEmpty ?? false)
+                          Text(
+                            recipe.title!,
+                            style: textTheme.headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        if (recipe.description?.isNotEmpty ?? false) ...[
+                          const SizedBox(height: 8),
+                          Text(recipe.description!),
+                        ],
+                        if (recipe.ingredients.isNotEmpty) ...[
+                          const SizedBox(height: 20),
+                          Text('Ingredients', style: sectionStyle),
+                          const SizedBox(height: 8),
+                          for (final ingredient in recipe.ingredients)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Wrap(
+                                spacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Text(
+                                    '•  ${[ingredient.quantity, ingredient.name].whereType<String>().join(' ')}',
+                                  ),
+                                  if (ingredient.onSale == true)
+                                    Chip(
+                                      label: const Text('on sale'),
+                                      labelStyle:
+                                          TextStyle(color: Colors.green.shade800),
+                                      backgroundColor: Colors.green.shade50,
+                                      side: BorderSide.none,
+                                      visualDensity: VisualDensity.compact,
+                                      materialTapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                ],
+                              ),
+                            ),
+                        ],
+                        if (recipe.steps.isNotEmpty) ...[
+                          const SizedBox(height: 20),
+                          Text('Steps', style: sectionStyle),
+                          const SizedBox(height: 8),
+                          for (final (index, step) in recipe.steps.indexed)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text('${index + 1}.  $step'),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
+
+class Recipe {
+  const Recipe({
+    this.title,
+    this.description,
+    this.servings,
+    this.ingredients = const [],
+    this.steps = const [],
+  });
+
+  final String? title;
+  final String? description;
+  final num? servings;
+  final List<RecipeIngredient> ingredients;
+  final List<String> steps;
+
+  factory Recipe.fromJson(dynamic json) {
+    final map = json as Map<String, dynamic>;
+    return Recipe(
+      title: map['title'] as String?,
+      description: map['description'] as String?,
+      servings: map['servings'] as num?,
+      ingredients: (map['ingredients'] as List<dynamic>? ?? [])
+          .map(RecipeIngredient.fromJson)
+          .toList(),
+      steps:
+          (map['steps'] as List<dynamic>? ?? []).whereType<String>().toList(),
+    );
+  }
+}
+
+class RecipeIngredient {
+  const RecipeIngredient({this.name, this.quantity, this.onSale});
+
+  final String? name;
+  final String? quantity;
+  final bool? onSale;
+
+  factory RecipeIngredient.fromJson(dynamic json) {
+    final map = json as Map<String, dynamic>;
+    return RecipeIngredient(
+      name: map['name'] as String?,
+      quantity: map['quantity'] as String?,
+      onSale: map['onSale'] as bool?,
+    );
+  }
+}
 ```
 
-## Run your application
+{corsCallout}
 
-Start your backend first, then run Flutter:
+`defineRemoteAction` creates a typed client for the backend flow. The `stream` method returns an async iterable of partial recipe objects, and `stream.onResult` waits for the final validated recipe. The app stores each partial recipe in Flutter state with `setState`, so the UI re-renders on every update.
+
+Each recipe section is wrapped in a null or empty check (for example, `recipe.title?.isNotEmpty ?? false`) so it only renders once that field arrives in the stream. The result is a UI that fills in progressively: title first, then description, then ingredients, then steps. The `TextField` calls the same submit handler from `onSubmitted`, so the user can submit by pressing Enter in addition to tapping the button.
+
+## Run the app
+
+Start your Genkit backend in one terminal by following the run instructions in the [backend tutorial](/docs/backend-frameworks/overview) you used. Then start the Flutter web app in another terminal:
 
 ```bash
-flutter run
+flutter run -d chrome
 ```
 
-If you're using Flutter web during development, `genkit start:flutter` is also a convenient option:
+Open the Flutter app in Chrome, enter a craving like `something warm with chicken`, and submit. The recipe streams in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
+
+If your backend uses a different route or port, pass it with a Dart define:
 
 ```bash
-genkit start:flutter -- -d chrome
+flutter run -d chrome --dart-define=BARGAIN_CHEF_URL=http://localhost:3780/api/bargainChefFlow
 ```
 
-## Test the full flow
+If the request fails, check the browser console first. The most common issue is a CORS error or a `BARGAIN_CHEF_URL` that doesn't match the backend route.
 
-Once your backend and Flutter app are both running:
+## Test and inspect the app
 
-- enter an ingredient and optional dietary restriction
-- tap `Generate recipe`
-- confirm the structured recipe appears in the app
+The Genkit Developer UI is a local console for testing flows and inspecting traces. It records every tool call, model invocation, and streamed chunk, so you can see what the model called, what it received back, and how the recipe was assembled.
 
-## Test in the Developer UI
-
-The **Developer UI** is a local tool for testing and inspecting Genkit components, like flows, with a visual interface.
-
-### Start the Developer UI
-
-The Genkit CLI is required to run the Developer UI. If you followed the installation steps above, you already have it installed.
-
-To inspect your flows in the Developer UI, run your backend with the Genkit CLI. For example, if your backend is a Dart server:
-
-```bash
-genkit start -- dart run
-```
-
-The command will print the Dev UI URL:
-
-```
-Genkit Developer UI: http://localhost:4000
-```
-
-### Run and inspect flows
+If your backend is running under `genkit start`, the Developer UI is already running at `http://localhost:4000`.
 
 In the Developer UI:
 
-1. Select `recipeGeneratorFlow` from the list of flows.
-2. Enter sample input:
+- The **Traces** tab shows every invocation of `bargainChefFlow`, including requests from your Flutter app. Open one and you'll see the `getIngredientsOnSale` tool call with the `dayType` the model chose, the model invocation, and each streamed chunk that the browser received.
+- The **Flows** tab lets you run `bargainChefFlow` directly with custom input, which is useful for iterating on the prompt without round-tripping through the UI.
 
-   ```json
-   {
-     "ingredient": "avocado",
-     "dietaryRestrictions": "vegetarian"
-   }
-   ```
+## What you built
 
-3. Click **Run**
-
-   You'll see the generated recipe as structured output, along with a visual trace of the AI generation process for debugging and optimization.
-
-   <video
-     controls
-     preload="metadata"
-     muted
-     width="100%"
-     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
-     poster="/videos/devui-flow-runner-poster.png"
-     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the recipe generator flow with input parameters and structured output results"
-   >
-     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
-     Your browser does not support the video tag. This video demonstrates how to
-     run a Genkit flow in the Developer UI, showing the recipe generator flow
-     with input parameters and the resulting structured output.
-   </video>
+You now have a working Genkit app that streams structured output from Gemini into a Flutter UI incrementally, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
 
 ## Next steps
 
-- [Accessing flows from the client](/docs/client)
-- [Creating flows](/docs/flows)
-- [Generating content](/docs/models)
-- [Developer tools](/docs/devtools)
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.
