@@ -45,7 +45,7 @@ Install the packages you need:
 
 <PackageManagerTabs
   command={`
-npm install fastify @fastify/cors genkit @genkit-ai/google-genai @genkit-ai/fetch
+npm install fastify @fastify/cors genkit @genkit-ai/google-genai @genkit-ai/fastify
 npm install -D typescript tsx @types/node genkit-cli
 `}
 />
@@ -56,7 +56,7 @@ These packages include:
 - **`@fastify/cors`**: Fastify CORS plugin. Lets browser frontends served from a different origin call the Genkit endpoint.
 - **`genkit`**: Core Genkit SDK.
 - **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`@genkit-ai/fetch`**: Fetch-based handlers you can wire into any HTTP framework.
+- **`@genkit-ai/fastify`**: Exposes a Genkit flow as a Fastify route, including server-sent events for streaming.
 - **`genkit-cli`**: CLI tool that enables Genkit testing and observability.
 
 ### Configure a model API key
@@ -113,87 +113,22 @@ A few details are worth noting:
 
 ### Add the server route
 
-Wire up the Genkit backend in `src/index.ts`. Fastify's request and response types don't match the fetch handlers directly, so the file includes a small adapter that converts a Fastify request into a `Request` and streams a `Response` back through Fastify.
+Wire up the Genkit backend in `src/index.ts`. The `@genkit-ai/fastify` plugin's `fastifyHandler` adapts the flow to a Fastify route, so there's no request or streaming plumbing to write.
 
 ```ts title="src/index.ts"
-import { Readable } from 'node:stream';
-import { fetchHandlers } from '@genkit-ai/fetch';
-import Fastify from 'fastify';
+import { fastifyHandler } from '@genkit-ai/fastify';
 import cors from '@fastify/cors';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import Fastify from 'fastify';
 import { bargainChefFlow } from './genkit/bargainChefFlow.js';
-
-function toWebRequest(request: FastifyRequest): Request {
-  const protocol = request.protocol || 'http';
-  const host = request.headers.host || 'localhost:3000';
-  const url = new URL(request.raw.url || '/', `${protocol}://${host}`);
-  const headers = new Headers();
-
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      value.forEach((entry) => headers.append(key, entry));
-    } else {
-      headers.set(key, String(value));
-    }
-  }
-
-  const body =
-    request.method === 'GET' || request.method === 'HEAD'
-      ? undefined
-      : JSON.stringify(request.body ?? {});
-
-  const controller = new AbortController();
-  request.raw.on('close', () => controller.abort());
-
-  return new Request(url, {
-    method: request.method,
-    headers,
-    body,
-    duplex: 'half',
-    signal: controller.signal,
-  });
-}
-
-async function sendWebResponse(reply: FastifyReply, response: Response) {
-  reply.hijack();
-  reply.raw.statusCode = response.status;
-
-  // Headers set by earlier hooks/plugins (like @fastify/cors) live on the
-  // Fastify reply. hijack() stops Fastify from flushing them, so copy them
-  // onto the raw response first, or the browser rejects the streamed response
-  // for missing CORS headers even though the preflight passed.
-  for (const [key, value] of Object.entries(reply.getHeaders())) {
-    if (value !== undefined) reply.raw.setHeader(key, value);
-  }
-
-  response.headers.forEach((value, key) => {
-    reply.raw.setHeader(key, value);
-  });
-
-  if (!response.body) {
-    reply.raw.end();
-    return;
-  }
-
-  Readable.fromWeb(response.body).pipe(reply.raw);
-}
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
-const handleFlowRequest = fetchHandlers([bargainChefFlow], '/api');
-
-app.post('/api/:flowName', async (request, reply) => {
-  const response = await handleFlowRequest(toWebRequest(request));
-  await sendWebResponse(reply, response);
-});
+app.post('/bargainChefFlow', fastifyHandler(bargainChefFlow));
 
 await app.listen({ port: 3000, host: '0.0.0.0' });
 ```
 
-`fetchHandlers([bargainChefFlow], '/api')` returns a single handler that dispatches incoming fetch `Request` objects to the matching flow based on the URL path. The Fastify route forwards every `POST /api/:flowName` request through the adapter so the handler can stream chunks back as they're produced.
-
-Because the streamed response uses `reply.hijack()`, the adapter copies the headers that plugins like `@fastify/cors` set on the reply onto the raw response before piping. Without that step, a streamed response would arrive without its CORS headers, and a browser would reject it even though the preflight request succeeded.
+`fastifyHandler(bargainChefFlow)` parses the JSON request body, invokes the flow, and (when the client opts in with an `Accept: text/event-stream` header) streams chunks back as server-sent events. It handles the Fastify-to-Genkit bridging for you, including copying CORS headers onto the streamed response so browsers accept it.
 
 `cors, { origin: true }` reflects the request origin, so **any browser frontend** can call this endpoint during development. Before deploying, restrict it to the origins you actually serve (for example, `{ origin: 'https://your-app.com' }`).
 
@@ -231,7 +166,7 @@ Start the Fastify server:
 The server listens on `http://localhost:3000`. In another terminal, send a craving and watch the recipe stream in field by field: title first, then description, then ingredients (with `onSale: true` on the ones the model picked from the tool), then steps.
 
 ```bash
-curl -N -X POST http://localhost:3000/api/bargainChefFlow \
+curl -N -X POST http://localhost:3000/bargainChefFlow \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"data":{"craving":"something warm with chicken"}}'
@@ -248,7 +183,7 @@ You can call the flow directly with curl, and you can use the Developer UI to in
 With the server running, post a non-streaming request to get the final validated recipe in one shot:
 
 ```bash
-curl -X POST http://localhost:3000/api/bargainChefFlow \
+curl -X POST http://localhost:3000/bargainChefFlow \
   -H "Content-Type: application/json" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
