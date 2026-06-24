@@ -7,6 +7,7 @@ supportedLanguages:
 ---
 
 import Lang from '../../../../components/Lang.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 :::caution[Beta]
 The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
@@ -42,52 +43,6 @@ app.listen(8080);
 ```
 
 The primary endpoint handles normal and streaming turns. The snapshot endpoint reads by `snapshotId` or `sessionId`. The abort endpoint takes `{ snapshotId }`.
-
-## Create a remote client
-
-`remoteAgent()` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
-
-```ts
-import { remoteAgent } from 'genkit/beta/client';
-
-const agent = remoteAgent<WeatherState>({
-  url: '/api/weatherAgent',
-});
-
-const chat = agent.chat();
-const res = await chat.send('Weather in Tokyo?');
-
-console.log(res.text);
-```
-
-Options:
-
-- **`url`** is required and sends normal and streaming turns.
-- **`getSnapshotUrl`** defaults to `${url}/getSnapshot` and loads saved snapshots for server-managed agents.
-- **`abortUrl`** defaults to `${url}/abort` and cancels detached background turns.
-- **`headers`** can be a static object or an async function called for each request. Use the function form when tokens rotate or need to be fetched from the current frontend session.
-- **`stateManagement`** explicitly declares `server` or `client` state. You usually do not need it because the client infers the mode from responses, but it is useful when a frontend must validate its own usage early.
-
-Current `remoteAgent()` code does not read a `stateUrl` option. The route may still be named `/state` if your server uses that path, but the client option is `getSnapshotUrl`.
-
-```ts
-const agent = remoteAgent({
-  url: '/api/weatherAgent',
-  getSnapshotUrl: '/api/weatherAgent/state',
-  abortUrl: '/api/weatherAgent/abort',
-  headers: async () => ({
-    Authorization: `Bearer ${await getToken()}`,
-  }),
-});
-```
-
-## Client behavior
-
-The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts through `AbortSignal`, applies streamed custom-state patches, and throws `AgentError` for failed turns.
-
-When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
-
-For client-managed agents, the remote client sends the full state back to the primary endpoint. That keeps the server stateless, but it means request size grows with conversation history and artifacts. Prefer server-managed routes for long-running chat experiences or background tasks.
 
 </Lang>
 
@@ -168,22 +123,113 @@ curl -X POST http://localhost:8080/agents/chat/abort \
   -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
 ```
 
-## Call a Go agent from JavaScript
+</Lang>
 
-The JavaScript client can call the Go route shape:
+## Connect a client
+
+The client is independent of the backend language. Point it at the primary turn URL your server exposes, such as `/api/weatherAgent` for the Express routes above or `/agents/{name}` for the Go routes, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
+
+The snippets below apply whichever backend language you selected.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
+
+`remoteAgent()` from `genkit/beta/client` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
 
 ```ts
 import { remoteAgent } from 'genkit/beta/client';
 
-const weatherAgent = remoteAgent({
-  url: 'http://localhost:8080/agents/chat',
-  getSnapshotUrl: 'http://localhost:8080/agents/chat/getSnapshot',
+const agent = remoteAgent<WeatherState>({
+  url: 'http://localhost:8080/api/weatherAgent',
 });
 
-const res = await weatherAgent.chat().send('Weather in Tokyo?');
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+
 console.log(res.text);
 ```
 
-You can omit `abortUrl` for the default Go layout because the JavaScript client derives `${url}/abort`.
+Options:
 
-</Lang>
+- **`url`** is required and sends normal and streaming turns.
+- **`getSnapshotUrl`** defaults to `${url}/getSnapshot` and loads saved snapshots for server-managed agents.
+- **`abortUrl`** defaults to `${url}/abort` and cancels detached background turns.
+- **`headers`** can be a static object or an async function called for each request. Use the function form when tokens rotate or are fetched from the current frontend session.
+- **`stateManagement`** explicitly declares `server` or `client` state. The client otherwise infers the mode from responses.
+
+</TabItem>
+<TabItem label="Dart">
+
+`remoteAgent()` from `package:genkit/client.dart` creates a typed client with the same chat surface. Build turn input with `agentInputFromText()`.
+
+```dart
+import 'package:genkit/client.dart';
+
+final agent = remoteAgent(
+  RemoteAgentOptions(url: 'http://localhost:8080/api/weatherAgent'),
+);
+
+final chat = agent.chat();
+final res = await chat.send(agentInputFromText('Weather in Tokyo?'));
+
+print(res.text);
+```
+
+`RemoteAgentOptions` fields:
+
+- **`url`** is required and sends normal and streaming turns.
+- **`stateUrl`** defaults to `$url/state` and loads saved snapshots. Point it at your server's snapshot route, such as `$url/getSnapshot`.
+- **`abortUrl`** defaults to `$url/abort` and cancels detached background turns.
+- **`headers`** is static headers or a resolver called per request, for rotating auth tokens.
+- **`stateManagement`** explicitly declares `server` or `client` state. The client otherwise infers the mode.
+- **`httpClient`** supplies your own `http.Client` when you need to control its lifecycle.
+
+</TabItem>
+</Tabs>
+
+## Stream a turn
+
+`sendStream()` returns a turn that exposes a chunk stream and a final response.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
+
+```ts
+const turn = agent.chat().sendStream('Write a long report.');
+
+for await (const chunk of turn.stream) {
+  if (chunk.text) process.stdout.write(chunk.text);
+  if (chunk.custom) updateStatus(chunk.custom);
+}
+
+const res = await turn.response;
+```
+
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+import 'dart:io';
+
+final turn = agent.chat().sendStream(
+  agentInputFromText('Write a long report.'),
+);
+
+await for (final chunk in turn.stream) {
+  stdout.write(chunk.text);
+  if (chunk.custom != null) updateStatus(chunk.custom);
+}
+
+final res = await turn.response;
+```
+
+</TabItem>
+</Tabs>
+
+## Client behavior
+
+The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts, applies streamed custom-state patches, and throws `AgentError` for failed turns.
+
+When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
+
+For client-managed agents, the remote client sends the full state back to the primary endpoint. That keeps the server stateless, but request size grows with conversation history and artifacts. Prefer server-managed routes for long-running chat experiences or background tasks.
