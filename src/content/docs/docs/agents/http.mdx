@@ -1,0 +1,193 @@
+---
+title: Serve agents over HTTP
+description: Connect frontend apps and services to Genkit agents through HTTP while keeping the same chat-based programming model.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+HTTP serving lets browser apps, mobile apps, other services, and agents written in another language use the same conversational runtime. The wire protocol has a primary turn endpoint and optional companion endpoints for snapshots and aborts.
+
+This is one of the main reasons to choose an agent over a standard flow for frontend-heavy features. The client can stream model output, custom state, artifacts, and interrupts through one agent interface, then continue the next turn with a session ID, snapshot ID, or client-managed state.
+
+<Lang lang="js">
+
+## Express routes
+
+Every JavaScript Genkit agent is a bidirectional action. Serve the agent action itself for turns. Serve the snapshot companion only for server-managed agents, and serve the abort companion only when clients need to cancel detached work.
+
+```ts
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
+const app = express();
+
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
+
+app.post(
+  '/api/weatherAgent/getSnapshot',
+  expressHandler(weatherAgent.getSnapshotDataAction),
+);
+
+app.post(
+  '/api/weatherAgent/abort',
+  expressHandler(weatherAgent.abortAgentAction),
+);
+
+app.listen(8080);
+```
+
+The primary endpoint handles normal and streaming turns. The snapshot endpoint reads by `snapshotId` or `sessionId`. The abort endpoint takes `{ snapshotId }`.
+
+## Create a remote client
+
+`remoteAgent()` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
+
+```ts
+import { remoteAgent } from 'genkit/beta/client';
+
+const agent = remoteAgent<WeatherState>({
+  url: '/api/weatherAgent',
+});
+
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+
+console.log(res.text);
+```
+
+Options:
+
+| Option            | Default              | Purpose                                                                      |
+| ----------------- | -------------------- | ---------------------------------------------------------------------------- |
+| `url`             | Required             | Sends normal and streaming turns.                                            |
+| `getSnapshotUrl`  | `${url}/getSnapshot` | Loads saved snapshots for server-managed agents.                             |
+| `abortUrl`        | `${url}/abort`       | Cancels detached background turns.                                           |
+| `headers`         | None                 | Static headers or an async function called for each request.                 |
+| `stateManagement` | Inferred             | Explicitly declares `server` or `client` state when inference is not enough. |
+
+Current `remoteAgent()` code does not read a `stateUrl` option. The route may still be named `/state` if your server uses that path, but the client option is `getSnapshotUrl`.
+
+```ts
+const agent = remoteAgent({
+  url: '/api/weatherAgent',
+  getSnapshotUrl: '/api/weatherAgent/state',
+  abortUrl: '/api/weatherAgent/abort',
+  headers: async () => ({
+    Authorization: `Bearer ${await getToken()}`,
+  }),
+});
+```
+
+## Client behavior
+
+The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts through `AbortSignal`, applies streamed custom-state patches, and throws `AgentError` for failed turns.
+
+When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history.
+
+</Lang>
+
+<Lang lang="go">
+
+## Route helpers
+
+The experimental Go route helpers live in `github.com/firebase/genkit/go/genkit/exp`. They return route descriptors that you can mount on `http.ServeMux` or another router.
+
+```go
+import genkitx "github.com/firebase/genkit/go/genkit/exp"
+
+mux := http.NewServeMux()
+for _, route := range genkitx.AllAgentRoutes(g) {
+	mux.HandleFunc(route.Pattern(), route.Handler())
+}
+
+log.Fatal(http.ListenAndServe(":8080", mux))
+```
+
+Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent.
+
+## Route layout
+
+| Route                             | When it exists                                                           |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `POST /agents/{name}`             | Always. One turn per request. Add `?stream=true` for server-sent events. |
+| `POST /agents/{name}/getSnapshot` | Only when the agent has a session store.                                 |
+| `POST /agents/{name}/abort`       | Only when the agent has a store that supports status subscriptions.      |
+
+The abort route is `/abort`. Current Go code does not expose an `abortSnapshot` route.
+
+Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in `init`.
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}}}'
+```
+
+Continue a server-managed conversation:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What about Paris?"}]}},"init":{"sessionId":"SESSION_ID"}}'
+```
+
+Continue a client-managed conversation:
+
+```sh
+curl -X POST http://localhost:8080/agents/statelessChat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What is my name?"}]}},"init":{"state":STATE_FROM_PREVIOUS_RESPONSE}}'
+```
+
+Stream a turn as server-sent events:
+
+```sh
+curl -N -X POST 'http://localhost:8080/agents/chat?stream=true' \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Suggest three day trips from Tokyo."}]}}}'
+```
+
+## Snapshot and abort companions
+
+Read a snapshot:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
+```
+
+Abort detached work:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/abort \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
+```
+
+## Call a Go agent from JavaScript
+
+The JavaScript client can call the Go route shape:
+
+```ts
+import { remoteAgent } from 'genkit/beta/client';
+
+const weatherAgent = remoteAgent({
+  url: 'http://localhost:8080/agents/chat',
+  getSnapshotUrl: 'http://localhost:8080/agents/chat/getSnapshot',
+});
+
+const res = await weatherAgent.chat().send('Weather in Tokyo?');
+console.log(res.text);
+```
+
+You can omit `abortUrl` for the default Go layout because the JavaScript client derives `${url}/abort`.
+
+</Lang>

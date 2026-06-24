@@ -1,0 +1,357 @@
+---
+title: Define agents
+description: Create Genkit agents that answer users, call tools, remember context, and grow from simple prompts into custom workflows.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+In Genkit, agents are actions with conversation state. A standard agent renders a prompt on each turn, appends conversation history, calls the model, streams chunks, updates state, and optionally persists a snapshot. A custom agent keeps that runtime shell, but replaces the prompt-backed loop with your own code.
+
+Choose an agent when the application should feel like an ongoing conversation or workspace rather than a single backend call. Persistent chat, iterative generation, resumable approvals, and frontend clients that need streamed state all benefit from the agent runtime. Choose a flow or a direct `generate()` call when you want to define every orchestration, storage, and transport detail yourself.
+
+<Lang lang="js">
+
+## Constructor choices
+
+| API                      | Use it when                                                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ai.defineAgent()`       | You want to define the prompt and agent in one call. This is the common path for chat, tool-using assistants, and server-backed agents. |
+| `ai.definePromptAgent()` | You already have a prompt action or Dotprompt file, and want to expose it as an agent.                                                  |
+| `ai.defineCustomAgent()` | You need a custom loop, multiple model calls, direct session control, or custom streaming.                                              |
+
+All three produce an agent that supports the transport-agnostic `chat()`, `loadChat()`, `getSnapshot()`, and `abort()` surface. The agent is also a bidirectional action that can be served over HTTP.
+
+## Define a prompt-backed agent
+
+`defineAgent()` combines prompt definition and agent registration. It accepts normal prompt options, plus agent-specific options such as `stateSchema`, `store`, `clientTransform`, and `promptInput`.
+
+```ts
+import { genkit, z, FileSessionStore } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});
+
+const store = new FileSessionStore<WeatherState>('./.genkit/snapshots/weather');
+
+const getWeather = ai.defineTool(
+  {
+    name: 'getWeather',
+    description: 'Get the current weather for a location.',
+    inputSchema: z.object({ location: z.string() }),
+    outputSchema: z.object({
+      temperatureF: z.number(),
+      conditions: z.string(),
+    }),
+  },
+  async ({ location }) => {
+    return { temperatureF: 72, conditions: `sunny in ${location}` };
+  },
+);
+
+const WeatherStateSchema = z.object({
+  lastLocation: z.string().optional(),
+});
+
+type WeatherState = z.infer<typeof WeatherStateSchema>;
+
+export const weatherAgent = ai.defineAgent({
+  name: 'weatherAgent',
+  description: 'Answers weather questions for a location.',
+  system: 'Answer weather questions. Ask for a location when one is missing.',
+  tools: [getWeather],
+  stateSchema: WeatherStateSchema,
+  store,
+});
+```
+
+The `description` is surfaced in action metadata, the developer UI, and the multi-agent middleware. Write it as an operational summary of when another agent should delegate to this one.
+
+## Agent-specific options
+
+| Option            | Purpose                                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | Registers the prompt and agent action.                                                                                             |
+| `description`     | Human-readable description for tooling and delegation.                                                                             |
+| `stateSchema`     | Validates custom state when loading from a snapshot or client state, and exposes JSON Schema metadata.                             |
+| `store`           | Switches the agent to server-managed state and enables snapshots, branching, background execution, and snapshot companion actions. |
+| `clientTransform` | Shapes state and stream chunks before they leave the server. Use it to redact or reshape client-facing data.                       |
+| `promptInput`     | Supplies values for the prompt input variables. This lets one prompt definition power differently configured agents.               |
+
+`defineAgent()` also accepts the prompt options used by `definePrompt()`, including `model`, `system`, `messages`, `tools`, `config`, `output`, `maxTurns`, and middleware through `use`.
+
+## Wrap an existing prompt
+
+Use `definePromptAgent()` when the prompt already exists. This is common with Dotprompt files because prompt authors can tune model settings, schemas, and template content without touching agent wiring.
+
+```ts
+export const tripAgent = ai.definePromptAgent({
+  promptName: 'trip-planner',
+  description: 'Plans short trips with weather-aware recommendations.',
+  promptInput: { tone: 'concise' },
+  stateSchema: TripStateSchema,
+  store,
+});
+```
+
+The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, the turn fails with an error telling you which prompt name was missing.
+
+Dotprompt keeps prompt copy and model settings close to the content:
+
+{/* prettier-ignore */}
+```handlebars
+---
+model: googleai/gemini-flash-latest
+input:
+  schema:
+    destination: string
+    tone?: string
+tools:
+  - getWeather
+---
+
+Plan a short trip to {{destination}}.
+Use weather data when it changes the recommendation.
+Write in a {{tone}} tone.
+```
+
+## Tools and current session
+
+Tools can read and update the active session by calling `ai.currentSession<State>()`. The session object exposes `getCustom()`, `updateCustom(fn)`, `getMessages()`, `addMessages()`, `setMessages()`, `getArtifacts()`, and `addArtifacts()`.
+
+```ts
+const addTask = ai.defineTool(
+  {
+    name: 'addTask',
+    description: 'Add a new task to the task list.',
+    inputSchema: z.object({ title: z.string() }),
+    outputSchema: z.object({
+      id: z.number(),
+      title: z.string(),
+      done: z.boolean(),
+    }),
+  },
+  async ({ title }) => {
+    const session = ai.currentSession<TaskState>();
+    let task!: TaskItem;
+
+    session.updateCustom((state) => {
+      const next = state ?? { tasks: [], nextId: 1 };
+      task = { id: next.nextId, title, done: false };
+      return {
+        tasks: [...next.tasks, task],
+        nextId: next.nextId + 1,
+      };
+    });
+
+    return task;
+  },
+);
+```
+
+Custom-state mutations automatically emit streamed JSON Patch chunks. That keeps `chat.state` and `chunk.custom` current while a turn is still running.
+
+## Define a custom agent implementation
+
+Use `defineCustomAgent()` when the standard prompt loop is too narrow. A custom agent receives a `SessionRunner` and helpers for streaming chunks. It still gets snapshot management, client-managed state, server-managed state, background execution, and HTTP serving.
+
+```ts
+export const researchAgent = ai.defineCustomAgent(
+  {
+    name: 'researchAgent',
+    description: 'Breaks a question into subtopics and synthesizes an answer.',
+    stateSchema: ResearchStateSchema,
+    store,
+  },
+  async (sess, { sendChunk, abortSignal }) => {
+    let finalMessage;
+
+    await sess.run(async (input) => {
+      const userText =
+        input.message?.content.find((part) => part.text)?.text ?? '';
+
+      sess.updateCustom((state) => ({
+        ...state,
+        status: 'Planning research',
+      }));
+
+      const outline = await ai.generate({
+        prompt: `Create three research questions for: ${userText}`,
+        abortSignal,
+      });
+
+      sess.updateCustom((state) => ({
+        ...state,
+        status: 'Writing answer',
+      }));
+
+      const stream = ai.generateStream({
+        prompt: `Answer the user using this outline:\n${outline.text}`,
+        abortSignal,
+      });
+
+      for await (const chunk of stream.stream) {
+        sendChunk({ modelChunk: chunk });
+      }
+
+      const response = await stream.response;
+      finalMessage = response.message;
+
+      if (response.message) {
+        sess.addMessages([response.message]);
+      }
+
+      return { finishReason: response.finishReason };
+    });
+
+    return {
+      message: finalMessage,
+      artifacts: sess.getArtifacts(),
+    };
+  },
+);
+```
+
+Call `sess.run()` to process each turn. It adds the incoming user message to history before your callback runs, reserves a snapshot ID before the turn starts when a store is configured, and snapshots successful turn state at the end. If your callback throws, the runtime records a failed turn and returns the last-good state or snapshot to the caller.
+
+</Lang>
+
+<Lang lang="go">
+
+## Constructor choices
+
+| API                        | Use it when                                                                                    |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| `genkit.DefineAgent`       | You want an inline prompt defined beside the agent wiring.                                     |
+| `genkit.DefinePromptAgent` | You want to wrap a prompt that is already registered, such as a Dotprompt file.                |
+| `genkit.DefineCustomAgent` | You need full control over the per-turn loop.                                                  |
+| `aix.NewCustomAgent`       | You want to create an agent before registering it, or register it into another registry later. |
+
+All Go agents implement `api.BidiAction`, so transports and route helpers can serve them directly. Server-managed agents also expose typed snapshot helpers and companion actions.
+
+## Define a prompt-backed agent
+
+`DefineAgent` registers a prompt-backed agent from an `aix.InlinePrompt`. The inline prompt is a list of prompt options.
+
+```go
+store, err := localstore.NewFileSessionStore[TaskState]("./.genkit/snapshots/tasks")
+if err != nil {
+	log.Fatal(err)
+}
+
+taskAgent := genkit.DefineAgent(g, "taskAgent",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Manage a task list. Use tools when changing tasks."),
+		ai.WithTools(addTaskTool, toggleTaskTool),
+	},
+	aix.WithSessionStore(store),
+	aix.WithDescription[TaskState]("Task management assistant"),
+)
+```
+
+The agent's custom state type is inferred from typed options such as `WithSessionStore[TaskState]`, `WithStateTransform[TaskState]`, or the explicit type argument on `DefineAgent[TaskState]`.
+
+## Agent options
+
+| Option                                    | Purpose                                                                      |
+| ----------------------------------------- | ---------------------------------------------------------------------------- |
+| `aix.WithSessionStore(store)`             | Persists snapshots and switches the agent to server-managed state.           |
+| `aix.WithStateTransform(fn)`              | Redacts or reshapes session state returned to clients and snapshot readers.  |
+| `aix.WithStreamTransform[State](fn)`      | Redacts or reshapes each streamed chunk before it is sent to clients.        |
+| `aix.WithDescription[State](text)`        | Adds a human-readable description to action metadata and developer tooling.  |
+| `aix.WithNamedPrompt[State](name, input)` | Points `DefinePromptAgent` at a specific registered prompt and render input. |
+
+Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time.
+
+## Wrap an existing prompt
+
+`DefinePromptAgent` wraps a prompt already registered in the prompt registry. With no prompt-source option, it uses a prompt with the same name as the agent.
+
+```go
+chef := genkit.DefinePromptAgent[ChefState](g, "chef",
+	aix.WithSessionStore(store),
+	aix.WithDescription[ChefState]("Chef assistant loaded from ./prompts/chef.prompt"),
+)
+```
+
+Use `WithNamedPrompt` when several agents share one prompt or when the prompt name differs from the agent name.
+
+```go
+friendlyChef := genkit.DefinePromptAgent[ChefState](g, "friendlyChef",
+	aix.WithNamedPrompt[ChefState]("chef", map[string]any{
+		"personality": "friendly",
+	}),
+	aix.WithSessionStore(store),
+)
+```
+
+The prompt input is rendered at definition time as a smoke test. If it does not satisfy the prompt schema, the constructor panics during setup rather than during the first request.
+
+## Define a custom agent implementation
+
+`DefineCustomAgent` gives you the agent runtime without the built-in prompt loop. The function receives a `Responder` for streaming and a `SessionRunner` for turn processing, messages, custom state, artifacts, and snapshots.
+
+```go
+coder := genkit.DefineCustomAgent(g, "coder",
+	func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[CoderState]) (*aix.AgentResult, error) {
+		err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+			for chunk, err := range genkit.GenerateStream(ctx, g,
+				ai.WithSystem("You are a concise coding assistant."),
+				ai.WithMessages(sess.Messages()...),
+			) {
+				if err != nil {
+					return nil, err
+				}
+				if chunk.Done {
+					sess.AddMessages(chunk.Response.Message)
+					return &aix.TurnResult{
+						FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
+					}, nil
+				}
+				resp.SendModelChunk(chunk.Chunk)
+			}
+			return nil, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return sess.Result(), nil
+	},
+	aix.WithSessionStore(store),
+	aix.WithDescription[CoderState]("Concise code helper"),
+)
+```
+
+Use `aix.TurnContextFromContext(ctx)` inside the per-turn callback when you need the reserved `SnapshotID`, parent snapshot ID, or zero-based turn index. The snapshot ID is minted before the turn runs for server-managed agents, which is useful when external resources need to be correlated with the snapshot that will later be persisted.
+
+## Current session and artifacts
+
+`SessionRunner` embeds `Session`, so custom agents can read messages, update typed custom state, and add artifacts directly:
+
+```go
+sess.UpdateCustom(func(state CoderState) CoderState {
+	state.Status = "Generating patch"
+	return state
+})
+
+resp.SendArtifact(&aix.Artifact{
+	Name: "patch.diff",
+	Parts: []*ai.Part{
+		ai.NewTextPart(diffText),
+	},
+})
+```
+
+`Responder.SendArtifact` streams the artifact to the client and records it in the session. The side effect is applied before `SendArtifact` returns, so a later snapshot or `sess.Result()` can see it.
+
+</Lang>

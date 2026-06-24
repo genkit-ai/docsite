@@ -1,0 +1,163 @@
+---
+title: Multi-agent delegation
+description: Split complex work across specialized Genkit agents and have an orchestrator combine their results.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+In Genkit, multi-agent systems split work between specialized agents and an orchestrator. The orchestrator decides which specialist should handle each part of the request, then synthesizes a final answer.
+
+<Lang lang="js">
+
+## Add delegation middleware
+
+The JavaScript middleware package provides `agents()` for delegation. It injects one delegation tool per sub-agent. By default, tool names use `delegate_to_<agentName>`.
+
+```ts
+import { agents, artifacts, retry } from '@genkit-ai/middleware';
+
+const researcher = ai.defineAgent({
+  name: 'researcher',
+  description: 'Finds facts and produces sourced research notes.',
+  system: 'Research the user request and write concise findings.',
+  use: [artifacts(), retry()],
+});
+
+const coder = ai.defineAgent({
+  name: 'coder',
+  description: 'Writes and explains code.',
+  system:
+    'Write clear TypeScript code unless the user asks for another language.',
+  use: [artifacts(), retry()],
+});
+
+const coordinator = ai.defineAgent({
+  name: 'coordinator',
+  system:
+    'Delegate to specialists, inspect their results, then answer the user.',
+  use: [
+    agents({
+      agents: [
+        'researcher',
+        {
+          name: 'coder',
+          description:
+            'Writes, debugs, and explains code. Use for programming tasks.',
+        },
+      ],
+      historyLength: 4,
+      maxDelegations: 5,
+      artifactStrategy: 'session',
+    }),
+    artifacts({ readonly: true }),
+  ],
+});
+```
+
+The middleware can discover agent descriptions from action metadata, or you can override a description in the middleware config. Keep descriptions concrete because they become tool descriptions for the orchestrator model.
+
+## Delegation options
+
+| Option             | Purpose                                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `agents`           | Agent names, agent actions, or entries with a name and description override.                              |
+| `toolPrefix`       | Prefix for generated tools. Defaults to `delegate_to`; set it to an empty string to use bare agent names. |
+| `historyLength`    | Number of recent conversation messages to forward to sub-agents.                                          |
+| `maxDelegations`   | Guard rail that limits delegation calls in one orchestrator turn.                                         |
+| `artifactStrategy` | Controls whether sub-agent artifacts are merged into the parent session.                                  |
+
+When history is forwarded to client-managed sub-agents, the middleware includes recent messages in the sub-agent state. For server-managed sub-agents, history is not forwarded as client state because those agents own their server-side session.
+
+## Stream delegation progress
+
+Delegation appears as normal tool activity in the orchestrator stream.
+
+```ts
+const turn = coordinator
+  .chat()
+  .sendStream('Research sorting algorithms and write quicksort.');
+
+for await (const chunk of turn.stream) {
+  for (const request of chunk.toolRequests) {
+    const name = request.toolRequest.name;
+    if (name.startsWith('delegate_to_')) {
+      showDelegation(name);
+    }
+  }
+
+  if (chunk.text) {
+    appendText(chunk.text);
+  }
+}
+```
+
+## Interrupts and failures
+
+Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as retrying, choosing another specialist, or asking the user for clarification.
+
+## Artifacts from sub-agents
+
+With `artifactStrategy: 'session'`, sub-agent artifacts are merged into the parent session and namespaced by invocation. Pair this with `artifacts({ readonly: true })` so the orchestrator can inspect delegated work through the `read_artifact` tool.
+
+## Existing legacy page
+
+The older [Building multi-agent systems](/docs/multi-agent) page describes a prompts-as-tools pattern. Prefer the Agents API middleware for new work because it integrates with sessions, streaming, persistence, background execution, and HTTP clients.
+
+</Lang>
+
+<Lang lang="go">
+
+## Compose agents with tools
+
+Go does not currently expose the JavaScript `agents()` middleware. Compose agents explicitly by defining tools that call specialist agents.
+
+```go
+researchTool := ai.DefineTool(g, "research",
+	"Researches a topic and returns concise notes.",
+	func(ctx context.Context, input ResearchInput) (ResearchOutput, error) {
+		out, err := researcher.RunText(ctx, input.Topic)
+		if err != nil {
+			return ResearchOutput{}, err
+		}
+		if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
+			return ResearchOutput{}, out.Error
+		}
+
+		return ResearchOutput{Notes: out.Message.Text()}, nil
+	})
+
+coordinator := genkit.DefineAgent(g, "coordinator",
+	aix.InlinePrompt{
+		ai.WithSystem("Use specialist tools for research or coding work."),
+		ai.WithTools(researchTool),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+Use clear tool descriptions so the coordinator knows when to call each specialist.
+
+## Preserve specialist continuity
+
+If a specialist needs durable memory, give it a session store and pass a stable session ID when the coordinator invokes it. Store that mapping in coordinator custom state or your application database.
+
+```go
+out, err := researcher.RunText(ctx, input.Topic,
+	aix.WithSessionID[ResearchState](input.ResearchSessionID),
+)
+```
+
+Use `WithSnapshotID` for deliberate branching of a specialist conversation.
+
+## Return recoverable failures as data
+
+When a specialist cannot complete a delegated task for a recoverable reason, return structured output that the coordinator can explain. Reserve Go errors for failures that should fail the coordinator tool call.
+
+</Lang>

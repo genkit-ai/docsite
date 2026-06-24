@@ -1,0 +1,317 @@
+---
+title: Sessions and state
+description: Choose where Genkit agent state lives and learn how conversations remember messages, progress, and generated outputs.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+In Genkit, agent state includes message history, custom application state, artifacts, session identity, and snapshot lineage. Choose the state strategy before building the client because it determines who owns continuity between turns.
+
+<Lang lang="js">
+
+## State strategies
+
+|                       | Server-managed                          | Client-managed                                        |
+| --------------------- | --------------------------------------- | ----------------------------------------------------- |
+| Setup                 | Define the agent with a `store`         | Omit `store`                                          |
+| Continuation          | Resume with `sessionId` or `snapshotId` | Send the full `state` object                          |
+| Client stores history | No                                      | Yes                                                   |
+| Server stores history | Yes                                     | No                                                    |
+| Branching             | Built in through snapshots              | Manual, by creating several chats from the same state |
+| Background execution  | Supported                               | Not supported                                         |
+| Snapshot endpoints    | Useful                                  | Not applicable                                        |
+
+In both modes, the `AgentChat` object tracks the next-turn values for you. A server-managed chat tracks `snapshotId` and `sessionId`. A client-managed chat tracks full `SessionState`.
+
+## Understand session state
+
+The full state object has three user-visible pieces:
+
+```ts
+type SessionState<S> = {
+  custom?: S;
+  messages?: MessageData[];
+  artifacts?: Artifact[];
+};
+```
+
+`custom` is application state. `messages` is conversation history. `artifacts` is a list of named outputs, such as generated files, reports, or media references.
+
+## Server-managed stores
+
+Add a store when the server should own history and snapshots:
+
+```ts
+import { FileSessionStore, genkit } from 'genkit/beta';
+
+const store = new FileSessionStore<WeatherState>('./.genkit/snapshots/weather');
+
+const agent = ai.defineAgent({
+  name: 'weatherAgent',
+  system: 'Answer weather questions.',
+  stateSchema: WeatherStateSchema,
+  store,
+});
+```
+
+Every successful turn writes a `completed` snapshot. The snapshot includes the session ID, parent snapshot ID, finish reason, state, timestamps, and status. Failed turns return the last-good state or snapshot instead of making partial state the normal resume point.
+
+## Snapshots
+
+Read a snapshot by ID or read the latest snapshot for a session:
+
+```ts
+const exact = await agent.getSnapshot({ snapshotId });
+const latest = await agent.getSnapshot({ sessionId });
+```
+
+You can pass a snapshot ID string as shorthand:
+
+```ts
+const snapshot = await agent.getSnapshot(snapshotId);
+```
+
+Snapshot statuses are:
+
+| Status      | Meaning                                                                             |
+| ----------- | ----------------------------------------------------------------------------------- |
+| `pending`   | A detached background invocation is still running.                                  |
+| `completed` | The snapshot captures a settled, resumable state.                                   |
+| `failed`    | The invocation failed. Error details are stored on the snapshot.                    |
+| `aborted`   | The detached invocation was canceled.                                               |
+| `expired`   | A pending snapshot heartbeat went stale, so the background worker is presumed dead. |
+
+Only `completed` snapshots are valid resume points. Other statuses are useful for inspection, polling, and recovery UI.
+
+## Resume by session or snapshot
+
+Use `sessionId` when the user wants the latest state in a conversation:
+
+```ts
+const chat = agent.chat({ sessionId: 'support-ticket-123' });
+await chat.send('Continue where we left off.');
+```
+
+Use `snapshotId` when the user wants a specific point in history:
+
+```ts
+const branch = agent.chat({ snapshotId: approvedPlanSnapshotId });
+await branch.send('Revise this plan for a smaller budget.');
+```
+
+When both values are supplied, the snapshot chooses the resume point and the session ID validates ownership.
+
+## Client-managed state
+
+Without a store, the server returns the whole state and the client sends it back:
+
+```ts
+const chat = agent.chat({
+  state: {
+    custom: { tasks: [], nextId: 1 },
+    messages: [],
+    artifacts: [],
+  },
+});
+
+const res = await chat.send('Add buy milk to my list.');
+
+saveState(res.raw.state);
+```
+
+This mode works well when your app already has a database, wants stateless server deployments, or needs to encrypt all conversation data client-side.
+
+## Live custom state
+
+When custom state changes during a turn, the runtime streams RFC 6902 JSON Patch chunks. `AgentChat` applies them in order. The resulting custom state appears on `chunk.custom` and `chat.state`.
+
+```ts
+const turn = researchAgent.chat().sendStream('Research electric vehicles.');
+
+for await (const chunk of turn.stream) {
+  if (chunk.custom?.status) {
+    renderStatus(chunk.custom.status);
+  }
+}
+```
+
+The first custom patch in each turn is a whole-document replace that rebases the client on the server's current custom state. Later patches are incremental.
+
+## Artifacts
+
+Artifacts are stored as named outputs in session state. Add them from a tool or custom agent through the active session.
+
+```ts
+const session = ai.currentSession<PlanState>();
+
+session.addArtifacts([
+  {
+    name: 'itinerary.json',
+    parts: [{ text: JSON.stringify(plan) }],
+    metadata: { contentType: 'application/json' },
+  },
+]);
+```
+
+Artifacts with the same `name` replace earlier artifacts. Unnamed artifacts are appended.
+
+## Client transforms
+
+Use `clientTransform` when raw session state should not leave the server. A state transform shapes snapshots and final state. A chunk transform shapes streamed chunks.
+
+```ts
+const agent = ai.defineAgent({
+  name: 'supportAgent',
+  system: 'Help support agents summarize cases.',
+  store,
+  clientTransform: {
+    state: (state) => ({
+      ...state,
+      custom: {
+        ...state.custom,
+        internalNotes: undefined,
+      },
+    }),
+    chunk: (chunk) => chunk,
+  },
+});
+```
+
+Keep state and chunk transforms consistent when they touch the same data. If state redaction changes custom state, the custom patch stream is diffed from the transformed state so clients see a coherent view.
+
+</Lang>
+
+<Lang lang="go">
+
+## State strategies
+
+|                       | Server-managed                                           | Client-managed      |
+| --------------------- | -------------------------------------------------------- | ------------------- |
+| Setup                 | Add `aix.WithSessionStore(store)`                        | Omit a store        |
+| Continuation          | Use `aix.WithSessionID` or `aix.WithSnapshotID`          | Use `aix.WithState` |
+| Server storage        | Snapshots in a store                                     | None                |
+| Background execution  | Supported when the store implements `SnapshotSubscriber` | Not supported       |
+| HTTP companion routes | `getSnapshot` and possibly `abort`                       | Omitted             |
+
+## Understand session state
+
+Go session state contains messages, typed custom state, artifacts, and the framework-owned session ID:
+
+```go
+type SessionState[State any] struct {
+	Artifacts []*aix.Artifact `json:"artifacts,omitempty"`
+	Custom    State           `json:"custom,omitempty"`
+	Messages  []*ai.Message   `json:"messages,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
+}
+```
+
+For client-managed agents, the caller round-trips this state with `aix.WithState`. For server-managed agents, snapshots persist it.
+
+## Server-side stores
+
+`WithSessionStore` switches the agent to server-managed state. The store must support snapshot reads and writes. Background detach and abort support also require the store to implement `SnapshotSubscriber`.
+
+```go
+store, err := localstore.NewFileSessionStore[TravelState]("./.genkit/snapshots/travel")
+if err != nil {
+	log.Fatal(err)
+}
+
+agent := genkit.DefineAgent(g, "travel",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("You are a travel assistant."),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+`FileSessionStore` persists snapshots as JSON files and is safe for concurrent use. It can also notify status subscribers when snapshots change, which enables abort handling and efficient wait loops.
+
+## Snapshot reads
+
+Use the typed agent methods when reading snapshots locally:
+
+```go
+snap, err := agent.GetSnapshot(ctx, snapshotID)
+latest, err := agent.GetLatestSnapshot(ctx, sessionID)
+```
+
+These methods apply `WithStateTransform` and read-time shaping. Reading `agent.Store()` directly returns raw, untransformed state.
+
+## Snapshot lifecycle
+
+| Status      | Meaning                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------ |
+| `pending`   | A detached invocation is processing queued inputs.                                                           |
+| `completed` | The snapshot captures settled state and can be resumed.                                                      |
+| `failed`    | The invocation failed and the snapshot contains structured error details.                                    |
+| `aborted`   | The detached invocation was canceled.                                                                        |
+| `expired`   | A pending snapshot heartbeat is stale. This status is computed on read and is not written back to the store. |
+
+Synchronous turns write `completed` snapshots. A failed turn does not make its partial state the normal continuation point. The output reports the last-good state or snapshot ID.
+
+## Invocation options
+
+Use `WithSessionID` when the caller tracks a conversation:
+
+```go
+out, err := agent.RunText(ctx, "What about Paris?",
+	aix.WithSessionID[TravelState](previous.SessionID),
+)
+```
+
+Use `WithSnapshotID` to branch:
+
+```go
+rainPlan, err := agent.RunText(ctx, "Assume it rains.",
+	aix.WithSnapshotID[TravelState](base.SnapshotID),
+)
+```
+
+Use `WithState` for client-managed agents:
+
+```go
+out, err := agent.RunText(ctx, "Add buy milk.",
+	aix.WithState(previous.State),
+)
+```
+
+An empty session ID is rejected. `WithState` cannot be combined with snapshot or session options.
+
+## State and stream transforms
+
+`WithStateTransform` redacts or reshapes session state on the way out to clients. It applies to snapshot reads and client-managed output, not to persisted raw state or the agent function's internal view.
+
+```go
+agent := genkit.DefineAgent(g, "support",
+	aix.InlinePrompt{
+		ai.WithSystem("Summarize support cases."),
+	},
+	aix.WithSessionStore(store),
+	aix.WithStateTransform(func(ctx context.Context, state *aix.SessionState[SupportState]) (*aix.SessionState[SupportState], error) {
+		state.Custom.InternalNotes = ""
+		return state, nil
+	}),
+)
+```
+
+`WithStreamTransform[State]` runs on every streamed `AgentStreamChunk` at the wire boundary. Return `nil` to drop a chunk. Return an error to fail closed, which prevents unshaped data from reaching the client.
+
+Prefer `WithStateTransform` for custom state redaction because the runtime diffs transformed state before emitting custom patches.
+
+## Custom state and artifacts
+
+Prompt-backed and custom agents can update state through the active session. Custom patches are streamed automatically when custom state changes. `AgentConnection.Receive` applies those patches and `AgentConnection.Custom()` returns the live custom state observed so far.
+
+Artifacts are named collections of parts. `Responder.SendArtifact` both streams the artifact and records it in the session, so the artifact is available in the final output or snapshot.
+
+</Lang>

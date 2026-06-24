@@ -1,0 +1,196 @@
+---
+title: Background execution
+description: Let Genkit agents keep working after the client disconnects, then check progress or cancel the work when needed.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+Background execution lets a client submit work, disconnect, and return later. It requires server-managed state because the server needs a snapshot to track progress, liveness, completion, failure, and cancellation.
+
+<Lang lang="js">
+
+## Server requirements
+
+Configure a store and expose companion endpoints when using a remote client:
+
+```ts
+const reportAgent = ai.defineAgent({
+  name: 'reportAgent',
+  system: 'Create detailed research reports.',
+  store,
+});
+
+app.post('/api/reportAgent', expressHandler(reportAgent));
+app.post(
+  '/api/reportAgent/getSnapshot',
+  expressHandler(reportAgent.getSnapshotDataAction),
+);
+app.post(
+  '/api/reportAgent/abort',
+  expressHandler(reportAgent.abortAgentAction),
+);
+```
+
+The runtime writes a `pending` snapshot and refreshes its heartbeat while work runs. If the heartbeat becomes stale, reads surface the snapshot as `expired`.
+
+## Detach from a turn
+
+`detach()` submits a turn with `detach: true`. It returns after the server accepts the background work.
+
+```ts
+const chat = reportAgent.chat({ sessionId: 'report-123' });
+const task = await chat.detach('Write the quarterly market report.');
+
+savePendingSnapshot(task.snapshotId);
+```
+
+The chat updates its `snapshotId` to the pending snapshot ID. Store that ID so another process or browser session can inspect or abort the task.
+
+## Poll or wait
+
+`DetachedTask.poll()` is an async iterable. It yields snapshots until the task reaches a terminal status.
+
+```ts
+for await (const snapshot of task.poll({ intervalMs: 1000 })) {
+  renderStatus(snapshot.status);
+
+  if (snapshot.status === 'completed') {
+    renderMessages(snapshot.state.messages);
+  }
+}
+```
+
+Use `wait()` when the caller can block:
+
+```ts
+const finalSnapshot = await task.wait({ intervalMs: 1000 });
+
+if (finalSnapshot.status === 'failed') {
+  showError(finalSnapshot.error);
+}
+```
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+
+## Reconnect by snapshot ID
+
+If the process that started the task no longer has the `DetachedTask`, call `getSnapshot()` with the stored ID:
+
+```ts
+const snapshot = await reportAgent.getSnapshot({ snapshotId });
+
+if (snapshot?.status === 'completed') {
+  const chat = await reportAgent.loadChat({ snapshotId });
+  await chat.send('Summarize the report in three bullets.');
+}
+```
+
+Only completed snapshots can be resumed.
+
+## Abort work
+
+```ts
+await task.abort();
+```
+
+Or abort directly from the agent:
+
+```ts
+await reportAgent.abort(snapshotId);
+```
+
+Abort flips a pending snapshot to `aborted`. The background worker observes the status change and cancels the work.
+
+</Lang>
+
+<Lang lang="go">
+
+## Requirements
+
+Go background execution requires a server-managed agent and a store that implements status subscriptions. `localstore.FileSessionStore` supports this.
+
+```go
+store, err := localstore.NewFileSessionStore[ReportState]("./.genkit/snapshots/reports")
+if err != nil {
+	log.Fatal(err)
+}
+
+agent := genkit.DefineAgent(g, "report",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Create detailed research reports."),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The default HTTP abort route is `/agents/{name}/abort`.
+
+## Detach locally
+
+With a local `AgentConnection`, send an input that has `Detach: true`.
+
+```go
+conn, err := agent.Connect(ctx)
+if err != nil {
+	return err
+}
+
+if err := conn.Send(&aix.AgentInput{
+	Message: ai.NewUserTextMessage("Write the quarterly report."),
+	Detach:  true,
+}); err != nil {
+	return err
+}
+
+out, err := conn.Output()
+if err != nil {
+	return err
+}
+
+fmt.Println(out.FinishReason)
+fmt.Println(out.SnapshotID)
+```
+
+A detached output has `FinishReason` set to `detached` and `SnapshotID` set to the pending snapshot.
+
+## Wait for completion
+
+When the store implements `aix.SnapshotSubscriber`, subscribe to status changes and then read the final snapshot.
+
+```go
+subscriber := agent.Store().(aix.SnapshotSubscriber)
+statusCh := subscriber.OnSnapshotStatusChange(ctx, snapshotID)
+
+for status := range statusCh {
+	if status != aix.SnapshotStatusPending {
+		break
+	}
+}
+
+snap, err := agent.GetSnapshot(ctx, snapshotID)
+```
+
+If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapshotID)` until `Status` leaves `pending`.
+
+## Abort work
+
+```go
+status, err := agent.Abort(ctx, snapshotID)
+if err != nil {
+	return err
+}
+
+fmt.Println(status)
+```
+
+`Abort` is a no-op for missing snapshots and for snapshots that already reached a terminal status. Client-managed agents return `FAILED_PRECONDITION` because there is no server snapshot to cancel.
+
+</Lang>

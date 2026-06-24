@@ -1,0 +1,248 @@
+---
+title: Agent interrupts
+description: Pause an agent when a task needs human approval or outside input, then resume the conversation safely.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+Interrupts let a tool pause execution and return a tool request to the client. The client can approve, reject, provide missing data, refresh credentials, or ask the user a question, then resume the turn.
+
+<Lang lang="js">
+
+## Define an interrupt
+
+Use `ai.defineInterrupt()` for an interrupt-only tool. Use `ctx.interrupt(metadata)` inside a normal tool when the tool sometimes pauses and sometimes completes on its own.
+
+```ts
+const askUser = ai.defineInterrupt({
+  name: 'ask_user',
+  description: 'Ask the user a clarification question.',
+  inputSchema: z.object({
+    question: z.string(),
+    options: z.array(z.string()).min(2).max(5),
+  }),
+  outputSchema: z.object({
+    answer: z.string(),
+  }),
+});
+```
+
+A normal tool can pause conditionally:
+
+```ts
+const runShell = ai.defineTool(
+  {
+    name: 'run_shell',
+    description: 'Run a shell command after a safety check.',
+    inputSchema: z.object({ command: z.string() }),
+  },
+  async (input, ctx) => {
+    if (isRisky(input.command) && !ctx.metadata?.resumed?.toolApproved) {
+      ctx.interrupt({
+        command: input.command,
+        reason: 'The command can modify files.',
+      });
+    }
+
+    return execute(input.command);
+  },
+);
+```
+
+## Receive interrupts
+
+Interrupted tool requests surface on `res.interrupts` and as tool request chunks while streaming.
+
+```ts
+const res = await chat.send('Run the migration.');
+
+for (const interrupt of res.interrupts) {
+  console.log(interrupt.name);
+  console.log(interrupt.input);
+}
+```
+
+The agent finish reason is `interrupted` when the model turn pauses on one or more interrupts.
+
+## Respond pattern
+
+Use `respond()` when the client has the final tool output. The method builds a tool response part. Send that part with `chat.resume()`.
+
+```ts
+const res = await chat.send('Transfer $50 to Robin.');
+const approval = res.interrupts.find((i) => i.name === 'userApproval');
+
+if (approval) {
+  const continued = await chat.resume({
+    respond: [
+      approval.respond({
+        approved: true,
+        approver: 'alex@example.com',
+      }),
+    ],
+  });
+
+  console.log(continued.text);
+}
+```
+
+This pattern is useful for approvals where the tool does not need to run again. The response you provide becomes the tool result.
+
+## Restart pattern
+
+Use `restart()` when the original tool should execute again after the app changes environment or metadata. The method builds a tool request part. Send it with `chat.resume()`.
+
+```ts
+const res = await chat.send('Run the deployment command.');
+const command = res.interrupts.find((i) => i.name === 'run_shell');
+
+if (command) {
+  const continued = await chat.resume({
+    restart: [command.restart()],
+  });
+
+  console.log(continued.text);
+}
+```
+
+For a tool that checks `ctx.metadata.resumed`, build the restart part through the tool's own `restart` helper or include resume metadata with the lower-level tool helper. The `AgentInterrupt.restart()` convenience preserves the original tool input.
+
+## Resume validation
+
+The runtime validates resume payloads against session history. A `respond` entry must match an interrupted tool request by name and ref. A `restart` entry must match the original tool request, and its input must not be modified. This protects server tools from forged client resume payloads.
+
+## Streaming interrupts
+
+```ts
+const turn = chat.sendStream('Book the hotel.');
+
+for await (const chunk of turn.stream) {
+  for (const request of chunk.toolRequests) {
+    if (request.metadata?.interrupt) {
+      showApproval(request);
+    }
+  }
+}
+
+const res = await turn.response;
+```
+
+Wait for the final response before treating the turn as durably interrupted, because the final response carries the normalized interrupt helpers.
+
+</Lang>
+
+<Lang lang="go">
+
+## Define an interruptible tool
+
+Go exposes interruptible tools through `genkit.DefineInterruptibleTool`. The tool returns `tool.Interrupt(data)` when it needs external input.
+
+```go
+type TransferInput struct {
+	To     string  `json:"to"`
+	Amount float64 `json:"amount"`
+}
+
+type TransferOutput struct {
+	ConfirmationID string `json:"confirmationId"`
+}
+
+type TransferResume struct {
+	Approved bool `json:"approved"`
+}
+
+type TransferInterrupt struct {
+	To     string  `json:"to"`
+	Amount float64 `json:"amount"`
+	Reason string  `json:"reason"`
+}
+
+transferMoney := genkit.DefineInterruptibleTool(g, "transferMoney",
+	"Transfer money after user approval.",
+	func(ctx context.Context, input TransferInput, resumed *TransferResume) (*TransferOutput, error) {
+		if resumed == nil || !resumed.Approved {
+			return nil, tool.Interrupt(TransferInterrupt{
+				To:     input.To,
+				Amount: input.Amount,
+				Reason: "Approval is required before transferring money.",
+			})
+		}
+
+		return &TransferOutput{ConfirmationID: "txn-123"}, nil
+	},
+)
+```
+
+## Collect interrupts from the stream
+
+Interrupts are model tool request parts with interrupt metadata.
+
+```go
+var interrupts []*ai.Part
+
+for chunk, err := range conn.Receive() {
+	if err != nil {
+		return err
+	}
+	if chunk.ModelChunk != nil {
+		interrupts = append(interrupts, chunk.ModelChunk.Interrupts()...)
+	}
+	if chunk.TurnEnd != nil {
+		break
+	}
+}
+```
+
+Use `tool.InterruptAs[T]` to decode typed interrupt metadata:
+
+```go
+meta, ok := tool.InterruptAs[TransferInterrupt](interrupts[0])
+if ok {
+	fmt.Printf("Approve transfer to %s?", meta.To)
+}
+```
+
+## Resume an interrupted turn
+
+Build a `ToolResume` with response or restart parts, then call `conn.SendResume`.
+
+```go
+part, err := transferMoney.Resume(interrupts[0], TransferResume{
+	Approved: true,
+})
+if err != nil {
+	return err
+}
+
+if err := conn.SendResume(&aix.ToolResume{
+	Restart: []*ai.Part{part},
+}); err != nil {
+	return err
+}
+```
+
+Use `Respond` when the approval result itself should be the tool output:
+
+```go
+part, err := transferMoney.Respond(interrupts[0], TransferOutput{
+	ConfirmationID: "manual-approval",
+})
+if err != nil {
+	return err
+}
+
+err = conn.SendResume(&aix.ToolResume{
+	Respond: []*ai.Part{part},
+})
+```
+
+A resumed turn can interrupt again. Streaming clients should handle interrupts in a loop: receive until `TurnEnd`, resolve any interrupts, send resume, then receive the continuation.
+
+</Lang>

@@ -1,8 +1,8 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { parse } from 'yaml';
+import fs from "node:fs";
+import path from "node:path";
+import { parse } from "yaml";
 
-const ALL_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+const ALL_LANGUAGES = ["js", "go", "dart", "python"] as const;
 type SupportedLanguage = (typeof ALL_LANGUAGES)[number];
 type DocLanguageMetadata = {
   supportedLanguages: SupportedLanguage[];
@@ -21,8 +21,11 @@ function parseLanguageList(value: string): SupportedLanguage[] {
 }
 
 function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
-  const docsRoot = path.resolve(process.cwd(), 'src/content/docs');
-  const candidates = [path.join(docsRoot, `${slug}.mdx`), path.join(docsRoot, `${slug}.md`)];
+  const docsRoot = path.resolve(process.cwd(), "src/content/docs");
+  const candidates = [
+    path.join(docsRoot, `${slug}.mdx`),
+    path.join(docsRoot, `${slug}.md`),
+  ];
   const docFile = candidates.find((candidate) => fs.existsSync(candidate));
 
   if (!docFile) {
@@ -32,7 +35,7 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
     };
   }
 
-  const source = fs.readFileSync(docFile, 'utf8');
+  const source = fs.readFileSync(docFile, "utf8");
   let isLanguageAgnostic = false;
   const frontmatterMatch = source.match(/^---\n([\s\S]*?)\n---\n?/);
   if (frontmatterMatch) {
@@ -41,19 +44,21 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
         supportedLanguages?: unknown;
         isLanguageAgnostic?: unknown;
       };
-      if (typeof frontmatter.isLanguageAgnostic === 'boolean') {
+      if (typeof frontmatter.isLanguageAgnostic === "boolean") {
         isLanguageAgnostic = frontmatter.isLanguageAgnostic;
       }
       if (Array.isArray(frontmatter.supportedLanguages)) {
         const langs = frontmatter.supportedLanguages
-          .filter((value): value is string => typeof value === 'string')
+          .filter((value): value is string => typeof value === "string")
           .map((value) => value.toLowerCase())
           .filter((value): value is SupportedLanguage =>
             (ALL_LANGUAGES as readonly string[]).includes(value),
           );
         if (langs.length > 0) {
           return {
-            supportedLanguages: ALL_LANGUAGES.filter((language) => langs.includes(language)),
+            supportedLanguages: ALL_LANGUAGES.filter((language) =>
+              langs.includes(language),
+            ),
             isLanguageAgnostic,
           };
         }
@@ -64,17 +69,22 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
   }
 
   const contentLanguages = new Set<SupportedLanguage>();
-  const languageContentPattern = /<Lang[^>]*lang\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  const languageContentPattern =
+    /<Lang[^>]*lang\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
   let languageContentMatch = languageContentPattern.exec(source);
   while (languageContentMatch) {
-    const parsed = parseLanguageList(languageContentMatch[1] || languageContentMatch[2] || '');
+    const parsed = parseLanguageList(
+      languageContentMatch[1] || languageContentMatch[2] || "",
+    );
     parsed.forEach((language) => contentLanguages.add(language));
     languageContentMatch = languageContentPattern.exec(source);
   }
 
   if (contentLanguages.size > 0) {
     return {
-      supportedLanguages: ALL_LANGUAGES.filter((language) => contentLanguages.has(language)),
+      supportedLanguages: ALL_LANGUAGES.filter((language) =>
+        contentLanguages.has(language),
+      ),
       isLanguageAgnostic,
     };
   }
@@ -113,7 +123,6 @@ const DOCS_SIDEBAR = [
       { label: "Generating content", slug: "docs/models" },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Tool calling", slug: "docs/tool-calling" },
-      { label: "Agents", slug: "docs/agents" },
       { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
       { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
       { label: "Passing information through context", slug: "docs/context" },
@@ -131,6 +140,24 @@ const DOCS_SIDEBAR = [
         label: "Local observability and metrics",
         slug: "docs/local-observability",
       },
+    ],
+  },
+  {
+    label: "Full-stack agents",
+    items: [
+      { label: "Overview", slug: "docs/agents" },
+      { label: "Define agents", slug: "docs/agents/define" },
+      { label: "Run and stream", slug: "docs/agents/run" },
+      { label: "Serve over HTTP", slug: "docs/agents/http" },
+      { label: "Sessions and state", slug: "docs/agents/state" },
+      { label: "Interrupts", slug: "docs/agents/interrupts" },
+      { label: "Background execution", slug: "docs/agents/background" },
+      { label: "Multi-agent delegation", slug: "docs/agents/multi-agent" },
+      {
+        label: "Custom orchestration",
+        slug: "docs/agents/custom-orchestration",
+      },
+      { label: "Error handling", slug: "docs/agents/errors" },
     ],
   },
   {
@@ -261,15 +288,19 @@ const DOCS_SIDEBAR = [
   },
 ];
 
-export const sidebar = [
-  ...DOCS_SIDEBAR,
-];
+export const sidebar = [...DOCS_SIDEBAR];
 
 const docsLanguageMetadataBySlug = createLanguageMetadataMap(DOCS_SIDEBAR);
 export const docsLanguageSupportBySlug = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.supportedLanguages]),
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [
+    slug,
+    metadata.supportedLanguages,
+  ]),
 ) as Record<string, SupportedLanguage[]>;
 export const docsLanguageAgnosticBySlug = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [slug, metadata.isLanguageAgnostic]),
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [
+    slug,
+    metadata.isLanguageAgnostic,
+  ]),
 ) as Record<string, boolean>;
 export const docsAllLanguages = [...ALL_LANGUAGES];
