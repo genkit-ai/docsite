@@ -18,15 +18,13 @@ In Genkit, agent state includes message history, custom application state, artif
 
 ## State strategies
 
-|                       | Server-managed                          | Client-managed                                        |
-| --------------------- | --------------------------------------- | ----------------------------------------------------- |
-| Setup                 | Define the agent with a `store`         | Omit `store`                                          |
-| Continuation          | Resume with `sessionId` or `snapshotId` | Send the full `state` object                          |
-| Client stores history | No                                      | Yes                                                   |
-| Server stores history | Yes                                     | No                                                    |
-| Branching             | Built in through snapshots              | Manual, by creating several chats from the same state |
-| Background execution  | Supported                               | Not supported                                         |
-| Snapshot endpoints    | Useful                                  | Not applicable                                        |
+Genkit agents can keep continuity in two ways.
+
+**Server-managed state** means the agent has a `store`. The server persists messages, custom state, artifacts, and snapshot metadata. Clients continue by sending a `sessionId` or `snapshotId`. Use this mode for persistent chat apps, shared devices, background execution, branching from saved points, or any workflow where clients should not carry the full conversation payload.
+
+**Client-managed state** means the agent has no `store`. The server returns the full `SessionState`, and the client sends that state back on the next turn. Use this mode when your app already owns persistence, needs stateless server deployments, wants to encrypt conversation state outside Genkit, or has short sessions where carrying the full state is acceptable.
+
+Prefer server-managed state when you are unsure. It gives you snapshots, `loadChat()`, background work, and smaller client payloads. Prefer client-managed state when infrastructure control matters more than built-in persistence.
 
 In both modes, the `AgentChat` object tracks the next-turn values for you. A server-managed chat tracks `snapshotId` and `sessionId`. A client-managed chat tracks full `SessionState`.
 
@@ -42,7 +40,31 @@ type SessionState<S> = {
 };
 ```
 
-`custom` is application state. `messages` is conversation history. `artifacts` is a list of named outputs, such as generated files, reports, or media references.
+`custom` is your typed application state. Use it for compact data that the agent or UI needs to make decisions across turns, such as workflow status, task lists, selected entities, preferences, draft metadata, or progress indicators.
+
+`messages` is conversation history. The runtime updates it as user and model messages are added. You usually read messages rather than manually rewriting them, except in custom orchestration.
+
+`artifacts` is a list of generated outputs, such as files, reports, plans, code patches, media references, or structured documents. Use artifacts when the value is an output the user may inspect, download, reuse, or version independently. Keep custom state for control data and small UI state. Do not put large generated documents into `custom` just because they are JSON.
+
+## Modify custom state
+
+Tools and custom agents can update custom state through the active session. Use `updateCustom(fn)` so Genkit can stream patches and keep the client-side chat state current.
+
+```ts
+const session = ai.currentSession<TaskState>();
+const title = 'Buy milk';
+
+session.updateCustom((state) => {
+  const next = state ?? { tasks: [], nextId: 1 };
+  return {
+    ...next,
+    tasks: [...next.tasks, { id: next.nextId, title, done: false }],
+    nextId: next.nextId + 1,
+  };
+});
+```
+
+Treat custom state updates as application state transitions. Return a new value from the updater, keep it serializable, and validate it with `stateSchema` when you need stronger guarantees at load time.
 
 ## Server-managed stores
 
@@ -126,7 +148,7 @@ const res = await chat.send('Add buy milk to my list.');
 saveState(res.raw.state);
 ```
 
-This mode works well when your app already has a database, wants stateless server deployments, or needs to encrypt all conversation data client-side.
+Store `res.raw.state` wherever your app keeps user session data, then pass it back with `chat({ state })` or keep using the same `AgentChat` instance. Because the client owns the full state, design for payload growth. Long conversations, many artifacts, or large custom objects can make every request heavier.
 
 ## Live custom state
 
@@ -160,7 +182,7 @@ session.addArtifacts([
 ]);
 ```
 
-Artifacts with the same `name` replace earlier artifacts. Unnamed artifacts are appended.
+Artifacts with the same `name` replace earlier artifacts. Unnamed artifacts are appended. Prefer a named artifact for outputs that should have stable identity, such as `itinerary.json`, `patch.diff`, or `report.md`. Prefer custom state for the smaller facts used to decide what the next turn should do.
 
 ## Client transforms
 
@@ -192,13 +214,13 @@ Keep state and chunk transforms consistent when they touch the same data. If sta
 
 ## State strategies
 
-|                       | Server-managed                                           | Client-managed      |
-| --------------------- | -------------------------------------------------------- | ------------------- |
-| Setup                 | Add `aix.WithSessionStore(store)`                        | Omit a store        |
-| Continuation          | Use `aix.WithSessionID` or `aix.WithSnapshotID`          | Use `aix.WithState` |
-| Server storage        | Snapshots in a store                                     | None                |
-| Background execution  | Supported when the store implements `SnapshotSubscriber` | Not supported       |
-| HTTP companion routes | `getSnapshot` and possibly `abort`                       | Omitted             |
+Genkit Go agents use the same two ownership models.
+
+**Server-managed state** uses `aix.WithSessionStore(store)`. The server persists snapshots and callers continue with `aix.WithSessionID` or `aix.WithSnapshotID`. Choose this for durable conversations, background execution, snapshot reads, branching, or clients that should not hold conversation history.
+
+**Client-managed state** omits a store. The caller receives `AgentOutput.State` and sends it back with `aix.WithState`. Choose this when your service already stores session data, when you need stateless Genkit workers, or when another system controls encryption and retention.
+
+Server-managed state is the default recommendation for user-facing conversational apps. Client-managed state is useful when you need tighter control over where state is stored and how it moves between services.
 
 ## Understand session state
 
@@ -213,7 +235,23 @@ type SessionState[State any] struct {
 }
 ```
 
-For client-managed agents, the caller round-trips this state with `aix.WithState`. For server-managed agents, snapshots persist it.
+`Custom` is your typed application state. Use it for compact data the agent needs across turns, such as workflow status, selected records, preferences, task state, or progress. `Messages` is conversation history. `Artifacts` contains generated outputs that the app or user may inspect independently.
+
+Use artifacts instead of custom state for larger outputs such as generated files, reports, patches, or documents. Use custom state for the smaller facts that drive orchestration and UI state.
+
+## Modify custom state
+
+Prompt-backed tools and custom agents can update typed custom state through the active session. In a custom agent, call `sess.UpdateCustom`:
+
+```go
+sess.UpdateCustom(func(state TravelState) TravelState {
+	state.Status = "Checking weather"
+	state.LastCity = city
+	return state
+})
+```
+
+The runtime streams custom patches as state changes. `AgentConnection.Receive` applies those patches, and `AgentConnection.Custom()` returns the current custom state observed by the connection.
 
 ## Server-side stores
 
