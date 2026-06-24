@@ -1887,6 +1887,55 @@ out, _ = agent.RunText(ctx, "My name is Bob.", aix.WithSnapshotID[any](branchPoi
 A snapshot is an immutable checkpoint: like a git commit, the original doesn't
 change when you branch from it. Each branch creates new, independent snapshots.
 
+### Redacting state and stream output
+
+`WithStateTransform` rewrites session state on its way out to a client without
+touching what the server keeps. It runs on `GetSnapshot` / `GetLatestSnapshot`
+reads (and the `getSnapshot` companion route), on a client-managed agent's
+`out.State`, and on the streamed `CustomPatch` diffs, so redaction reaches every
+client-facing surface. The persisted snapshot and the state your agent function
+sees stay raw, so the conversation still resumes faithfully.
+
+```go
+chatAgent := genkit.DefineAgent(g, "chat",
+    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+    aix.WithSessionStore(store),
+    aix.WithStateTransform[MyState](func(ctx context.Context, s *aix.SessionState[MyState]) (*aix.SessionState[MyState], error) {
+        return redactPII(ctx, s) // ctx carries the caller's identity for RBAC-aware redaction
+    }),
+)
+```
+
+`WithStreamTransform` is the stream-side counterpart: it rewrites each
+`AgentStreamChunk` (model tokens, artifacts, custom patches, and turn-end
+signals) as it leaves for the client. A chunk carries no state type, so unlike
+`WithStateTransform` its `State` argument cannot be inferred and is passed
+explicitly:
+
+```go
+    aix.WithStreamTransform[MyState](func(ctx context.Context, c *aix.AgentStreamChunk) (*aix.AgentStreamChunk, error) {
+        if c.ModelChunk != nil {
+            c.ModelChunk = redactModelChunk(c.ModelChunk)
+        }
+        return c, nil
+    }),
+```
+
+Both transforms receive a fresh deep copy they own, and the return value decides
+what the client sees:
+
+- Return the (possibly mutated) value with a `nil` error to forward it.
+- Return a `nil` value to omit that state, or drop that chunk, from the client's
+  view. This is wire-only: the side effects, the persisted snapshot, and the
+  final `AgentOutput` still hold the underlying data.
+- Return a non-nil error to **fail closed**: the read or invocation fails with
+  that error instead of leaking unredacted data, and the error's status code
+  (such as `PERMISSION_DENIED`) propagates to the caller.
+
+To redact custom state specifically, prefer `WithStateTransform`: the runtime
+applies it before diffing, so the streamed `CustomPatch` deltas stay internally
+consistent.
+
 ## Custom state and artifacts
 
 ### Custom state
