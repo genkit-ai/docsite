@@ -116,50 +116,85 @@ The older [Building multi-agent systems](/docs/multi-agent) page describes a pro
 
 <Lang lang="go">
 
-## Compose agents with tools
+## Add delegation middleware
 
-Go does not currently expose the JavaScript `agents()` middleware. Compose agents explicitly by defining tools that call specialist agents.
+The experimental middleware package `github.com/firebase/genkit/go/plugins/middleware/exp` provides `Agents` for delegation. It injects one delegation tool per sub-agent (named `delegate_to_<agentName>` by default) and appends a `<sub-agents>` listing to the orchestrator's system prompt. Attach it with `ai.WithUse` inside the agent's inline prompt.
 
 ```go
-researchTool := genkit.DefineTool(g, "research",
-	"Researches a topic and returns concise notes.",
-	func(ctx *ai.ToolContext, input ResearchInput) (ResearchOutput, error) {
-		out, err := researcher.RunText(ctx, input.Topic)
-		if err != nil {
-			return ResearchOutput{}, err
-		}
-		if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
-			return ResearchOutput{}, out.Error
-		}
+import middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 
-		return ResearchOutput{Notes: out.Message.Text()}, nil
-	})
+researcher := genkit.DefineAgent(g, "researcher",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Research the user request and write concise findings."),
+		ai.WithUse(&middlewarex.Artifacts{}),
+	},
+	aix.WithDescription[any]("Finds facts and produces sourced research notes."),
+)
+
+coder := genkit.DefineAgent(g, "coder",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Write clear Go code unless the user asks for another language."),
+		ai.WithUse(&middlewarex.Artifacts{}),
+	},
+	aix.WithDescription[any]("Writes, debugs, and explains code. Use for programming tasks."),
+)
 
 coordinator := genkit.DefineAgent(g, "coordinator",
 	aix.InlinePrompt{
-		ai.WithSystem("Use specialist tools for research or coding work."),
-		ai.WithTools(researchTool),
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Delegate to specialists, inspect their results, then answer the user."),
+		ai.WithUse(
+			&middlewarex.Agents{
+				Agents:           []aix.AgentRef{researcher.Ref(), coder.Ref()},
+				HistoryLength:    4,
+				MaxDelegations:   5,
+				ArtifactStrategy: middlewarex.ArtifactStrategySession,
+			},
+			&middlewarex.Artifacts{Readonly: true},
+		),
 	},
 	aix.WithSessionStore(store),
 )
 ```
 
-Use clear tool descriptions so the coordinator knows when to call each specialist.
+Reference a sub-agent by name (`aix.AgentRef{Name: "researcher"}`) or capture it from an agent value with `agent.Ref()`, which carries the agent's description into the system listing. Descriptions matter because they become the delegation tool descriptions the orchestrator model sees, so keep them concrete.
 
-## Preserve specialist continuity
+The middleware resolves sub-agents through the `Genkit` instance seeded on the turn context, which `genkit.DefineAgent` (and `genkit.Generate`) set automatically. Attach it to the orchestrator agent.
 
-If a specialist needs durable memory, give it a session store and pass a stable session ID when the coordinator invokes it. Store that mapping in coordinator custom state or your application database.
+## Delegation options
+
+The `Agents` middleware is configured through struct fields:
+
+- **`Agents`** lists the sub-agents available for delegation, by name or via `agent.Ref()`. At least one is required.
+- **`ToolPrefix`** controls generated tool names. A `nil` value defaults to `delegate_to` (tools become `delegate_to_<agent>`); a pointer to the empty string uses bare agent names.
+- **`MaxDelegations`** caps delegation calls in one orchestrator generate call. `0` means unlimited.
+- **`HistoryLength`** sets how many recent conversation messages are forwarded to a sub-agent. `0` forwards only the task description.
+- **`ArtifactStrategy`** controls how sub-agent artifacts surface, `ArtifactStrategyInline` (default) or `ArtifactStrategySession`.
+
+History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
+
+## Read sub-agent artifacts
+
+The `Artifacts` middleware gives a model `read_artifact` and `write_artifact` tools over the active session's artifacts, and injects an `<artifacts>` listing into the system prompt each turn. Set `Readonly: true` to provide only `read_artifact`.
+
+With `ArtifactStrategySession`, a sub-agent's artifacts are merged into the parent session (namespaced by invocation as `<agent>_<n>/<name>`) and kept out of the tool result. Pair it with `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can inspect delegated work through `read_artifact` before answering. The default `ArtifactStrategyInline` instead includes artifact content in the delegation tool result and also merges it into the session.
+
+Artifacts live on the active agent session, so the `Artifacts` tools only have an effect inside an agent invocation. With no active session they degrade gracefully: the listing is empty and the tools report that.
+
+## Interrupts and failures
+
+A sub-agent interrupt or failure is returned to the orchestrator as the delegation tool's output, not propagated as a top-level interrupt or error to the original client. There is no stateful sub-agent runtime to resume into, so write orchestrator instructions that tell it how to handle a delegated failure, such as retrying, choosing another specialist, or asking the user for clarification.
+
+## Register as a plugin
+
+Using the middlewares through `ai.WithUse` needs no plugin. Register `&middlewarex.Middleware{}` only to make them resolvable by name, for example in the Developer UI.
 
 ```go
-out, err := researcher.RunText(ctx, input.Topic,
-	aix.WithSessionID[ResearchState](input.ResearchSessionID),
+g := genkit.Init(ctx,
+	genkit.WithPlugins(&googlegenai.GoogleAI{}, &middlewarex.Middleware{}),
 )
 ```
-
-Use `WithSnapshotID` for deliberate branching of a specialist conversation.
-
-## Return recoverable failures as data
-
-When a specialist cannot complete a delegated task for a recoverable reason, return structured output that the coordinator can explain. Reserve Go errors for failures that should fail the coordinator tool call.
 
 </Lang>
