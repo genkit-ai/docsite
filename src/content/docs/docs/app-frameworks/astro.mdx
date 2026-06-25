@@ -1,0 +1,852 @@
+---
+title: Astro tutorial
+description:
+  default: Build an Astro app powered by Genkit, with streaming structured output and tool calling.
+  js: Add Genkit to an Astro app with SSR server endpoints, streaming structured output and tool calling in one project.
+  go: Connect an Astro UI to your Genkit Go backend and stream the recipe into your UI incrementally.
+  dart: Connect an Astro UI to your Genkit Dart backend and stream the recipe into your UI incrementally.
+  python: Connect an Astro UI to your Genkit Python backend and stream the recipe into your UI incrementally.
+supportedLanguages:
+  - js
+  - go
+  - dart
+  - python
+---
+
+import {
+  Aside,
+  Code,
+  FileTree,
+  LinkButton,
+} from '@astrojs/starlight/components';
+import Lang from '../../../../components/Lang.astro';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+import bargainChefFlowCode from './_snippets/bargainChefFlow.ts?raw';
+
+export const corsCallout = (
+  <Aside type="caution" title="Enable CORS on the backend">
+    Your Astro dev server runs on <code>http://localhost:4321</code> and your
+    Genkit backend runs on a different port, so the browser will block requests
+    unless the backend explicitly allows that origin. If you haven't configured
+    CORS on your backend yet, do that before running the Astro app. See your
+    backend framework's CORS documentation for the exact configuration.
+  </Aside>
+);
+
+<Lang lang="js">
+
+In this tutorial, you'll build **Bargain Chef**, a full-stack Astro app where one Astro project serves both your Genkit backend and the UI. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+</Lang>
+
+<Lang lang="go dart python">
+
+In this tutorial, you'll build the Astro UI for **Bargain Chef** and connect it to your existing Genkit backend. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+</Lang>
+
+## What you'll build
+
+The user types what they're craving, Gemini drafts a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The recipe streams into the UI incrementally, so users see progress before the full recipe is ready.
+
+<video
+  controls
+  preload="metadata"
+  muted
+  width="100%"
+  poster="/videos/bargain-chef-demo-poster.png"
+  style="max-width: 800px; display: block; margin: 2rem auto; border: none; border-radius: 8px;"
+  aria-label="Preview of the Bargain Chef app that you will build in this Astro tutorial"
+>
+  <source src="/videos/bargain-chef-demo.mp4" type="video/mp4" />
+  Your browser does not support the video tag. This video previews the Bargain
+  Chef app that you will build in this Astro tutorial.
+</video>
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/app-frameworks/astro).
+
+<Lang lang="js">
+
+Keeping the backend and UI in one project gives you shared TypeScript types, no CORS configuration during local development, and a single deployment path.
+
+<Aside type="note" title="Already have a standalone Genkit backend?">
+  Follow this tutorial for the Astro UI structure, but point{' '}
+  <code>streamFlow</code> at your existing backend route instead of the API
+  route. See{' '}
+  <a href="#use-a-standalone-backend-instead">
+    Use a standalone backend instead
+  </a>{' '}
+  for the small changes required.
+</Aside>
+
+</Lang>
+
+<Lang lang="go dart python">
+
+You'll call the existing `bargainChefFlow` over HTTP and render the streamed recipe as fields arrive.
+
+</Lang>
+
+## Prerequisites
+
+<Lang lang="js">
+
+- Node.js v20 or later
+- npm
+- Familiarity with Astro and TypeScript
+
+</Lang>
+
+<Lang lang="go">
+
+- Node.js v20 or later
+- npm
+- Familiarity with Astro and TypeScript
+
+**You should have already completed the [Chi](/docs/backend-frameworks/chi), [Echo](/docs/backend-frameworks/echo), or other [backend tutorial](/docs/backend-frameworks/overview).** This tutorial picks up where those leave off and adds an Astro UI to the `bargainChefFlow` you already built there. Make sure your backend is running and note the port it serves on, since you'll need it later.
+
+</Lang>
+
+<Lang lang="dart">
+
+- Node.js v20 or later
+- npm
+- Familiarity with Astro and TypeScript
+
+**You should have already completed the [Shelf](/docs/backend-frameworks/shelf) or other [backend tutorial](/docs/backend-frameworks/overview).** This tutorial picks up where those leave off and adds an Astro UI to the `bargainChefFlow` you already built there. Make sure your backend is running and note the port it serves on, since you'll need it later.
+
+</Lang>
+
+<Lang lang="python">
+
+- Node.js v20 or later
+- npm
+- Familiarity with Astro and TypeScript
+
+**You should have already completed the [Flask](/docs/backend-frameworks/flask), [FastAPI](/docs/backend-frameworks/fastapi), or other [backend tutorial](/docs/backend-frameworks/overview).** This tutorial picks up where those leave off and adds an Astro UI to the `bargainChefFlow` you already built there. Make sure your backend is running and note the port it serves on, since you'll need it later.
+
+</Lang>
+
+## Set up the application
+
+<Lang lang="js">
+
+### Create the Astro project
+
+<PackageManagerTabs
+  command={`
+npm create astro@latest my-genkit-astro
+cd my-genkit-astro
+`}
+/>
+
+When prompted, choose the **Empty** template and enable TypeScript.
+
+### Install packages
+
+<PackageManagerTabs
+  command={`
+npm install genkit @genkit-ai/google-genai @genkit-ai/fetch
+npm install -D genkit-cli tsx
+`}
+/>
+
+These packages include:
+
+- **`genkit`**: Core Genkit SDK.
+- **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`@genkit-ai/fetch`**: Exposes Genkit flows over the standard Web Fetch API, which Astro endpoints use.
+- **`genkit-cli`**: Genkit CLI tool that enables local testing and observability.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio.
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic
+  (Claude)](/docs/integrations/anthropic), [OpenAI](/docs/integrations/openai),
+  and many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+### Enable server rendering
+
+Astro endpoints need a server runtime. Add the Node.js adapter:
+
+<PackageManagerTabs command="npx astro add node" />
+
+Accept the prompts to install `@astrojs/node` and update `astro.config.mjs` automatically. The result looks like this:
+
+```ts title="astro.config.mjs"
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'server',
+  adapter: node({
+    mode: 'standalone',
+  }),
+});
+```
+
+</Lang>
+
+<Lang lang="go dart python">
+
+Create the Astro project:
+
+<PackageManagerTabs
+  command={`
+npm create astro@latest my-genkit-astro
+cd my-genkit-astro
+`}
+/>
+
+When prompted, choose the **Empty** template and enable TypeScript.
+
+Install the Genkit web client, which lets the browser call your backend:
+
+<PackageManagerTabs command="npm install genkit" />
+
+Your backend should already expose `bargainChefFlow`. For reference, here's the shape the Astro app expects:
+
+```ts
+// Input
+{ craving: string }
+
+// Streamed output (partial: fields fill in over time)
+{
+  title?: string;
+  description?: string;
+  servings?: number;
+  ingredients?: { name: string; quantity: string; onSale: boolean }[];
+  steps?: string[];
+}
+```
+
+If your backend exposes a flow with a different name or shape, adjust the URL and the `Recipe` interface in the next section accordingly.
+
+At this point, your Astro app is ready to call the backend flow you already created.
+
+</Lang>
+
+<Lang lang="js">
+
+## Create the backend
+
+The backend prompts Gemini to draft a recipe, lets the model call a tool to look up mock grocery sale prices, and streams the partial recipe back to the browser as it's generated.
+
+The core AI logic lives in a **flow**, which is a Genkit-managed function that adds observability, type safety, and tooling integration on top of a regular async function.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Zod so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
+
+Create `src/genkit/bargainChefFlow.ts`:
+
+<Code
+  code={bargainChefFlowCode}
+  lang="ts"
+  meta='title="src/genkit/bargainChefFlow.ts"'
+/>
+
+A few details are worth noting before you connect the UI:
+
+- **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape with every field optional (`RecipeSchema.partial()`), because early chunks might only include the title or description.
+- **Shared TypeScript types:** `Recipe`, `PartialRecipe`, and `BargainChefInput` are inferred from the Zod schemas with `z.infer<...>` and re-exported for the Astro page script to import. Because the page script imports them with `import type`, Genkit and the model plugin stay out of the browser bundle.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`sendChunk`:** Each call pushes the latest partial recipe to the browser, giving the UI a typed view of the generated JSON as it grows.
+
+### Add the API route
+
+Expose the flow as an HTTP endpoint by creating `src/pages/api/bargainChefFlow.ts`:
+
+```ts title="src/pages/api/bargainChefFlow.ts"
+import type { APIRoute } from 'astro';
+import { fetchHandler } from '@genkit-ai/fetch';
+import { bargainChefFlow } from '../../genkit/bargainChefFlow';
+
+export const prerender = false;
+
+const handler = fetchHandler(bargainChefFlow);
+
+export const POST: APIRoute = ({ request }) => handler(request);
+```
+
+`fetchHandler` wraps your flow in Genkit's HTTP protocol, which supports streaming chunks, structured errors, and compatibility with the Genkit client SDK. Setting `prerender = false` keeps Astro from trying to statically pre-render the route at build time.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- package.json
+- astro.config.mjs
+- src
+  - genkit
+    - bargainChefFlow.ts
+  - pages
+    - api
+      - bargainChefFlow.ts
+    - index.astro
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+</Lang>
+
+## Build the Astro UI
+
+Now update the Astro page so the browser can call your Genkit backend and render streamed output. Astro pages can host UI in framework islands (React, Svelte, Vue, and others), but for this tutorial we keep it simple with plain HTML and a single TypeScript `<script>` block that Astro bundles for the browser.
+
+### Add the page script
+
+<Lang lang="js">
+
+You'll drop the following script into `src/pages/index.astro` in the next step. It calls your API route and renders streamed updates. The script imports the flow's TypeScript types with `import type`, so the UI and backend stay in sync without adding server code to the browser bundle:
+
+```ts title="src/pages/index.astro (script block)"
+import { streamFlow } from 'genkit/beta/client';
+import type { PartialRecipe, Recipe } from '../genkit/bargainChefFlow';
+
+const form = document.getElementById('prompt-form') as HTMLFormElement;
+const cravingInput = document.getElementById('craving') as HTMLInputElement;
+const submitButton = document.getElementById('submit') as HTMLButtonElement;
+const recipeEl = document.getElementById('recipe') as HTMLElement;
+
+let isStreaming = false;
+
+function setStreaming(value: boolean) {
+  isStreaming = value;
+  cravingInput.disabled = value;
+  submitButton.disabled = value;
+  submitButton.textContent = value ? 'Cooking…' : 'Suggest a recipe';
+}
+
+function render(recipe: PartialRecipe | null) {
+  if (!recipe) {
+    recipeEl.innerHTML = '';
+    return;
+  }
+
+  const parts: string[] = ['<article>'];
+  if (recipe.title) parts.push(`<h2>${recipe.title}</h2>`);
+  if (recipe.description)
+    parts.push(`<p class="description">${recipe.description}</p>`);
+  if (recipe.servings)
+    parts.push(
+      `<p class="serves"><strong>Serves:</strong> ${recipe.servings}</p>`,
+    );
+
+  if (recipe.ingredients?.length) {
+    parts.push('<h3>Ingredients</h3><ul class="ingredients">');
+    for (const ing of recipe.ingredients) {
+      const badge = ing.onSale ? ' <span class="badge">on sale</span>' : '';
+      parts.push(`<li>${ing.quantity} ${ing.name}${badge}</li>`);
+    }
+    parts.push('</ul>');
+  }
+
+  if (recipe.steps?.length) {
+    parts.push('<h3>Steps</h3><ol class="steps">');
+    for (const step of recipe.steps) {
+      parts.push(`<li>${step}</li>`);
+    }
+    parts.push('</ol>');
+  }
+
+  parts.push('</article>');
+  recipeEl.innerHTML = parts.join('');
+}
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const craving = cravingInput.value.trim();
+  if (!craving) return;
+
+  render(null);
+  setStreaming(true);
+  try {
+    const result = streamFlow<Recipe, PartialRecipe>({
+      url: '/api/bargainChefFlow',
+      input: { craving },
+    });
+    for await (const partial of result.stream) {
+      render(partial);
+    }
+    await result.output;
+  } catch (err) {
+    console.error('Failed to generate recipe', err);
+  } finally {
+    setStreaming(false);
+  }
+});
+```
+
+</Lang>
+
+<Lang lang="go dart python">
+
+You'll drop the following script into `src/pages/index.astro` in the next step. The URL points to your standalone backend; `8080` is a common default backend port, so adjust it if your backend uses a different port.
+
+```ts title="src/pages/index.astro (script block)"
+import { streamFlow } from 'genkit/beta/client';
+
+// Point this at the URL where your bargainChefFlow is served
+const FLOW_URL = 'http://localhost:8080/bargainChefFlow';
+
+interface RecipeIngredient {
+  name?: string;
+  quantity?: string;
+  onSale?: boolean;
+}
+
+interface Recipe {
+  title?: string;
+  description?: string;
+  servings?: number;
+  ingredients?: RecipeIngredient[];
+  steps?: string[];
+}
+
+const form = document.getElementById('prompt-form') as HTMLFormElement;
+const cravingInput = document.getElementById('craving') as HTMLInputElement;
+const submitButton = document.getElementById('submit') as HTMLButtonElement;
+const recipeEl = document.getElementById('recipe') as HTMLElement;
+
+let isStreaming = false;
+
+function setStreaming(value: boolean) {
+  isStreaming = value;
+  cravingInput.disabled = value;
+  submitButton.disabled = value;
+  submitButton.textContent = value ? 'Cooking…' : 'Suggest a recipe';
+}
+
+function render(recipe: Recipe | null) {
+  if (!recipe) {
+    recipeEl.innerHTML = '';
+    return;
+  }
+
+  const parts: string[] = ['<article>'];
+  if (recipe.title) parts.push(`<h2>${recipe.title}</h2>`);
+  if (recipe.description)
+    parts.push(`<p class="description">${recipe.description}</p>`);
+  if (recipe.servings)
+    parts.push(
+      `<p class="serves"><strong>Serves:</strong> ${recipe.servings}</p>`,
+    );
+
+  if (recipe.ingredients?.length) {
+    parts.push('<h3>Ingredients</h3><ul class="ingredients">');
+    for (const ing of recipe.ingredients) {
+      const badge = ing.onSale ? ' <span class="badge">on sale</span>' : '';
+      parts.push(`<li>${ing.quantity ?? ''} ${ing.name ?? ''}${badge}</li>`);
+    }
+    parts.push('</ul>');
+  }
+
+  if (recipe.steps?.length) {
+    parts.push('<h3>Steps</h3><ol class="steps">');
+    for (const step of recipe.steps) {
+      parts.push(`<li>${step}</li>`);
+    }
+    parts.push('</ol>');
+  }
+
+  parts.push('</article>');
+  recipeEl.innerHTML = parts.join('');
+}
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const craving = cravingInput.value.trim();
+  if (!craving) return;
+
+  render(null);
+  setStreaming(true);
+  try {
+    const result = streamFlow({
+      url: FLOW_URL,
+      input: { craving },
+    });
+    for await (const partial of result.stream) {
+      render(partial as Recipe);
+    }
+    await result.output;
+  } catch (err) {
+    console.error('Failed to generate recipe', err);
+  } finally {
+    setStreaming(false);
+  }
+});
+```
+
+{corsCallout}
+
+</Lang>
+
+`streamFlow` returns an async iterable of partial recipe objects. Each chunk is the accumulated structured output so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them. The script re-renders the recipe section on every chunk so the UI fills in progressively.
+
+### Update the page
+
+Replace the contents of `src/pages/index.astro` with the following. The `<script>` block holds the code from the previous step (Astro compiles it and bundles it for the browser):
+
+```astro title="src/pages/index.astro"
+---
+// No server-side logic needed for this page.
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Bargain Chef</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Bargain Chef</h1>
+      <p class="tagline">
+        Tell me what you feel like eating and I'll suggest a recipe built around today's grocery deals.
+      </p>
+
+      <form id="prompt-form" class="prompt">
+        <input
+          id="craving"
+          type="text"
+          name="craving"
+          value="something warm with chicken"
+          placeholder="What are you in the mood for?"
+        />
+        <button id="submit" type="submit">Suggest a recipe</button>
+      </form>
+
+      <div id="recipe"></div>
+    </main>
+
+    <script>
+      // Paste the script from the previous step here.
+    </script>
+  </body>
+</html>
+```
+
+Each recipe section is only rendered after that field arrives in the stream. The result is a UI that fills in progressively: title first, then description, then ingredients, then steps.
+
+Wrapping the input and button in a `<form>` lets the user submit by pressing Enter. The `submit` handler calls `preventDefault()` so the browser doesn't reload the page, then kicks off the streaming request.
+
+### Add styles
+
+Create `public/styles.css` with the following:
+
+```css title="public/styles.css"
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 3rem 1.5rem;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  margin: 0 0 0.25rem;
+  letter-spacing: -0.01em;
+}
+
+.tagline {
+  color: #555;
+  margin: 0 0 2rem;
+}
+
+.prompt {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2.5rem;
+}
+
+.prompt input {
+  flex: 1;
+  font: inherit;
+  font-size: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  background: #fff;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.prompt input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.prompt input:disabled {
+  background: #f1f1f1;
+  color: #888;
+}
+
+.prompt button {
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 0.75rem 1.25rem;
+  border: 0;
+  border-radius: 8px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  transition: background 120ms ease;
+  white-space: nowrap;
+}
+
+.prompt button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.prompt button:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+article {
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+}
+
+article h2 {
+  font-size: 1.5rem;
+  margin: 0 0 0.5rem;
+}
+
+article h3 {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #666;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.description {
+  color: #444;
+  margin: 0 0 1rem;
+}
+
+.serves {
+  color: #555;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ingredients,
+.steps {
+  padding-left: 1.25rem;
+  line-height: 1.6;
+}
+
+.ingredients li {
+  margin-bottom: 0.25rem;
+}
+
+.steps li {
+  margin-bottom: 0.5rem;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border-radius: 999px;
+}
+
+@media (max-width: 480px) {
+  .prompt {
+    flex-direction: column;
+  }
+  .prompt button {
+    width: 100%;
+  }
+}
+```
+
+## Run the app
+
+<Lang lang="js">
+
+Start the Astro development server:
+
+<PackageManagerTabs command="npm run dev" />
+
+</Lang>
+
+<Lang lang="go dart python">
+
+Start your Genkit backend in one terminal by following the run instructions in the [backend tutorial](/docs/backend-frameworks/overview) you used. Then start the Astro development server in another terminal:
+
+<PackageManagerTabs command="npm run dev" />
+
+</Lang>
+
+Open `http://localhost:4321`, enter a craving like `something warm with chicken`, and submit. The recipe streams in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
+
+<Lang lang="go dart python">
+
+If the request fails, check the browser console first. The most common issue is a CORS error or a backend URL that doesn't match the route in your page script.
+
+</Lang>
+
+## Test and inspect the app
+
+The Genkit Developer UI is a local console for testing flows and inspecting traces. It records every tool call, model invocation, and streamed chunk, so you can see what the model called, what it received back, and how the recipe was assembled.
+
+<Lang lang="js">
+
+Start the Developer UI from your project root:
+
+<PackageManagerTabs command="npx genkit start -- tsx --watch src/genkit/bargainChefFlow.ts" />
+
+This launches the Developer UI at `http://localhost:4000` by default.
+
+:::tip[Add a script]
+To make starting the Developer UI easier, add the above command to your project's scripts, such as in `package.json`.
+:::
+
+In the Developer UI:
+
+- The **Traces** tab shows every invocation of `bargainChefFlow`, including the ones triggered by your Astro app. Open one and you'll see the `getIngredientsOnSale` tool call with the `dayType` the model chose, the model invocation, and each streamed chunk that the browser received.
+- The **Flows** tab lets you run `bargainChefFlow` directly with custom input, which is useful for iterating on the prompt without round-tripping through the UI. Try sample input like:
+
+  ```json
+  { "craving": "something warm with chicken" }
+  ```
+
+<video
+  controls
+  preload="metadata"
+  muted
+  width="100%"
+  style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+  poster="/videos/devui-flow-runner-poster.png"
+  aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+>
+  <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+  Your browser does not support the video tag. This video demonstrates how to
+  run a Genkit flow in the Developer UI, showing the bargainChefFlow with input
+  parameters and the resulting structured output.
+</video>
+
+### Or call the flow with curl
+
+You can also test the API route directly. Use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://localhost:4321/api/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
+
+The response arrives as a series of SSE `data:` events, each containing the partial recipe accumulated so far.
+
+</Lang>
+
+<Lang lang="go dart python">
+
+If your backend is running under `genkit start`, the Developer UI is already running at `http://localhost:4000`.
+
+In the Developer UI:
+
+- The **Traces** tab shows every invocation of `bargainChefFlow`, including requests from your Astro app. Open one and you'll see the `getIngredientsOnSale` tool call with the `dayType` the model chose, the model invocation, and each streamed chunk that the browser received.
+- The **Flows** tab lets you run `bargainChefFlow` directly with custom input, which is useful for iterating on the prompt without round-tripping through the UI.
+
+</Lang>
+
+<Lang lang="js">
+
+## Use a standalone backend instead
+
+This tutorial uses an Astro server endpoint for the shortest first-run path. To use the same UI against a standalone backend instead, change four things:
+
+1. Skip the Node.js adapter. A standalone setup doesn't need server rendering, so you can leave Astro on its default output and omit the "Enable server rendering" step and the `## Create the backend` section.
+
+2. Install the Genkit web client:
+
+   <PackageManagerTabs command="npm install genkit" />
+
+3. In the `src/pages/index.astro` script, define local TypeScript interfaces matching your flow's streamed output instead of importing shared types.
+
+4. Point the `streamFlow` URL at your backend route:
+
+   ```ts
+   const result = streamFlow({
+     url: 'http://localhost:8080/bargainChefFlow',
+     input: { craving },
+   });
+   ```
+
+Then enable CORS on your backend so it accepts requests from `http://localhost:4321`:
+
+{corsCallout}
+
+</Lang>
+
+## What you built
+
+You now have a working Genkit app that streams structured output from Gemini into an Astro UI incrementally, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.

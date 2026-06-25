@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig, fontProviders } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidatorPlugin from 'starlight-links-validator';
 import starlightBlog from 'starlight-blog';
@@ -7,8 +7,21 @@ import sitemap from '@astrojs/sitemap';
 import { sidebar, docsLanguageAgnosticBySlug } from './src/sidebar.ts';
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from './src/google-theme';
 
+import { readFileSync } from 'node:fs';
+
 const site = 'https://genkit.dev';
 const ogUrl = new URL('ogimage.png?v=1', site).href;
+
+const authorsRaw = JSON.parse(readFileSync('./src/data/authors.json', 'utf8'));
+const blogAuthors = Object.fromEntries(
+  Object.entries(authorsRaw).map(([key, author]) => [
+    key,
+    {
+      name: author.name,
+      title: author.title,
+    }
+  ])
+);
 
 // https://astro.build/config
 export default defineConfig({
@@ -16,9 +29,64 @@ export default defineConfig({
   site,
   markdown: {
     shikiConfig: {
-      langAlias: { dotprompt: 'handlebars' },
+      langAlias: {
+        dotprompt: 'handlebars',
+        angular: 'html',
+      },
     },
   },
+  // Fonts are self-hosted (local provider) rather than fetched from Google at
+  // build time. The preview build runs in a sandboxed CI environment with no
+  // network egress to fonts.googleapis.com, so a remote provider fails the
+  // build. The woff2 files in src/assets/fonts are the variable "latin" subsets
+  // Google serves for these families; weight ranges match each font's wght axis.
+  fonts: [
+    {
+      provider: fontProviders.local(),
+      name: 'Google Sans',
+      cssVariable: '--font-google-sans',
+      fallbacks: ['Arial', 'sans-serif'],
+      options: {
+        variants: [
+          {
+            weight: '400 700',
+            style: 'normal',
+            src: ['./src/assets/fonts/google-sans.woff2'],
+          },
+        ],
+      },
+    },
+    {
+      provider: fontProviders.local(),
+      name: 'Google Sans Flex',
+      cssVariable: '--font-google-sans-text',
+      fallbacks: ['Arial', 'sans-serif'],
+      options: {
+        variants: [
+          {
+            weight: '100 900',
+            style: 'normal',
+            src: ['./src/assets/fonts/google-sans-flex.woff2'],
+          },
+        ],
+      },
+    },
+    {
+      provider: fontProviders.local(),
+      name: 'Google Sans Code',
+      cssVariable: '--font-google-sans-mono',
+      fallbacks: ['monospace'],
+      options: {
+        variants: [
+          {
+            weight: '300 800',
+            style: 'normal',
+            src: ['./src/assets/fonts/google-sans-code.woff2'],
+          },
+        ],
+      },
+    },
+  ],
   integrations: [
     starlight({
       favicon: 'favicon.ico',
@@ -30,9 +98,10 @@ export default defineConfig({
       title: 'Genkit',
       components: {
         Sidebar: './src/components/sidebar.astro',
-        Header: './src/content/custom/header.astro',
+        Header: './src/components/Header.astro',
         Hero: './src/content/custom/hero.astro',
         Head: './src/content/custom/head.astro',
+        Footer: './src/content/custom/footer.astro',
         PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
       },
@@ -46,66 +115,21 @@ export default defineConfig({
             height: '377',
           },
         },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.gstatic.com',
-            rel: 'preconnect',
-            crossorigin: true,
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Text:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Mono:wght@400;500&display=swap',
-            rel: 'stylesheet',
-          },
-        },
-        {
-          tag: 'link',
-          attrs: {
-            href: 'https://fonts.googleapis.com/css2?family=Google+Symbols&display=block',
-            rel: 'stylesheet',
-          },
-        },
       ],
       plugins: [
         starlightBlog({
           title: 'Blog',
-          // We add our own "Blog" link in the custom header (src/content/custom/header.astro).
+          // The "Blog" link is rendered by our shared header (src/components/Header.astro).
           navigation: 'none',
           prefix: 'blog',
           metrics: { readingTime: true },
-          // Global authors, referenceable by key from a post's `authors` frontmatter.
-          authors: {
-            genkit: {
-              name: 'The Genkit Team',
-              title: 'Genkit',
-              url: 'https://genkit.dev',
-            },
-          },
+          authors: blogAuthors,
         }),
-        starlightLinksValidatorPlugin(),
+        starlightLinksValidatorPlugin({
+          // The landing page at `/` is a custom Astro page outside Starlight routes.
+          exclude: ['/'],
+        }),
       ],
-      logo: {
-        dark: './src/assets/lockup_white_tight2.png',
-        light: './src/assets/lockup_dark_tight.png',
-        replacesTitle: true,
-      },
       social: [
         {
           icon: 'github',
@@ -134,7 +158,7 @@ export default defineConfig({
         },
       ],
       sidebar,
-      customCss: ['./src/tailwind.css'],
+      customCss: ['./src/styles/tailwind.css'],
       editLink: {
         baseUrl: 'https://github.com/genkit-ai/docsite/edit/main/',
       },
