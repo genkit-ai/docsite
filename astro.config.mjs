@@ -97,6 +97,10 @@ export default defineConfig({
               title: 'Genkit',
               url: 'https://genkit.dev',
             },
+            'chris-gill': {
+              name: 'Chris Gill',
+              title: 'Product Manager at Google',
+            },
           },
         }),
         starlightLinksValidatorPlugin(),
