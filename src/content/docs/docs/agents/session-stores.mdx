@@ -211,7 +211,8 @@ Plan retention before launch. Snapshots are full conversation checkpoints, so lo
 
 - **In-memory store** for tests, demos, local examples, and single-process experiments.
 - **File store** for local development, prototypes, CLIs, and single-host apps that need snapshots to survive process restarts.
-- **Custom store** for production web apps that need a database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence.
+- **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
+- **Custom store** for production web apps that need a different database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence that the built-in stores do not cover.
 
 Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, exposes snapshot companion actions, starts detached work, or aborts an in-flight turn.
 
@@ -262,9 +263,55 @@ Use `WithPollInterval` to control how often the file store checks for status cha
 
 The file store is safe for concurrent use inside one process, writes snapshots atomically with temporary files and rename, and implements `aix.SnapshotSubscriber`. It is still a local filesystem store, so use a custom store when many app instances need to coordinate durable sessions.
 
+## Use a Firestore store
+
+`firebasex.NewFirestoreSessionStore` persists snapshots in Cloud Firestore. It is a managed, multi-instance store, so it is the built-in option for production apps where several server instances share sessions, and it implements `aix.SnapshotSubscriber` for background execution and abort.
+
+The store resolves its Firestore client from the Firebase plugin registered with the Genkit instance, so pass the Firebase plugin to `genkit.Init` before constructing the store.
+
+```go
+import (
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/firebase"
+	firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
+)
+
+g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+
+store, err := firebasex.NewFirestoreSessionStore[SupportState](ctx, g,
+	firebasex.WithCollection("genkit-sessions"),
+	firebasex.WithSnapshotPathPrefix(func(ctx context.Context) string {
+		return tenantIDFromContext(ctx)
+	}),
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+supportAgent := genkit.DefineAgent(g, "supportAgent",
+	aix.InlinePrompt{
+		ai.WithSystem("Help customers understand their order status."),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The `State` type parameter is the user-defined custom-state type carried in the session state; it must be JSON-serializable.
+
+All options are optional:
+
+- **`WithCollection`** sets the root collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-shards` and `<collection>-pointers`, are derived from it for sharded checkpoint state and per-session pointers.
+- **`WithSnapshotPathPrefix`** derives a per-tenant prefix from `context.Context`, such as an authenticated user or organization ID. When set, snapshots, shards, and pointers are nested under a tenant-scoped subcollection, so one tenant can never read another tenant's snapshots even with a snapshot ID. The value must be a single valid Firestore document ID (no `/` separators) and stable for a snapshot's lifetime, since every read recomputes it. An empty result falls back to `global`, which is also the default when the option is omitted.
+- **`WithCheckpointInterval`** sets the number of turns between full-state checkpoints. Between checkpoints the store writes JSON Patch diffs; a larger value writes fewer full checkpoints but reconstructs over more diffs. The number of diff documents read or written per turn is bounded by this value rather than by total session length. Must be at least `1`; defaults to `25`.
+- **`WithShardSize`** sets the maximum size in bytes of a single shard or diff document. Checkpoint state is split into chunks of this size, and any diff exceeding it is promoted to a sharded checkpoint, so no document approaches Firestore's 1 MiB limit. Must be positive; defaults to 512 KiB.
+
+The store picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable through the Firebase plugin, so the same code runs against the Firestore emulator for local testing.
+
+Because it implements `aix.SnapshotSubscriber` over Firestore's native real-time listeners, a status change such as an abort committed by one process is observed by the process running the detached turn even across instances, without polling. The store does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+
 ## Implement a production store
 
-Implement a custom `aix.SessionStore` when snapshots should live in your production data layer. This is the right approach for Cloud SQL, Firestore, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
+When the built-in Firestore store does not fit, implement a custom `aix.SessionStore` so snapshots live in your own production data layer. This is the right approach for Cloud SQL, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
 
 A custom store implements snapshot reading and writing:
 
