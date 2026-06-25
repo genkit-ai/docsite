@@ -114,19 +114,20 @@ class SaleItem(BaseModel):
     price: str
 
 
-class DayType(BaseModel):
+class GetIngredientsInput(BaseModel):
     day_type: Literal['weekday', 'weekend'] = Field(
         description='Whether to fetch weekday or weekend sale prices.',
     )
 
 
 @ai.tool(
+    name='get_ingredients_on_sale',
     description=(
-        "Returns the ingredients on sale at the local grocery store, with prices. "
-        "The sale set differs between weekdays and weekends."
+        'Returns the ingredients on sale at the local grocery store, with prices. '
+        'The sale set differs between weekdays and weekends.'
     ),
 )
-async def get_ingredients_on_sale(input: DayType) -> list[SaleItem]:
+async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleItem]:
     # Mock data: in a real app, query a pricing database.
     if input.day_type == 'weekend':
         return [
@@ -160,12 +161,12 @@ class Recipe(BaseModel):
     steps: list[str]
 
 
-class CravingInput(BaseModel):
+class BargainChefInput(BaseModel):
     craving: str = Field(description='What the user feels like eating right now.')
 
 
-@ai.flow(chunk_type=Recipe)
-async def bargain_chef_flow(input: CravingInput, ctx: ActionRunContext) -> Recipe:
+@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
+async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
     today = datetime.now().strftime('%A')
 
     stream_response = ai.generate_stream(
@@ -173,8 +174,8 @@ async def bargain_chef_flow(input: CravingInput, ctx: ActionRunContext) -> Recip
             f'Today is {today}. The user is craving: {input.craving}.\n\n'
             'Call the get_ingredients_on_sale tool with the day_type that matches today. '
             'Saturday and Sunday are weekends; all other days are weekdays. '
-            "Then propose ONE recipe that takes advantage of those deals. For each "
-            'ingredient, set on_sale=true if it appears in the tool\'s response, '
+            'Then propose ONE recipe that takes advantage of those deals. For each '
+            "ingredient, set on_sale=true if it appears in the tool's response, "
             'false otherwise.'
         ),
         tools=[get_ingredients_on_sale],
@@ -213,8 +214,8 @@ async def bargain_chef_endpoint():
 A few details are worth noting before you run the backend:
 
 - **Final output and streamed chunks:** `Recipe` is the complete recipe the flow returns at the end, passed as `output_schema` so Genkit validates the model's output against it. Declaring `chunk_type=Recipe` on the flow tells Genkit that streamed chunks share the same shape, with fields filling in progressively as the model generates them.
-- **Shared Python types:** the Pydantic models (`Recipe`, `RecipeIngredient`, `CravingInput`) define the request and response shapes once, so the flow, the HTTP handler, and any client share a single source of truth.
-- **The `get_ingredients_on_sale` tool:** the model decides when to call it based on the prompt, and the typed `DayType` input forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **Shared Python types:** the Pydantic models (`Recipe`, `RecipeIngredient`, `BargainChefInput`) define the request and response shapes once, so the flow, the HTTP handler, and any client share a single source of truth.
+- **The `get_ingredients_on_sale` tool:** the model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`ctx.send_chunk`:** each call pushes the latest partial recipe to the client, giving it a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
 
 ### Expose the flow over HTTP
@@ -248,6 +249,8 @@ curl -N -X POST http://localhost:8000/bargainChefFlow \
   -H "Accept: text/event-stream" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
+
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
 
 The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far: title first, then description, then ingredients (with `on_sale` flags on the ones the model picked from the tool), then steps.
 
@@ -283,7 +286,7 @@ The Developer UI is Genkit's local console for testing flows and inspecting exec
    To make starting the Developer UI easier, add the above command to your project's scripts in `pyproject.toml`.
    :::
 
-2. Select `bargain_chef_flow` from the list of flows.
+2. Select `bargainChefFlow` from the list of flows.
 3. Enter sample input:
 
    ```json

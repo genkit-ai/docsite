@@ -45,7 +45,7 @@ curl -sL cli.genkit.dev | bash
 Then install the packages you need in your project:
 
 ```bash
-uv add flask flask-cors genkit genkit-plugin-google-genai genkit-plugin-flask
+uv add "flask[async]" flask-cors genkit genkit-plugin-google-genai genkit-plugin-flask
 ```
 
 These packages include:
@@ -105,7 +105,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-class SaleIngredient(BaseModel):
+class SaleItem(BaseModel):
     name: str
     price: str
 
@@ -116,27 +116,30 @@ class GetIngredientsInput(BaseModel):
     )
 
 
-@ai.tool()
-async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleIngredient]:
-    """Returns the ingredients on sale at the local grocery store, with prices.
-    The sale set differs between weekdays and weekends.
-    """
+@ai.tool(
+    name='get_ingredients_on_sale',
+    description=(
+        'Returns the ingredients on sale at the local grocery store, with prices. '
+        'The sale set differs between weekdays and weekends.'
+    ),
+)
+async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleItem]:
     # Mock data: in a real app, query a pricing database.
     if input.day_type == 'weekend':
         return [
-            SaleIngredient(name='chicken breast', price='$2.99/lb'),
-            SaleIngredient(name='pasta', price='$0.79'),
-            SaleIngredient(name='canned tomatoes', price='$0.99'),
-            SaleIngredient(name='garlic', price='$0.50 / head'),
-            SaleIngredient(name='olive oil', price='$6.99'),
+            SaleItem(name='chicken breast', price='$2.99/lb'),
+            SaleItem(name='pasta', price='$0.79'),
+            SaleItem(name='canned tomatoes', price='$0.99'),
+            SaleItem(name='garlic', price='$0.50 / head'),
+            SaleItem(name='olive oil', price='$6.99'),
         ]
     return [
-        SaleIngredient(name='eggs', price='$3.49 / dozen'),
-        SaleIngredient(name='spinach', price='$1.99'),
-        SaleIngredient(name='parmesan', price='$4.99'),
-        SaleIngredient(name='lemons', price='$0.50 each'),
-        SaleIngredient(name='rice', price='$2.49'),
-        SaleIngredient(name='butter', price='$3.99'),
+        SaleItem(name='eggs', price='$3.49 / dozen'),
+        SaleItem(name='spinach', price='$1.99'),
+        SaleItem(name='parmesan', price='$4.99'),
+        SaleItem(name='lemons', price='$0.50 each'),
+        SaleItem(name='rice', price='$2.49'),
+        SaleItem(name='butter', price='$3.99'),
     ]
 
 
@@ -160,7 +163,7 @@ class BargainChefInput(BaseModel):
 
 @app.post('/bargainChefFlow')
 @genkit_flask_handler(ai)
-@ai.flow(chunk_type=Recipe)
+@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
 async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
     today = datetime.now().strftime('%A')
 
@@ -169,11 +172,11 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
             f'Today is {today}. The user is craving: {input.craving}.\n\n'
             'Call the get_ingredients_on_sale tool with the day_type that matches '
             'today. Saturday and Sunday are weekends; all other days are weekdays. '
-            "Then propose ONE recipe that takes advantage of those deals. For each "
+            'Then propose ONE recipe that takes advantage of those deals. For each '
             "ingredient, set on_sale=true if it appears in the tool's response, "
             'false otherwise.'
         ),
-        tools=['get_ingredients_on_sale'],
+        tools=[get_ingredients_on_sale],
         output_schema=Recipe,
         config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
     )
@@ -198,7 +201,7 @@ A few details are worth noting:
 - **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
 - **Describe the recipe shape:** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
 - **Define the flow:** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
-- **The three stacked decorators:** These wire everything up. `@ai.flow()` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
+- **The three stacked decorators:** These wire everything up. `@ai.flow(name='bargainChefFlow', chunk_type=Recipe)` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
 
 ### Check the project layout
 
@@ -246,6 +249,8 @@ curl -N -X POST http://127.0.0.1:8080/bargainChefFlow \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
 
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
+
 The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, and the final event contains the validated result.
 
 For a non-streaming request, drop the `Accept` header and you'll get a single JSON response:
@@ -272,7 +277,7 @@ The Developer UI is Genkit's local console for testing flows and inspecting exec
    To make starting the Developer UI easier, add the above command to your project's scripts (for example, in a Makefile or a `[tool.uv]` script entry).
    :::
 
-2. Select `bargain_chef_flow` from the list of flows.
+2. Select `bargainChefFlow` from the list of flows.
 3. Enter sample input:
 
    ```json
