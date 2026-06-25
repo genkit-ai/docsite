@@ -721,6 +721,98 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
+### Tool Calling
+
+Claude models support function calling. Define tools with `genkit.DefineTool` and pass them to `genkit.Generate`:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/anthropic"
+)
+
+type WeatherInput struct {
+	Location string `json:"location" jsonschema_description:"City and state, e.g. San Francisco, CA"`
+}
+
+getWeather := genkit.DefineTool(g, "get_weather",
+	"Gets the current weather in a given location",
+	func(ctx *ai.ToolContext, in WeatherInput) (string, error) {
+		return fmt.Sprintf("72°F and sunny in %s", in.Location), nil
+	},
+)
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(anthropic.Model(g, "claude-sonnet-4-5")),
+	ai.WithPrompt("What's the weather in San Francisco?"),
+	ai.WithTools(getWeather),
+)
+```
+
+#### Strict Tool Use
+
+The Anthropic plugin enables [strict tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use) by default for Claude models accessed through the direct Anthropic API. Strict mode uses grammar-constrained sampling to guarantee that the `input` field of every tool call exactly matches the tool's JSON schema — no missing required fields, no string-where-an-integer-should-be, no surprise extra keys.
+
+This means:
+
+- **Type-safe tool inputs.** If your tool declares `passengers int`, you will never receive `"two"` or `"2"`. The grammar enforces it before the token leaves the model.
+- **No retries for malformed arguments.** Cuts out a whole class of agent failure where you have to detect a bad tool call and re-prompt.
+- **Tool names are guaranteed valid.** The model can only emit tool names you actually registered.
+
+The plugin handles strict-mode requirements automatically. Specifically, it walks your tool's input schema and **recursively sets `additionalProperties: false`** on every nested object (including objects inside arrays), since the Anthropic API rejects strict tool schemas that omit it.
+
+The same enforcement applies to native structured output — when you call `genkit.Generate` with an output schema and `Constrained: true`, the schema is rewritten the same way before being sent.
+
+##### Opting out per tool
+
+Use `ai.WithStrictSchema(false)` to opt a single tool out of strict mode. Common reasons:
+
+- The tool's input schema uses keywords strict mode rejects (e.g. `minItems`, `maxItems`, complex unions).
+- The tool isn't critical enough to justify the added latency of grammar-constrained sampling (see the tip below).
+- You want to rely on Claude's natural schema adherence for simpler tools while keeping strict on the ones that matter.
+
+The flag is per-tool, so other tools in the same request still get strict enforcement:
+
+```go
+import (
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+)
+
+searchFlights := genkit.DefineTool(g, "search_flights",
+	"Search for flights matching constraints",
+	func(ctx *ai.ToolContext, in FlightQuery) (FlightResults, error) {
+		// ...
+	},
+	ai.WithStrictSchema(false),
+)
+```
+
+When strict is off for a tool, the plugin omits the `strict` field from the tool definition entirely. That means your schema can use any JSON Schema keywords you like, but the model is no longer grammar-constrained for that tool — it may produce inputs that don't match your schema. Validate them in your tool function.
+
+:::tip[Reserve strict mode for tools that need it]
+Per [Anthropic's guidance](https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations), mark only critical tools as strict. If you have many tools, reserve it for ones where schema violations cause real problems (database writes, payments, destructive actions) and rely on Claude's natural schema adherence for simpler tools. Grammar-constrained sampling adds latency, so applying it everywhere is rarely worth it.
+:::
+
+:::note[Vertex AI exception]
+The Vertex AI Anthropic endpoint does not support the `strict` field. When the plugin detects a Vertex AI provider it omits `strict: true` from the request. Tools still work, but inputs are not grammar-constrained — validate them in your tool implementation.
+:::
+
+##### JSON Schema limitations
+
+Strict tool use uses the same compiled-grammar pipeline as Anthropic's structured outputs, so your tool input schemas must stick to a supported subset of JSON Schema. The plugin passes schemas through as-is (apart from injecting `additionalProperties: false`); if you use an unsupported keyword the API returns a 400.
+
+For the full list of supported keywords, per-request limits, and HIPAA caveats, see Anthropic's documentation:
+
+- [Strict tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use)
+- [JSON Schema limitations](https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations)
+
+If you need a constraint the API doesn't enforce (e.g. regex patterns, numeric ranges), validate it inside your tool function — strict mode guarantees the shape, not the semantics.
+
 ### Configuration
 
 Anthropic models support specific configuration options provided by the Anthropic SDK:
