@@ -147,11 +147,14 @@ Wait for the final response before treating the turn as durably interrupted, bec
 
 ## Interrupt from a tool
 
-Go does not have a separate interruptible tool type. A normal tool defined with `genkit.DefineTool` signals an interrupt by returning `ai.InterruptWith(ctx, metadata)` from inside its function. The lower-level form is `ctx.Interrupt(&ai.InterruptOptions{Metadata: ...})`.
-
-The tool detects a resumed call with `ctx.IsResumed()` and can read the original input with `ai.OriginalInputAs[T](ctx)`. Keep approval and execution logic in one tool, and require the client to explicitly resume the turn.
+Define an interruptible tool with `genkitx.DefineInterruptibleTool`. Its third parameter is a typed *resume payload*: `nil` on the first call, and populated with the client's answer when the turn is resumed. The tool pauses by returning `tool.Interrupt(metadata)`; on resume it runs again from the top with the payload set. Keep approval and execution logic in one tool, and require the client to explicitly resume the turn.
 
 ```go
+import (
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	"github.com/firebase/genkit/go/ai/exp/tool"
+)
+
 type TransferInput struct {
 	To     string  `json:"to"`
 	Amount float64 `json:"amount"`
@@ -167,15 +170,24 @@ type TransferInterrupt struct {
 	Reason string  `json:"reason"`
 }
 
-transferMoney := genkit.DefineTool(g, "transferMoney",
+// Confirmation is the resume payload the client sends back to approve or
+// reject the paused transfer.
+type Confirmation struct {
+	Approved bool `json:"approved"`
+}
+
+transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
 	"Transfer money after user approval.",
-	func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
-		if !ctx.IsResumed() {
-			return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
+	func(ctx context.Context, input TransferInput, confirm *Confirmation) (TransferOutput, error) {
+		if confirm == nil {
+			return TransferOutput{}, tool.Interrupt(TransferInterrupt{
 				To:     input.To,
 				Amount: input.Amount,
 				Reason: "Approval is required before transferring money.",
 			})
+		}
+		if !confirm.Approved {
+			return TransferOutput{}, errors.New("transfer rejected by user")
 		}
 
 		return TransferOutput{ConfirmationID: "txn-123"}, nil
@@ -203,10 +215,10 @@ for chunk, err := range conn.Receive() {
 }
 ```
 
-Use `ai.InterruptAs[T]` to decode typed interrupt metadata:
+Use `tool.InterruptAs[T]` to decode typed interrupt metadata:
 
 ```go
-meta, ok := ai.InterruptAs[TransferInterrupt](interrupts[0])
+meta, ok := tool.InterruptAs[TransferInterrupt](interrupts[0])
 if ok {
 	fmt.Printf("Approve transfer to %s?", meta.To)
 }
@@ -214,10 +226,10 @@ if ok {
 
 ## Resume an interrupted turn
 
-Build resume parts from the tool, then send them with `conn.SendResume`. Use `RestartWith` to re-execute the original tool, optionally with `ai.WithNewInput` to change its arguments. The tool runs again with `ctx.IsResumed()` true.
+Build resume parts from the tool, then send them with `conn.SendResume`. Use `Resume` to re-execute the tool, delivering the client's typed answer to its resume parameter. The tool runs again from the top, this time with a non-nil payload.
 
 ```go
-part, err := transferMoney.RestartWith(interrupts[0])
+part, err := transferMoney.Resume(interrupts[0], Confirmation{Approved: true})
 if err != nil {
 	return err
 }
@@ -229,10 +241,10 @@ if err := conn.SendResume(&aix.ToolResume{
 }
 ```
 
-Use `RespondWith` when the result should be the tool output and the tool should not run again, such as a rejected approval:
+Use `Respond` when the result should be the tool output and the tool should not run again, such as supplying a precomputed result:
 
 ```go
-part, err := transferMoney.RespondWith(interrupts[0], TransferOutput{
+part, err := transferMoney.Respond(interrupts[0], TransferOutput{
 	ConfirmationID: "manual-approval",
 })
 if err != nil {
