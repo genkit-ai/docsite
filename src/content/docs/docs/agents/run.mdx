@@ -7,6 +7,7 @@ supportedLanguages:
 ---
 
 import Lang from '../../../../components/Lang.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 :::caution[Beta]
 The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
@@ -14,23 +15,24 @@ The Agents API is in **Beta.** It can introduce breaking changes in minor versio
 
 Genkit agents are built around conversations that continue across turns. A session or chat carries continuity, while each turn streams chunks and eventually resolves to a final output. This page covers starting a conversation, streaming a turn, and continuing from an earlier point.
 
-<Lang lang="js">
-
 ## The unified API
 
-Local agents and remote agents expose the same high-level interface:
+The JavaScript and Dart clients expose the same high-level interface, whether the agent runs locally (JavaScript `ai.defineAgent()`) or behind HTTP through `remoteAgent()`. In Go, the in-process API uses `RunText` and `Connect` instead, covered below.
 
-- **`AgentAPI`** is the callable agent. It creates chats, loads snapshots, reads snapshots, and aborts detached work.
-- **`AgentChat`** is a stateful conversation. It sends normal turns, streams turns, resumes interrupts, detaches work, and tracks the next-turn state for you.
-- **`AgentTurn`** represents one in-flight streaming turn. It gives you a stream, a final response promise, and an abort helper.
-- **`AgentResponse`** is the completed turn. It includes text, tool requests, interrupts, finish reason, snapshot ID, session ID, custom state, artifacts, raw output, and `assertValid()`.
+- **`AgentApi`** is the callable agent. It creates chats, loads snapshots, reads snapshots, and aborts detached work.
+- **`AgentChat`** is a stateful conversation. It sends normal turns, streams turns, resumes interrupts, detaches work, and tracks the next-turn state, including the session ID, for you.
+- **`AgentTurn`** represents one in-flight streaming turn. It gives you a stream, a final response, and an abort helper.
+- **`AgentResponse`** is the completed turn, with text, tool requests, interrupts, finish reason, snapshot ID, custom state, artifacts, and raw output.
 - **`AgentChunk`** is one streamed update. It can contain text, accumulated text, model data, tool requests, custom state, or an artifact.
 - **`AgentInterrupt`** is a paused tool request. It has the original input and helpers for building resume payloads.
 - **`DetachedTask`** is a background task handle. It can poll, wait, or abort the detached turn.
 
-`res.state` and `chat.state` are shortcuts for the custom state. Use `res.raw.state` when you need the full `SessionState` with messages, artifacts, and custom state together.
+`res.state` and `chat.state` are shortcuts for the custom state. Use `res.raw.state` when you need the full session state with messages, artifacts, and custom state together.
 
 ## Start a chat
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 const chat = weatherAgent.chat();
@@ -42,7 +44,26 @@ console.log(res.snapshotId);
 console.log(res.state);
 ```
 
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+final chat = agent.chat();
+final res = await chat.send(agentInputFromText('Weather in Tokyo?'));
+
+print(res.text);
+print(chat.sessionId); // the chat tracks the server-assigned session ID
+print(res.snapshotId);
+print(res.state);
+```
+
+</TabItem>
+</Tabs>
+
 Calling `chat()` without arguments starts a new conversation. Pass `sessionId` for the latest server-managed conversation, `snapshotId` when you need an exact saved point, or `state` when the client owns the full session state.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 const chat = weatherAgent.chat({
@@ -52,11 +73,26 @@ const chat = weatherAgent.chat({
 await chat.send('What did we discuss last time?');
 ```
 
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+final chat = agent.chat(sessionId: 'user-session-123');
+
+await chat.send(agentInputFromText('What did we discuss last time?'));
+```
+
+</TabItem>
+</Tabs>
+
 When both `sessionId` and `snapshotId` are supplied, the snapshot selects the exact resume point and the session ID acts as an ownership guard.
 
 ## Restore a full chat
 
 `loadChat()` reads a server snapshot and hydrates messages, custom state, artifacts, `snapshotId`, and `sessionId` before the next turn.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 const chat = await weatherAgent.loadChat({ sessionId: 'user-session-123' });
@@ -67,9 +103,27 @@ console.log(chat.state);
 await chat.send('Continue from there.');
 ```
 
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+final chat = await agent.loadChat(sessionId: 'user-session-123');
+
+print(chat.messages.length);
+print(chat.state);
+
+await chat.send(agentInputFromText('Continue from there.'));
+```
+
+</TabItem>
+</Tabs>
+
 Use `getSnapshot()` when you only need to inspect a snapshot, such as a status page or audit view. Use `loadChat()` when you want to continue the conversation from that saved state.
 
 ## Stream a turn
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 const chat = weatherAgent.chat();
@@ -85,11 +139,35 @@ const res = await turn.response;
 console.log(res.finishReason);
 ```
 
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+import 'dart:io';
+
+final turn = agent.chat().sendStream(agentInputFromText('Weather in Tokyo?'));
+
+await for (final chunk in turn.stream) {
+  if (chunk.text.isNotEmpty) stdout.write(chunk.text);
+  if (chunk.custom != null) updateStatus(chunk.custom);
+  if (chunk.artifact != null) renderArtifact(chunk.artifact);
+}
+
+final res = await turn.response;
+print(res.finishReason);
+```
+
+</TabItem>
+</Tabs>
+
 The non-streaming `send()` path drains the stream internally so custom state patches are still applied. This keeps `send()` and `sendStream()` consistent for server-managed agents, where final wire output may return a `snapshotId` instead of full state.
 
 ## Abort a foreground turn
 
-Use `AbortController` to cancel a foreground turn.
+Cancel a foreground turn from the caller.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 const controller = new AbortController();
@@ -103,11 +181,33 @@ const res = await turn.response;
 console.log(res.finishReason);
 ```
 
+</TabItem>
+<TabItem label="Dart">
+
+```dart
+final cancel = CancellationToken();
+final turn = chat.sendStream(
+  agentInputFromText('Write a long report.'),
+  cancel: cancel,
+);
+
+Future.delayed(const Duration(seconds: 1), cancel.cancel);
+
+final res = await turn.response;
+print(res.finishReason);
+```
+
+</TabItem>
+</Tabs>
+
 You can also call `turn.abort()`. Foreground aborts return an `aborted` response when cancellation is observed.
 
 ## Failed turns
 
 When a turn fails after the invocation starts, the client throws `AgentError`. The error carries the last-good state, snapshot ID, and response object when available.
+
+<Tabs syncKey="client-lang">
+<TabItem label="JavaScript">
 
 ```ts
 import { AgentError } from 'genkit/beta/client';
@@ -123,9 +223,25 @@ try {
 }
 ```
 
-Initialization misuse, such as sending `state` to a server-managed agent or `sessionId` to a client-managed agent, is rejected before a turn starts.
+</TabItem>
+<TabItem label="Dart">
 
-</Lang>
+```dart
+import 'package:genkit/client.dart';
+
+try {
+  await chat.send(agentInputFromText('Use a broken tool.'));
+} on AgentError catch (err) {
+  print(err.status);
+  print(err.snapshotId);
+  print(err.state);
+}
+```
+
+</TabItem>
+</Tabs>
+
+Initialization misuse, such as sending `state` to a server-managed agent or `sessionId` to a client-managed agent, is rejected before a turn starts.
 
 <Lang lang="go">
 
@@ -174,7 +290,7 @@ Use `Connect` for multi-turn local clients and streaming UIs. The connection let
 
 Reach for `Connect` when the caller needs direct control over both sides of the conversation on one live connection. It is useful for command-line tools, local services, workers, and lower-level integrations that need to stream output, observe custom state patches, handle interrupts, send a resume payload, or send another message after a `TurnEnd` without reconnecting.
 
-For most single-turn server code, use `RunText` or `Run`. For browser apps and HTTP clients, use the JavaScript `chat.send()` and `chat.sendStream()` helpers through `remoteAgent()` rather than managing a bidirectional stream directly.
+For most single-turn server code, use `RunText` or `Run`. For browser, mobile, and other HTTP clients, use the JavaScript or Dart `chat().send()` and `chat().sendStream()` clients through `remoteAgent()` rather than managing a bidirectional stream directly.
 
 ```go
 conn, err := weatherAgent.Connect(ctx)
