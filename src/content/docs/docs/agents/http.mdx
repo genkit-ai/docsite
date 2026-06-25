@@ -245,23 +245,50 @@ This path is server-managed only. The transport sends the chat `id` to the agent
 Point the transport at the same agent route you serve for turns. This example uses React's `useChat`; the Vue, Svelte, and Angular bindings accept the same `GenkitChatTransport`.
 
 ```tsx
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
 
 function Chat() {
+  // The chat id is sent to the agent as its sessionId, so it must be a UUID.
   const chatId = useMemo(() => crypto.randomUUID(), []);
-  const { messages, sendMessage } = useChat({
+  const [input, setInput] = useState('');
+
+  const { messages, sendMessage, status } = useChat({
     id: chatId,
-    transport: new GenkitChatTransport({
-      url: '/api/weatherAgent',
-    }),
+    transport: new GenkitChatTransport({ url: '/api/weatherAgent' }),
   });
 
-  // Render `messages` and call `sendMessage(...)` from your UI.
+  return (
+    <>
+      {messages.map((message) => (
+        <div key={message.id}>
+          <strong>{message.role}: </strong>
+          {/* A UIMessage is a list of typed parts; render the text ones. */}
+          {message.parts.map((part, i) =>
+            part.type === 'text' ? <span key={i}>{part.text}</span> : null,
+          )}
+        </div>
+      ))}
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!input.trim()) return;
+          sendMessage({ text: input });
+          setInput('');
+        }}
+      >
+        <input value={input} onChange={(e) => setInput(e.target.value)} />
+        <button disabled={status !== 'ready'}>Send</button>
+      </form>
+    </>
+  );
 }
 ```
 
+The hook does not manage input state, so you hold it yourself and pass the text to `sendMessage({ text })`. Each `message` is a `UIMessage` whose `parts` array holds typed segments (text, tool calls, and so on); the loop above renders the text parts. `status` is `ready` when the agent is idle.
+
 `GenkitChatTransport` takes `url` and an optional `headers` object or function for rotating auth tokens. To resume an earlier conversation, convert a snapshot's messages with `messagesFromSnapshot()` and pass them to your chat binding's `messages` option (for example, `useChat({ id, messages })`). When the user answers an interrupt through the SDK's `addToolResult`, the transport returns the resolved tool output to the agent as a resume payload automatically.
 
-The agent needs no extra wiring beyond a server-managed route.
+On the server, this is the standard agent route shown above, backed by a session store so each `sessionId` keeps its own conversation; no extra wiring is required.
