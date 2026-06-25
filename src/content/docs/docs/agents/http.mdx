@@ -233,3 +233,33 @@ The remote client calls the primary endpoint with streamed action transport. It 
 When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
 
 For client-managed agents, the remote client sends the full state back to the primary endpoint. That keeps the server stateless, but request size grows with conversation history and artifacts. Prefer server-managed routes for long-running chat experiences or background tasks.
+
+## React with the Vercel AI SDK
+
+For React frontends, `@genkit-ai/vercel-ai` adapts an agent to the [Vercel AI SDK](https://ai-sdk.dev). `GenkitChatTransport` implements the SDK's `ChatTransport`, so you drive the agent with the SDK's `useChat` hook and render messages with its UI primitives instead of wiring up `remoteAgent()` yourself. It speaks the same wire protocol over the agent route, so it works against a JavaScript or Go backend.
+
+This path is server-managed only. The transport sends the `useChat` `id` to the agent as its `sessionId`, and the agent persists each turn in its session store, so there is no client-side snapshot bookkeeping. The `id` must be a bare UUID.
+
+Point the transport at the same agent route you serve for turns:
+
+```tsx
+import { useMemo } from 'react';
+import { useChat } from '@ai-sdk/react';
+import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
+
+function Chat() {
+  const chatId = useMemo(() => crypto.randomUUID(), []);
+  const { messages, sendMessage } = useChat({
+    id: chatId,
+    transport: new GenkitChatTransport({
+      url: '/api/weatherAgent',
+    }),
+  });
+
+  // Render `messages` and call `sendMessage(...)` from your UI.
+}
+```
+
+`GenkitChatTransport` takes `url` and an optional `headers` object or function for rotating auth tokens. To resume an earlier conversation, convert a snapshot's messages with `messagesFromSnapshot()` and pass them to `useChat({ id, messages })`. When the user answers an interrupt through the SDK's `addToolResult`, the transport returns the resolved tool output to the agent as a resume payload automatically.
+
+The agent needs no extra wiring beyond a server-managed route. `@genkit-ai/vercel-ai` is currently published as a release candidate.
