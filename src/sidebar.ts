@@ -145,7 +145,7 @@ const DOCS_SIDEBAR = [
   {
     label: "Full-stack agents",
     items: [
-      { label: "Overview", slug: "docs/agents" },
+      { label: "Overview", slug: "docs/agents/overview" },
       { label: "Define agents", slug: "docs/agents/define" },
       { label: "Run and stream", slug: "docs/agents/run" },
       { label: "Serve over HTTP", slug: "docs/agents/http" },
