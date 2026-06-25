@@ -7,8 +7,21 @@ import sitemap from "@astrojs/sitemap";
 import { sidebar, docsLanguageAgnosticBySlug } from "./src/sidebar.ts";
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from "./src/google-theme";
 
-const site = "https://genkit.dev";
-const ogUrl = new URL("ogimage.png?v=1", site).href;
+import { readFileSync } from 'node:fs';
+
+const site = 'https://genkit.dev';
+const ogUrl = new URL('ogimage.png?v=1', site).href;
+
+const authorsRaw = JSON.parse(readFileSync('./src/data/authors.json', 'utf8'));
+const blogAuthors = Object.fromEntries(
+  Object.entries(authorsRaw).map(([key, author]) => [
+    key,
+    {
+      name: author.name,
+      title: author.title,
+    }
+  ])
+);
 
 // https://astro.build/config
 export default defineConfig({
@@ -110,14 +123,7 @@ export default defineConfig({
           navigation: "none",
           prefix: "blog",
           metrics: { readingTime: true },
-          // Global authors, referenceable by key from a post's `authors` frontmatter.
-          authors: {
-            genkit: {
-              name: "The Genkit Team",
-              title: "Genkit",
-              url: "https://genkit.dev",
-            },
-          },
+          authors: blogAuthors,
         }),
         starlightLinksValidatorPlugin({
           // The landing page at `/` is a custom Astro page outside Starlight routes.
