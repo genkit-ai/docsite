@@ -1,0 +1,171 @@
+---
+title: Full-stack agents
+description: Build AI features that can hold a conversation, use tools, stream progress, and continue across user sessions.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+Genkit agents package the model loop, message history, tool calls, streaming, and persistence behind one API. You define the agent on the server, then call the same conversational interface in process or through HTTP.
+
+Genkit agents are useful when your app needs an assistant, an approval workflow, a long-running generator, or a coordinator that delegates work to specialized agents. They build on Genkit prompts and `generate()` calls, so they can use models, tools, middleware, and developer tooling from the rest of Genkit.
+
+## When to choose Genkit agents
+
+Use standard Genkit flows and `generate()` primitives when you want full control over the application's API shape, persistence model, orchestration, and frontend protocol. A flow is often the right fit for request and response tasks, explicit backend workflows, scheduled jobs, and systems where your app already owns every step of state management.
+
+Use Genkit agents when the feature is naturally conversational or iterative. They handle the repeated work that chat-based applications need, including message history, streaming updates, tool turns, snapshots, aborts, interrupts, background execution, and continuation from a previous turn. They are a strong fit for persistent chat applications, conversational product experiences, approval workflows, task copilots, and multi-turn generation where the model refines output over several steps.
+
+Genkit agents are also designed for seamless frontend integration. A browser or mobile client can use the same `chat()` interface for local and remote agents, receive streamed text, state patches, artifacts, and tool interruptions, then continue the next turn without rebuilding the transport protocol. You can build the same capabilities with flows and `generate()` if you need maximum architectural control, but agents remove much of the plumbing for persistent, interactive AI features.
+
+<Lang lang="js">
+
+All agent APIs are imported from `genkit/beta` on the server and `genkit/beta/client` on the client. This includes `genkit()`, session stores, `remoteAgent()`, and the shared agent types.
+
+The samples in this section are based on the [agents test app](https://github.com/genkit-ai/genkit/tree/main/js/testapps/agents).
+
+## Your first agent
+
+The simplest agent needs a name and a system prompt. Start a chat and send a message:
+
+```ts
+import { genkit } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});
+
+const assistant = ai.defineAgent({
+  name: 'assistant',
+  system: 'You are a helpful assistant.',
+});
+
+const chat = assistant.chat();
+const res = await chat.send('Hello. What can you do?');
+
+console.log(res.text);
+```
+
+You can reference a model with the plugin helper, such as `googleAI.model('gemini-flash-latest')`, or with the string ID, such as `'googleai/gemini-flash-latest'`.
+
+## Common path
+
+Most production agents grow in this order:
+
+1. Define the agent with a model, instructions, and tools.
+2. Call it locally with `chat().send()` or `chat().sendStream()`.
+3. Add a session store when the server should own history.
+4. Serve it over HTTP with a primary endpoint and optional snapshot and abort endpoints.
+5. Use `remoteAgent()` from a browser, mobile app, or another server.
+
+## Develop with the Genkit Dev UI
+
+The [Genkit Developer UI](/docs/devtools) lets you chat with your agents, inspect their full execution, and iterate quickly without writing any frontend code. When you run your app with the Genkit CLI, agents appear alongside your flows, prompts, and models so you can send messages, watch streamed responses, step through tool calls, and review session state.
+
+![Chatting with a Genkit agent in the Developer UI](/assets/agent-dev-ui-1.png)
+
+This makes the Dev UI a fast way to test conversational behavior, debug tool turns, and verify interrupts and continuation before wiring up a client. You can also inspect detailed execution traces for each turn to see model calls, tool invocations, latency, and token usage.
+
+## Where to go next
+
+- [Define agents](/docs/agents/define) covers `defineAgent`, `definePromptAgent`, tools, and Dotprompt backed agents.
+- [Run and stream](/docs/agents/run) covers `chat()`, `loadChat()`, `send`, `sendStream`, `resume`, and response types.
+- [Serve over HTTP](/docs/agents/http) covers Express routes, `remoteAgent()`, the JavaScript client, and a Vercel AI SDK UI integration.
+- [Sessions and state](/docs/agents/state) covers server-managed stores, client-managed state, snapshots, branching, custom state, and artifacts.
+- [Session stores](/docs/agents/session-stores) covers built-in stores, production recommendations, and custom store implementations.
+- [Interrupts](/docs/agents/interrupts) covers human approval and resumable tool calls.
+- [Background execution](/docs/agents/background) covers detached turns, polling, waiting, aborting, and snapshot status values.
+- [Multi-agent delegation](/docs/agents/multi-agent) covers the `agents()` middleware and `delegate_to_*` tools.
+- [Custom orchestration](/docs/agents/custom-orchestration) covers `defineCustomAgent` and custom turn loops for advanced workflows.
+- [Error handling](/docs/agents/errors) covers agent errors, tool errors, and Go failure tiers.
+
+</Lang>
+
+<Lang lang="go">
+
+The Agents API is available from the experimental Genkit packages. It supports server-side agents, session stores, HTTP routes, custom state, interrupts, background work, and JavaScript clients that call agent routes.
+
+## Your first agent
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx,
+		genkit.WithExperimental(),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+	)
+
+	assistant := genkitx.DefineAgent(g, "assistant",
+		aix.InlinePrompt{
+			ai.WithModelName("googleai/gemini-flash-latest"),
+			ai.WithSystem("You are a helpful assistant."),
+		},
+	)
+
+	out, err := assistant.RunText(ctx, "Hello. What can you do?")
+	if err != nil {
+		// A non-nil error means the turn never produced a result, such as a
+		// rejected init payload or a cancelled context.
+		log.Fatalf("run assistant: %v", err)
+	}
+
+	fmt.Println(out.Message.Text())
+}
+```
+
+## Common path
+
+Most production agents grow in this order:
+
+1. Define the agent with an inline prompt or a named prompt.
+2. Call it with `Run`, `RunText`, or `Connect`.
+3. Add a session store when the server should own history.
+4. Expose the agent with the experimental HTTP routes.
+5. Call the Go route from a JavaScript client or any HTTP client.
+
+## Develop with the Genkit Dev UI
+
+The [Genkit Developer UI](/docs/devtools) lets you chat with your agents, inspect their full execution, and iterate quickly without writing any frontend code. When you run your app with the Genkit CLI, agents appear alongside your flows, prompts, and models so you can send messages, watch streamed responses, step through tool calls, and review session state.
+
+![Chatting with a Genkit agent in the Developer UI](/assets/agent-dev-ui-1.png)
+
+This makes the Dev UI a fast way to test conversational behavior, debug tool turns, and verify interrupts and continuation before wiring up a client. You can also inspect detailed execution traces for each turn to see model calls, tool invocations, latency, and token usage.
+
+## Where to go next
+
+- [Define agents](/docs/agents/define) covers `DefineAgent`, `DefinePromptAgent`, inline prompts, named prompts, and typed state.
+
+- [Run and stream](/docs/agents/run) covers request and response shapes, streaming, and continuation.
+- [Serve over HTTP](/docs/agents/http) covers Go routes, curl examples, the JavaScript client, and a Vercel AI SDK UI integration.
+- [Sessions and state](/docs/agents/state) covers stores, snapshots, branching, redaction, custom state, and artifacts.
+- [Session stores](/docs/agents/session-stores) covers built-in stores, production recommendations, and custom store implementations.
+- [Interrupts](/docs/agents/interrupts) covers resumable tool calls.
+- [Background execution](/docs/agents/background) covers detached work and aborting.
+- [Multi-agent delegation](/docs/agents/multi-agent) covers agent coordination patterns.
+- [Custom orchestration](/docs/agents/custom-orchestration) covers `DefineCustomAgent` and advanced turn loops.
+- [Error handling](/docs/agents/errors) covers request failures and tool return errors.
+
+</Lang>

@@ -1,0 +1,199 @@
+---
+title: Agent error handling
+description: Understand how agent failures are reported and how to recover a conversation after something goes wrong.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+Genkit agent failures have different recovery paths depending on when they happen. A request can be rejected before an invocation starts, a turn can fail after state has been loaded, or a tool can return a domain-level result that the model can handle.
+
+<Lang lang="js">
+
+## Failure categories
+
+- **Init misuse** throws before a turn starts. Fix the caller, such as by not sending `state` to a store-backed agent.
+- **Failed turns** throw `AgentError` with `response`, `status`, `details`, `state`, and `snapshotId`. Resume from the last-good state or snapshot.
+- **Foreground aborts** resolve with `finishReason: 'aborted'`. Let the user retry or revise the request.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Show the status, inspect snapshot error details, and retry from a completed snapshot when possible.
+- **Domain-level tool problems** should be structured tool output when the model can recover. Let the model explain the issue or ask the user for corrected input.
+
+## Handle failed turns
+
+```ts
+import { AgentError } from 'genkit/beta/client';
+
+try {
+  const res = await chat.send('Look up order 123.');
+  console.log(res.text);
+} catch (err) {
+  if (err instanceof AgentError) {
+    console.error(err.status);
+    console.error(err.details);
+    console.error(err.snapshotId);
+    console.error(err.state);
+
+    const recoveryChat = err.snapshotId
+      ? await agent.loadChat({ snapshotId: err.snapshotId })
+      : agent.chat({ state: err.response.raw.state });
+
+    await recoveryChat.send('Try again with order 456.');
+  } else {
+    throw err;
+  }
+}
+```
+
+For streaming turns, catch errors around stream consumption and the final response. The stream rethrows failed-turn errors after yielding any available chunks.
+
+```ts
+const turn = chat.sendStream('Write a report.');
+
+try {
+  for await (const chunk of turn.stream) {
+    render(chunk);
+  }
+
+  await turn.response;
+} catch (err) {
+  showFailure(err);
+}
+```
+
+## Tool exceptions
+
+Throw from a tool when the system cannot safely continue, such as a database outage, auth failure, or invariant violation.
+
+```ts
+const lookupOrder = ai.defineTool(
+  {
+    name: 'lookupOrder',
+    description: 'Looks up an order by ID.',
+    inputSchema: z.object({ orderId: z.string() }),
+  },
+  async ({ orderId }) => {
+    const order = await db.orders.find(orderId);
+    if (!order) {
+      throw new Error(`Order ${orderId} was not found.`);
+    }
+    return order;
+  },
+);
+```
+
+Return structured data when the model can recover:
+
+```ts
+return {
+  ok: false,
+  reason: 'ORDER_NOT_FOUND',
+  message: 'Ask the user to check the order ID.',
+};
+```
+
+## Response validation
+
+Call `res.assertValid()` when a caller requires a model message and wants blocked responses to throw.
+
+```ts
+const res = await chat.send('Write the summary.');
+res.assertValid();
+```
+
+</Lang>
+
+<Lang lang="go">
+
+## Failure categories
+
+- **Rejected init** returns a non-nil Go error from `Connect`, `Run`, or `RunText`. Fix the caller or selected resume source.
+- **Failed turns** return `AgentOutput` with `FinishReasonFailed` and `Error`. Resume from `State` for client-managed agents or `SnapshotID` for server-managed agents.
+- **Tool domain problems** should return structured tool output when the coordinator or model can recover.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect snapshot error details or retry from a completed snapshot.
+
+## Check both error channels
+
+```go
+import aix "github.com/firebase/genkit/go/ai/exp"
+```
+
+```go
+out, err := agent.RunText(ctx, "Look up order 123.")
+if err != nil {
+	return fmt.Errorf("agent invocation did not start: %w", err)
+}
+
+if out.FinishReason == aix.AgentFinishReasonFailed {
+	if out.Error != nil {
+		return fmt.Errorf("agent turn failed: %s: %s", out.Error.Status, out.Error.Message)
+	}
+	return fmt.Errorf("agent turn failed")
+}
+
+fmt.Println(out.Message.Text())
+```
+
+A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band so the output can include recovery state or a recovery snapshot ID.
+
+## Resume after failure
+
+For client-managed agents, pass the last-good state from the failed output:
+
+```go
+retry, err := agent.RunText(ctx, "Try order 456.",
+	aix.WithState(out.State),
+)
+```
+
+For server-managed agents, resume from the recovery snapshot:
+
+```go
+retry, err := agent.RunText(ctx, "Try order 456.",
+	aix.WithSnapshotID[OrderState](out.SnapshotID),
+)
+```
+
+Only completed snapshots are resumable. If the latest session snapshot is failed, aborted, or pending, use a known completed snapshot ID or wait for the pending work to finish.
+
+## Tool errors
+
+Return a Go error when the tool cannot safely produce a meaningful result:
+
+```go
+func lookupOrder(ctx *ai.ToolContext, input LookupOrderInput) (LookupOrderOutput, error) {
+	order, err := db.LookupOrder(ctx, input.OrderID)
+	if err != nil {
+		// The lookup itself failed (e.g. the database is unreachable); this is
+		// a tool failure, distinct from a found-but-empty result below.
+		return LookupOrderOutput{}, fmt.Errorf("look up order %q: %w", input.OrderID, err)
+	}
+	if order == nil {
+		return LookupOrderOutput{}, core.NewError(core.NOT_FOUND, "order %q not found", input.OrderID)
+	}
+	return LookupOrderOutput{OK: true, Order: order}, nil
+}
+```
+
+Return structured output when the model should recover:
+
+```go
+if order == nil {
+	return LookupOrderOutput{
+		OK:      false,
+		Reason:  "ORDER_NOT_FOUND",
+		Message: "Ask the user to check the order ID.",
+	}, nil
+}
+```
+
+## Transform failures
+
+State and stream transforms fail closed. If a transform returns an error, the read or invocation fails instead of exposing unredacted data. Use this behavior for authorization-dependent redaction where returning raw state would leak sensitive information.
+
+</Lang>
