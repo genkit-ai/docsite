@@ -1,0 +1,314 @@
+---
+title: Serve agents over HTTP
+description: Connect frontend apps and services to Genkit agents through HTTP while keeping the same chat-based programming model.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+HTTP serving lets browser apps, mobile apps, other services, and agents written in another language use the same conversational runtime. The wire protocol has a primary turn endpoint and optional companion endpoints for snapshots and aborts. Over it, a client streams model output, custom state, artifacts, and interrupts through one agent interface, then continues the next turn with a session ID, snapshot ID, or client-managed state.
+
+<Lang lang="js">
+
+## Express routes
+
+Every Genkit agent is a bidirectional action. Serve the agent action itself for turns. Serve the snapshot companion only for server-managed agents, and serve the abort companion only when clients need to cancel detached work.
+
+```ts
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
+const app = express();
+
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
+
+app.post(
+  '/api/weatherAgent/getSnapshot',
+  expressHandler(weatherAgent.getSnapshotDataAction),
+);
+
+app.post(
+  '/api/weatherAgent/abort',
+  expressHandler(weatherAgent.abortAgentAction),
+);
+
+app.listen(8080);
+```
+
+The primary endpoint handles normal and streaming turns. The snapshot endpoint reads by `snapshotId` or `sessionId`. The abort endpoint takes `{ snapshotId }`.
+
+</Lang>
+
+<Lang lang="go">
+
+## Route helpers
+
+The experimental route helpers live in `github.com/firebase/genkit/go/genkit/exp`. They return route descriptors that you can mount on `http.ServeMux` or another router.
+
+```go
+import genkitx "github.com/firebase/genkit/go/genkit/exp"
+```
+
+```go
+mux := http.NewServeMux()
+for _, route := range genkitx.AllAgentRoutes(g) {
+	mux.HandleFunc(route.Pattern(), route.Handler())
+}
+
+log.Fatal(http.ListenAndServe(":8080", mux))
+```
+
+Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent.
+
+## Route layout
+
+- **`POST /agents/{name}`** always exists. It handles one turn per request. Add `?stream=true` for server-sent events.
+- **`POST /agents/{name}/getSnapshot`** exists only when the agent has a session store. Use it to read by `snapshotId` or by latest `sessionId`.
+- **`POST /agents/{name}/abort`** exists only when the agent has a store that supports status subscriptions. Use it to cancel detached background work.
+
+There is currently no `abortSnapshot` route.
+
+Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in `init`. `init` is a required object even for a new conversation: send `init: {}` to start fresh, or include `sessionId`, `snapshotId`, or `state` to continue.
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}},"init":{}}'
+```
+
+Continue a server-managed conversation:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What about Paris?"}]}},"init":{"sessionId":"SESSION_ID"}}'
+```
+
+Continue a client-managed conversation:
+
+```sh
+curl -X POST http://localhost:8080/agents/statelessChat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What is my name?"}]}},"init":{"state":STATE_FROM_PREVIOUS_RESPONSE}}'
+```
+
+Stream a turn as server-sent events:
+
+```sh
+curl -N -X POST 'http://localhost:8080/agents/chat?stream=true' \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Suggest three day trips from Tokyo."}]}},"init":{}}'
+```
+
+## Snapshot and abort companions
+
+Read a snapshot:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
+```
+
+Abort detached work:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/abort \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
+```
+
+</Lang>
+
+## Connect a client
+
+The client is independent of the backend language. Point it at the primary turn URL your server exposes, the route you mounted above, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
+
+The snippets below apply whichever backend language you selected.
+
+`remoteAgent()` from `genkit/beta/client` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
+
+```ts
+import { remoteAgent } from 'genkit/beta/client';
+
+const agent = remoteAgent<WeatherState>({
+  url: 'http://localhost:8080/api/weatherAgent',
+});
+
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+
+console.log(res.text);
+```
+
+Options:
+
+- **`url`** is required and sends normal and streaming turns.
+- **`getSnapshotUrl`** defaults to `${url}/getSnapshot` and loads saved snapshots for server-managed agents.
+- **`abortUrl`** defaults to `${url}/abort` and cancels detached background turns.
+- **`headers`** can be a static object or an async function called for each request. Use the function form when tokens rotate or are fetched from the current frontend session.
+- **`stateManagement`** explicitly declares `server` or `client` state. The client otherwise infers the mode from responses.
+
+## Stream a turn
+
+`sendStream()` returns a turn that exposes a chunk stream and a final response.
+
+```ts
+const turn = agent.chat().sendStream('Write a long report.');
+
+for await (const chunk of turn.stream) {
+  if (chunk.text) process.stdout.write(chunk.text);
+  if (chunk.custom) updateStatus(chunk.custom);
+}
+
+const res = await turn.response;
+```
+
+## Client behavior
+
+The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts, applies streamed custom-state patches, and throws `AgentError` for failed turns.
+
+When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
+
+For client-managed agents, the remote client sends the full state back to the primary endpoint. That keeps the server stateless, but request size grows with conversation history and artifacts. Prefer server-managed routes for long-running chat experiences or background tasks.
+
+## Vercel AI SDK UI and AI Elements
+
+`@genkit-ai/vercel-ai` connects an agent to the [Vercel AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui) library — the framework chat bindings such as `useChat`, not the broader Vercel AI SDK. `GenkitChatTransport` implements AI SDK UI's framework-agnostic `ChatTransport`, so it works with any of the bindings, including React, Vue, Svelte, and Angular. The transport speaks the same wire protocol over the agent route, so it works against a JavaScript or Go backend.
+
+With the agent behind an AI SDK UI binding, you drive it from the SDK's chat primitives instead of wiring up `remoteAgent()` yourself. In React, you can also assemble the interface from Vercel's [AI Elements](https://elements.ai-sdk.dev/) components, which are built on the AI SDK UI primitives.
+
+This path is server-managed only. The transport sends the chat `id` to the agent as its `sessionId`, and the agent persists each turn in its session store, so there is no client-side snapshot bookkeeping. The `id` must be a bare UUID.
+
+Point the transport at the same agent route you serve for turns. These examples use React and Angular; the Vue and Svelte bindings accept the same `GenkitChatTransport`.
+
+<Tabs syncKey="ai-sdk-ui">
+<TabItem label="React">
+
+```tsx
+import { useMemo, useState } from 'react';
+import { useChat } from '@ai-sdk/react';
+import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
+
+function Chat() {
+  // The chat id is sent to the agent as its sessionId, so it must be a UUID.
+  const chatId = useMemo(() => crypto.randomUUID(), []);
+  const [input, setInput] = useState('');
+
+  const { messages, sendMessage, status } = useChat({
+    id: chatId,
+    transport: new GenkitChatTransport({ url: '/api/weatherAgent' }),
+  });
+
+  return (
+    <>
+      {messages.map((message) => (
+        <div key={message.id}>
+          <strong>{message.role}: </strong>
+          {/* A UIMessage is a list of typed parts; render the text ones. */}
+          {message.parts.map((part, i) =>
+            part.type === 'text' ? <span key={i}>{part.text}</span> : null,
+          )}
+        </div>
+      ))}
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!input.trim()) return;
+          sendMessage({ text: input });
+          setInput('');
+        }}
+      >
+        <input value={input} onChange={(e) => setInput(e.target.value)} />
+        <button disabled={status !== 'ready'}>Send</button>
+      </form>
+    </>
+  );
+}
+```
+
+</TabItem>
+<TabItem label="Angular">
+
+```ts
+import { Component, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { Chat } from '@ai-sdk/angular';
+import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
+
+@Component({
+  selector: 'app-chat',
+  imports: [FormsModule],
+  template: `
+    @for (message of chat.messages; track message.id) {
+      <div>
+        <strong>{{ message.role }}: </strong>
+        <!-- A UIMessage is a list of typed parts; render the text ones. -->
+        @for (part of message.parts; track $index) {
+          @if (part.type === 'text') {
+            <span>{{ part.text }}</span>
+          }
+        }
+      </div>
+    }
+
+    <form (submit)="$event.preventDefault(); send()">
+      <input
+        [ngModel]="input()"
+        (ngModelChange)="input.set($event)"
+        name="input"
+      />
+      <button [disabled]="chat.status !== 'ready'">Send</button>
+    </form>
+  `,
+})
+export class ChatComponent {
+  input = signal('');
+
+  // The chat id is sent to the agent as its sessionId, so it must be a UUID.
+  // `Chat` is signal-backed, so `chat.messages` and `chat.status` are reactive
+  // in the template.
+  chat = new Chat({
+    id: crypto.randomUUID(),
+    transport: new GenkitChatTransport({ url: '/api/weatherAgent' }),
+  });
+
+  send() {
+    if (!this.input().trim()) return;
+    this.chat.sendMessage({ text: this.input() });
+    this.input.set('');
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+Neither binding manages input state, so you hold it yourself and pass the text to `sendMessage({ text })`. Each `message` is a `UIMessage` whose `parts` array holds typed segments (text, tool calls, and so on); the loop above renders the text parts. `status` is `ready` when the agent is idle.
+
+### Reading custom state and tool calls
+
+AI SDK UI streams structured data alongside the chat as **data parts**, delivered through the binding's `onData` callback rather than added to `messages`. This is the SDK's standard channel for anything that is not chat text, and the transport reuses it to carry the agent's custom state: each time the agent updates its session state, it emits a transient `data-custom` part with the full, current state. Because it is transient and never lands on a message, a UI that only renders `messages` never sees it — read it in `onData`. Both `useChat(options)` and `new Chat(options)` take `onData` in the same options object as `id` and `transport`:
+
+```ts
+onData: (part) => {
+  if (part.type === 'data-custom') {
+    // part.data is the agent's full, current custom state.
+    renderCustomState(part.data);
+  }
+},
+```
+
+Tool calls arrive as `tool-<name>` parts on the assistant message, each advancing through a `state` lifecycle: `input-streaming` → `input-available` → `output-available` (or `output-error`). Scan the latest assistant message's parts to drive per-tool progress indicators.
+
+`GenkitChatTransport` takes `url` and an optional `headers` object or function for rotating auth tokens. To resume an earlier conversation, convert a snapshot's messages with `messagesFromSnapshot()` and pass them to your chat binding's `messages` option (for example, `useChat({ id, messages })`). When the user answers an interrupt through the SDK's `addToolResult`, the transport returns the resolved tool output to the agent as a resume payload automatically.
+
+On the server, this is the standard agent route shown above, backed by a session store so each `sessionId` keeps its own conversation; no extra wiring is required.

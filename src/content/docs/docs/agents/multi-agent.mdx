@@ -1,0 +1,206 @@
+---
+title: Multi-agent delegation
+description: Split complex work across specialized Genkit agents and have an orchestrator combine their results.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+In Genkit, multi-agent systems split work between specialized agents and an orchestrator. The orchestrator decides which specialist should handle each part of the request, then synthesizes a final answer.
+
+Use this pattern when separate capabilities benefit from separate prompts, tools, state, or evaluation. A single agent with several tools is usually simpler when one prompt can coordinate the whole task. Multiple agents are useful when specialists need different instructions, different model settings, durable specialist memory, or independently inspectable artifacts.
+
+<Lang lang="js">
+
+## Add delegation middleware
+
+The middleware package provides `agents()` for delegation. It injects one delegation tool per sub-agent. By default, tool names use `delegate_to_<agentName>`.
+
+```ts
+import { agents, artifacts, retry } from '@genkit-ai/middleware';
+
+const researcher = ai.defineAgent({
+  name: 'researcher',
+  description: 'Finds facts and produces sourced research notes.',
+  system: 'Research the user request and write concise findings.',
+  use: [artifacts(), retry()],
+});
+
+const coder = ai.defineAgent({
+  name: 'coder',
+  description: 'Writes and explains code.',
+  system:
+    'Write clear TypeScript code unless the user asks for another language.',
+  use: [artifacts(), retry()],
+});
+
+const coordinator = ai.defineAgent({
+  name: 'coordinator',
+  system:
+    'Delegate to specialists, inspect their results, then answer the user.',
+  use: [
+    agents({
+      agents: [
+        'researcher',
+        {
+          name: 'coder',
+          description:
+            'Writes, debugs, and explains code. Use for programming tasks.',
+        },
+      ],
+      historyLength: 4,
+      maxDelegations: 5,
+      artifactStrategy: 'session',
+    }),
+    artifacts({ readonly: true }),
+  ],
+});
+```
+
+The middleware can discover agent descriptions from action metadata, or you can override a description in the middleware config. Keep descriptions concrete because they become tool descriptions for the orchestrator model.
+
+## Delegation options
+
+- **`agents`** accepts agent names, agent actions, or entries with a name and description override.
+- **`toolPrefix`** controls generated tool names. It defaults to `delegate_to`; set it to an empty string to use bare agent names.
+- **`historyLength`** sets how many recent conversation messages are forwarded to sub-agents.
+- **`maxDelegations`** limits delegation calls in one orchestrator turn.
+- **`artifactStrategy`** controls whether sub-agent artifacts are merged into the parent session.
+
+When history is forwarded to client-managed sub-agents, the middleware includes recent messages in the sub-agent state. For server-managed sub-agents, history is not forwarded as client state because those agents own their server-side session.
+
+## Stream delegation progress
+
+Delegation appears as normal tool activity in the orchestrator stream.
+
+```ts
+const turn = coordinator
+  .chat()
+  .sendStream('Research sorting algorithms and write quicksort.');
+
+for await (const chunk of turn.stream) {
+  for (const request of chunk.toolRequests) {
+    const name = request.toolRequest.name;
+    if (name.startsWith('delegate_to_')) {
+      showDelegation(name);
+    }
+  }
+
+  if (chunk.text) {
+    appendText(chunk.text);
+  }
+}
+```
+
+## Interrupts and failures
+
+Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as retrying, choosing another specialist, or asking the user for clarification.
+
+## Artifacts from sub-agents
+
+With `artifactStrategy: 'session'`, sub-agent artifacts are merged into the parent session and namespaced by invocation. Pair this with `artifacts({ readonly: true })` so the orchestrator can inspect delegated work through the `read_artifact` tool.
+
+Use session artifacts when delegated work should be visible to the final user or to later turns. Keep artifacts isolated when the specialist output is only an implementation detail for the orchestrator's current answer.
+
+## Existing legacy page
+
+The older [Building multi-agent systems](/docs/multi-agent) page describes a prompts-as-tools pattern. Prefer the Agents API middleware for new work because it integrates with sessions, streaming, persistence, background execution, and HTTP clients.
+
+</Lang>
+
+<Lang lang="go">
+
+## Add delegation middleware
+
+The experimental middleware package `github.com/firebase/genkit/go/plugins/middleware/exp` provides `Agents` for delegation. It injects one delegation tool per sub-agent (named `delegate_to_<agentName>` by default) and appends a `<sub-agents>` listing to the orchestrator's system prompt. Attach it with `ai.WithUse` inside the agent's inline prompt.
+
+```go
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+)
+```
+
+```go
+researcher := genkitx.DefineAgent(g, "researcher",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Research the user request and write concise findings."),
+		ai.WithUse(&middlewarex.Artifacts{}),
+	},
+	aix.WithDescription[any]("Finds facts and produces sourced research notes."),
+)
+
+coder := genkitx.DefineAgent(g, "coder",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Write clear Go code unless the user asks for another language."),
+		ai.WithUse(&middlewarex.Artifacts{}),
+	},
+	aix.WithDescription[any]("Writes, debugs, and explains code. Use for programming tasks."),
+)
+
+coordinator := genkitx.DefineAgent(g, "coordinator",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Delegate to specialists, inspect their results, then answer the user."),
+		ai.WithUse(
+			&middlewarex.Agents{
+				Agents:           []aix.AgentRef{researcher.Ref(), coder.Ref()},
+				HistoryLength:    4,
+				MaxDelegations:   5,
+				ArtifactStrategy: middlewarex.ArtifactStrategySession,
+			},
+			&middlewarex.Artifacts{Readonly: true},
+		),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+Reference a sub-agent by name (`aix.AgentRef{Name: "researcher"}`) or capture it from an agent value with `agent.Ref()`, which carries the agent's description into the system listing. Descriptions matter because they become the delegation tool descriptions the orchestrator model sees, so keep them concrete.
+
+The middleware resolves sub-agents through the `Genkit` instance seeded on the turn context, which `genkitx.DefineAgent` (and `genkit.Generate`) set automatically. Attach it to the orchestrator agent.
+
+## Delegation options
+
+The `Agents` middleware is configured through struct fields:
+
+- **`Agents`** lists the sub-agents available for delegation, by name or via `agent.Ref()`. At least one is required.
+- **`ToolPrefix`** controls generated tool names. A `nil` value defaults to `delegate_to` (tools become `delegate_to_<agent>`); a pointer to the empty string uses bare agent names.
+- **`MaxDelegations`** caps delegation calls in one orchestrator generate call. `0` means unlimited.
+- **`HistoryLength`** sets how many recent conversation messages are forwarded to a sub-agent. `0` forwards only the task description.
+- **`ArtifactStrategy`** controls how sub-agent artifacts surface, `ArtifactStrategyInline` (default) or `ArtifactStrategySession`.
+
+History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
+
+## Read sub-agent artifacts
+
+The `Artifacts` middleware gives a model `read_artifact` and `write_artifact` tools over the active session's artifacts, and injects an `<artifacts>` listing into the system prompt each turn. Set `Readonly: true` to provide only `read_artifact`.
+
+With `ArtifactStrategySession`, a sub-agent's artifacts are merged into the parent session (namespaced by invocation as `<agent>_<n>/<name>`) and kept out of the tool result. Pair it with `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can inspect delegated work through `read_artifact` before answering. The default `ArtifactStrategyInline` instead includes artifact content in the delegation tool result and also merges it into the session.
+
+Artifacts live on the active agent session, so the `Artifacts` tools only have an effect inside an agent invocation. With no active session they degrade gracefully: the listing is empty and the tools report that.
+
+## Interrupts and failures
+
+A sub-agent interrupt or failure is returned to the orchestrator as the delegation tool's output, not propagated as a top-level interrupt or error to the original client. There is no stateful sub-agent runtime to resume into, so write orchestrator instructions that tell it how to handle a delegated failure, such as retrying, choosing another specialist, or asking the user for clarification.
+
+## Register as a plugin
+
+Using the middlewares through `ai.WithUse` needs no plugin. Register `&middlewarex.Middleware{}` only to make them resolvable by name, for example in the Developer UI.
+
+```go
+g := genkit.Init(ctx,
+	genkit.WithPlugins(&googlegenai.GoogleAI{}, &middlewarex.Middleware{}),
+)
+```
+
+</Lang>

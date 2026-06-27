@@ -1,5 +1,5 @@
 ---
-title: Accessing flows from the client
+title: Frontend integration
 description: Learn how to access Genkit flows from client-side applications.
 supportedLanguages:
   - js
@@ -62,18 +62,18 @@ callHelloFlow();
 // main.dart
 import 'package:genkit/client.dart';
 
-// Define the action (as shown above)
+// defineRemoteAction returns a typed RemoteAction you can call or stream.
 final helloFlow = defineRemoteAction(
   url: 'http://127.0.0.1:3400/helloFlow',
-  fromResponse: (data) => data['greeting'] as String,
+  fromResponse: (data) => (data as Map<String, dynamic>)['greeting'] as String,
 );
 
 Future<void> callHelloFlow() async {
   try {
     final result = await helloFlow(input: {'name': 'Genkit User'});
     print('Non-streaming result: $result');
-  } catch (e) {
-    print('Error calling helloFlow: $e');
+  } on GenkitException catch (e) {
+    print('Error calling helloFlow: ${e.message}');
   }
 }
 ```
@@ -124,27 +124,28 @@ streamHelloFlow();
 // main.dart
 import 'package:genkit/client.dart';
 
-// Define the action with a chunk decoder
+// Provide fromStreamChunk to decode each streamed chunk.
 final helloFlow = defineRemoteAction(
   url: 'http://127.0.0.1:3400/helloFlow',
-  fromResponse: (data) => data['greeting'] as String,
+  fromResponse: (data) => (data as Map<String, dynamic>)['greeting'] as String,
   fromStreamChunk: (chunk) => chunk as String,
 );
 
 Future<void> streamHelloFlow() async {
   try {
-    final result = helloFlow.stream(input: {'name': 'Streaming User'});
+    // stream() returns an ActionStream: a Stream of chunks plus an onResult future.
+    final stream = helloFlow.stream(input: {'name': 'Streaming User'});
 
     // Process the stream chunks as they arrive
-    await for (final chunk in result) {
+    await for (final chunk in stream) {
       print('Stream chunk: $chunk');
     }
 
     // Get the final complete response
-    final finalOutput = await result.onResult;
+    final finalOutput = await stream.onResult;
     print('Final streaming output: $finalOutput');
-  } catch (e) {
-    print('Error streaming helloFlow: $e');
+  } on GenkitException catch (e) {
+    print('Error streaming helloFlow: ${e.message}');
   }
 }
 ```
@@ -202,16 +203,19 @@ class StreamChunk {
 
   StreamChunk({required this.content});
 
-  factory StreamChunk.fromJson(Map<String, dynamic> json) => StreamChunk(
-    content: json['content'] as String,
+  // fromResponse and fromStreamChunk receive the JSON-decoded value as `dynamic`,
+  // so the factory takes `dynamic` and casts inside. You can then pass the
+  // factory directly (a tear-off) instead of wrapping it in a closure.
+  factory StreamChunk.fromJson(dynamic json) => StreamChunk(
+    content: (json as Map<String, dynamic>)['content'] as String,
   );
 }
 
-// Assumes MyOutput and MyInput classes are defined as in the non-streaming example
+// Assumes MyOutput and MyInput classes are defined with matching fromJson factories.
 final streamAction = defineRemoteAction(
   url: 'http://localhost:3400/stream-process',
-  fromResponse: (data) => MyOutput.fromJson(data),
-  fromStreamChunk: (data) => StreamChunk.fromJson(data),
+  fromResponse: MyOutput.fromJson,
+  fromStreamChunk: StreamChunk.fromJson,
 );
 
 final input = MyInput(message: 'Stream this data', count: 5);
@@ -226,8 +230,8 @@ try {
 
   final finalResult = await stream.onResult;
   print('\nFinal Response: ${finalResult.reply}');
-} catch (e) {
-  print('Error calling streaming flow: $e');
+} on GenkitException catch (e) {
+  print('Error calling streaming flow: ${e.message}');
 }
 ```
 
@@ -285,22 +289,22 @@ import 'package:genkit/client.dart';
 
 final generateFlow = defineRemoteAction(
   url: 'http://localhost:3400/generate',
-  fromResponse: (json) => GenerateResponse.fromJson(json),
-  fromStreamChunk: (json) => GenerateResponseChunk.fromJson(json),
+  fromResponse: ModelResponse.fromJson,
+  fromStreamChunk: ModelResponseChunk.fromJson,
 );
 
 final stream = generateFlow.stream(
-  input: Message(role: Role.user, content: [TextPart(text: "hello")]),
+  input: Message(role: Role.user, content: [TextPart(text: 'hello')]),
 );
 
 print('Streaming chunks:');
 await for (final chunk in stream) {
-  // Use the .text getter to easily access the text content of the chunk
+  // The .text getter (from genkit/client.dart) concatenates the text parts.
   print('Chunk: ${chunk.text}');
 }
 
 final finalResult = await stream.onResult;
-// The .text getter also works on the final response
+// The .text getter also works on the final response.
 print('Final Response: ${finalResult.text}');
 ```
 
@@ -339,8 +343,8 @@ final result = await helloFlow(
 
 // For streaming calls
 final streamResult = helloFlow.stream(
-input: {'name': 'Authenticated User'},
-headers: {'Authorization': 'Bearer your-token-here'},
+  input: {'name': 'Authenticated User'},
+  headers: {'Authorization': 'Bearer your-token-here'},
 );
 ```
 

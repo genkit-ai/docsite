@@ -8,6 +8,21 @@ import { blogSchema } from 'starlight-blog/schema';
 // live in the repo without being published as pages.
 const docsExtensions = 'markdown,mdown,mkdn,mkd,mdwn,md,mdx';
 
+const description = z
+	.union([
+		z.string(),
+		z
+			.object({
+				default: z.string().optional(),
+				js: z.string().optional(),
+				go: z.string().optional(),
+				dart: z.string().optional(),
+				python: z.string().optional(),
+			})
+			.transform((value) => value.default),
+	])
+	.optional();
+
 export const collections = {
 	docs: defineCollection({
 		loader: glob({
@@ -18,7 +33,11 @@ export const collections = {
 			const starlightBase = docsSchema()(context) as unknown as z.AnyZodObject;
 			return (
 				starlightBase
+					// Replace Starlight's plain-string `description` with our language-aware union so
+					// pages can supply per-language meta descriptions (see the `description` schema above).
+					.omit({ description: true })
 					.extend({
+						description,
 						supportedLanguages: z
 							.array(z.enum(['js', 'go', 'dart', 'python']))
 							.default(['js', 'go', 'dart', 'python']),
@@ -29,10 +48,21 @@ export const collections = {
 					// Author posts the same way as docs: with `description`. Starlight emits the meta/OG
 					// description from it natively, and we default the blog card's `excerpt` to it so the
 					// summary is written once. A post may still set `excerpt` explicitly to override.
-					.transform((data) => ({
-						...data,
-						excerpt: data.excerpt ?? data.description,
-					}))
+					.transform((data) => {
+						let date = data.date;
+						if (date) {
+							const d = new Date(date);
+							if (!isNaN(d.getTime())) {
+								d.setUTCHours(12);
+								date = d;
+							}
+						}
+						return {
+							...data,
+							date,
+							excerpt: data.excerpt ?? data.description,
+						};
+					})
 			);
 		},
 	}),

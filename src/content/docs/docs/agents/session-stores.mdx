@@ -1,0 +1,371 @@
+---
+title: Session stores
+description: Choose a Genkit agent session store and learn what a custom store must implement.
+supportedLanguages:
+  - js
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+:::caution[Beta]
+The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
+:::
+
+Session stores persist snapshots for server-managed agents. They are the storage layer behind `sessionId`, `snapshotId`, `loadChat()`, snapshot reads, branching, background execution, and aborting detached work.
+
+Use the [Sessions and state](/docs/agents/state) guide first when you are deciding between server-managed and client-managed state. Use this page when you know the server should own state and need to choose or implement the persistence layer.
+
+<Lang lang="js">
+
+## Choose a store
+
+- **In-memory store** for tests, demos, local examples, and single-process experiments.
+- **File store** for local development, prototypes, CLIs, and single-host apps that need snapshots to survive process restarts.
+- **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
+- **Custom store** for production apps that need a different database, centralized authorization, or retention policies that the built-in stores do not cover.
+
+Most applications only configure a store on the agent. The agent runtime calls the store when it creates a snapshot, resumes with `sessionId` or `snapshotId`, serves `loadChat()`, reads a snapshot, starts detached work, or aborts an in-flight turn.
+
+## Use an in-memory store
+
+`InMemorySessionStore` keeps snapshots in process memory. It is fast, requires no setup, and supports status-change callbacks inside the same process, which makes it useful for testing background execution and abort behavior locally.
+
+```ts
+import { InMemorySessionStore } from 'genkit/beta';
+
+const store = new InMemorySessionStore<SupportState>();
+
+export const supportAgent = ai.defineAgent({
+  name: 'supportAgent',
+  system: 'Help customers understand their order status.',
+  stateSchema: SupportStateSchema,
+  store,
+});
+```
+
+Do not use the in-memory store when conversations must survive a process restart or when multiple server instances need to share sessions. Each process gets its own isolated map, so a `sessionId` created by one process is invisible to another.
+
+The in-memory store accepts one option:
+
+```ts
+const store = new InMemorySessionStore<SupportState>({
+  rejectBranchingSessions: true,
+});
+```
+
+`rejectBranchingSessions` makes `sessionId` lookup fail when a session has more than one leaf snapshot. This is useful during development when you want accidental branching to be obvious. Clients can always resume by exact `snapshotId`.
+
+## Use a file-backed store
+
+`FileSessionStore` stores each snapshot as a JSON file. It is a good fit for local development and single-host deployments where you want persistent state without operating a database.
+
+```ts
+import { FileSessionStore } from 'genkit/beta';
+
+const store = new FileSessionStore<SupportState>(
+  './.genkit/snapshots/support',
+  {
+    maxPersistedChainLength: 20,
+    snapshotPathPrefix: ({ context }) => context?.auth?.uid ?? 'anonymous',
+    rejectBranchingSessions: true,
+    snapshotWatchPollIntervalMs: 1000,
+  },
+);
+```
+
+Snapshots are written under the directory passed to the constructor. By default, they go under a `global` subdirectory. When you provide `snapshotPathPrefix`, the prefix determines the subdirectory for every read and write.
+
+Use `maxPersistedChainLength` to bound how many snapshots are retained in one parent chain. This helps local stores avoid growing forever. Because snapshots are full checkpoints, pruning an old ancestor removes it as a resume point, but surviving snapshots remain loadable.
+
+Use `snapshotPathPrefix` to scope reads and writes to a subdirectory. Return a stable, app-controlled tenant or user segment from `options.context`, and do not return raw user input. The prefix becomes part of a filesystem path, so normalize or encode identifiers before returning them.
+
+`rejectBranchingSessions` makes `sessionId` lookup fail when a session has more than one leaf snapshot. This is useful during development when you want accidental branching to be obvious. Clients can always resume by exact `snapshotId`.
+
+Use `snapshotWatchPollIntervalMs` to control the polling fallback for file watching. The file store uses directory watching plus polling to observe status changes, which helps one process notice an abort or completion written by another process sharing the same snapshot directory. The default is 2000 milliseconds.
+
+The file store serializes writes per snapshot file and writes by renaming a temporary file into place. That helps avoid torn JSON files when concurrent reads happen during a write. It does not turn the filesystem into a multi-instance production database, so use a custom store when many app instances need to coordinate durable sessions.
+
+## Use a Firestore store
+
+`FirestoreSessionStore` persists snapshots in Cloud Firestore. It is a managed, multi-instance store, so it is the built-in option for production apps where several server instances share sessions, and it supports snapshot watching for background execution and abort.
+
+It ships in two packages with the same API. Use `@genkit-ai/google-cloud` on Google Cloud, or `@genkit-ai/firebase` when you already have a Firebase Admin app. Both export from the `/beta` entry point.
+
+```ts
+import { FirestoreSessionStore } from '@genkit-ai/google-cloud/beta';
+
+const store = new FirestoreSessionStore<SupportState>({
+  collection: 'genkit-sessions',
+  snapshotPathPrefix: (options) => options?.context?.auth?.uid ?? 'global',
+});
+
+export const supportAgent = ai.defineAgent({
+  name: 'supportAgent',
+  system: 'Help customers understand their order status.',
+  stateSchema: SupportStateSchema,
+  store,
+});
+```
+
+All options are optional:
+
+- **`db`** is an explicit `Firestore` instance. It defaults to a new client that picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable.
+- **`collection`** is the collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-pointers` and `<collection>-shards`, are derived from it for per-session pointers and sharded state.
+- **`snapshotPathPrefix`** returns a per-tenant prefix from the call's `SessionStoreOptions`, such as the authenticated user ID from `options.context`. When set, snapshots, pointers, and shards are nested under a tenant-scoped subcollection, so one tenant can never read another tenant's snapshots even with a `snapshotId`. It defaults to `global`.
+- **`checkpointInterval`** is the number of turns between full-state checkpoints. Between checkpoints the store writes diffs. A larger value writes fewer full snapshots but reconstructs over more diffs. It defaults to `25`.
+- **`shardSize`** is the maximum size in bytes of a single shard or diff document. State is split into chunks of this size so no document approaches Firestore's 1 MiB limit. It defaults to 512 KiB.
+
+On Firebase, import from `@genkit-ai/firebase/beta` instead and pass `firebaseApp` to derive the Firestore instance from an existing Admin app:
+
+```ts
+import { FirestoreSessionStore } from '@genkit-ai/firebase/beta';
+
+const store = new FirestoreSessionStore<SupportState>({
+  firebaseApp: app,
+  collection: 'genkit-sessions',
+});
+```
+
+The Firestore store watches snapshot documents to observe status changes, so background execution and aborts work across instances without polling. It does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+
+## Implement a production store
+
+When the built-in Firestore store does not fit, implement a custom `SessionStore` so snapshots live in your own production data layer. This is the right approach for Cloud SQL, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
+
+A custom store implements three capabilities:
+
+- `getSnapshot()` loads either one exact snapshot or the latest snapshot for a session.
+- `saveSnapshot()` applies an atomic read-modify-write.
+- `onSnapshotStateChange()` lets the runtime observe status changes for abort and background work.
+
+```ts
+import type {
+  SessionSnapshot,
+  SessionStore,
+  SessionStoreOptions,
+  SnapshotMutator,
+} from 'genkit/beta';
+
+type SnapshotLookup = {
+  snapshotId?: string;
+  sessionId?: string;
+  context?: SessionStoreOptions['context'];
+};
+
+class DatabaseSessionStore<S> implements SessionStore<S> {
+  async getSnapshot(
+    opts: SnapshotLookup,
+  ): Promise<SessionSnapshot<S> | undefined> {
+    // Load by opts.snapshotId, or load the latest leaf for opts.sessionId.
+    throw new Error('Not implemented');
+  }
+
+  async saveSnapshot(
+    snapshotId: string | undefined,
+    mutator: SnapshotMutator<S>,
+    options?: SessionStoreOptions,
+  ): Promise<string | null> {
+    // Atomically read the current snapshot, call mutator, and persist the result.
+    throw new Error('Not implemented');
+  }
+
+  onSnapshotStateChange(
+    snapshotId: string,
+    callback: (snapshot: SessionSnapshot<S>) => void,
+    options?: SessionStoreOptions,
+  ): void | (() => void) {
+    // Optional, but needed for responsive abort and background status updates.
+  }
+}
+```
+
+`getSnapshot()` must support exactly one lookup mode at a time:
+
+- `snapshotId` loads that exact snapshot.
+- `sessionId` loads the latest leaf snapshot for that session.
+
+Here, "latest" means the latest leaf snapshot in the session history. A leaf is a snapshot that no other snapshot references as its parent. If branching exists, the built-in stores either select the most recently created leaf or throw when `rejectBranchingSessions` is enabled.
+
+`saveSnapshot()` must be atomic. In a database, wrap the read, `mutator` call, and write in a transaction or use optimistic concurrency with retries. The mutator may return a snapshot to save, return `null` to skip the write, or throw to fail the operation. If your retry logic can call the mutator more than once, keep the mutator invocation free of external side effects.
+
+When `snapshotId` is undefined, the store should assign a new snapshot ID. When a snapshot ID is provided, the store should write that ID even if the mutator returns a different one.
+
+Implement `onSnapshotStateChange()` when detached background work should respond quickly to aborts or when clients should observe status changes without polling. Return an unsubscribe function when the store opens a listener, subscription, or timer. If a custom store omits this method, normal server-managed state still works, but background abort behavior is limited.
+
+## Production guidance
+
+Store snapshots as sensitive user data. They can contain message history, custom state, artifacts, tool inputs, and generated outputs.
+
+Scope every read and write by authenticated user, organization, or tenant. Do not rely on snapshot IDs alone as authorization. Use `SessionStoreOptions.context` to pass request context into store operations.
+
+Index by snapshot ID, session ID, parent ID, and creation time. `sessionId` lookup should be efficient because it is the common path for continuing a conversation. Parent relationships matter for leaf selection.
+
+Plan retention before launch. Snapshots are full conversation checkpoints, so long-running conversations and artifact-heavy agents can grow quickly.
+
+</Lang>
+
+<Lang lang="go">
+
+## Choose a store
+
+- **In-memory store** for tests, demos, local examples, and single-process experiments.
+- **File store** for local development, prototypes, CLIs, and single-host apps that need snapshots to survive process restarts.
+- **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
+- **Custom store** for production web apps that need a different database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence that the built-in stores do not cover.
+
+Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, exposes snapshot companion actions, starts detached work, or aborts an in-flight turn.
+
+## Use an in-memory store
+
+`localstore.NewInMemorySessionStore` keeps snapshots in process memory. It is fast, requires no setup, and implements `aix.SnapshotSubscriber`, which makes it useful for testing background execution and abort behavior locally.
+
+```go
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+```
+
+```go
+store := localstore.NewInMemorySessionStore[SupportState]()
+
+supportAgent := genkitx.DefineAgent(g, "supportAgent",
+	aix.InlinePrompt{
+		ai.WithSystem("Help customers understand their order status."),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+Do not use the in-memory store when conversations must survive a process restart or when multiple server instances need to share sessions. Each process gets its own isolated map, so a session created by one process is invisible to another.
+
+The in-memory store does not have configuration options. If you need retention or tenant-scoped local files, use the file store.
+
+## Use a file-backed store
+
+`localstore.NewFileSessionStore` stores each snapshot as a JSON file. It is a good fit for local development and single-host deployments where you want persistent state without operating a database.
+
+```go
+store, err := localstore.NewFileSessionStore[SupportState](
+	"./.genkit/snapshots/support",
+	localstore.WithMaxPersistedChainLength(20),
+	localstore.WithSnapshotPathPrefix(func(ctx context.Context) string {
+		return tenantIDFromContext(ctx)
+	}),
+	localstore.WithPollInterval(time.Second),
+)
+if err != nil {
+	// Fails if the snapshot directory cannot be created or an option is
+	// invalid, such as a path prefix that escapes the store directory.
+	log.Fatalf("open support store: %v", err)
+}
+```
+
+Snapshots are written under the directory passed to `NewFileSessionStore`. Without a path prefix, all snapshots are stored directly under that root.
+
+Use `WithMaxPersistedChainLength` to bound how many snapshots are retained in one parent chain. A value of `1` keeps only the latest snapshot in a chain. Omitting the option leaves pruning disabled. Pruning follows parent links, so sibling branches are pruned independently when they are extended.
+
+Use `WithSnapshotPathPrefix` to scope reads and writes to a subdirectory. Return a stable tenant or user identity from `context.Context` so one caller cannot read another caller's snapshots. Prefixes may contain `/` for nested directories, but values that escape the store directory are rejected.
+
+Use `WithPollInterval` to control how often the file store checks for status changes written by another process or store instance sharing the same directory. The default is one second. A value less than or equal to zero disables cross-process polling, so subscriptions observe only changes written through the same store instance.
+
+The file store is safe for concurrent use inside one process, writes snapshots atomically with temporary files and rename, and implements `aix.SnapshotSubscriber`. It is still a local filesystem store, so use a custom store when many app instances need to coordinate durable sessions.
+
+## Use a Firestore store
+
+`firebasex.NewFirestoreSessionStore` persists snapshots in Cloud Firestore. It is a managed, multi-instance store, so it is the built-in option for production apps where several server instances share sessions, and it implements `aix.SnapshotSubscriber` for background execution and abort.
+
+The store resolves its Firestore client from the Firebase plugin registered with the Genkit instance, so pass the Firebase plugin to `genkit.Init` before constructing the store.
+
+```go
+import (
+	"github.com/firebase/genkit/go/plugins/firebase"
+	firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
+)
+```
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+
+store, err := firebasex.NewFirestoreSessionStore[SupportState](ctx, g,
+	firebasex.WithCollection("genkit-sessions"),
+	firebasex.WithSnapshotPathPrefix(func(ctx context.Context) string {
+		return tenantIDFromContext(ctx)
+	}),
+)
+if err != nil {
+	// Fails if the Firebase plugin is not registered on g or the Firestore
+	// client cannot be resolved.
+	log.Fatalf("open Firestore store: %v", err)
+}
+
+supportAgent := genkitx.DefineAgent(g, "supportAgent",
+	aix.InlinePrompt{
+		ai.WithSystem("Help customers understand their order status."),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The `State` type parameter is the user-defined custom-state type carried in the session state; it must be JSON-serializable.
+
+All options are optional:
+
+- **`WithCollection`** sets the root collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-shards` and `<collection>-pointers`, are derived from it for sharded checkpoint state and per-session pointers.
+- **`WithSnapshotPathPrefix`** derives a per-tenant prefix from `context.Context`, such as an authenticated user or organization ID. When set, snapshots, shards, and pointers are nested under a tenant-scoped subcollection, so one tenant can never read another tenant's snapshots even with a snapshot ID. The value must be a single valid Firestore document ID (no `/` separators) and stable for a snapshot's lifetime, since every read recomputes it. An empty result falls back to `global`, which is also the default when the option is omitted.
+- **`WithCheckpointInterval`** sets the number of turns between full-state checkpoints. Between checkpoints the store writes JSON Patch diffs; a larger value writes fewer full checkpoints but reconstructs over more diffs. The number of diff documents read or written per turn is bounded by this value rather than by total session length. Must be at least `1`; defaults to `25`.
+- **`WithShardSize`** sets the maximum size in bytes of a single shard or diff document. Checkpoint state is split into chunks of this size, and any diff exceeding it is promoted to a sharded checkpoint, so no document approaches Firestore's 1 MiB limit. Must be positive; defaults to 512 KiB.
+
+The store picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable through the Firebase plugin, so the same code runs against the Firestore emulator for local testing.
+
+Because it implements `aix.SnapshotSubscriber` over Firestore's native real-time listeners, a status change such as an abort committed by one process is observed by the process running the detached turn even across instances, without polling. The store does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+
+## Implement a production store
+
+When the built-in Firestore store does not fit, implement a custom `aix.SessionStore` so snapshots live in your own production data layer. This is the right approach for Cloud SQL, Spanner, Postgres, Redis-backed systems with durability, or application-specific storage that already handles user and tenant authorization.
+
+A custom store implements snapshot reading and writing:
+
+```go
+type SessionStore[State any] interface {
+	GetSnapshot(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[State], error)
+	GetLatestSnapshot(ctx context.Context, sessionID string) (*aix.SessionSnapshot[State], error)
+	SaveSnapshot(
+		ctx context.Context,
+		snapshotID string,
+		fn func(existing *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], error),
+	) (*aix.SessionSnapshot[State], error)
+}
+```
+
+- **`GetSnapshot`** loads a snapshot by exact ID.
+- **`GetLatestSnapshot`** loads the most recently created snapshot for a session, whatever its status. Use `CreatedAt` for recency, not `UpdatedAt`, because heartbeat writes update liveness without changing the conversation state. If two snapshots have the same `CreatedAt`, break ties deterministically. Parent IDs are lineage metadata for this lookup, not how the latest session snapshot is resolved.
+- **`SaveSnapshot`** must be atomic. In a database, run the read, callback, and write in one transaction or use optimistic concurrency with retries. The callback may return a snapshot to save, return `nil, nil` to skip the write, or return an error to fail the operation. Stores that retry on contention may call the callback more than once, so keep the callback free of external side effects.
+
+The store owns identity. If `snapshotID` is empty, generate a fresh ID. If `snapshotID` is provided, persist that ID even if the callback returns a different one. Preserve a row's existing session ID on update.
+
+To support detached background work and abort, also implement `aix.SnapshotSubscriber`.
+
+```go
+type SnapshotSubscriber interface {
+	OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan aix.SnapshotStatus
+}
+```
+
+The channel should yield the current status when a subscription starts, then yield later status changes until the context is canceled. The runtime uses this to notice when an abort flips a pending snapshot to `aborted`.
+
+Stores that do not implement `SnapshotSubscriber` can still support server-managed state, snapshots, and `GetLatestSnapshot`. The runtime rejects detach attempts because it cannot signal background work to stop.
+
+## Production guidance
+
+Store snapshots as sensitive user data. They can contain message history, custom state, artifacts, tool inputs, and generated outputs.
+
+Scope every read and write by authenticated user, organization, or tenant. Do not rely on snapshot IDs alone as authorization. Derive tenancy from `context.Context` and apply it consistently in every store method.
+
+Index by snapshot ID and by session ID plus creation time. `GetLatestSnapshot` should be efficient because it is the common path for continuing a conversation by `sessionId`.
+
+Plan retention before launch. Snapshots are full conversation checkpoints, so long-running conversations and artifact-heavy agents can grow quickly.
+
+</Lang>
