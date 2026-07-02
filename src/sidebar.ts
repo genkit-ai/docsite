@@ -136,6 +136,7 @@ const DOCS_SIDEBAR = [
       },
       { label: "Durable streaming", slug: "docs/durable-streaming" },
       { label: "Frontend integration", slug: "docs/client" },
+      { label: "Testing", slug: "docs/testing" },
       { label: "Evaluation", slug: "docs/evaluation" },
       { label: "Error types", slug: "docs/error-types" },
       {
