@@ -6,6 +6,7 @@ supportedLanguages:
 ---
 
 import Lang from '../../../components/Lang.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 <Lang lang="js">
 
@@ -34,90 +35,152 @@ _quality_ of a real model's output - relevance, groundedness, safety - use
 [Evaluation](/docs/evaluation) instead. The two are complementary.
 :::
 
-## Structuring your app for testability
+## Testing your app
 
-A mock model is registered on a Genkit instance under a name, just like a
-provider model. The simplest pattern is to reference your default model **by
-name** and let tests register a mock under that same name - your app code does
-not change between production and test:
+Your app doesn't need any special structure to be testable. The standard
+Genkit setup - a module-level instance with the default model referenced by
+name - already is:
 
 ```ts
 import { genkit, z } from 'genkit';
 
-export function createMenuApp() {
-  // In production, a provider plugin (e.g. googleAI) registers this model.
-  // In tests, a mock is registered under the same name.
-  const ai = genkit({ model: 'menuModel' });
+// In production, a provider plugin (e.g. googleAI) registers this model.
+// In tests, a mock is registered under the same name.
+export const ai = genkit({ model: 'menuModel' });
 
-  const recommendDish = ai.defineFlow(
-    {
-      name: 'recommendDish',
-      inputSchema: z.object({
-        restaurant: z.string(),
-        mood: z.string(),
-        budgetUSD: z.number(),
-      }),
-      outputSchema: z.object({
-        dish: z.string(),
-        reason: z.string(),
-        withinBudget: z.boolean(),
-      }),
-    },
-    async (input) => {
-      const { output } = await ai.generate({
-        prompt: `Recommend a dish at ${input.restaurant} for someone feeling ${input.mood}.`,
-        output: {
-          schema: z.object({
-            dish: z.string(),
-            reason: z.string(),
-            priceUSD: z.number(),
-          }),
-        },
-      });
-      if (!output) {
-        throw new Error('Model did not return a structured recommendation.');
-      }
-      // Business logic the tests pin down - derived by the flow, not the model.
-      return {
-        dish: output.dish,
-        reason: output.reason,
-        withinBudget: output.priceUSD <= input.budgetUSD,
-      };
+export const recommendDish = ai.defineFlow(
+  {
+    name: 'recommendDish',
+    inputSchema: z.object({
+      restaurant: z.string(),
+      mood: z.string(),
+      budgetUSD: z.number(),
+    }),
+    outputSchema: z.object({
+      dish: z.string(),
+      reason: z.string(),
+      withinBudget: z.boolean(),
+    }),
+  },
+  async (input) => {
+    const { output } = await ai.generate({
+      prompt: `Recommend a dish at ${input.restaurant} for someone feeling ${input.mood}.`,
+      output: {
+        schema: z.object({
+          dish: z.string(),
+          reason: z.string(),
+          priceUSD: z.number(),
+        }),
+      },
+    });
+    if (!output) {
+      throw new Error('Model did not return a structured recommendation.');
     }
-  );
-
-  return { ai, recommendDish };
-}
+    // Business logic the tests pin down - derived by the flow, not the model.
+    return {
+      dish: output.dish,
+      reason: output.reason,
+      withinBudget: output.priceUSD <= input.budgetUSD,
+    };
+  }
+);
 ```
 
-Exposing a factory like `createMenuApp()` lets each test build a fresh,
-isolated Genkit instance (its own registry), so registering a mock under the
-default model name never collides with other tests:
+In a test file, register **one** mock under the app's default model name, and
+the app resolves to it with no code change. Give each test its own behavior
+with `respondWith(...)`, and call `reset()` in `beforeEach` so tests stay
+independent. `genkit/testing` is runner-agnostic - only the imports and
+assertion style differ:
+
+<Tabs syncKey="test-runner">
+<TabItem label="Vitest">
+
+```ts
+import { mockModel } from 'genkit/testing';
+import { beforeEach, expect, test } from 'vitest';
+import { ai, recommendDish } from '../src/menu.js';
+
+const model = mockModel(ai, { name: 'menuModel' });
+
+beforeEach(() => model.reset());
+
+test('marks a recommendation within budget', async () => {
+  model.respondWith({
+    text: JSON.stringify({
+      dish: 'Mushroom risotto',
+      reason: 'Comforting and in season.',
+      priceUSD: 18,
+    }),
+  });
+
+  const out = await recommendDish({
+    restaurant: 'Lumen',
+    mood: 'cozy',
+    budgetUSD: 30,
+  });
+
+  expect(out.dish).toBe('Mushroom risotto');
+  expect(out.withinBudget).toBe(true);
+  expect(model.requestCount).toBe(1);
+});
+```
+
+</TabItem>
+<TabItem label="Jest">
+
+```ts
+import { beforeEach, expect, test } from '@jest/globals';
+import { mockModel } from 'genkit/testing';
+import { ai, recommendDish } from '../src/menu.js';
+
+const model = mockModel(ai, { name: 'menuModel' });
+
+beforeEach(() => model.reset());
+
+test('marks a recommendation within budget', async () => {
+  model.respondWith({
+    text: JSON.stringify({
+      dish: 'Mushroom risotto',
+      reason: 'Comforting and in season.',
+      priceUSD: 18,
+    }),
+  });
+
+  const out = await recommendDish({
+    restaurant: 'Lumen',
+    mood: 'cozy',
+    budgetUSD: 30,
+  });
+
+  expect(out.dish).toBe('Mushroom risotto');
+  expect(out.withinBudget).toBe(true);
+  expect(model.requestCount).toBe(1);
+});
+```
+
+</TabItem>
+<TabItem label="node:test">
 
 ```ts
 import { mockModel } from 'genkit/testing';
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
-import { createMenuApp } from '../src/menu.js';
+import { ai, recommendDish } from '../src/menu.js';
 
-let app: ReturnType<typeof createMenuApp>;
-beforeEach(() => {
-  app = createMenuApp();
-});
+const model = mockModel(ai, { name: 'menuModel' });
+
+beforeEach(() => model.reset());
 
 test('marks a recommendation within budget', async () => {
-  const model = mockModel(app.ai, {
-    name: 'menuModel',
-    respond: () => ({
-      text: JSON.stringify({
-        dish: 'Mushroom risotto',
-        reason: 'Comforting and in season.',
-        priceUSD: 18,
-      }),
+  model.respondWith({
+    text: JSON.stringify({
+      dish: 'Mushroom risotto',
+      reason: 'Comforting and in season.',
+      priceUSD: 18,
     }),
   });
 
-  const out = await app.recommendDish({
+  const out = await recommendDish({
     restaurant: 'Lumen',
     mood: 'cozy',
     budgetUSD: 30,
@@ -129,35 +192,54 @@ test('marks a recommendation within budget', async () => {
 });
 ```
 
+</TabItem>
+</Tabs>
+
 Because the model's response is fixed, the test exercises _your_ logic: run the
 same response against a lower budget and assert `withinBudget` flips to
 `false`, or return a business-invalid price and assert your flow's guard
 throws.
 
-## Scripting responses with mockModel
+This register-once pattern is safe because `node --test`, Jest, and Vitest all
+run each test **file** in its own process or module graph - every file gets a
+fresh Genkit registry, so mock registrations in different files never collide.
+Within a file, `reset()` clears the mock's recorded history and re-arms its
+original behavior, keeping tests order-independent.
 
-The `respond` option controls what the mock returns on each `generate` call.
-From lightest to fullest control, a response can be:
+- `model.respondWith(...)` - replaces the respond behavior for subsequent
+  calls. Recorded history is untouched.
+- `model.reset()` - clears recorded history (`requests`, `requestCount`, and
+  so on) and restores the behavior given at construction, re-arming a queued
+  respond from its first item.
 
-- a `string` - shorthand for a single text response;
-- an object with any of `text`, `toolRequests`, `content`, `finishReason`,
-  `usage` - assembled into a well-formed model message for you;
-- a full `GenerateResponseData` - used as-is.
+The examples in the rest of this page follow this same setup, and reference
+tools (`dailySpecial`, `confirmBooking`), a prompt (`recommendPrompt`), and
+flows defined on the app in the ordinary way - see [Tool calling](/docs/tool-calling),
+[Prompt templating](/docs/dotprompt), and [Flows](/docs/flows).
 
-And `respond` itself takes two forms:
+## Scripting responses
 
-- **A callback** `(request, { sendChunk }) => response`, invoked once per call.
-  Use this to branch on the request (for tool loops) or to stream chunks.
-- **An array** - a queue consumed one item per call, with the last item
-  repeating once exhausted. Use this to script multi-turn interactions without
+Both the `respond` option and `respondWith(...)` accept, from lightest to
+fullest control:
+
+- a **single response** - returned on every call;
+- a **callback** `(request, { sendChunk }) => response`, invoked once per
+  call - use it to branch on the request (for tool loops) or to stream chunks;
+- an **array** - a queue consumed one item per call, with the last item
+  repeating once exhausted - use it to script multi-turn interactions without
   a branching callback.
+
+Each response can be a `string` (shorthand for a text response), an object
+with any of `text`, `toolRequests`, `content`, `finishReason`, `usage`
+(assembled into a well-formed model message for you), or a full
+`GenerateResponseData` (used as-is).
 
 ```ts
 // Same response every call:
-mockModel(ai, { respond: () => 'Hello!' });
+model.respondWith('Hello!');
 
 // A queue: first call gets 'first', every later call gets 'second':
-mockModel(ai, { respond: ['first', 'second'] });
+model.respondWith(['first', 'second']);
 ```
 
 ### Inspecting what the model received
@@ -186,28 +268,25 @@ framework or by your test - cannot alter recorded history.
 
 When your app requests structured output (`output: { schema }`), `mockModel`
 behaves like a modern provider model: it declares native constrained generation
-support by default, so `respond` sees the schema on `request.output.schema` and
-no schema text is injected into the prompt. Return JSON text that conforms to
-the schema and Genkit parses and validates it as usual:
+support by default, so a callback `respond` sees the schema on
+`request.output.schema` and no schema text is injected into the prompt. Return
+JSON text that conforms to the schema and Genkit parses and validates it as
+usual:
 
 ```ts
-mockModel(ai, {
-  name: 'menuModel',
-  respond: () => ({
-    text: JSON.stringify({ dish: 'Mushroom risotto', reason: '...', priceUSD: 18 }),
-  }),
+model.respondWith({
+  text: JSON.stringify({ dish: 'Mushroom risotto', reason: '...', priceUSD: 18 }),
 });
 ```
 
 To instead exercise Genkit's _simulated_ constrained-output path - where the
 framework injects schema instructions into the prompt - opt out of native
-support:
+support when defining the mock:
 
 ```ts
-mockModel(ai, {
+const model = mockModel(ai, {
   name: 'menuModel',
   info: { supports: { constrained: 'none' } },
-  respond: () => ({ text: '...' }),
 });
 ```
 
@@ -219,20 +298,23 @@ On the simulated path the injected schema instructions are visible in
 A tool round-trip is two model turns: the model requests a tool, Genkit runs it
 and feeds the result back, and the model responds again. Script it either by
 branching on the request in a callback, or - often simpler - with a response
-queue:
+queue. Declare tool support on the mock when you define it:
 
 ```ts
+const model = mockModel(ai, {
+  name: 'menuModel',
+  info: { supports: { tools: true } },
+});
+
+beforeEach(() => model.reset());
+
 test('runs dailySpecial, then recommends', async () => {
-  const model = mockModel(ai, {
-    name: 'menuModel',
-    info: { supports: { tools: true } },
-    respond: [
-      // Turn 1: ask for the tool.
-      { toolRequests: [{ name: 'dailySpecial', input: { restaurant: 'Lumen' } }] },
-      // Turn 2 (after the tool ran): the final answer.
-      { text: 'Try the mushroom risotto - today\'s special.' },
-    ],
-  });
+  model.respondWith([
+    // Turn 1: ask for the tool.
+    { toolRequests: [{ name: 'dailySpecial', input: { restaurant: 'Lumen' } }] },
+    // Turn 2 (after the tool ran): the final answer.
+    { text: "Try the mushroom risotto - today's special." },
+  ]);
 
   const res = await ai.generate({
     prompt: 'What should I eat at Lumen?',
@@ -254,36 +336,29 @@ If you need to branch on conversation state instead of scripting turns, use the
 callback form:
 
 ```ts
-mockModel(ai, {
-  name: 'menuModel',
-  info: { supports: { tools: true } },
-  respond: (req) => {
-    const toolAnswered = req.messages.some((m) =>
-      m.content.some((c) => c.toolResponse)
-    );
-    return toolAnswered
-      ? { text: 'Final answer using the tool result.' }
-      : { toolRequests: [{ name: 'dailySpecial', input: { restaurant: 'Lumen' } }] };
-  },
+model.respondWith((req) => {
+  const toolAnswered = req.messages.some((m) =>
+    m.content.some((c) => c.toolResponse)
+  );
+  return toolAnswered
+    ? { text: 'Final answer using the tool result.' }
+    : { toolRequests: [{ name: 'dailySpecial', input: { restaurant: 'Lumen' } }] };
 });
 ```
 
 ## Testing streaming
 
-The callback form of `respond` receives `sendChunk`, which streams chunks to
-the caller exactly as a real model would. Use it to test flows that forward
-model tokens through their own stream:
+The callback form receives `sendChunk`, which streams chunks to the caller
+exactly as a real model would. Use it to test flows that forward model tokens
+through their own stream:
 
 ```ts
 test('forwards model chunks through the flow stream', async () => {
-  mockModel(ai, {
-    name: 'menuModel',
-    respond: (_req, { sendChunk }) => {
-      sendChunk('Try ');
-      sendChunk('the ');
-      sendChunk('risotto.');
-      return { text: 'Try the risotto.' };
-    },
+  model.respondWith((_req, { sendChunk }) => {
+    sendChunk('Try ');
+    sendChunk('the ');
+    sendChunk('risotto.');
+    return { text: 'Try the risotto.' };
   });
 
   const { stream, output } = streamRecommendation.stream({
@@ -310,10 +385,7 @@ A queued `Error` is thrown when its turn is reached, so you can test retry,
 fallback, and error-surfacing paths declaratively:
 
 ```ts
-mockModel(ai, {
-  name: 'menuModel',
-  respond: [new Error('model overloaded')],
-});
+model.respondWith([new Error('model overloaded')]);
 
 await assert.rejects(
   recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 }),
@@ -322,7 +394,7 @@ await assert.rejects(
 ```
 
 Mix errors into a longer queue to fail on a specific turn - for example,
-succeed once, then fail: `respond: ['ok', new Error('rate limited')]`.
+succeed once, then fail: `respondWith(['ok', new Error('rate limited')])`.
 
 ## Asserting prompt assembly with echoModel
 
@@ -333,10 +405,11 @@ assembly:
 
 ```ts
 import { echoModel } from 'genkit/testing';
+import { ai, recommendPrompt } from '../src/menu.js';
+
+echoModel(ai, { name: 'menuModel' });
 
 test('renders the system instruction and template variables', async () => {
-  echoModel(ai, { name: 'menuModel' });
-
   const res = await recommendPrompt({
     restaurant: 'Lumen',
     mood: 'tired',
@@ -350,6 +423,10 @@ test('renders the system instruction and template variables', async () => {
   );
 });
 ```
+
+Put `echoModel` tests in their own test file when they claim the same default
+model name as your `mockModel` tests - per-file process isolation keeps the
+two registrations apart.
 
 `echoModel` supports the same inspection members as `mockModel`.
 
@@ -370,18 +447,13 @@ generation pauses, then resume it and assert completion:
 
 ```ts
 test('pauses on confirmBooking, then resumes', async () => {
-  const model = mockModel(ai, {
-    name: 'menuModel',
-    info: { supports: { tools: true } },
-    respond: [
-      { toolRequests: [{ name: 'confirmBooking', input: { dish: 'Mushroom risotto' } }] },
-      { text: 'Enjoy your meal!' },
-    ],
-  });
+  model.respondWith([
+    { toolRequests: [{ name: 'confirmBooking', input: { dish: 'Mushroom risotto' } }] },
+    { text: 'Enjoy your meal!' },
+  ]);
 
   // First pass: the tool interrupts, so generation pauses awaiting the human.
   const paused = await ai.generate({
-    model,
     prompt: 'Book the risotto.',
     tools: [confirmBooking],
   });
@@ -389,7 +461,6 @@ test('pauses on confirmBooking, then resumes', async () => {
 
   // The human confirms; restart re-runs the tool with the decision.
   const done = await ai.generate({
-    model,
     messages: paused.messages,
     tools: [confirmBooking],
     resume: {
@@ -401,6 +472,14 @@ test('pauses on confirmBooking, then resumes', async () => {
   assert.equal(model.requestCount, 2);
 });
 ```
+
+## Isolating tests further
+
+If you prefer each _test_ (not just each file) to have a fully isolated Genkit
+registry - for example, when tests need mocks with different model `info` under
+the same name - construct a fresh instance per test with a factory function
+that builds your app, and register the mock on it in `beforeEach`. For most
+suites the register-once pattern above is simpler and sufficient.
 
 ## For plugin authors: testModels
 
