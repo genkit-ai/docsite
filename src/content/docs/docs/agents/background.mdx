@@ -125,12 +125,21 @@ Background execution requires a server-managed agent and a store that implements
 Choose background execution when the caller should receive a pending snapshot immediately and let the agent continue on the server. For local command-line tools or services that can keep the connection open, a normal streaming `Connect` call is often simpler.
 
 ```go
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+```
+
+```go
 store, err := localstore.NewFileSessionStore[ReportState]("./.genkit/snapshots/reports")
 if err != nil {
-	log.Fatal(err)
+	// Fails if the snapshot directory cannot be created or is not writable.
+	log.Fatalf("open report store: %v", err)
 }
 
-agent := genkit.DefineAgent(g, "report",
+agent := genkitx.DefineAgent(g, "report",
 	aix.InlinePrompt{
 		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithSystem("Create detailed research reports."),
@@ -148,19 +157,22 @@ With a local `AgentConnection`, send an input that has `Detach: true`.
 ```go
 conn, err := agent.Connect(ctx)
 if err != nil {
-	return err
+	// Connect fails if the init payload is rejected, such as a sessionId on a
+	// client-managed agent.
+	return fmt.Errorf("connect to agent: %w", err)
 }
 
 if err := conn.Send(&aix.AgentInput{
 	Message: ai.NewUserTextMessage("Write the quarterly report."),
 	Detach:  true,
 }); err != nil {
-	return err
+	return fmt.Errorf("send detached input: %w", err)
 }
 
 out, err := conn.Output()
 if err != nil {
-	return err
+	// The detached turn could not be started; a started one resolves in-band.
+	return fmt.Errorf("read detached output: %w", err)
 }
 
 fmt.Println(out.FinishReason)
@@ -193,7 +205,9 @@ If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapsh
 ```go
 status, err := agent.Abort(ctx, snapshotID)
 if err != nil {
-	return err
+	// A non-nil error is an abort the store could not attempt, not a snapshot
+	// that was already terminal (that returns the terminal status, nil).
+	return fmt.Errorf("abort snapshot: %w", err)
 }
 
 fmt.Println(status)
