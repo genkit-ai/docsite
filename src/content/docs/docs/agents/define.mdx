@@ -332,31 +332,45 @@ final weatherAgent = ai.defineAgent(
 
 ## Tools and current session
 
-Tools can read and update the active session by calling `ai.currentSession()`. The session object exposes `updateCustom(fn)` and other state utilities.
+Tools can read and update the active session by calling `ai.currentSession<State>()`. The session object exposes typed `getCustom()` and `updateCustom(fn)` along with other state utilities. The `State` type comes from the agent's `stateSchema`, so the updater receives a typed `State?` value with no casting.
 
 ```dart
+@Schema()
+abstract class $TaskItem {
+  int get id;
+  String get title;
+  bool get done;
+}
+
+@Schema()
+abstract class $TaskState {
+  List<$TaskItem> get tasks;
+  int get nextId;
+}
+
 final addTask = ai.defineTool(
   name: 'addTask',
   description: 'Add a new task to the task list.',
   inputSchema: AddTaskInput.$schema,
   outputSchema: TaskItem.$schema,
   fn: (input, _) async {
-    final session = ai.currentSession()!;
-    late Map<String, dynamic> newTask;
+    final session = ai.currentSession<TaskState>()!;
+    late TaskItem newTask;
 
-    session.updateCustom((custom) {
-      final state = custom as Map<String, dynamic>? ?? {'tasks': []};
-      newTask = {'id': DateTime.now().millisecondsSinceEpoch, 'title': input.title, 'done': false};
-      (state['tasks'] as List).add(newTask);
+    session.updateCustom((state) {
+      state ??= TaskState(tasks: [], nextId: 1);
+      newTask = TaskItem(id: state.nextId, title: input.title, done: false);
+      state.tasks = [...state.tasks, newTask];
+      state.nextId += 1;
       return state;
     });
 
-    return TaskItem.fromJson(newTask);
+    return newTask;
   },
 );
 ```
 
-Custom-state mutations automatically emit streamed JSON Patch chunks. That keeps client-side state and streamed updates current while a turn is still running.
+Provide the matching `stateSchema` when defining the agent (here `stateSchema: TaskState.$schema`) so the session state is typed. Custom-state mutations automatically emit streamed JSON Patch chunks, which keeps client-side state and streamed updates current while a turn is still running.
 
 ## Define a custom agent implementation
 
