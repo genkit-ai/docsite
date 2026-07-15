@@ -4,6 +4,7 @@ description: Take direct control of an agent turn while keeping Genkit's convers
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -239,5 +240,117 @@ Use this when external resources need to line up with the snapshot that will lat
 ## Failure and detach behavior
 
 If the per-turn callback returns an error, the invocation resolves as a failed `AgentOutput` with structured error details and a last-good recovery point. A client can resume from the last-good state or snapshot. When a client detaches, chunks after detach are not forwarded, but session side effects such as artifacts still apply to the final snapshot.
+
+</Lang>
+
+<Lang lang="dart">
+
+## When to use a custom agent
+
+Use `defineCustomAgent()` when you need full control over the turn logic:
+
+- Running multiple model calls sequentially inside a single user turn.
+- Choosing models, prompts, or tools dynamically at runtime.
+- Implementing custom loops (e.g. planner-executor or self-correction).
+- Emitting status updates or artifacts during a turn.
+
+## Runtime contract
+
+A custom agent receives a `SessionRunner` and an `AgentFnOptions` object:
+
+```dart
+final customAgent = ai.defineCustomAgent(
+  name: 'myAgent',
+  fn: (sess, options) async {
+    // Custom logic...
+  },
+);
+```
+
+- **`sess`** (the `SessionRunner`) manages the session's active turns, messages, custom state, and artifacts.
+- **`options`** (the `AgentFnOptions`) provides `sendChunk(chunk)` to stream model chunks back to the client, along with a `cancel` token and ambient request `context`.
+
+Call `sess.run((input, turnContext) async => TurnResult)` to process each input turn. The runner appends the user input to the message history automatically. For server-managed agents, `turnContext.snapshotId` is reserved beforehand so external state matches the snapshot.
+
+## Multi-step example
+
+This simplified multi-step researcher is modeled directly on the `research_agent.dart` sample:
+
+```dart
+final researchAgent = ai.defineCustomAgent(
+  name: 'researchAgent',
+  fn: (sess, options) async {
+    Message? lastMessage;
+    final session = ai.currentSession()!;
+
+    await sess.run((input, turnContext) async {
+      final userText = input.message?.content.first.text ?? '';
+
+      // Step 1: Decompose the question into subquestions
+      session.updateCustom((state) {
+        final s = state as Map<String, dynamic>? ?? {};
+        s['status'] = 'Decomposing question...';
+        return s;
+      });
+
+      final decompose = await ai.generate(
+        model: liteModel,
+        prompt: 'Break this question into two sub-questions:\n$userText',
+        outputFormat: 'json',
+        outputSchema: SchemanticType.list(SchemanticType.string()),
+      );
+      final subQuestions = (decompose.output ?? [userText])
+          .map((q) => q.toString())
+          .toList();
+
+      // Step 2: Research each subquestion
+      final answers = [];
+      for (final q in subQuestions) {
+        session.updateCustom((state) {
+          final s = state as Map<String, dynamic>;
+          s['status'] = 'Researching: $q';
+          return s;
+        });
+
+        final research = await ai.generate(prompt: q);
+        answers.add({'question': q, 'answer': research.text});
+      }
+
+      // Step 3: Synthesize and stream the final response
+      session.updateCustom((state) {
+        final s = state as Map<String, dynamic>;
+        s['status'] = 'Synthesizing final response...';
+        return s;
+      });
+
+      final synthesis = ai.generateStream(
+        prompt: 'Synthesize these findings:\n$answers',
+      );
+
+      await for (final chunk in synthesis) {
+        options.sendChunk(AgentStreamChunk(modelChunk: chunk.rawChunk));
+      }
+
+      final finalRes = await synthesis.onResult;
+      lastMessage = finalRes.message;
+      if (lastMessage != null) {
+        sess.addMessages([lastMessage!]);
+      }
+
+      return TurnResult(finishReason: finalRes.finishReason);
+    });
+
+    return AgentResult(
+      message: lastMessage,
+      finishReason: sess.lastTurnFinishReason,
+    );
+  },
+  store: InMemorySessionStore(),
+);
+```
+
+## Failure and recovery
+
+If the per-turn callback throws an exception, the runtime marks the turn as failed and resolves the action with `finishReason: 'failed'`. The response carries the last-good state or snapshot ID, allowing the client to safely retry without continuing from broken or corrupted partial states.
 
 </Lang>

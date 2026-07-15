@@ -4,6 +4,7 @@ description: Create Genkit agents that answer users, call tools, remember contex
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -267,5 +268,110 @@ coder := genkitx.DefineCustomAgent(g, "coder",
 ```
 
 See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, turn context, responder behavior, and failure handling.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Constructor choices
+
+- **`ai.defineAgent()`** defines the prompt instructions, tools, and the agent shell in one place. This is the common path for chat assistants, tool-calling agents, and server-backed frontend features.
+- **`ai.defineCustomAgent()`** replaces the prompt loop with your own code, allowing multiple model calls in one turn, custom planning loops, direct session control, or custom streaming.
+
+Both constructors produce an `Agent` instance supporting the transport-agnostic `chat()`, `loadChat()`, `getSnapshot()`, and `abort()` APIs. The agent is also a bidirectional action that can be served over HTTP.
+
+## Define a prompt-backed agent
+
+`defineAgent()` registers a prompt-backed agent. It accepts normal prompt-generation options plus agent-specific options such as `stateSchema` and `store`.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+import 'package:schemantic/schemantic.dart';
+
+part 'weather_agent.g.dart';
+
+@Schema()
+abstract class $GetWeatherInput {
+  String get location;
+}
+
+@Schema()
+abstract class $GetWeatherOutput {
+  String get weather;
+  String get temperature;
+}
+
+final getWeather = ai.defineTool(
+  name: 'getWeather',
+  description: 'Get the current weather for a location.',
+  inputSchema: GetWeatherInput.$schema,
+  outputSchema: GetWeatherOutput.$schema,
+  fn: (input, _) async => GetWeatherOutput(
+    weather: 'Sunny in ${input.location}',
+    temperature: '71F',
+  ),
+);
+
+final weatherAgent = ai.defineAgent(
+  name: 'weatherAgent',
+  system: 'You help with weather information. Use the getWeather tool.',
+  tools: [getWeather],
+  store: FileSessionStore('.sessions'),
+);
+```
+
+## Agent options
+
+- **`name`** registers the prompt and agent action. Use a stable, descriptive name because it appears in action metadata, route helpers, and delegation tools.
+- **`system`** provides the instructions or system prompt for the model loop.
+- **`tools`** lists the tools the agent is permitted to call during its turn.
+- **`stateSchema`** validates custom session state when loading from snapshots or client state.
+- **`store`** switches the agent to server-managed state. Add a store when you want snapshots, branching, background execution, `loadChat()`, or smaller client payloads.
+- **`use`** lists the middleware plugins (e.g. `retry()`) applied to the prompt model loops.
+
+## Tools and current session
+
+Tools can read and update the active session by calling `ai.currentSession()`. The session object exposes `updateCustom(fn)` and other state utilities.
+
+```dart
+final addTask = ai.defineTool(
+  name: 'addTask',
+  description: 'Add a new task to the task list.',
+  inputSchema: AddTaskInput.$schema,
+  outputSchema: TaskItem.$schema,
+  fn: (input, _) async {
+    final session = ai.currentSession()!;
+    late Map<String, dynamic> newTask;
+
+    session.updateCustom((custom) {
+      final state = custom as Map<String, dynamic>? ?? {'tasks': []};
+      newTask = {'id': DateTime.now().millisecondsSinceEpoch, 'title': input.title, 'done': false};
+      (state['tasks'] as List).add(newTask);
+      return state;
+    });
+
+    return TaskItem.fromJson(newTask);
+  },
+);
+```
+
+Custom-state mutations automatically emit streamed JSON Patch chunks. That keeps client-side state and streamed updates current while a turn is still running.
+
+## Define a custom agent implementation
+
+Use `defineCustomAgent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and handles turn processing directly.
+
+```dart
+final researchAgent = ai.defineCustomAgent(
+  name: 'researchAgent',
+  fn: (sess, options) async {
+    // Your own per-turn loop. See Custom orchestration for the full pattern.
+  },
+  store: InMemorySessionStore(),
+);
+```
+
+See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, and failure handling.
 
 </Lang>

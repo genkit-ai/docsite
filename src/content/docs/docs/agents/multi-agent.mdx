@@ -4,6 +4,7 @@ description: Split complex work across specialized Genkit agents and have an orc
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -202,5 +203,82 @@ g := genkit.Init(ctx,
 	genkit.WithPlugins(&googlegenai.GoogleAI{}, &middlewarex.Middleware{}),
 )
 ```
+
+</Lang>
+
+<Lang lang="dart">
+
+## Add delegation middleware
+
+Genkit Dart provides the `agents()` middleware from `package:genkit_middleware/agents.dart` to manage multi-agent delegation. It dynamically auto-injects one delegation tool per sub-agent (named `delegate_to_<agentName>` by default) and appends a list of available sub-agents and their descriptions to the orchestrator's system prompt.
+
+Make sure to include `AgentsPlugin()` in your `Genkit` initialization.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_middleware/agents.dart';
+
+final researcher = ai.defineAgent(
+  name: 'researcher',
+  description: 'A thorough research assistant that provides well-sourced answers.',
+  system: 'You are a thorough research assistant. Return a clear and factual answer.',
+  maxTurns: 10,
+);
+
+final coder = ai.defineAgent(
+  name: 'coder',
+  description: 'Writes, debugs, and explains code.',
+  system: 'You are an expert programmer. Use Dart by default.',
+  maxTurns: 10,
+);
+
+final orchestratorAgent = ai.defineAgent(
+  name: 'orchestratorAgent',
+  system: '''
+    You are a project assistant. Analyze the user's request and delegate to the appropriate sub-agent.
+    If the request requires both research and code, call them sequentially.
+    After receiving sub-agent responses, synthesize a final answer for the user.
+  ''',
+  use: [
+    agents(
+      agents: ['researcher', 'coder'],
+      maxDelegations: 5,
+      historyLength: 4,
+    ),
+  ],
+  store: InMemorySessionStore(),
+);
+```
+
+Always provide a clear, descriptive `description` for sub-agents, as this metadata is used directly by the orchestrator model to determine when to call each delegation tool.
+
+## Delegation options
+
+- **`agents`** is a list of sub-agent names available to the orchestrator.
+- **`maxDelegations`** caps delegation calls in one orchestrator turn to prevent runaway loops (e.g., `5`).
+- **`historyLength`** sets how many recent conversation messages are forwarded to the sub-agents so they have context.
+
+## Stream delegation progress
+
+Delegation appears as a standard tool call in the orchestrator's chunk stream. This allows clients to see in real-time which sub-agent is active.
+
+```dart
+final turn = orchestratorAgent.chat().sendTextStream('Research quicksort and write it in Dart.');
+
+await for (final chunk in turn.stream) {
+  for (final req in chunk.toolRequests) {
+    if (req.name.startsWith('delegate_to_')) {
+      print('Delegating to sub-agent: ${req.name}');
+    }
+  }
+  if (chunk.text.isNotEmpty) {
+    stdout.write(chunk.text);
+  }
+}
+```
+
+## Interrupts and failures
+
+If a sub-agent fails or triggers an interrupt, the failure or pause is returned to the orchestrator as the delegation tool's output. It does not automatically bubble up as a top-level error to the client. You should instruct the orchestrator on how to handle failures—for example, by trying a different specialist, correcting input, or reporting the issue back to the user.
 
 </Lang>

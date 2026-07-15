@@ -4,6 +4,7 @@ description: Connect frontend apps and services to Genkit agents through HTTP wh
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -127,11 +128,50 @@ curl -X POST http://localhost:8080/agents/chat/abort \
 
 </Lang>
 
+<Lang lang="dart">
+
+## Shelf routes
+
+Serve local agents over HTTP using the `genkit_shelf` package. Every local agent exposes its turn, snapshot, and abort loops as standard Genkit actions.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as io;
+import 'package:shelf_router/shelf_router.dart';
+
+void main() async {
+  final router = Router();
+
+  // Mount primary turn handler:
+  router.post('/api/weatherAgent', shelfHandler(weatherAgent.action));
+
+  // Mount snapshot reader:
+  router.post(
+    '/api/weatherAgent/state',
+    shelfHandler(weatherAgent.getSnapshotDataAction),
+  );
+
+  // Mount abort worker:
+  router.post('/api/weatherAgent/abort', shelfHandler(weatherAgent.abortAgentAction));
+
+  final server = await io.serve(router.call, '0.0.0.0', 8080);
+  print('Server running on http://localhost:${server.port}');
+}
+```
+
+The turn endpoint processes both streaming and non-streaming requests. The snapshot endpoint reads the database by `snapshotId` or returns the latest leaf by `sessionId`. The abort endpoint takes the `snapshotId` and cancels running background tasks.
+
+</Lang>
+
 ## Connect a client
 
 The client is independent of the backend language. Point it at the primary turn URL your server exposes, the route you mounted above, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
 
 The snippets below apply whichever backend language you selected.
+
+<Lang lang="js">
 
 `remoteAgent()` from `genkit/beta/client` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
 
@@ -170,6 +210,54 @@ for await (const chunk of turn.stream) {
 
 const res = await turn.response;
 ```
+
+</Lang>
+
+<Lang lang="dart">
+
+`remoteAgent()` from `package:genkit/client.dart` creates a platform-safe client with the same `AgentApi` shape as a local agent.
+
+```dart
+import 'package:genkit/client.dart';
+
+final agent = remoteAgent(
+  url: 'http://localhost:8080/api/weatherAgent',
+  getSnapshotUrl: 'http://localhost:8080/api/weatherAgent/state',
+  abortUrl: 'http://localhost:8080/api/weatherAgent/abort',
+);
+
+void main() async {
+  final chat = agent.chat();
+  final res = await chat.sendText('Weather in Tokyo?');
+
+  print(res.text);
+}
+```
+
+Options:
+
+- **`url`** is required and sends normal and streaming turns.
+- **`getSnapshotUrl`** specifies the endpoint to load saved snapshots for server-managed agents (often mapped to `/state`).
+- **`abortUrl`** specifies the endpoint to cancel detached background turns.
+- **`headers`** can be a function or map that returns custom headers, resolving auth tokens dynamically per-request.
+
+## Stream a turn
+
+`sendTextStream()` returns a turn that exposes a chunk stream and a final response.
+
+```dart
+final chat = agent.chat();
+final turn = chat.sendTextStream('Write a long report.');
+
+await for (final chunk in turn.stream) {
+  if (chunk.text.isNotEmpty) stdout.write(chunk.text);
+  if (chunk.custom != null) updateStatus(chunk.custom!);
+}
+
+final res = await turn.response;
+```
+
+</Lang>
 
 ## Client behavior
 
