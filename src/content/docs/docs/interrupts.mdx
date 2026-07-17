@@ -822,18 +822,20 @@ Another common pattern for interrupts is the need to _confirm_ an action that th
 
 ### Define a restartable tool
 
-When defining a tool, you can check your application state (for example, reading a boolean variable or fetching a database record) to determine whether the action is approved. If not, trigger an interrupt:
+When defining a tool, check `ctx.resumed` to decide whether the action has been approved. It is `null` on the first call, so the tool interrupts. When the tool is restarted, it holds the metadata the client sent, which lets the transfer proceed:
 
 ```dart
-var isApproved = false;
-
 ai.defineTool(
   name: 'transfer_funds',
   description: 'transfer funds, requires user approval',
   inputSchema: ApprovalRequest.$schema,
   fn: (input, ctx) async {
-    // Check if context has approval flag to simulate state or auth passing
-    if (!isApproved) {
+    // `ctx.resumed` is null on the first call and carries the client's
+    // approval metadata when the tool is restarted.
+    final resumed = ctx.resumed;
+    final approved = resumed is Map && resumed['approved'] == true;
+
+    if (!approved) {
       ctx.interrupt(input);
     }
     return 'Successfully transferred funds! Details: ${input.details}';
@@ -843,22 +845,23 @@ ai.defineTool(
 
 ### Restart tools after interruption
 
-To restart the interrupted tool, pass the original interrupt part back to the `interruptRestart` parameter on your next `ai.generate` call. The model will re-execute the tool function, so ensure your state is updated so the tool check succeeds on the second run:
+To restart the interrupted tool, build a restart part from the interrupted tool request with `.restart(metadata)` and pass it to the `interruptRestart` parameter on your next `ai.generate` call. The metadata surfaces to the tool as `ctx.resumed`, and the model re-executes the tool function:
 
 ```dart
 if (response.finishReason == FinishReason.interrupted) {
-  final interruptPart = response.interrupts.first;
+  final interrupt = response.interrupts.first;
 
   // In your app logic: Ask the user to confirm the transfer...
-  // Once confirmed, pass approval flag so the tool succeeds on restart
-  isApproved = true;
-
+  // Once confirmed, restart the tool with approval metadata that the tool
+  // reads via `ctx.resumed`.
   final response2 = await ai.generate(
     // Ensure you pass the previous messages back
     messages: response.messages,
     toolNames: ['transfer_funds'],
-    // Pass the part back to `interruptRestart` to signal a restart
-    interruptRestart: [interruptPart],
+    // Restart the interrupted tool with approval metadata.
+    interruptRestart: [
+      interrupt.toolRequestPart!.restart({'approved': true}),
+    ],
   );
 }
 ```

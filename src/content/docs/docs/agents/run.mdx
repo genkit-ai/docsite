@@ -4,6 +4,7 @@ description: Start conversations with Genkit agents, stream their responses, and
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -239,5 +240,112 @@ for chunk, err := range conn.Receive() {
 ```
 
 The authoritative final state is on `AgentOutput.State` for client-managed agents, or in the saved snapshot for server-managed agents.
+
+</Lang>
+
+<Lang lang="dart">
+
+Local agents from `ai.defineAgent()` and remote clients from `remoteAgent()` share this interface, so the same code drives both.
+
+## Start a chat
+
+```dart
+final chat = weatherAgent.chat();
+final res = await chat.send(text: 'Weather in Tokyo?');
+
+print(res.text);
+print(res.snapshotId);
+print(res.state);
+```
+
+Calling `chat()` without arguments starts a new conversation. Pass `sessionId` to resume or start a server-managed conversation under that session ID, `snapshotId` when you need to resume from an exact snapshot, or `state` to seed or carry forward a client-managed state.
+
+```dart
+final chat = weatherAgent.chat(
+  sessionId: 'user-session-123',
+);
+
+await chat.send(text: 'What did we discuss last time?');
+```
+
+## Restore a full chat
+
+`loadChat()` reads a server snapshot and hydrates messages, custom state, artifacts, `snapshotId`, and `sessionId` before the next turn.
+
+```dart
+final chat = await weatherAgent.loadChat(sessionId: 'user-session-123');
+
+print(chat.messages.length);
+print(chat.state);
+
+await chat.send(text: 'Continue from there.');
+```
+
+Use `getSnapshot()` when you only need to inspect a snapshot, such as for an audit view. Use `loadChat()` when you want to continue the conversation from that saved state.
+
+## Stream a turn
+
+```dart
+final chat = weatherAgent.chat();
+final turn = chat.sendStream(text: 'Weather in Tokyo?');
+
+await for (final chunk in turn.stream) {
+  if (chunk.text.isNotEmpty) stdout.write(chunk.text);
+  if (chunk.custom != null) updateStatus(chunk.custom!);
+  if (chunk.artifact != null) renderArtifact(chunk.artifact!);
+}
+
+final res = await turn.response;
+print(res.finishReason.value);
+```
+
+The non-streaming `send()` path drains the stream internally so custom state patches are still applied. This keeps `send()` and `sendStream()` consistent for server-managed agents.
+
+## Pass per-turn context
+
+Every turn method (`send`, `sendStream`, and `detach`) accepts an optional `context` map. Use it to pass ambient request data, such as auth, that tools and custom agents can read without exposing it to the model.
+
+```dart
+final res = await chat.send(
+  text: 'What is on my calendar today?',
+  context: {
+    'auth': {'name': 'Ada'},
+  },
+);
+```
+
+Tools read the context through the tool context (`ctx.context`), and custom agents read it through `options.context`.
+
+Per-turn `context` is honored by the in-process transport, where you drive a local agent from `ai.defineAgent()`. A `remoteAgent()` over HTTP rejects a non-empty `context` with an `UnsupportedError`, because a remote agent derives its context server-side from the incoming request.
+
+## Abort a foreground turn
+
+Cancel a foreground turn using the `abort()` method on the active `AgentTurn`.
+
+```dart
+final turn = chat.sendStream(text: 'Write a long report.');
+
+// Later, abort the turn:
+turn.abort();
+
+final res = await turn.response;
+print(res.finishReason.value); // 'aborted'
+```
+
+## Failed turns
+
+When a turn fails after the invocation starts, the client throws `AgentError`. The exception carries details of the failure along with the last-good state.
+
+```dart
+try {
+  await chat.send(text: 'Use a broken tool.');
+} on AgentError catch (err) {
+  print(err.status);
+  print(err.snapshotId);
+  print(err.state);
+}
+```
+
+Initialization misuse, such as sending `state` to a server-managed agent, is rejected before a turn starts.
 
 </Lang>

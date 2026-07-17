@@ -4,6 +4,7 @@ description: Understand how agent failures are reported and how to recover a con
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -195,5 +196,82 @@ if order == nil {
 ## Transform failures
 
 State and stream transforms fail closed. If a transform returns an error, the read or invocation fails instead of exposing unredacted data. Use this behavior for authorization-dependent redaction where returning raw state would leak sensitive information.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Failure categories
+
+- **Init misuse** throws an immediate exception (e.g., `AgentInitError` or `GenkitException`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
+- **Failed turns** throw `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
+- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+- **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
+
+## Handle failed turns
+
+```dart
+try {
+  final res = await chat.send(text: 'Look up order 123.');
+  print(res.text);
+} on AgentError catch (err) {
+  print('Turn failed: ${err.status}');
+  print('Error details: ${err.message}');
+
+  // Recover the conversation:
+  final recoveryChat = err.snapshotId != null
+      ? await agent.loadChat(snapshotId: err.snapshotId!)
+      : agent.chat(state: err.state);
+
+  await recoveryChat.send(text: 'Try again with order 456.');
+}
+```
+
+For streaming turns, catch errors around the chunk stream consumption and the final response Future. The stream rethrows failed-turn errors after yielding any chunks that arrived before the failure occurred.
+
+```dart
+final turn = chat.sendStream(text: 'Write a long report.');
+
+try {
+  await for (final chunk in turn.stream) {
+    render(chunk);
+  }
+  await turn.response;
+} on AgentError catch (err) {
+  showFailure(err);
+}
+```
+
+## Tool exceptions
+
+Throw an exception from a tool when the system cannot safely proceed, such as a database outage or auth failure:
+
+```dart
+final lookupOrder = ai.defineTool(
+  name: 'lookupOrder',
+  description: 'Looks up an order by ID.',
+  inputSchema: LookupOrderInput.$schema,
+  outputSchema: Order.$schema,
+  fn: (input, _) async {
+    final order = await db.orders.find(input.orderId);
+    if (order == null) {
+      throw Exception('Order ${input.orderId} was not found.');
+    }
+    return order;
+  },
+);
+```
+
+When the error is soft and the model has a chance to recover (e.g. invalid user input), return structured output:
+
+```dart
+if (order == null) {
+  return {
+    'ok': false,
+    'reason': 'ORDER_NOT_FOUND',
+    'message': 'Ask the user to check the order ID.',
+  };
+}
+```
 
 </Lang>

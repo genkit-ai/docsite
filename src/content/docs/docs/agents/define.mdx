@@ -4,6 +4,7 @@ description: Create Genkit agents that answer users, call tools, remember contex
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -267,5 +268,173 @@ coder := genkitx.DefineCustomAgent(g, "coder",
 ```
 
 See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, turn context, responder behavior, and failure handling.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Constructor choices
+
+- **`ai.defineAgent()`** defines the prompt instructions, tools, and the agent shell in one place. This is the common path for chat assistants, tool-calling agents, and server-backed frontend features.
+- **`ai.definePromptAgent()`** wraps a prompt that already exists as a Dotprompt file (or registered prompt). It keeps prompt copy, model settings, schemas, and tool lists in the prompt layer while the agent adds conversation state and transport.
+- **`ai.defineCustomAgent()`** replaces the prompt loop with your own code, allowing multiple model calls in one turn, custom planning loops, direct session control, or custom streaming.
+
+All three constructors produce an `Agent` instance supporting the transport-agnostic `chat()`, `loadChat()`, `getSnapshot()`, and `abort()` APIs. The agent is also a bidirectional action that can be served over HTTP.
+
+## Define a prompt-backed agent
+
+`defineAgent()` registers a prompt-backed agent. It accepts normal prompt-generation options plus agent-specific options such as `stateSchema` and `store`.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+import 'package:schemantic/schemantic.dart';
+
+part 'weather_agent.g.dart';
+
+@Schema()
+abstract class $GetWeatherInput {
+  String get location;
+}
+
+@Schema()
+abstract class $GetWeatherOutput {
+  String get weather;
+  String get temperature;
+}
+
+final getWeather = ai.defineTool(
+  name: 'getWeather',
+  description: 'Get the current weather for a location.',
+  inputSchema: GetWeatherInput.$schema,
+  outputSchema: GetWeatherOutput.$schema,
+  fn: (input, _) async => GetWeatherOutput(
+    weather: 'Sunny in ${input.location}',
+    temperature: '71F',
+  ),
+);
+
+final weatherAgent = ai.defineAgent(
+  name: 'weatherAgent',
+  system: 'You help with weather information. Use the getWeather tool.',
+  tools: [getWeather],
+  store: FileSessionStore('.sessions'),
+);
+```
+
+## Agent options
+
+- **`name`** registers the prompt and agent action. Use a stable, descriptive name because it appears in action metadata, route helpers, and delegation tools.
+- **`description`** is surfaced in action metadata and the multi-agent delegation middleware. Write it as a summary of when another agent should delegate to this one.
+- **`system`** provides the instructions or system prompt for the model loop.
+- **`tools`** lists the tools the agent is permitted to call during its turn.
+- **`maxTurns`** caps how many model/tool iterations one turn may run before stopping.
+- **`stateSchema`** validates custom session state when loading from snapshots or client state.
+- **`store`** switches the agent to server-managed state. Add a store when you want snapshots, branching, background execution, `loadChat()`, or smaller client payloads.
+- **`use`** lists the middleware applied to the prompt model loops. Register the matching plugin in your `Genkit(plugins: [...])` so the reference resolves at runtime (for example, `RetryPlugin()` for `retry()`, `AgentsPlugin()` for `agents()`).
+
+## Tools and current session
+
+Tools can read and update the active session by calling `ai.currentSession<State>()`. The session object exposes typed `getCustom()` and `updateCustom(fn)` along with other state utilities. The `State` type comes from the agent's `stateSchema`, so the updater receives a typed `State?` value with no casting.
+
+```dart
+@Schema()
+abstract class $TaskItem {
+  int get id;
+  String get title;
+  bool get done;
+}
+
+@Schema()
+abstract class $TaskState {
+  List<$TaskItem> get tasks;
+  int get nextId;
+}
+
+@Schema()
+abstract class $AddTaskInput {
+  String get title;
+}
+
+final addTask = ai.defineTool(
+  name: 'addTask',
+  description: 'Add a new task to the task list.',
+  inputSchema: AddTaskInput.$schema,
+  outputSchema: TaskItem.$schema,
+  fn: (input, _) async {
+    final session = ai.currentSession<TaskState>()!;
+    late TaskItem newTask;
+
+    session.updateCustom((state) {
+      final nextId = state?.nextId ?? 1;
+      newTask = TaskItem(id: nextId, title: input.title, done: false);
+      return TaskState(
+        tasks: [...?state?.tasks, newTask],
+        nextId: nextId + 1,
+      );
+    });
+
+    return newTask;
+  },
+);
+```
+
+Provide the matching `stateSchema` when defining the agent (here `stateSchema: TaskState.$schema`) so the session state is typed. Custom-state mutations automatically emit streamed JSON Patch chunks, which keeps client-side state and streamed updates current while a turn is still running.
+
+## Wrap an existing prompt
+
+Use `definePromptAgent()` when the prompt already exists as a Dotprompt file. This is common because prompt authors can tune the model, schemas, tool list, and template content without touching agent wiring. `promptInput` supplies values for the prompt template's input variables, so a single shared `.prompt` file can be reused and customized by multiple agents.
+
+```dart
+import 'package:genkit/genkit.dart';
+
+import 'genkit.dart';
+
+final tripPlannerAgent = ai.definePromptAgent(
+  promptName: 'tripPlanner',
+  promptInput: {'tone': 'enthusiastic'},
+  store: InMemorySessionStore(),
+);
+```
+
+The Dotprompt file keeps the prompt copy, model settings, input schema, and tool list close to the content. Here `{{tone}}` is filled by the `promptInput` above:
+
+{/* prettier-ignore */}
+```handlebars
+---
+model: googleai/gemini-flash-latest
+input:
+  schema:
+    tone: string
+tools:
+  - getAttractions
+  - getFlightInfo
+---
+
+{{role "system"}}
+You are a friendly trip planning assistant. Help users plan trips by suggesting
+attractions and looking up flight information. Use the available tools to provide
+accurate, up-to-date information. Keep your tone {{tone}}.
+
+{{history}}
+```
+
+The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, the turn fails with an error telling you which prompt name was missing.
+
+## Define a custom agent implementation
+
+Use `defineCustomAgent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and handles turn processing directly.
+
+```dart
+final researchAgent = ai.defineCustomAgent(
+  name: 'researchAgent',
+  fn: (sess, options) async {
+    // Your own per-turn loop. See Custom orchestration for the full pattern.
+  },
+  store: InMemorySessionStore(),
+);
+```
+
+See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, and failure handling.
 
 </Lang>

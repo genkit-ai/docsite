@@ -4,6 +4,7 @@ description: Choose a Genkit agent session store and learn what a custom store m
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -202,6 +203,87 @@ Scope every read and write by authenticated user, organization, or tenant. Do no
 Index by snapshot ID, session ID, parent ID, and creation time. `sessionId` lookup should be efficient because it is the common path for continuing a conversation. Parent relationships matter for leaf selection.
 
 Plan retention before launch. Snapshots are full conversation checkpoints, so long-running conversations and artifact-heavy agents can grow quickly.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Choose a store
+
+- **In-memory store** (`InMemorySessionStore`) for tests, local examples, command-line interfaces, and single-process experiments.
+- **File store** (`FileSessionStore`) for local development, prototypes, and single-host applications where snapshots must persist across process restarts.
+- **Custom store** (implementing `SessionStore`) for production apps utilizing centralized databases like Cloud SQL, Spanner, Postgres, or Redis.
+
+Configure your session store directly on the agent's constructor. The agent runtime manages reads, writes, and updates behind the scenes.
+
+## Use an in-memory store
+
+`InMemorySessionStore` keeps snapshots in local process memory. It is fast and requires no setup.
+
+```dart
+import 'package:genkit/genkit.dart';
+
+final store = InMemorySessionStore();
+
+final supportAgent = ai.defineAgent(
+  name: 'supportAgent',
+  system: 'Help customers with their orders.',
+  store: store,
+);
+```
+
+Do not use the in-memory store if session history must survive process restarts or when scaling horizontally across multiple server instances.
+
+## Use a file-backed store
+
+`FileSessionStore` stores snapshots as JSON files inside a local directory. This is the standard choice for local development or single-host deployments.
+
+Import `FileSessionStore` from the IO-safe entry point: `package:genkit/io.dart`.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+
+final store = FileSessionStore('.sessions');
+
+final weatherAgent = ai.defineAgent(
+  name: 'weatherAgent',
+  system: 'You help with weather questions.',
+  store: store,
+);
+```
+
+Snapshots will be saved to files inside the `.sessions` folder.
+
+## Implement a production store
+
+To store snapshots in a shared production database (such as PostgreSQL, Spanner, or Redis), implement a custom `SessionStore`:
+
+```dart
+import 'package:genkit/genkit.dart';
+
+class MyDatabaseSessionStore implements SessionStore {
+  @override
+  Future<SessionSnapshot?> getSnapshot({String? snapshotId, String? sessionId}) async {
+    // Load snapshot from your database by ID or resolve latest for session ID
+  }
+
+  @override
+  Future<String?> saveSnapshot(String? snapshotId, SnapshotMutator mutator) async {
+    // Perform an atomic read-modify-write on the snapshot.
+    // Call the mutator: final updated = mutator(existingSnapshot);
+    // Write and commit the updated snapshot to your database.
+  }
+}
+```
+
+- **`getSnapshot`** fetches a snapshot by exact `snapshotId` or resolves the latest snapshot in the sequence for `sessionId`.
+- **`saveSnapshot`** must be atomic. Run the read, mutator execution, and write inside a single database transaction. This prevents concurrent writes from clobbering each other.
+
+## Production guidance
+
+- **Security**: Treat snapshots as sensitive user data. They can contain raw message history, tool results, and personal information. Apply authorization checks in your API or store layer before returning snapshot data.
+- **Payload size**: Because snapshots contain full conversational checkpoints, their size grows over long sessions. Plan database indexes and cleanup/archival routines before launching production systems.
 
 </Lang>
 

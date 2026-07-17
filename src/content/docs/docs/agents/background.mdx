@@ -4,6 +4,7 @@ description: Let Genkit agents keep working after the client disconnects, then c
 supportedLanguages:
   - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -214,5 +215,101 @@ fmt.Println(status)
 ```
 
 `Abort` is a no-op for missing snapshots and for snapshots that already reached a terminal status. Client-managed agents return `FAILED_PRECONDITION` because there is no server snapshot to cancel.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Server requirements
+
+Configure a store and expose companion endpoints when serving a remote agent:
+
+```dart
+final reportAgent = ai.defineAgent(
+  name: 'reportAgent',
+  system: 'Create detailed research reports.',
+  store: FileSessionStore('.sessions'),
+);
+
+void main() {
+  final router = Router();
+  router.post('/api/reportAgent', shelfHandler(reportAgent.action));
+  router.post('/api/reportAgent/getSnapshot', shelfHandler(reportAgent.getSnapshotDataAction));
+  router.post('/api/reportAgent/abort', shelfHandler(reportAgent.abortAgentAction));
+}
+```
+
+The runtime writes a `pending` snapshot and refreshes its heartbeat while the background thread processes the turn.
+
+## Detach from a turn
+
+Submit a background task from the client using `detach()` on the `AgentChat`:
+
+```dart
+final chat = reportAgent.chat(sessionId: 'report-123');
+final task = await chat.detach(text: 'Write the quarterly market report.');
+
+// Save snapshotId so you can poll or abort it later
+final snapshotId = task.snapshotId;
+```
+
+## Poll or wait
+
+Use `poll()` to yield status snapshots over a `Stream` until the task reaches a terminal status:
+
+```dart
+await for (final snapshot in task.poll(interval: Duration(milliseconds: 1500))) {
+  print('Current Status: ${snapshot.status?.value}');
+
+  if (snapshot.status?.value == 'completed') {
+    final report = snapshot.messages.last.content.first.text;
+    print(report);
+  }
+}
+```
+
+Use `wait()` to block execution as a `Future` until completion:
+
+```dart
+final finalSnapshot = await task.wait(interval: Duration(milliseconds: 1500));
+
+if (finalSnapshot.status?.value == 'failed') {
+  print('Task failed: ${finalSnapshot.error?.message}');
+}
+```
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+
+## Reconnect by snapshot ID
+
+To reconnect and inspect or resume a detached task from a different client process, read the stored snapshot ID and load it:
+
+```dart
+final snapshot = await reportAgent.getSnapshot(snapshotId: snapshotId);
+
+if (snapshot?.status?.value == 'completed') {
+  final chat = await reportAgent.loadChat(snapshotId: snapshotId);
+  final res = await chat.send(text: 'Summarize this report.');
+  print(res.text);
+}
+```
+
+Only completed snapshots can be resumed.
+
+## Abort work
+
+Cancel a pending task from the client using `task.abort()`:
+
+```dart
+await task.abort();
+```
+
+Or abort directly by snapshot ID from the `AgentApi` handle:
+
+```dart
+await reportAgent.abort(snapshotId);
+```
+
+Aborting shifts the pending snapshot status to `aborted`. The background worker observes this change and safely terminates the turn loop.
 
 </Lang>
