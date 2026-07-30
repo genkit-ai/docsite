@@ -522,16 +522,17 @@ class MyDatabaseSessionStore(SessionStore):
 
     async def save_snapshot(self, snapshot_id, fn, *, context=None) -> SessionSnapshot | None:
         # Atomic read-modify-write: call fn(existing) and persist the result.
-        ...
-
-    @property
-    def lock(self):
-        # Return a process-local asyncio.Lock for this store instance.
-        ...
+        async with self.lock:
+            existing = await self._read(snapshot_id)
+            updated = fn(existing)
+            if updated is not None:
+                await self._write(snapshot_id, updated)
+            return updated
 ```
 
 - **`get_snapshot`** fetches a snapshot by exact `snapshot_id` or resolves the latest snapshot in the sequence for `session_id`.
-- **`save_snapshot`** must be atomic. Run the read, mutator execution, and write inside a single database transaction. The mutator must be side-effect free — stores may call it more than once under contention.
+- **`save_snapshot`** must be atomic. Run the read, mutator execution, and write inside a single database transaction, or synchronize with a lock. The mutator must be side-effect free — stores may call it more than once under contention.
+- **`self.lock`**: `SessionStore` automatically provides a loop-local `asyncio.Lock` via `self.lock` on every store instance. You can use `async with self.lock:` inside `save_snapshot` to synchronize in-process read-modify-write operations without instantiating locks manually.
 
 For detach and abort support, also implement `SnapshotSubscriber` so clients can poll status changes.
 
