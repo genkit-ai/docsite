@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -14,6 +15,8 @@ The Agents API is in **Beta.** It can introduce breaking changes in minor versio
 :::
 
 Genkit agents are built around conversations that continue across turns. A session or chat carries continuity, while each turn streams chunks and eventually resolves to a final output. This page covers starting a conversation, streaming a turn, and continuing from an earlier point.
+
+<Lang lang="js">
 
 ## The unified API
 
@@ -29,11 +32,9 @@ The JavaScript client exposes a high-level interface for driving an agent across
 
 `res.state` and `chat.state` are shortcuts for the custom state. Use `res.raw.state` when you need the full session state with messages, artifacts, and custom state together.
 
-<Lang lang="js">
-
 A local agent from `ai.defineAgent()` and a remote client from `remoteAgent()` share this interface, so the same code drives both.
 
-</Lang>
+
 
 ## Start a chat
 
@@ -129,6 +130,9 @@ try {
 ```
 
 Initialization misuse, such as sending `state` to a server-managed agent or `sessionId` to a client-managed agent, is rejected before a turn starts.
+
+</Lang>
+
 
 <Lang lang="go">
 
@@ -347,5 +351,95 @@ try {
 ```
 
 Initialization misuse, such as sending `state` to a server-managed agent, is rejected before a turn starts.
+
+</Lang>
+<Lang lang="python">
+
+Local agents from `ai.define_agent()` and remote clients from `remote_agent()` share this interface, so the same code drives both.
+
+## Start a chat
+
+```python
+chat = weather_agent.chat()
+res = await chat.send('Weather in Tokyo?').response
+
+print(res.text)
+print(res.session_id)
+print(res.snapshot_id)
+print(res.state)
+```
+
+Calling `chat()` without arguments starts a new conversation. Pass `session_id` to resume a server-managed conversation, `snapshot_id` when you need an exact saved point, or `messages` / `state` / `artifacts` when the client owns the full session state.
+
+```python
+chat = weather_agent.chat(session_id='user-session-123')
+await chat.send('What did we discuss last time?').response
+```
+
+## Restore a full chat
+
+`load_chat()` reads a server snapshot and hydrates messages, custom state, artifacts, `snapshot_id`, and `session_id` before the next turn.
+
+```python
+chat = await weather_agent.load_chat(session_id='user-session-123')
+
+print(len(chat.messages))
+print(chat.state)
+
+await chat.send('Continue from there.').response
+```
+
+Use `get_snapshot()` when you only need to inspect a snapshot, such as for an audit view. Use `load_chat()` when you want to continue the conversation from that saved state.
+
+## Stream a turn
+
+```python
+chat = weather_agent.chat()
+turn = chat.send('Weather in Tokyo?')
+
+async for chunk in turn.stream:
+    if chunk.text:
+        print(chunk.text, end='', flush=True)
+    if chunk.custom is not None:
+        update_status(chunk.custom)
+    if chunk.artifact is not None:
+        render_artifact(chunk.artifact)
+
+res = await turn.response
+print(res.finish_reason)
+```
+
+`chat.send()` returns an `AgentTurn`. Iterate `turn.stream` for live chunks, or await `turn.response` for the final output. Both paths apply custom-state patches so `chat.state` stays current.
+
+## Abort a foreground turn
+
+Cancel a foreground turn with `turn.abort()`. This stops the client from listening; for store-backed agents, call `chat.abort()` if you also need to stop server-side work.
+
+```python
+turn = chat.send('Write a long report.')
+
+# Later:
+await turn.abort()
+
+res = await turn.response
+print(res.finish_reason)  # AgentFinishReason.ABORTED
+```
+
+## Failed turns
+
+When a turn fails after the invocation starts, the client raises `AgentError`. The exception carries status, details, the latest snapshot ID, and the recoverable last-good state.
+
+```python
+from genkit.agent import AgentError
+
+try:
+    await chat.send('Use a broken tool.').response
+except AgentError as err:
+    print(err.status)
+    print(err.snapshot_id)
+    print(err.state)
+```
+
+Initialization misuse, such as sending `state` to a server-managed agent, raises `AgentInitError` before a turn starts.
 
 </Lang>

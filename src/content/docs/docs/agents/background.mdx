@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -45,7 +46,7 @@ app.post(
 
 The runtime writes a `pending` snapshot and refreshes its heartbeat while work runs. If the heartbeat becomes stale, reads surface the snapshot as `expired`.
 
-</Lang>
+
 
 ## Detach from a turn
 
@@ -116,6 +117,7 @@ await reportAgent.abort(snapshotId);
 ```
 
 Abort flips a pending snapshot to `aborted`. The background worker observes the status change and cancels the work.
+</Lang>
 
 <Lang lang="go">
 
@@ -311,5 +313,96 @@ await reportAgent.abort(snapshotId);
 ```
 
 Aborting shifts the pending snapshot status to `aborted`. The background worker observes this change and safely terminates the turn loop.
+
+</Lang>
+<Lang lang="python">
+
+## Server requirements
+
+Configure a store and expose companion endpoints when serving a remote agent:
+
+```python
+from fastapi import FastAPI
+from genkit.agent import FileSessionStore
+from genkit_fastapi import serve_agent
+
+report_agent = ai.define_agent(
+    name='reportAgent',
+    model='googleai/gemini-flash-latest',
+    system='Create detailed research reports.',
+    store=FileSessionStore('.sessions'),
+)
+
+app = FastAPI()
+app.include_router(serve_agent(report_agent), prefix='/api')
+```
+
+The runtime writes a `pending` snapshot and refreshes its heartbeat while the background work processes the turn.
+
+## Detach from a turn
+
+Submit a background task from the client using `detach()` on the `AgentChat`:
+
+```python
+chat = report_agent.chat(session_id='report-123')
+task = await chat.detach('Write the quarterly market report.')
+
+# Save snapshot_id so you can poll or abort it later
+snapshot_id = task.snapshot_id
+```
+
+## Poll or wait
+
+Use `poll()` to yield status snapshots until the task reaches a terminal status:
+
+```python
+from genkit.agent import SnapshotStatus
+
+async for snapshot in task.poll(interval=1.5):
+    print('Current status:', snapshot.status)
+    if snapshot.status == SnapshotStatus.COMPLETED:
+        print(snapshot.state)
+```
+
+Use `wait()` to block until completion:
+
+```python
+final_snapshot = await task.wait(interval=1.5)
+if final_snapshot.status == SnapshotStatus.FAILED:
+    print('Task failed:', final_snapshot.error.message if final_snapshot.error else None)
+```
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+
+## Reconnect by snapshot ID
+
+To reconnect and inspect or resume a detached task from a different client process, read the stored snapshot ID and load it:
+
+```python
+snapshot = await report_agent.get_snapshot(snapshot_id=snapshot_id)
+
+if snapshot and snapshot.status == SnapshotStatus.COMPLETED:
+    chat = await report_agent.load_chat(snapshot_id=snapshot_id)
+    res = await chat.send('Summarize this report.').response
+    print(res.text)
+```
+
+Only completed snapshots can be resumed.
+
+## Abort work
+
+Cancel a pending task from the client using `task.abort()`:
+
+```python
+await task.abort()
+```
+
+Or abort directly by snapshot ID from the agent handle:
+
+```python
+await report_agent.abort(snapshot_id)
+```
+
+Aborting sets the pending snapshot status to `aborted`. The background worker stops the turn when it observes that change. Long-running tools should check `ctx.abort_signal.is_set()` on `ToolRunContext` so they can exit cleanly.
 
 </Lang>

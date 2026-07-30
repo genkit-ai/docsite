@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -361,5 +362,100 @@ final researchAgent = ai.defineCustomAgent(
 ## Failure and recovery
 
 If the per-turn callback throws an exception, the runtime marks the turn as failed and resolves the action with `finishReason: 'failed'`. The response carries the last-good state or snapshot ID, allowing the client to safely retry without continuing from broken or corrupted partial states.
+
+</Lang>
+
+<Lang lang="python">
+
+## When to use a custom agent
+
+Use `define_custom_agent()` when you need full control over the turn logic:
+
+- Running multiple model calls sequentially inside a single user turn.
+- Choosing models, prompts, or tools dynamically at runtime.
+- Implementing custom loops (for example planner-executor or self-correction).
+- Emitting status updates or artifacts during a turn.
+
+## Runtime contract
+
+A custom agent receives a `SessionRunner` and an `ActionRunContext`:
+
+```python
+from genkit import ActionRunContext
+from genkit.agent import AgentResult, SessionRunner
+
+
+async def my_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    # Custom logic...
+    ...
+
+
+custom_agent = ai.define_custom_agent(
+    name='myAgent',
+    fn=my_agent_fn,
+)
+```
+
+- **`sess`** (the `SessionRunner`) manages the session's active turns, messages, custom state, and artifacts.
+- **`ctx`** (the `ActionRunContext`) provides `send_chunk(...)` to stream chunks back to the client, along with abort signaling and ambient request context.
+
+Call `await sess.run(handle_turn)` to process each input turn, then `return await sess.result()`. The runner appends the user input to the message history automatically. For server-managed agents, `turn_ctx.snapshot_id` is reserved beforehand so external state can match the snapshot.
+
+## Multi-step example
+
+This simplified custom agent streams a model reply while keeping session history and a store:
+
+```python
+from genkit import ActionRunContext, FinishReason, Message
+from genkit.agent import (
+    AgentFinishReason,
+    AgentInput,
+    AgentResult,
+    AgentStreamChunk,
+    InMemorySessionStore,
+    SessionRunner,
+    TurnContext,
+    TurnResult,
+)
+
+
+async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
+        history = await sess.get_messages()
+        messages = [Message(m) for m in history] if history else None
+
+        stream_resp = ai.generate_stream(
+            model='googleai/gemini-flash-latest',
+            system='Concise coding assistant.',
+            messages=messages,
+        )
+        async for chunk in stream_resp.stream:
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
+
+        res = await stream_resp.response
+        if res.message:
+            await sess.add_messages(res.message)
+
+        finish = (
+            AgentFinishReason.STOP
+            if res.finish_reason == FinishReason.STOP
+            else AgentFinishReason.UNKNOWN
+        )
+        return TurnResult(finish_reason=finish)
+
+    await sess.run(handle_turn)
+    return await sess.result()
+
+
+agent = ai.define_custom_agent(
+    name='customCoder',
+    fn=custom_coder_fn,
+    store=InMemorySessionStore(),
+)
+```
+
+## Failure and recovery
+
+If the per-turn callback raises, the runtime marks the turn as failed and the client raises `AgentError`. The response carries the last-good state or snapshot ID so you can retry without continuing from a broken partial state.
 
 </Lang>

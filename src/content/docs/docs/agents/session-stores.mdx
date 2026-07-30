@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -449,5 +450,94 @@ Scope every read and write by authenticated user, organization, or tenant. Do no
 Index by snapshot ID and by session ID plus creation time. `GetLatestSnapshot` should be efficient because it is the common path for continuing a conversation by `sessionId`.
 
 Plan retention before launch. Snapshots are full conversation checkpoints, so long-running conversations and artifact-heavy agents can grow quickly.
+
+</Lang>
+
+<Lang lang="python">
+
+## Choose a store
+
+- **In-memory store** (`InMemorySessionStore`) for tests, local examples, command-line interfaces, and single-process experiments.
+- **File store** (`FileSessionStore`) for local development, prototypes, and single-host applications where snapshots must persist across process restarts.
+- **Custom store** (implementing `SessionStore`) for production apps using a shared database such as Cloud SQL, Spanner, Postgres, or Redis.
+
+Configure the store on the agent. The runtime handles reads and writes.
+
+## Use an in-memory store
+
+`InMemorySessionStore` keeps snapshots in local process memory. It is fast and requires no setup.
+
+```python
+from genkit.agent import InMemorySessionStore
+
+store = InMemorySessionStore()
+
+support_agent = ai.define_agent(
+    name='supportAgent',
+    model='googleai/gemini-flash-latest',
+    system='Help customers with their orders.',
+    store=store,
+)
+```
+
+Do not use the in-memory store if session history must survive process restarts or when scaling horizontally across multiple server instances.
+
+## Use a file-backed store
+
+`FileSessionStore` stores snapshots as JSON files inside a local directory. This is the standard choice for local development or single-host deployments.
+
+```python
+from genkit.agent import FileSessionStore
+
+store = FileSessionStore('.sessions')
+
+weather_agent = ai.define_agent(
+    name='weatherAgent',
+    model='googleai/gemini-flash-latest',
+    system='You help with weather questions.',
+    store=store,
+)
+```
+
+Snapshots are saved as files inside the `.sessions` folder.
+
+## Implement a production store
+
+To store snapshots in a shared production database, implement a custom `SessionStore`:
+
+```python
+from genkit.agent import SessionSnapshot, SessionStore
+
+
+class MyDatabaseSessionStore(SessionStore):
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+        context: dict | None = None,
+    ) -> SessionSnapshot | None:
+        # Load by snapshot_id, or resolve the latest leaf for session_id.
+        ...
+
+    async def save_snapshot(self, snapshot_id, fn, *, context=None) -> SessionSnapshot | None:
+        # Atomic read-modify-write: call fn(existing) and persist the result.
+        ...
+
+    @property
+    def lock(self):
+        # Return a process-local asyncio.Lock for this store instance.
+        ...
+```
+
+- **`get_snapshot`** fetches a snapshot by exact `snapshot_id` or resolves the latest snapshot in the sequence for `session_id`.
+- **`save_snapshot`** must be atomic. Run the read, mutator execution, and write inside a single database transaction. The mutator must be side-effect free — stores may call it more than once under contention.
+
+For detach and abort support, also implement `SnapshotSubscriber` so clients can poll status changes.
+
+## Production guidance
+
+- **Security**: Treat snapshots as sensitive user data. They can contain raw message history, tool results, and personal information. Apply authorization checks in your API or store layer before returning snapshot data.
+- **Payload size**: Because snapshots contain full conversational checkpoints, their size grows over long sessions. Plan database indexes and cleanup/archival routines before launching production systems.
 
 </Lang>

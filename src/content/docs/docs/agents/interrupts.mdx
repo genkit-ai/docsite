@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -60,7 +61,7 @@ const runShell = ai.defineTool(
 );
 ```
 
-</Lang>
+
 
 ## Receive interrupts
 
@@ -143,6 +144,7 @@ const res = await turn.response;
 ```
 
 Wait for the final response before treating the turn as durably interrupted, because the final response carries the normalized interrupt helpers.
+</Lang>
 
 <Lang lang="go">
 
@@ -360,6 +362,112 @@ if (deployInterrupts.isNotEmpty) {
 ```
 
 The restart builder preserves the original tool input and forces the server-side tool function to execute again with those parameters.
+
+## Resume validation
+
+To prevent client-side spoofing, the runtime validates that every `respond` and `restart` entry matches an active paused tool call by name and unique reference ID.
+
+</Lang>
+
+
+<Lang lang="python">
+
+## Define an interrupt
+
+- **`ai.define_interrupt()`** for an interrupt-only tool that never performs work by itself and only asks the client for information.
+- **`raise Interrupt(metadata)`** inside a normal tool that can either finish immediately or pause based on runtime conditions.
+
+```python
+from pydantic import BaseModel
+
+from genkit import Genkit
+from genkit.agent import InMemorySessionStore
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+
+class UserApprovalInput(BaseModel):
+    action: str
+    details: str
+
+
+user_approval = ai.define_interrupt(
+    name='userApproval',
+    description='Ask the user for approval before proceeding with a sensitive action.',
+    input_schema=UserApprovalInput,
+)
+
+banking_agent = ai.define_agent(
+    name='bankingAgent',
+    model='googleai/gemini-flash-latest',
+    system='If the user wants to transfer money, ALWAYS use userApproval before transferMoney.',
+    tools=[user_approval, transfer_money],
+    store=InMemorySessionStore(),
+)
+```
+
+A normal tool can pause conditionally:
+
+```python
+from genkit import Interrupt, ToolRunContext
+
+
+@ai.tool(name='run_shell', description='Run a shell command after a safety check.')
+async def run_shell(input: RunShellInput, ctx: ToolRunContext) -> dict:
+    if is_risky(input.command) and not (ctx.resumed_metadata or {}).get('tool_approved'):
+        raise Interrupt({
+            'command': input.command,
+            'reason': 'The command can modify files.',
+        })
+    return execute(input.command)
+```
+
+## Receive interrupts
+
+Interrupted tool requests surface on `res.interrupts` at turn end, and as tool request chunks while streaming.
+
+```python
+res = await chat.send('Transfer $500 to savings.').response
+
+for interrupt in res.interrupts:
+    print(interrupt.name)
+    print(interrupt.input)
+```
+
+When an interrupt occurs, the turn finishes with `finish_reason=AgentFinishReason.INTERRUPTED`.
+
+## Respond pattern
+
+Use `respond()` when the client already has the final tool output. Pass the part to `chat.resume(respond=...)`. The tool does not run again on the server.
+
+```python
+res = await chat.send('Transfer $500 to savings.').response
+approvals = [i for i in res.interrupts if i.name == 'userApproval']
+
+if approvals:
+    continued = await chat.resume(
+        respond=[approvals[0].respond({'approved': True, 'feedback': 'Looks good!'})]
+    ).response
+    print(continued.text)
+```
+
+## Restart pattern
+
+Use `restart()` when the server-side tool should run again after approval or a corrected request.
+
+```python
+res = await chat.send('Deploy code to production.').response
+deploy_interrupts = [i for i in res.interrupts if i.name == 'deployApproval']
+
+if deploy_interrupts:
+    continued = await chat.resume(
+        restart=[deploy_interrupts[0].restart()]
+    ).response
+    print(continued.text)
+```
+
+The restart helper preserves the original tool input and forces the server-side tool function to execute again with those parameters.
 
 ## Resume validation
 

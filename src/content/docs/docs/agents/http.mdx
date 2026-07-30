@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -165,6 +166,27 @@ The turn endpoint processes both streaming and non-streaming requests. The snaps
 
 </Lang>
 
+<Lang lang="python">
+
+## FastAPI routes
+
+Serve agents over HTTP with `serve_agent()` from `genkit_fastapi`. One `include_router` call mounts the turn route plus `/getSnapshot` and `/abort` companions when the agent has a store.
+
+```python
+from fastapi import FastAPI
+from genkit_fastapi import serve_agent
+
+app = FastAPI()
+app.include_router(serve_agent(weather_agent), prefix='/api')
+# Routes: /api/weatherAgent, /api/weatherAgent/getSnapshot, /api/weatherAgent/abort
+```
+
+The turn endpoint handles both streaming and non-streaming requests. The snapshot endpoint reads by `snapshotId` or returns the latest leaf by `sessionId`. The abort endpoint takes a `snapshotId` and cancels running background work.
+
+Pass `context_dependency` to reuse FastAPI `Depends` for auth or request-scoped resources on the turn, snapshot, and abort routes.
+
+</Lang>
+
 ## Connect a client
 
 The client is independent of the backend language. Point it at the primary turn URL your server exposes, the route you mounted above, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
@@ -257,6 +279,48 @@ final res = await turn.response;
 
 </Lang>
 
+<Lang lang="python">
+
+`remote_agent()` from `genkit.agent` creates a client with the same chat surface as a local agent.
+
+```python
+from genkit.agent import remote_agent
+
+agent = remote_agent(
+    url='http://localhost:8080/api/weatherAgent',
+    state_management='server',
+)
+
+chat = agent.chat()
+res = await chat.send('Weather in Tokyo?').response
+print(res.text)
+```
+
+Options:
+
+- **`url`** is required and sends normal and streaming turns.
+- Snapshot and abort companions default to `{url}/getSnapshot` and `{url}/abort`.
+- **`headers`** can be a static mapping or a callable resolved per request for rotating auth tokens.
+- **`state_management`** declares `'server'` or `'client'` state.
+- **`state_schema`** optionally types custom state on the client.
+
+## Stream a turn
+
+```python
+chat = agent.chat()
+turn = chat.send('Write a long report.')
+
+async for chunk in turn.stream:
+    if chunk.text:
+        print(chunk.text, end='', flush=True)
+    if chunk.custom is not None:
+        update_status(chunk.custom)
+
+res = await turn.response
+```
+
+</Lang>
+
 ## Client behavior
 
 The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts, applies streamed custom-state patches, and throws `AgentError` for failed turns.
@@ -267,7 +331,7 @@ For client-managed agents, the remote client sends the full state back to the pr
 
 ## Vercel AI SDK UI and AI Elements
 
-`@genkit-ai/vercel-ai` connects an agent to the [Vercel AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui) library — the framework chat bindings such as `useChat`, not the broader Vercel AI SDK. `GenkitChatTransport` implements AI SDK UI's framework-agnostic `ChatTransport`, so it works with any of the bindings, including React, Vue, Svelte, and Angular. The transport speaks the same wire protocol over the agent route, so it works against a JavaScript or Go backend.
+`@genkit-ai/vercel-ai` connects an agent to the [Vercel AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui) library — the framework chat bindings such as `useChat`, not the broader Vercel AI SDK. `GenkitChatTransport` implements AI SDK UI's framework-agnostic `ChatTransport`, so it works with any of the bindings, including React, Vue, Svelte, and Angular. The transport speaks the same wire protocol over the agent route, so a JavaScript frontend can call a Genkit agent HTTP backend in any supported language.
 
 With the agent behind an AI SDK UI binding, you drive it from the SDK's chat primitives instead of wiring up `remoteAgent()` yourself. In React, you can also assemble the interface from Vercel's [AI Elements](https://elements.ai-sdk.dev/) components, which are built on the AI SDK UI primitives.
 
