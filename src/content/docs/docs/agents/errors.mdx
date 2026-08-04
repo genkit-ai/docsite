@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -272,6 +273,87 @@ if (order == null) {
     'message': 'Ask the user to check the order ID.',
   };
 }
+```
+
+</Lang>
+
+
+<Lang lang="python">
+
+## Failure categories
+
+- **Init misuse** raises `AgentInitError` (a `GenkitError`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
+- **Failed turns** raise `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
+- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+- **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
+
+## Handle failed turns
+
+```python
+from genkit.agent import AgentError
+
+try:
+    res = await chat.send('Look up order 123.')
+    print(res.text)
+except AgentError as err:
+    print('Turn failed:', err.status)
+    print('Error details:', err.message)
+
+    recovery_chat = (
+        await agent.load_chat(snapshot_id=err.snapshot_id)
+        if err.snapshot_id
+        else agent.chat(state=err.state)
+    )
+    await recovery_chat.send('Try again with order 456.')
+```
+
+For streaming turns, catch errors around stream consumption and the final response. The stream rethrows failed-turn errors after yielding any chunks that arrived before the failure.
+
+```python
+turn = chat.send_stream('Write a long report.')
+
+try:
+    async for chunk in turn.stream:
+        render(chunk)
+    await turn.response
+except AgentError as err:
+    show_failure(err)
+```
+
+## Tool exceptions
+
+Raise from a tool when the system cannot safely proceed, such as a database outage or auth failure:
+
+```python
+from pydantic import BaseModel
+
+from genkit import GenkitError
+
+
+class LookupOrderInput(BaseModel):
+    order_id: str
+
+
+@ai.tool(name='lookupOrder', description='Looks up an order by ID.')
+async def lookup_order(input: LookupOrderInput) -> dict:
+    order = await db.orders.find(input.order_id)
+    if order is None:
+        raise GenkitError(
+            status='NOT_FOUND',
+            message=f'Order {input.order_id} was not found.',
+        )
+    return order
+```
+
+When the model can recover (for example, invalid user input), return structured output instead:
+
+```python
+if order is None:
+    return {
+        'ok': False,
+        'reason': 'ORDER_NOT_FOUND',
+        'message': 'Ask the user to check the order ID.',
+    }
 ```
 
 </Lang>
