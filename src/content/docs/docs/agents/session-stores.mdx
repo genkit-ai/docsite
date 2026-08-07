@@ -459,9 +459,10 @@ Plan retention before launch. Snapshots are full conversation checkpoints, so lo
 
 - **In-memory store** (`InMemorySessionStore`) for tests, local examples, command-line interfaces, and single-process experiments.
 - **File store** (`FileSessionStore`) for local development, prototypes, and single-host applications where snapshots must persist across process restarts.
-- **Custom store** (implementing `SessionStore`) for production apps using a shared database such as Cloud SQL, Spanner, Postgres, or Redis.
+- **Firestore store** (`FirestoreSessionStore` from `genkit-google-cloud`) for production apps where several server instances share sessions.
+- **Custom store** (implementing `SessionStore`) when you need a different shared database such as Cloud SQL, Spanner, Postgres, or Redis.
 
-Configure the store on the agent. The runtime handles reads and writes.
+Configure the store on the agent. The runtime handles reads and writes. With [HTTP serving](/docs/agents/http), `/getSnapshot` and `/abort` are mounted only when a store is configured.
 
 ## Use an in-memory store
 
@@ -501,9 +502,46 @@ weather_agent = ai.define_agent(
 
 Snapshots are saved as files inside the `.sessions` folder.
 
-## Implement a production store
+## Use a Firestore store
 
-To store snapshots in a shared production database, implement a custom `SessionStore`:
+`FirestoreSessionStore` in `genkit-google-cloud` persists snapshots in Cloud Firestore. It is the built-in option for production apps where several server instances share sessions, and it supports snapshot watching for background execution and abort.
+
+```python
+from genkit_google_cloud import FirestoreSessionStore
+
+
+def by_user(context: dict | None = None) -> str:
+    if isinstance(context, dict) and isinstance(context.get('uid'), str):
+        return context['uid']
+    return 'global'
+
+
+store = FirestoreSessionStore(
+    collection='genkit-sessions',
+    snapshot_path_prefix=by_user,
+)
+
+support_agent = ai.define_agent(
+    name='supportAgent',
+    model='googleai/gemini-flash-latest',
+    system='Help customers understand their order status.',
+    store=store,
+)
+```
+
+All options are optional:
+
+- **`client`** is an explicit Firestore `AsyncClient`. It defaults to a new client that picks up Application Default Credentials and `FIRESTORE_EMULATOR_HOST`.
+- **`collection`** is the collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-pointers` and `<collection>-shards`, are derived from it.
+- **`snapshot_path_prefix`** returns a per-tenant prefix from the call context (for example an authenticated user id). When set, snapshots are nested under that prefix so one tenant cannot read another's data even with a `snapshotId`. It defaults to `global`.
+- **`checkpoint_interval`** is the number of turns between full-state checkpoints. Between checkpoints the store writes diffs. It defaults to `25`.
+- **`shard_size`** is the maximum size in bytes of a single shard or diff document. It defaults to 512 KiB.
+
+The Firestore store watches snapshot documents to observe status changes, so background execution and aborts work across instances without polling. It does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+
+## Implement a custom store
+
+When the built-in Firestore store does not fit, implement a custom `SessionStore`:
 
 ```python
 from genkit.agent import SessionSnapshot, SessionStore

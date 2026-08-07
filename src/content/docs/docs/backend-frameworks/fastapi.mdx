@@ -52,7 +52,7 @@ These packages include:
 - **`uvicorn`**: The ASGI server that runs your FastAPI app.
 - **`genkit`**: Core Genkit SDK.
 - **`genkit-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`genkit-fastapi`**: Serves Genkit flows as FastAPI endpoints, including streaming.
+- **`genkit-fastapi`**: Mounts Genkit flows and agents on FastAPI with `serve_flow` / `serve_agent`, including streaming.
 
 ### Configure a model API key
 
@@ -100,7 +100,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, Genkit
-from genkit_fastapi import genkit_fastapi_handler
+from genkit_fastapi import serve_flow
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(
@@ -204,11 +204,8 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-
-@app.post('/bargainChefFlow', response_model=None)
-@genkit_fastapi_handler(ai)
-async def bargain_chef_endpoint():
-    return bargain_chef_flow
+# POST /bargainChefFlow — path defaults to the flow's name
+app.include_router(serve_flow(bargain_chef_flow))
 ```
 
 A few details are worth noting before you run the backend:
@@ -220,7 +217,65 @@ A few details are worth noting before you run the backend:
 
 ### Expose the flow over HTTP
 
-The `@genkit_fastapi_handler(ai)` decorator wraps the flow as a FastAPI route. The handler inspects the incoming request: when the client sends `Accept: text/event-stream`, it streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON.
+`serve_flow` returns a FastAPI `APIRouter` you mount with `app.include_router`. By default the route is `POST /<flow name>` (here `/bargainChefFlow`). When the client sends `Accept: text/event-stream`, the endpoint streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON. Pass `base_path=` or a router `prefix=` if you want a different URL.
+
+### Attach request context
+
+Use `context_dependency` to wire FastAPI dependency injection into Genkit. The dependency returns a dict; Genkit makes that dict available on the flow as `ctx.context`—the same `ActionRunContext` you already use for `send_chunk`. Typical uses are auth, tenancy, and other values you already resolve with `Depends`:
+
+```python
+from fastapi import Header
+
+async def user_context(authorization: str = Header(...)) -> dict[str, object]:
+    # Validate the token and load the user in a real app.
+    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+app.include_router(
+    serve_flow(bargain_chef_flow, context_dependency=user_context),
+)
+```
+
+Inside the flow:
+
+```python
+uid = (ctx.context or {}).get('uid')
+```
+
+### Serve an agent over HTTP
+
+For [agents](/docs/agents/overview), use `serve_agent` the same way. One `include_router` call mounts the turn route. Configure a [session store](/docs/agents/session-stores) on the agent when you want server-managed sessions—only then does `serve_agent` also mount `/getSnapshot` and `/abort`. Without a store, those paths are not registered and return 404.
+
+Pass the same `context_dependency` and Genkit applies it on every mounted route. Install `genkit-google-cloud` for the Firestore-backed store:
+
+```bash
+uv add genkit-google-cloud
+```
+
+```python
+from genkit_fastapi import serve_agent
+from genkit_google_cloud import FirestoreSessionStore
+
+bargain_chef_agent = ai.define_agent(
+    name='bargainChefAgent',
+    model='googleai/gemini-flash-latest',
+    system='You help users cook from grocery sale ingredients.',
+    tools=[get_ingredients_on_sale],
+    store=FirestoreSessionStore(),
+)
+
+app.include_router(
+    serve_agent(
+        bargain_chef_agent,
+        context_dependency=user_context,
+    ),
+    prefix='/api',
+)
+# POST /api/bargainChefAgent
+# POST /api/bargainChefAgent/getSnapshot
+# POST /api/bargainChefAgent/abort
+```
+
+`FirestoreSessionStore` uses Application Default Credentials (or `FIRESTORE_EMULATOR_HOST` locally). See [Session stores](/docs/agents/session-stores) for options such as tenant prefixes, and [Serve agents over HTTP](/docs/agents/http) for the turn envelope (`data` / `init`), streaming, and client connection details.
 
 ### Check the project layout
 
@@ -325,6 +380,7 @@ You now have a standalone Genkit backend on FastAPI that streams structured outp
 - [Connect an app framework](/docs/app-frameworks/overview)
 - [Deploy your app](/docs/deployment/overview)
 - [Creating flows](/docs/flows)
+- [Agents](/docs/agents/overview) and [serve agents over HTTP](/docs/agents/http)
 - [Generating content](/docs/models)
 - [Connect a web frontend](/docs/client)
 - [Developer tools](/docs/devtools)

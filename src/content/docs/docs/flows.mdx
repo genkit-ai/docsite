@@ -1552,8 +1552,8 @@ log.Fatal(router.Run(":3400"))
 
 ### FastAPI
 
-Install `genkit-fastapi`, then expose the flow with `genkit_fastapi_handler` so
-requests use the Genkit HTTP envelope (`{"data": ...}`):
+Install `genkit-fastapi`, then mount the flow with `serve_flow` so requests use
+the Genkit HTTP envelope (`{"data": ...}`):
 
 ```python
 import os
@@ -1562,7 +1562,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit_fastapi import genkit_fastapi_handler
+from genkit_fastapi import serve_flow
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(
@@ -1578,14 +1578,14 @@ class MenuSuggestionInput(BaseModel):
 class MenuSuggestionOutput(BaseModel):
     menu_item: str = Field(description='Generated menu item')
 
-@app.post('/menuSuggestionFlow', response_model=None)
-@genkit_fastapi_handler(ai)
-@ai.flow()
+@ai.flow(name='menuSuggestionFlow')
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
     response = await ai.generate(
         prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
     )
     return MenuSuggestionOutput(menu_item=response.text)
+
+app.include_router(serve_flow(menu_suggestion_flow))
 
 if __name__ == '__main__':
     import uvicorn
@@ -1595,6 +1595,28 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=int(os.environ.get('PORT', 3400)),
     )
+```
+
+To attach per-request context (auth, tenancy, and so on), pass a FastAPI dependency as `context_dependency`. Its return value must be a dict; Genkit exposes that dict on the flow as `ctx.context`:
+
+```python
+from fastapi import Header
+from genkit import ActionRunContext
+
+async def user_context(authorization: str = Header(...)) -> dict[str, object]:
+    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+@ai.flow(name='menuSuggestionFlow')
+async def menu_suggestion_flow(
+    input: MenuSuggestionInput,
+    ctx: ActionRunContext,
+) -> MenuSuggestionOutput:
+    uid = (ctx.context or {}).get('uid')
+    ...
+
+app.include_router(
+    serve_flow(menu_suggestion_flow, context_dependency=user_context),
+)
 ```
 
 For production, run your app with a production ASGI server (for example, Uvicorn with Gunicorn workers):
@@ -1623,8 +1645,6 @@ curl -X POST "http://localhost:3400/menuSuggestionFlow" \
   -d '{"data": {"theme": "banana"}}'
 ```
 
-You can also use the Genkit web client library to call flows from web applications. See [Accessing flows from the client](/docs/client) for detailed examples of using the `runFlow()` and `streamFlow()` functions.
-
 ### Learn more about deployment
 
 For detailed deployment instructions and platform-specific guides, see:
@@ -1632,6 +1652,8 @@ For detailed deployment instructions and platform-specific guides, see:
 - [Deploy with Cloud Run](/docs/deployment/cloud-run)
 
 <Lang lang="js">
+
+You can also use the Genkit web client library to call flows from web applications. See [Accessing flows from the client](/docs/client) for detailed examples of using the `runFlow()` and `streamFlow()` functions.
 
 - [Deploy with Firebase](/docs/deployment/firebase)
 - [Authorization and integrity](/docs/deployment/authorization)
@@ -1641,6 +1663,7 @@ For detailed deployment instructions and platform-specific guides, see:
 
 <Lang lang="python">
 
-- [Deploy with FastAPI](/docs/backend-frameworks/fastapi)
+- [FastAPI tutorial](/docs/backend-frameworks/fastapi) (`serve_flow` / `serve_agent`)
+- [Deploy to any platform](/docs/deployment/any-platform)
 
 </Lang>
