@@ -891,7 +891,7 @@ class GetWeatherInput(BaseModel):
     location: str = Field(description='The location to get the current weather for')
 
 @ai.tool(name='getWeather', description='Gets the current weather in a given location')
-def get_weather(input: GetWeatherInput) -> str:
+async def get_weather(input: GetWeatherInput) -> str:
     # Here, we would typically make an API call or database query. For this
     # example, we just return a fixed value.
     return f'The current weather in {input.location} is 63°F and sunny.'
@@ -954,15 +954,15 @@ response = await weather_prompt({'location': 'Baltimore'})
 When combining tool calling with streaming responses, you will receive `toolRequest` and `toolResponse` content parts in the chunks of the stream. For example, the following code:
 
 ```python
-stream, response_future = ai.generate_stream(
+result = ai.generate_stream(
     prompt='What is the weather in Baltimore?',
     tools=['getWeather'],
 )
 
-async for chunk in stream:
+async for chunk in result.stream:
     print(chunk)
 
-response = await response_future
+response = await result.response
 ```
 
 Might produce a sequence of chunks similar to:
@@ -1003,7 +1003,7 @@ class WebSearchInput(BaseModel):
     query: str = Field(description='Search query')
 
 @ai.tool(name='webSearch', description='Search the web for current information')
-def web_search(input: WebSearchInput) -> str:
+async def web_search(input: WebSearchInput) -> str:
     # Simulate web search API call
     return f'Search results for "{input.query}": [relevant information here]'
 
@@ -1026,7 +1026,7 @@ class CalculatorInput(BaseModel):
     expression: str = Field(description='Mathematical expression to evaluate')
 
 @ai.tool(name='calculator', description='Perform mathematical calculations')
-def calculator(input: CalculatorInput) -> float:
+async def calculator(input: CalculatorInput) -> float:
     # Safe evaluation of mathematical expressions
     return eval(input.expression)  # In production, use a safe math parser
 
@@ -1042,7 +1042,10 @@ response = await ai.generate(
 
 **What happens when `max_turns` is reached?**
 
-When the limit is reached, Genkit stops the tool-calling loop and raises a [`GenkitError`](/docs/error-types). You can handle this error in your application to define specific behavior for this scenario.
+When the limit is reached, Genkit stops the tool-calling loop and raises an
+error from the generate path (today: `GenerationResponseError`). That type is
+not a `GenkitError` subclass, so `except GenkitError` will not catch it—catch
+the exception around your `generate` / `generate_stream` call instead.
 
 ### Pause the tool loop by using interrupts
 
@@ -1065,42 +1068,40 @@ apply more complicated logic, set the `return_tool_requests` parameter to `True`
 Now it's your responsibility to ensure all of the tool requests are fulfilled:
 
 ```python
-from genkit import tool_response
+from genkit import Message, Part, Role, ToolResponse, ToolResponsePart
 
-generate_options = dict(
+response = await ai.generate(
     prompt="What's the weather like in Baltimore?",
     tools=['getWeather'],
     return_tool_requests=True,
 )
 
-llm_response = None
-tool_responses = None
-messages = None
+while response.tool_requests:
+    tool_parts = []
+    for req in response.tool_requests:
+        if req.tool_request.name != 'getWeather':
+            raise ValueError(f'Unexpected tool: {req.tool_request.name}')
+        output = await get_weather(GetWeatherInput(**req.tool_request.input))
+        tool_parts.append(
+            Part(
+                root=ToolResponsePart(
+                    tool_response=ToolResponse(
+                        name=req.tool_request.name,
+                        ref=req.tool_request.ref,
+                        output=output,
+                    )
+                )
+            )
+        )
 
-while True:
-    llm_response = await ai.generate(
-        **generate_options,
-        messages=messages,
-        tool_responses=tool_responses,
+    response = await ai.generate(
+        messages=[
+            *response.messages,
+            Message(role=Role.TOOL, content=tool_parts),
+        ],
+        tools=['getWeather'],
+        return_tool_requests=True,
     )
-
-    tool_requests = llm_response.tool_requests
-    if len(tool_requests) < 1:
-        break
-
-    tool_responses = []
-    for req in tool_requests:
-        match req.tool_request.name:
-            case 'getWeather':
-                output = await get_weather(GetWeatherInput(**req.tool_request.input))
-                tool_responses.append(tool_response(req, output))
-            case _:
-                raise ValueError('Tool not found')
-
-    # Continue the loop from the updated message history
-    messages = llm_response.messages
-    # Only include the initial prompt on the first turn
-    generate_options.pop('prompt', None)
 ```
 
 ## Extending tool capabilities with MCP

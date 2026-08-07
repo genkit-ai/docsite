@@ -177,6 +177,7 @@ from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
 )
 
 class MenuSuggestionInput(BaseModel):
@@ -1306,13 +1307,10 @@ Each of Genkit's fundamental actions show up as separate steps in the trace view
 
 - `ai.generate()`
 - `ai.embed()`
-- `ai.index()`
-- `ai.retrieve()`
 
-If you want to include code other than the above in your traces, you can do so
-by wrapping the code in an `ai.run()` call. You might do this for calls to
-third-party libraries that are not Genkit-aware, or for any critical section of
-code.
+If you want to include other code in your traces (for example retrieval against
+your own vector store, or calls to third-party libraries), wrap it in an
+`ai.run()` call.
 
 For example, here's a flow with two steps: the first step retrieves a menu using
 some unspecified method, and the second step includes the menu in a `generate()`
@@ -1325,6 +1323,7 @@ from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
 )
 
 class MenuQuestionInput(BaseModel):
@@ -1343,7 +1342,7 @@ async def menu_question_flow(input: MenuQuestionInput) -> MenuQuestionOutput:
         #
         return "Soup: tomato bisque\nMain: roast chicken\nDessert: panna cotta"
 
-    menu = await ai.run("retrieve-daily-menu", retrieve_daily_menu)
+    menu = await ai.run(name='retrieve-daily-menu', fn=retrieve_daily_menu)
 
     response = await ai.generate(
         system="Help the user answer questions about today's menu.",
@@ -1553,7 +1552,8 @@ log.Fatal(router.Run(":3400"))
 
 ### FastAPI
 
-To deploy flows using FastAPI, create a FastAPI app and expose routes that call your flows:
+Install `genkit-fastapi`, then expose the flow with `genkit_fastapi_handler` so
+requests use the Genkit HTTP envelope (`{"data": ...}`):
 
 ```python
 import os
@@ -1562,9 +1562,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
+from genkit_fastapi import genkit_fastapi_handler
 from genkit_google_genai import GoogleAI
 
-# Initialize Genkit
 ai = Genkit(
     plugins=[GoogleAI()],
     model='googleai/gemini-flash-latest',
@@ -1578,6 +1578,8 @@ class MenuSuggestionInput(BaseModel):
 class MenuSuggestionOutput(BaseModel):
     menu_item: str = Field(description='Generated menu item')
 
+@app.post('/menuSuggestionFlow', response_model=None)
+@genkit_fastapi_handler(ai)
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
     response = await ai.generate(
@@ -1585,17 +1587,13 @@ async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutp
     )
     return MenuSuggestionOutput(menu_item=response.text)
 
-@app.post("/menuSuggestionFlow")
-async def menu_suggestion_endpoint(input: MenuSuggestionInput) -> MenuSuggestionOutput:
-    return await menu_suggestion_flow(input)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     import uvicorn
 
     uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 3400)),
+        'main:app',
+        host='0.0.0.0',
+        port=int(os.environ.get('PORT', 3400)),
     )
 ```
 
