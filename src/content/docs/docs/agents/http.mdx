@@ -170,20 +170,38 @@ The turn endpoint processes both streaming and non-streaming requests. The snaps
 
 ## FastAPI routes
 
-Serve agents over HTTP with `serve_agent()` from `genkit_fastapi`. One `include_router` call mounts the turn route plus `/getSnapshot` and `/abort` companions when the agent has a store.
+Serve agents over HTTP with `serve_agent()` from `genkit_fastapi`. The turn route is always mounted. `/getSnapshot` and `/abort` are mounted only when the agent has a session store—without one, those paths are not registered and return 404.
 
 ```python
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from genkit_fastapi import serve_agent
+from genkit_google_cloud import FirestoreSessionStore
 
 app = FastAPI()
-app.include_router(serve_agent(weather_agent), prefix='/api')
+
+async def user_context(authorization: str = Header(...)) -> dict[str, object]:
+    # Validate the token and load the user in a real app.
+    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+weather_agent = ai.define_agent(
+    name='weatherAgent',
+    model='googleai/gemini-flash-latest',
+    system='You help with weather questions.',
+    store=FirestoreSessionStore(),
+)
+
+app.include_router(
+    serve_agent(weather_agent, context_dependency=user_context),
+    prefix='/api',
+)
 # Routes: /api/weatherAgent, /api/weatherAgent/getSnapshot, /api/weatherAgent/abort
 ```
 
 The turn endpoint handles both streaming and non-streaming requests. The snapshot endpoint reads by `snapshotId` or returns the latest leaf by `sessionId`. The abort endpoint takes a `snapshotId` and cancels running background work.
 
-Pass `context_dependency` to reuse FastAPI `Depends` for auth or request-scoped resources on the turn, snapshot, and abort routes.
+### Request context
+
+`context_dependency` is a FastAPI dependency that returns a dict. Genkit threads that dict into the action as context on the turn, snapshot, and abort routes, so auth and other request-scoped values resolve once through FastAPI's `Depends` graph. Tools and custom orchestration read the same map from turn context.
 
 </Lang>
 

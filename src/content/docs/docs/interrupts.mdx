@@ -925,10 +925,11 @@ interacting with an LLM:
 The most common kind of interrupt allows the LLM to request clarification from
 the user, for example by asking a multiple-choice question.
 
-For this use case, use the Genkit instance's `tool()` decorator with `ctx.interrupt()`:
+For this use case, register an interrupt tool with `define_interrupt`, or raise
+`Interrupt` from a normal tool when you need to pause conditionally.
 
 ```python
-from genkit import FinishReason, Genkit, tool_response, ToolRunContext
+from genkit import FinishReason, Genkit, respond_to_interrupt
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
@@ -943,23 +944,15 @@ class QuestionInput(BaseModel):
     choices: list[str] = Field(description='the choices to display to the user')
     allow_other: bool = Field(default=False, description='when true, allow write-ins')
 
-@ai.tool()
-async def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
-    """Use this to ask the user a clarifying question."""
-    # Interrupt with metadata that the caller can use.
-    ctx.interrupt({
-        'question': input.question,
-        'choices': input.choices,
-        'allow_other': input.allow_other,
-    })
+ask_question = ai.define_interrupt(
+    name='ask_question',
+    description='Use this to ask the user a clarifying question.',
+    input_schema=QuestionInput,
+)
 ```
 
-Note that the output type of an interrupt tool corresponds to the response data
-you will provide when resuming, as opposed to something that will be automatically
-populated by the tool function.
-
-To resume, build each entry in `tool_responses` with `tool_response` from `genkit`,
-wrapping the interrupted `ToolRequestPart` in `Part(root=...)` (see below).
+The output you later provide with `respond_to_interrupt` is what the model sees
+as the tool result when generation resumes.
 
 ### Use interrupts
 
@@ -970,11 +963,12 @@ same `generate` call:
 ```python
 response = await ai.generate(
     prompt='Ask me a movie trivia question.',
-    tools=['ask_question'],
+    tools=[ask_question],
 )
 ```
 
-Genkit immediately returns a response on receipt of an interrupt tool call.
+Genkit returns as soon as an interrupt tool is called
+(`finish_reason=FinishReason.INTERRUPTED`).
 
 ### Respond to interrupts
 
@@ -990,29 +984,24 @@ if response.finish_reason == FinishReason.INTERRUPTED:
 if response.interrupts:
     print(f"Interrupts found: {len(response.interrupts)}")
     for interrupt in response.interrupts:
-        # Access the interrupt metadata
         tool_input = interrupt.tool_request.input
         print(f"Question: {tool_input.get('question')}")
         print(f"Choices: {tool_input.get('choices')}")
 ```
 
-Responding to an interrupt is done using the `tool_responses` option on a subsequent
-`generate` call, making sure to pass in the existing message history. Use `tool_response`
-with each interrupted request and the user's answer:
+Resume with `respond_to_interrupt` and pass the result to `resume_respond`,
+keeping the existing message history:
 
 ```python
-from genkit import tool_response
-
 # Get the user's answer (e.g., from user input)
 user_answer = 'b'  # User selected option b
 
-tool_request = response.interrupts[0]
+interrupt = response.interrupts[0]
 
-# Resume generation with the tool response
 response = await ai.generate(
     messages=response.messages,
-    tool_responses=[tool_response(tool_request, user_answer)],
-    tools=['ask_question'],
+    resume_respond=respond_to_interrupt(user_answer, interrupt=interrupt),
+    tools=[ask_question],
 )
 ```
 
@@ -1022,41 +1011,33 @@ For interactive applications, you'll often need to handle multiple interrupts
 in a loop until the model completes its task:
 
 ```python
-from genkit import tool_response
-
 async def interactive_session():
     response = await ai.generate(
         prompt='Help me plan a backyard BBQ.',
         system='Ask clarifying questions until you have a complete solution.',
-        tools=['ask_question'],
+        tools=[ask_question],
     )
 
-    # Continue until no more interrupts
     while response.interrupts:
         answers = []
-
-        # Handle all interrupts (multiple can occur at once)
         for interrupt in response.interrupts:
-            tool_input = interrupt.tool_request.input
+            tool_input = interrupt.tool_request.input or {}
             question = tool_input.get('question', 'Unknown question')
             choices = tool_input.get('choices', [])
 
-            # Display to user and get their answer
             print(f"\nQuestion: {question}")
             for i, choice in enumerate(choices):
                 print(f"  {i + 1}. {choice}")
 
             user_input = input("Your answer: ")
-            answers.append(tool_response(interrupt, user_input))
+            answers.append(respond_to_interrupt(user_input, interrupt=interrupt))
 
-        # Resume generation with all answers
         response = await ai.generate(
             messages=response.messages,
-            tool_responses=answers,
-            tools=['ask_question'],
+            resume_respond=answers,
+            tools=[ask_question],
         )
 
-    # No more interrupts - print final response
     print(f"\nFinal response: {response.text}")
 ```
 
@@ -1065,36 +1046,38 @@ async def interactive_session():
 You can also use interrupts within flows for more structured applications:
 
 ```python
-from genkit import Genkit, ToolRunContext
+from genkit import Genkit
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-ai = Genkit(plugins=[GoogleAI()])
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 class TriviaQuestion(BaseModel):
     """A trivia question with multiple choice answers."""
     question: str = Field(description='the trivia question')
     answers: list[str] = Field(description='multiple choice answers')
 
-@ai.tool()
-async def present_question(input: TriviaQuestion, ctx: ToolRunContext) -> None:
-    """Presents a trivia question to the user."""
-    ctx.interrupt(input.model_dump())
+present_question = ai.define_interrupt(
+    name='present_question',
+    description='Presents a trivia question to the user.',
+    input_schema=TriviaQuestion,
+)
 
 @ai.flow()
 async def play_trivia(theme: str) -> str:
     """Plays a trivia game on the given theme."""
     response = await ai.generate(
         prompt=f'Ask me a trivia question about {theme}.',
-        tools=['present_question'],
+        tools=[present_question],
     )
 
     if response.interrupts:
         interrupt = response.interrupts[0]
-        question_data = interrupt.tool_request.input
-
-        # In a real app, you'd get this from user input
-        return f"Question: {question_data.get('question')}\nAnswers: {question_data.get('answers')}"
+        question_data = interrupt.tool_request.input or {}
+        return (
+            f"Question: {question_data.get('question')}\n"
+            f"Answers: {question_data.get('answers')}"
+        )
 
     return response.text
 ```
@@ -1158,8 +1141,8 @@ if response.interrupts:
     if user_approved:
         # Rerun the tool by passing a restart part to resume_restart
         restart = restart_tool(
-            interrupt,
-            resumed_metadata={'approved_by': 'user'}
+            interrupt=interrupt,
+            resumed_metadata={'approved_by': 'user'},
         )
         response = await ai.generate(
             messages=messages,
@@ -1191,7 +1174,7 @@ meta = interrupt.tool_request.input
 adjusted_input = TransferInput(to_account=meta.get('to_account'), amount=100.0)
 
 restart = restart_tool(
-    interrupt,
+    interrupt=interrupt,
     resumed_metadata={'approved_by': 'user'},
     replace_input=adjusted_input,
 )

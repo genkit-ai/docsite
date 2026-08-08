@@ -221,11 +221,7 @@ func main() {
 
 <Lang lang="python">
 
-The `genkit-openai` package manages integration for [xAI (Grok)](https://x.ai/) models. The `OpenAI` compatible plugin provides access to the `grok` family of models, including vision models.
-
-:::note
-The xAI plugin is built on top of the OpenAI-compatible plugin architecture. It is pre-configured for xAI's API endpoints.
-:::
+xAI (Grok) is available through the OpenAI-compatible plugin in `genkit-openai`, including vision models.
 
 ## Installation
 
@@ -235,7 +231,7 @@ uv add genkit-openai
 
 ## Configuration
 
-To use this plugin, import `OpenAI` and specify it when you initialize Genkit:
+Point `OpenAI` at xAI's API:
 
 ```python
 from genkit import Genkit
@@ -243,22 +239,16 @@ from genkit_openai import OpenAI
 import os
 
 ai = Genkit(
-    plugins=[OpenAI(base_url='https://api.x.ai/v1', api_key=os.getenv('XAI_API_KEY'))],
+    plugins=[
+        OpenAI(
+            base_url='https://api.x.ai/v1',
+            api_key=os.getenv('XAI_API_KEY'),
+        ),
+    ],
 )
 ```
 
-You must provide an API key from xAI. You can get an API key from your [xAI account settings](https://console.x.ai/).
-
-Configure the plugin to use your API key by doing one of the following:
-
-- Set the `XAI_API_KEY` environment variable to your API key.
-- Specify the API key when you initialize the plugin:
-
-```python
-OpenAI(base_url='https://api.x.ai/v1', api_key='YOUR_API_KEY')
-```
-
-As always, avoid embedding API keys directly in your code.
+Get an API key from your [xAI account settings](https://console.x.ai/) and pass it as `api_key=` when you initialize the plugin—for example from the `XAI_API_KEY` environment variable. Don't embed API keys directly in code.
 
 ## Usage
 
@@ -313,7 +303,7 @@ class WeatherInput(BaseModel):
     location: str = Field(description='City name')
 
 @ai.tool(description='Get current weather for a location')
-def get_weather(input: WeatherInput) -> str:
+async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
     # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
@@ -321,7 +311,7 @@ def get_weather(input: WeatherInput) -> str:
 response = await ai.generate(
     model=openai_model('grok-4.3'),
     prompt="What's the weather like in Austin?",
-    tools=['get_weather'],
+    tools=[get_weather],
 )
 ```
 
@@ -333,14 +323,15 @@ The plugin supports streaming responses for real-time output:
 from genkit import ActionRunContext
 
 @ai.flow()
-async def streaming_story(name: str, ctx: ActionRunContext | None = None) -> str:
+async def streaming_story(name: str, ctx: ActionRunContext) -> str:
     """Generate a story with streaming output."""
-    response = await ai.generate(
+    stream_response = ai.generate_stream(
         model=openai_model('grok-4.3'),
         prompt=f'Write a short story about {name}',
-        on_chunk=ctx.send_chunk if ctx else None,
     )
-    return response.text
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
 ```
 
 **Vision Capabilities:**
@@ -349,6 +340,8 @@ Use the Grok Vision model to analyze images:
 
 ```python
 from genkit import Part, TextPart, MediaPart, Media
+
+image_url = 'https://example.com/photo.jpg'
 
 response = await ai.generate(
     model=openai_model('grok-4.3'),
@@ -365,7 +358,6 @@ Generate structured data using Pydantic models:
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class MovieRecommendation(BaseModel):
     """A movie recommendation."""
@@ -374,10 +366,12 @@ class MovieRecommendation(BaseModel):
     genre: str = Field(description='Primary genre')
     reason: str = Field(description='Why this movie is recommended')
 
+preferences = 'sci-fi and heist movies'
+
 response = await ai.generate(
     model=openai_model('grok-4.3'),
     prompt=f'Recommend a movie for someone who likes: {preferences}',
-    output=Output(schema=MovieRecommendation),
+    output_schema=MovieRecommendation,
 )
 movie = response.output  # Typed as MovieRecommendation
 ```

@@ -652,7 +652,9 @@ The `genkit-middleware` package provides several useful middleware options out o
 
 ### 1. FileSystem middleware (`Filesystem`)
 
-Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `edit_file`). All operations are safely restricted to a specified root directory.
+Grants the model access to a root directory by injecting `list_files` and
+`read_file`. When `allow_write_access=True` (default `False`), it also injects
+`write_file` and `edit_file`. All paths are restricted to that root.
 
 ```python
 from genkit import Genkit
@@ -671,7 +673,7 @@ response = await ai.generate(
 
 **Configuration options:**
 - `root_dir` (required): The root directory to which all filesystem operations are restricted.
-- `allow_write_access` (optional): If `True`, allows write access to the filesystem (defaults to `False`).
+- `allow_write_access` (optional): If `True`, adds write/edit tools (defaults to `False` — read-only).
 - `tool_name_prefix` (optional): Prefix to add to the name of the injected tools.
 
 ### 2. Skills middleware (`Skills`)
@@ -697,39 +699,53 @@ response = await ai.generate(
 
 ### 3. Tool approval middleware (`ToolApproval`)
 
-Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptError` allowing you to prompt the user for manual confirmation before resuming.
+Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, generation finishes interrupted (`FinishReason.INTERRUPTED`) so you can prompt the user for confirmation before resuming.
 
 ```python
 from genkit import FinishReason, Genkit, restart_tool
 from genkit_middleware import ToolApproval
+from pydantic import BaseModel, Field
 
 ai = Genkit(...)
+
+
+class WriteFileInput(BaseModel):
+    path: str = Field(description='File path')
+    content: str = Field(description='File contents')
+
+
+@ai.tool(description='Write a text file')
+async def write_file_tool(input: WriteFileInput) -> str:
+    # Persist input.content to input.path in a real app.
+    return f'Wrote {input.path}'
+
 
 # 1. Initial attempt
 response = await ai.generate(
     prompt='write a file',
     tools=[write_file_tool],
     use=[
-        ToolApproval(allowed_tools=[]) # Empty list means all tool calls trigger interrupt
-    ]
+        ToolApproval(allowed_tools=[])  # Empty list means all tool calls trigger interrupt
+    ],
 )
 
 if response.finish_reason == FinishReason.INTERRUPTED:
     interrupt = response.interrupts[0]
-    
+
     # 2. Ask user for approval, then recreate the tool request with approval
     approved_part = restart_tool(
         interrupt=interrupt,
-        resumed_metadata={'tool_approved': True}
+        resumed_metadata={'tool_approved': True},
     )
 
     # 3. Resume execution
     resumed_response = await ai.generate(
         messages=list(response.messages),
+        tools=[write_file_tool],
         use=[
-            ToolApproval(allowed_tools=[])
+            ToolApproval(allowed_tools=[]),
         ],
-        resume_restart=approved_part
+        resume_restart=approved_part,
     )
 ```
 
@@ -840,7 +856,7 @@ response = await ai.generate(
 )
 ```
 
-For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/py/plugins/middleware).
+For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-middleware).
 
 </Lang>
 

@@ -406,7 +406,7 @@ ai = Genkit(
 )
 
 @ai.flow()
-async def get_embeddings(text: str) -> list[float]:
+async def get_embeddings(text: str):
     """Generate embeddings for text.
 
     Args:
@@ -430,7 +430,7 @@ Ollama models support streaming responses for real-time output:
 from genkit import ActionRunContext
 
 @ai.flow()
-async def streaming_story(topic: str, ctx: ActionRunContext | None = None) -> str:
+async def streaming_story(topic: str, ctx: ActionRunContext) -> str:
     """Generate a story with streaming output.
 
     Args:
@@ -440,12 +440,13 @@ async def streaming_story(topic: str, ctx: ActionRunContext | None = None) -> st
     Returns:
         The complete generated story.
     """
-    response = await ai.generate(
+    stream_response = ai.generate_stream(
         model=ollama_name('llama3.2'),
         prompt=f'Write a short story about {topic}',
-        on_chunk=ctx.send_chunk if ctx else None,
     )
-    return response.text
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
 ```
 
 ### Tool Calling
@@ -460,7 +461,7 @@ class WeatherInput(BaseModel):
     location: str = Field(description='City name')
 
 @ai.tool(description='Get current weather for a location')
-def get_weather(input: WeatherInput) -> str:
+async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
     # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
@@ -481,7 +482,7 @@ async def weather_flow(location: str) -> str:
     response = await ai.generate(
         model=ollama_name('mistral-nemo'),
         prompt=f"What's the weather like in {location}?",
-        tools=['get_weather'],
+        tools=[get_weather],
     )
     return response.text
 ```
@@ -492,7 +493,6 @@ Generate structured data using Pydantic models:
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class Recipe(BaseModel):
     """A cooking recipe."""
@@ -514,7 +514,7 @@ async def create_recipe(dish: str) -> Recipe:
     response = await ai.generate(
         model=ollama_name('llama3.2'),
         prompt=f'Create a recipe for {dish}',
-        output=Output(schema=Recipe),
+        output_schema=Recipe,
     )
     return response.output
 ```
