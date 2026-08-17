@@ -115,14 +115,21 @@ res.assertValid();
 ## Failure categories
 
 - **Rejected init** returns a non-nil Go error from `Connect`, `Run`, or `RunText`. Fix the caller or selected resume source.
-- **Failed turns** return `AgentOutput` with `FinishReasonFailed` and `Error`. Resume from `State` for client-managed agents or `SnapshotID` for server-managed agents.
+- **Failed turns** return `AgentOutput` with `AgentFinishReasonFailed` and a non-nil `Error`. Resume from `State` for client-managed agents or `SnapshotID` for server-managed agents.
 - **Tool domain problems** should return structured tool output when the coordinator or model can recover.
 - **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect snapshot error details or retry from a completed snapshot.
 
 ## Check both error channels
 
+An agent reports failure through two channels. A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band, so the output can still carry recovery state or a recovery snapshot ID.
+
+`AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
+
 ```go
-import aix "github.com/firebase/genkit/go/ai/exp"
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
+)
 ```
 
 ```go
@@ -131,17 +138,36 @@ if err != nil {
 	return fmt.Errorf("agent invocation did not start: %w", err)
 }
 
-if out.FinishReason == aix.AgentFinishReasonFailed {
-	if out.Error != nil {
+if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
+	switch out.Error.Status {
+	case status.Unavailable, status.ResourceExhausted:
+		// Overloaded. Resume from out.SnapshotID in a moment.
+	case status.InvalidArgument:
+		// The model or a tool rejected the request. Rephrase it.
+	default:
 		return fmt.Errorf("agent turn failed: %s: %s", out.Error.Status, out.Error.Message)
 	}
-	return fmt.Errorf("agent turn failed")
 }
 
 fmt.Println(out.Message.Text())
 ```
 
-A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band so the output can include recovery state or a recovery snapshot ID.
+The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
+
+## Snapshot and store failures
+
+Reads and aborts classify too. Match them with `errors.Is` against the sentinels in `ai/exp` rather than by inspecting the message:
+
+```go
+if _, err := agent.GetSnapshot(ctx, snapshotID); err != nil {
+	switch {
+	case errors.Is(err, aix.ErrSnapshotNotFound):
+		// Nothing was ever written under that ID.
+	case errors.Is(err, aix.ErrSessionStoreNotConfigured):
+		// The agent is client-managed, so there is no snapshot to read.
+	}
+}
+```
 
 ## Resume after failure
 
@@ -165,22 +191,28 @@ Only completed snapshots are resumable. If the latest session snapshot is failed
 
 ## Tool errors
 
-Return a Go error when the tool cannot safely produce a meaningful result:
+Return a Go error when the tool cannot safely produce a meaningful result. Classify it once, where the failure mode is known, with `status.Errorf` and a sentinel; add context further up with `fmt.Errorf` and `%w`, which preserves the classification.
 
 ```go
+// A subtype keeps its parent's status and matches errors.Is at either
+// granularity: ErrOrderNotFound for this failure, status.ErrNotFound for any.
+var ErrOrderNotFound = status.ErrNotFound.Subtype("order not found")
+
 func lookupOrder(ctx *ai.ToolContext, input LookupOrderInput) (LookupOrderOutput, error) {
 	order, err := db.LookupOrder(ctx, input.OrderID)
 	if err != nil {
 		// The lookup itself failed (e.g. the database is unreachable); this is
 		// a tool failure, distinct from a found-but-empty result below.
-		return LookupOrderOutput{}, fmt.Errorf("look up order %q: %w", input.OrderID, err)
+		return LookupOrderOutput{}, fmt.Errorf("could not look up order %q: %w", input.OrderID, err)
 	}
 	if order == nil {
-		return LookupOrderOutput{}, core.NewError(core.NOT_FOUND, "order %q not found", input.OrderID)
+		return LookupOrderOutput{}, status.Errorf(ErrOrderNotFound, "order %q not found", input.OrderID)
 	}
 	return LookupOrderOutput{OK: true, Order: order}, nil
 }
 ```
+
+The [basic-errors](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors) sample works the whole pattern through, including what reaches an HTTP client and what stays in the server log.
 
 Return structured output when the model should recover:
 

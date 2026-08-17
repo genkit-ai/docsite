@@ -151,9 +151,11 @@ agent := genkitx.DefineAgent(g, "report",
 )
 ```
 
-The default HTTP abort route is `/agents/{name}/abort`.
+The default HTTP abort route is `/agents/{name}/abort`. The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample walks the whole background lifecycle over plain HTTP with `curl`: detach, poll, and abort.
 
 ## Detach locally
+
+Go has no handle type for a background task. A detached run is identified only by the pending snapshot ID on the output, which you poll with `Agent.GetSnapshot` or `Agent.GetLatestSnapshot` and cancel with `Agent.Abort`. Store that ID before the process that started the work goes away.
 
 With a local `AgentConnection`, send an input that has `Detach: true`.
 
@@ -182,11 +184,34 @@ fmt.Println(out.FinishReason)
 fmt.Println(out.SnapshotID)
 ```
 
-A detached output has `FinishReason` set to `detached` and `SnapshotID` set to the pending snapshot.
+A detached output has `FinishReason` set to `aix.AgentFinishReasonDetached` and `SnapshotID` set to the pending snapshot.
+
+`conn.Detach()` sends the same directive with no message, for leaving a turn that is already under way:
+
+```go
+if err := conn.Detach(); err != nil {
+	return fmt.Errorf("detach: %w", err)
+}
+```
+
+A bare detach does not start an extra turn. To ride a final input on the detach, set `Message` alongside `Detach` as in the first example.
+
+The client stream is suppressed the moment the detach directive is read, so nothing the background turn produces afterwards reaches `conn.Receive()`. Session-level side effects still apply: an artifact sent through `Responder.SendArtifact` still lands in the final snapshot's state, so agent code does not have to branch on detach.
 
 ## Wait for completion
 
-When the store implements `aix.SnapshotSubscriber`, subscribe to status changes and then read the final snapshot.
+Read a snapshot by ID with `agent.GetSnapshot`, or a session's most recent one with `agent.GetLatestSnapshot(ctx, sessionID)`.
+
+```go
+snap, err := agent.GetSnapshot(ctx, snapshotID)
+if err != nil {
+	return fmt.Errorf("read snapshot: %w", err)
+}
+
+fmt.Println(snap.Status)
+```
+
+When the store implements `aix.SnapshotSubscriber`, subscribe to status changes instead of polling, then read the final snapshot.
 
 ```go
 subscriber := agent.Store().(aix.SnapshotSubscriber)
@@ -201,7 +226,9 @@ for status := range statusCh {
 snap, err := agent.GetSnapshot(ctx, snapshotID)
 ```
 
-If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapshotID)` until `Status` leaves `pending`.
+If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapshotID)` until `Status` leaves `pending`. Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. Only a completed snapshot is resumable.
+
+The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives this from its CLI: `/detach` leaves a turn running, and returning to the agent later waits on the pending snapshot.
 
 ## Abort work
 
