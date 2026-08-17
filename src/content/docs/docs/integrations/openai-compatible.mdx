@@ -227,19 +227,31 @@ Every plugin in the family fills in three response fields that are easy to miss.
 
 **Cost.** A gateway that prices the request reports it as `resp.Usage.Custom["cost"]`, in whatever currency the gateway bills in. Presence of the key decides, not its value: a free-tier request is priced at an explicit zero, which is an answer. Read it with the two-value map form rather than testing for a value above zero. Provider endpoints that do not price requests leave the key absent.
 
-**Provider failure.** A gateway whose upstream provider fails mid-generation answers with HTTP 200, the text produced so far, and an error object, so nothing about the transport says the request went wrong. Genkit maps that to `ai.FinishReasonOther`, puts the provider's message in `resp.FinishMessage`, and puts the whole error object on `resp.Raw` under the `error` key, which carries the status code and the name of the provider that failed. The partial text is still in `resp.Text()`.
+**Provider failure.** A gateway whose upstream provider fails part-way through a generation reports it differently depending on the transport, so the two cases reach you differently.
+
+On a non-streaming request the gateway answers with HTTP 200, the text produced so far, and an error object, so nothing about the transport says the request went wrong. Genkit maps that to `ai.FinishReasonOther`, puts the provider's message in `resp.FinishMessage`, and puts the whole error object on `resp.Raw` under the `error` key, which carries the status code and the name of the provider that failed. The partial text is still in `resp.Text()`.
+
+On a streaming request the failure arrives at the top level of a chunk, which ends the stream. Whatever was generated before it has already reached your streaming callback, but `Generate` returns a classified error rather than an aggregate response, so a caller and any middleware around it are told the generation failed instead of being handed a short answer that reads as a complete one. The status is recovered from the failure's own code where the gateway sends one, so retry and fallback middleware can tell a rate limit from a request the provider will refuse again.
 
 ```go
 if cost, ok := resp.Usage.Custom["cost"]; ok {
     fmt.Printf("this request cost %v\n", cost)
 }
 
+// Non-streaming: the failure rides on the response.
 if resp.FinishReason == ai.FinishReasonOther {
     fmt.Printf("the provider failed: %s\n", resp.FinishMessage)
     if raw, ok := resp.Raw.(map[string]any); ok {
         fmt.Printf("error detail: %v\n", raw["error"])
     }
     fmt.Printf("partial text: %s\n", resp.Text())
+}
+
+// Streaming: the failure comes back as a classified error instead.
+if _, err := genkit.Generate(ctx, g, ai.WithStreaming(onChunk)); err != nil {
+    if errors.Is(err, status.ErrResourceExhausted) {
+        // Rate limited part-way through. Worth retrying.
+    }
 }
 ```
 
