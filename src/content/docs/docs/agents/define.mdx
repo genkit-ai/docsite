@@ -14,7 +14,7 @@ import Lang from '../../../../components/Lang.astro';
 The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
 :::
 
-In Genkit, agents are actions with conversation state. A standard agent renders a prompt on each turn, appends conversation history, calls the model, streams chunks, updates state, and optionally persists a snapshot. A custom agent keeps that runtime shell, but replaces the prompt-backed loop with your own code.
+In Genkit, agents are actions with conversation state. A standard agent renders a prompt on each turn, places the conversation history, calls the model, streams chunks, updates state, and optionally persists a snapshot. A custom agent keeps that runtime shell, but replaces the prompt-backed loop with your own code.
 
 This page covers defining the agent itself. For when to choose an agent over a plain flow, see [Full-stack agents](/docs/agents/overview).
 
@@ -218,7 +218,9 @@ taskAgent := genkitx.DefineAgent(g, "taskAgent",
 )
 ```
 
-The agent's custom state type is inferred from typed options such as `WithSessionStore[TaskState]`, `WithStateTransform[TaskState]`, or the explicit type argument on `DefineAgent[TaskState]`.
+The agent's custom state type is inferred from typed options such as `WithSessionStore[TaskState]`, `WithStateTransform[TaskState]`, or the explicit type argument on `DefineAgent[TaskState]`. An agent that passes no typed option needs the argument written out, as in `DefineAgent[any]`.
+
+The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) is the shortest working version of this shape: one inline prompt, one file store, no state of its own.
 
 ## Agent options
 
@@ -229,6 +231,44 @@ The agent's custom state type is inferred from typed options such as `WithSessio
 - **`aix.WithNamedPrompt[State](name, input)`** points `DefinePromptAgent` at a specific registered prompt and renders input.
 
 Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time.
+
+## How a turn is composed
+
+Rendering always builds the request in one order: the system message, then the conversation, then the user prompt. On every turn the runtime hands the session's conversation to the render, and where it lands depends on what the prompt declares.
+
+- The prompt declares no conversation, the common case of `ai.WithSystem` alone. The session's messages are placed for you, between the system message and the user prompt.
+- The prompt declares a conversation with `ai.WithMessages` or `ai.WithMessagesFn`. The prompt owns placement, so the session's messages are not placed for you. A function reads them with `ai.HistoryFromContext(ctx)` and returns them where it wants them.
+- The prompt declares the conversation as a template, with `ai.WithMessagesTemplate` or the body of a `.prompt` file. The session's messages land at `{{history}}`, or, when the template has no such marker, immediately before the template's final user message.
+
+`ai.WithMessagesTemplate` and `ai.WithMessages` or `ai.WithMessagesFn` have no meaningful combination, since the template is the whole conversation. Passing both to one prompt definition panics with a message naming the prompt.
+
+:::caution[Declaring the conversation means placing it]
+An agent whose prompt adds few-shot examples with `ai.WithMessages` and never places the conversation receives no conversation at all, and its session stops accumulating. Only the prompt knows where its examples end and the conversation begins, so the placement is deliberately its decision. Read the conversation back with `ai.HistoryFromContext` or `{{history}}`.
+:::
+
+Claiming the slot is what lets an agent rewrite its own history. Whatever the function returns is both what the model sees and what the session keeps, so a summary or a trim persists into the next turn instead of being recomputed from a growing transcript.
+
+```go
+support := genkitx.DefineAgent(g, "support",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Be helpful."),
+		ai.WithMessagesFn(func(ctx context.Context, _ any) ([]*ai.Message, error) {
+			history := ai.HistoryFromContext(ctx)
+			const keep = 6
+			if len(history) <= keep {
+				return history, nil
+			}
+			dropped := len(history) - keep
+			note := ai.NewUserTextMessage(fmt.Sprintf("(%d earlier messages omitted)", dropped))
+			return append([]*ai.Message{note}, history[dropped:]...), nil
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+Each content slot has a template form and a function form: `ai.WithSystem` and `ai.WithSystemFn`, `ai.WithPrompt` and `ai.WithPromptFn`, `ai.WithMessagesTemplate` and `ai.WithMessagesFn`. Template text is compiled against the prompt input, so it can interpolate fields. What a function returns is used verbatim, which is what makes it safe for user-supplied content and for text containing braces. A function also receives the turn's context, so it can read session state as well as the conversation. See [Sessions and state](/docs/agents/state) for an agent whose instruction is rebuilt from typed state on every turn.
 
 ## Wrap an existing prompt
 
@@ -252,7 +292,9 @@ friendlyChef := genkitx.DefinePromptAgent[ChefState](g, "friendlyChef",
 )
 ```
 
-The prompt input is rendered at definition time as a smoke test. If it does not satisfy the prompt schema, the constructor panics during setup rather than during the first request.
+The prompt input is rendered at definition time as a smoke test. If it does not satisfy the prompt schema, the constructor panics during setup rather than during the first request. When the `.prompt` frontmatter names an input schema, register the matching Go type with `genkit.DefineSchemasFor(g, ChefInput{})` before defining the agent, so the name resolves during that first render. Register the type whose name the frontmatter's `input.schema` field uses, which is the prompt input type, not the agent's state type.
+
+The `chef.go` file and `prompts/chef.prompt` in [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) show the whole arrangement: model, config, input schema, and default input live in the file, and the Go code carries only the agent wiring.
 
 ## Define a custom agent implementation
 
@@ -262,13 +304,14 @@ The prompt input is rendered at definition time as a smoke test. If it does not 
 coder := genkitx.DefineCustomAgent(g, "coder",
 	func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[CoderState]) (*aix.AgentResult, error) {
 		// Your own per-turn loop. See Custom orchestration for the full pattern.
+		return sess.Result(), nil
 	},
 	aix.WithSessionStore(store),
 	aix.WithDescription[CoderState]("Concise code helper"),
 )
 ```
 
-See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, turn context, responder behavior, and failure handling.
+See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime contract, a complete example, turn context, responder behavior, and failure handling. The `coder.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) wires the per-turn loop by hand while the framework still owns session state, snapshot writes, and the detach lifecycle.
 
 </Lang>
 

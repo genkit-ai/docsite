@@ -233,12 +233,17 @@ Genkit agents keep continuity in one of two ownership models.
 
 Server-managed state is the default recommendation for user-facing conversational apps. Client-managed state is useful when you need tighter control over where state is stored and how it moves between services.
 
+[`go/samples/basic-agents-server`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) serves both models side by side: a `chat` agent with a store, which answers with a session ID to send back, and a `statelessChat` agent without one, which answers with the whole state for the client to hold.
+
 ## Understand session state
 
 Session state contains messages, typed custom state, artifacts, and the framework-owned session ID:
 
 ```go
-import aix "github.com/firebase/genkit/go/ai/exp"
+import (
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+)
 ```
 
 ```go
@@ -265,7 +270,7 @@ Do not put large generated documents into `Custom` just because they serialize t
 
 ## Modify custom state
 
-Prompt-backed tools and custom agents can update typed custom state through the active session. In a custom agent, call `sess.UpdateCustom`:
+Tools and custom agents update typed custom state through the active session. In a custom agent, call `sess.UpdateCustom`:
 
 ```go
 sess.UpdateCustom(func(state TravelState) TravelState {
@@ -274,6 +279,67 @@ sess.UpdateCustom(func(state TravelState) TravelState {
 	return state
 })
 ```
+
+A tool reaches the same session through its context with `aix.SessionFromContext[State]`. The updater takes and returns the state as its own Go type, so a mistyped field is a compile error rather than a lost key.
+
+```go
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+// OrderState is the agent's custom state type.
+type OrderState struct {
+	Drinks []string `json:"drinks,omitempty"`
+}
+```
+
+```go
+addToOrder := genkitx.DefineTool(g, "addToOrder",
+	"Records one drink the customer ordered.",
+	func(ctx context.Context, in struct {
+		Drink string `json:"drink"`
+	}) (string, error) {
+		sess := aix.SessionFromContext[OrderState](ctx)
+		if sess == nil {
+			return "", status.Errorf(status.ErrFailedPrecondition,
+				"addToOrder must be called inside a session")
+		}
+		sess.UpdateCustom(func(order OrderState) OrderState {
+			order.Drinks = append(order.Drinks, in.Drink)
+			return order
+		})
+		return "Added " + in.Drink + " to the order.", nil
+	})
+```
+
+What a tool writes is visible to the next turn's prompt render, so an agent can turn its own state back into instructions. `ai.WithSystemFn` runs once per turn and its result is used verbatim, which is what lets the wording branch on the state:
+
+```go
+barista := genkitx.DefineAgent(g, "barista",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithTools(addToOrder),
+		ai.WithSystemFn(func(ctx context.Context, _ any) (string, error) {
+			sess := aix.SessionFromContext[OrderState](ctx)
+			if sess == nil {
+				return "", status.Errorf(status.ErrFailedPrecondition,
+					"barista prompt rendered outside a session")
+			}
+			order := sess.Custom()
+			if len(order.Drinks) == 0 {
+				return "You are a brisk barista. Take the order one drink at a time.", nil
+			}
+			return fmt.Sprintf("You are a brisk barista. Ordered so far: %s.",
+				strings.Join(order.Drinks, ", ")), nil
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The `barista.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) runs this pair end to end. Note the `omitempty` on the state's slice field: a nil Go slice marshals to `null`, which does not satisfy the array schema inferred from the type.
 
 The runtime streams custom patches as state changes. `AgentConnection.Receive` applies those patches, and `AgentConnection.Custom()` returns the current custom state observed by the connection.
 

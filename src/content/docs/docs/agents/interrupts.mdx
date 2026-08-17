@@ -200,6 +200,8 @@ transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
 )
 ```
 
+The banker agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample runs this end to end: its tool interrupts with a discriminated payload, and the CLI asks the user and resumes the turn.
+
 ## Collect interrupts from the stream
 
 Interrupts are model tool request parts with interrupt metadata.
@@ -272,6 +274,24 @@ if err := conn.SendResume(&aix.ToolResume{
 ```
 
 A resumed turn can interrupt again. Streaming clients should handle interrupts in a loop: receive until `TurnEnd`, resolve any interrupts, send resume, then receive the continuation.
+
+The same interruptible-tool API works outside an agent. The [basic-tool-interrupts-exp](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts-exp) sample runs the pause-and-resume cycle across two ordinary generate turns instead.
+
+## Resume validation
+
+The runtime validates a resume payload against session history before it reaches the model. A `respond` entry must match an interrupted tool request by name and ref. A `restart` entry must match the original request and carry its unmodified input. This protects server tools from forged client payloads.
+
+Only the most recent model response is searched. An entry naming a tool request from an earlier turn is rejected as stale, separately from one naming a request that never existed. Refs are only unique within a single model response, so searching further back would let a caller validate a restart whose input was forged from an already-settled call. A client that accumulates resume entries across turns and resends them all must send only the entries for the pending response.
+
+`genkitx.DefineAgent` and `genkitx.DefinePromptAgent` run this check for you. A custom agent that accepts `AgentInput.Resume` from untrusted callers should run it itself before forwarding the payload:
+
+```go
+if input.Resume != nil {
+	if err := aix.ValidateResumeAgainstHistory(input.Resume, sess.Messages()); err != nil {
+		return nil, err
+	}
+}
+```
 
 </Lang>
 

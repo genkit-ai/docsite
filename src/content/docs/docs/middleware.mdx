@@ -241,11 +241,9 @@ Register the `Middleware` plugin during `genkit.Init` to expose the built-ins to
 import (
     "context"
 
-    "github.com/genkit-ai/genkit/go/ai"
-    "github.com/genkit-ai/genkit/go/core"
-    "github.com/genkit-ai/genkit/go/genkit"
-    "github.com/genkit-ai/genkit/go/plugins/googlegenai"
-    "github.com/genkit-ai/genkit/go/plugins/middleware"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
+    "github.com/firebase/genkit/go/plugins/middleware"
 )
 
 ctx := context.Background()
@@ -256,6 +254,63 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 ```
 
 For pure Go programs that just attach middleware to a `genkit.Generate()` call, plugin registration is optional. Passing a middleware value directly to `ai.WithUse` invokes its `New` method on the local fast path without consulting the registry.
+
+## Attaching middleware
+
+`ai.WithUse` is the option that attaches middleware. It returns an `ai.CommonGenOption`, so the same call is accepted by `genkit.Generate` (and `GenerateText` / `GenerateData`), by `genkit.DefinePrompt`, and by `Prompt.Execute` / `ExecuteStream`. There are four ways to reach it.
+
+**Per call.** Pass the middleware's config struct to the generation you want it on. This is the default and it needs no registration: the value carries its own config, so Genkit calls its `New` method directly.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("Summarize the release notes."),
+    ai.WithUse(&middleware.Retry{MaxRetries: 2}),
+)
+```
+
+The built-in middleware implement `ai.Middleware` on pointer receivers, so they are passed as `&middleware.Retry{...}`. A custom type with value receivers is passed as a bare literal.
+
+**Inline.** For a one-off that needs no named type or Dev UI entry, adapt a closure with `ai.MiddlewareFunc`. See [Inline middleware](#inline-middleware) below.
+
+**On a prompt definition.** Middleware passed to `genkit.DefinePrompt` applies to every execution of that prompt.
+
+```go
+p := genkit.DefinePrompt(g, "assistant",
+    ai.WithPrompt("{{query}}"),
+    ai.WithUse(&middleware.Retry{MaxRetries: 2}),
+)
+
+// Inherits the prompt's middleware.
+resp, err := p.Execute(ctx, ai.WithInput(map[string]any{"query": "hello"}))
+
+// Replaces it: only Fallback runs on this execution, Retry does not.
+resp, err = p.Execute(ctx,
+    ai.WithInput(map[string]any{"query": "hello"}),
+    ai.WithUse(&middleware.Fallback{}),
+)
+```
+
+Two things about prompts catch people out:
+
+- Prompt-level and execute-level middleware do **not** merge. `ai.WithUse` at execute time replaces the whole chain the prompt was defined with.
+- `ai.MiddlewareFunc` cannot be used in `genkit.DefinePrompt`. A prompt action serializes its options, and a function value has no JSON form, so execution fails with `json: unsupported type: ai.MiddlewareFunc`. Use a named config type at definition time.
+
+**By name.** Middleware that is registered, either by a plugin or by `genkit.DefineMiddleware`, can be selected by name from a `.prompt` file's `use:` frontmatter. Each entry is a bare name or a `name` with a `config` map:
+
+```yaml
+---
+model: googleai/gemini-flash-latest
+use:
+  - name: genkit-middleware/retry
+    config:
+      maxRetries: 2
+  - genkit-middleware/skills
+---
+```
+
+These entries resolve through the registry at execute time, so the plugin providing them has to be registered or the execution fails with `NOT_FOUND`.
+
+`ai.WithMiddleware` still exists but is deprecated. It takes an `ai.ModelMiddleware`, which wraps only the model call, has no generate or tool hook, and never appears in the Dev UI. Use `ai.WithUse` instead.
 
 ## Available middleware
 
@@ -279,12 +334,28 @@ resp, err := genkit.Generate(ctx, g,
 
 **Configuration options:**
 
-- `MaxRetries` (optional): The maximum number of times to retry a failed request (default: 3).
-- `Statuses` (optional): A list of `core.StatusName` values that should trigger a retry (default: `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, `INTERNAL`). Non-`GenkitError` errors such as network failures are always retried regardless of this list.
+- `MaxRetries` (optional): The number of retries after the first attempt (default: 3). `MaxRetries: 3` allows up to four model calls in total.
+- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`).
 - `InitialDelayMs` (optional): The initial delay between retries in milliseconds (default: 1000).
 - `MaxDelayMs` (optional): The upper bound on retry delay in milliseconds (default: 60000).
 - `BackoffFactor` (optional): The factor by which the delay increases after each retry (default: 2).
 - `NoJitter` (optional): If true, disables random jitter on the delay (default: false).
+
+**What counts as retryable.** The decision turns on whether the error is classified, not on its Go type:
+
+```go
+func isRetryable(err error, statuses []status.Name) bool {
+    if s, ok := status.Classified(err); ok {
+        return slices.Contains(statuses, s)
+    }
+    return true
+}
+```
+
+A classified error is retried only when its status is on the list. An **unclassified** error is always retried, whatever the list says, because a provider SDK error that carries no Genkit status is usually a transport failure worth another attempt. Two consequences are worth knowing:
+
+- A cancelled context classifies as `CANCELLED`, which is not on the default list, so cancelling stops the retries. A `context.DeadlineExceeded` classifies as `DEADLINE_EXCEEDED`, which is on the list, so it is retried.
+- Wrapping an error with `%v` instead of `%w` destroys its classification. That silently converts a non-retryable `INVALID_ARGUMENT` into an always-retried unclassified error.
 
 ### 2. Fallback middleware (`Fallback`)
 
@@ -298,15 +369,30 @@ resp, err := genkit.Generate(ctx, g,
         Models: []ai.ModelRef{
             googlegenai.ModelRef("googleai/gemini-flash-latest", nil),
         },
-        Statuses: []core.StatusName{core.RESOURCE_EXHAUSTED},
+        Statuses: []status.Name{status.ResourceExhausted},
     }),
 )
 ```
 
 **Configuration options:**
 
-- `Models` (required): An ordered list of `ai.ModelRef` values to try after the primary fails. Each ref's `Config` is used verbatim for that model; the original request's config is **not** inherited. Use `googlegenai.ModelRef` (or the equivalent helper for your provider) to attach configuration.
-- `Statuses` (optional): A list of `core.StatusName` values that should trigger a fallback (default: `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, `INTERNAL`, `NOT_FOUND`, `UNIMPLEMENTED`).
+- `Models` (required): An ordered list of `ai.ModelRef` values to try after the primary fails. Each ref's `Config` is used verbatim for that model; the original request's config is **not** inherited. Use `googlegenai.ModelRef` (or the equivalent helper for your provider) to attach configuration. A named model that is not registered fails with `ai.ErrModelNotFound`.
+- `Statuses` (optional): A list of `status.Name` values that should trigger a fallback (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`, `status.NotFound`, `status.Unimplemented`). The two entries `Retry` does not share are `NotFound` and `Unimplemented`, so a model the provider does not serve fails over instead of failing.
+
+**What counts as fallback-eligible.** The predicate is `Retry`'s with one line changed:
+
+```go
+func isFallbackRetryable(err error, statuses []status.Name) bool {
+    if s, ok := status.Classified(err); ok {
+        return slices.Contains(statuses, s)
+    }
+    return false
+}
+```
+
+An unclassified error never triggers a fallback; it propagates immediately. This is the deliberate opposite of `Retry`, and the reason is cost: moving a request to a different billed model is a bigger action than reissuing the same one, so it demands an explicit classification. A plugin that classifies its provider's errors, for example with `status.Base(status.FromHTTPCode(code))`, is what makes fallback work at all.
+
+The [retry-fallback sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/retry-fallback) composes the two, pointing the primary at a model id that does not exist so the cascade fires on every run.
 
 ### 3. Tool approval middleware (`ToolApproval`)
 
@@ -349,13 +435,15 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 
 A bare resume without the `toolApproved` flag is **not** treated as approval, so unrelated resume flows can't bypass approval gating.
 
+A blocked call is still visible in traces: when a `WrapTool` hook resolves a call without running the tool, Genkit emits the tool span the tool itself would have produced.
+
 **Configuration options:**
 
 - `AllowedTools` (optional): The list of tool names pre-approved to run without interruption. Tools not in this list trigger an interrupt. An empty list interrupts every tool.
 
 ### 4. Skills middleware (`Skills`)
 
-Scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can call to load a specific skill's full body on demand.
+Scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects a list of them into the system prompt. It also registers a `use_skill` tool, taking a single `skillName` string, that the model calls to load one skill's full body on demand. Keeping the heavy instructions behind that tool is the point: only the name and description of each skill are on the hot path.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -366,11 +454,19 @@ resp, err := genkit.Generate(ctx, g,
 
 **Configuration options:**
 
-- `SkillPaths` (optional): A list of directories to scan for skills. Each direct subdirectory containing a `SKILL.md` file is exposed as a skill (default: `["skills"]`).
+- `SkillPaths` (optional): A list of directories to scan for skills. Each direct subdirectory containing a `SKILL.md` file is exposed as a skill (default: `["skills"]`, resolved against the process working directory).
+
+Three details of the scan are worth knowing:
+
+- The **directory name** is the skill name the model uses. The `name` field in the frontmatter is parsed but never used for that, so a directory named `python-helper` is `python-helper` no matter what the file says. Only `description` reaches the prompt.
+- Discovery is one level deep. Direct subdirectories are considered, nested ones are not, and names starting with `.` are skipped.
+- A path that cannot be read is skipped rather than fatal, with a warning in the log. A mistyped `SkillPaths` entry therefore yields no skills and no error.
+
+Loading a skill costs a turn of the tool loop, so raise `ai.WithMaxTurns` above the default of 5 to leave room for the answer. The [skills sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/skills) ships four deliberately loud personas so the effect of a load is visible in one run.
 
 ### 5. Filesystem middleware (`Filesystem`)
 
-Grants the model access to a single root directory by injecting standard file manipulation tools (`list_files`, `read_file`, plus `write_file` and `edit_file` when writes are enabled). Path safety is enforced by `os.Root` (Go 1.24+), which rejects any path that resolves outside the root, including via `..`, absolute paths, or symbolic links.
+Grants the model access to a single root directory by injecting file manipulation tools. Two are always registered, `list_files` and `read_file`; `write_file` and `edit_file` join them only when `AllowWriteAccess` is true. Path safety is enforced by `os.Root` (Go 1.25+), which rejects any path that resolves outside the root, including via `..`, absolute paths, or symbolic links.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -384,9 +480,13 @@ resp, err := genkit.Generate(ctx, g,
 
 **Configuration options:**
 
-- `RootDir` (required): The root directory all filesystem operations are confined to.
+- `RootDir` (required): The root directory all filesystem operations are confined to. Its JSON key is `rootDirectory`, which is the name to use in `.prompt` frontmatter and the Dev UI. An empty value fails with `INVALID_ARGUMENT`.
 - `AllowWriteAccess` (optional): If true, additionally registers `write_file` and `edit_file` (default: false).
-- `ToolNamePrefix` (optional): A prefix prepended to each tool name. Use distinct prefixes when attaching multiple `Filesystem` middlewares to one call so their tool names don't collide.
+- `ToolNamePrefix` (optional): A prefix prepended verbatim to each tool name, so `"repo_"` yields `repo_list_files` and the rest. Use distinct prefixes when attaching multiple `Filesystem` middlewares to one call so their tool names don't collide.
+
+`read_file` does not return the file in its tool result. It answers with a short summary and injects the contents as a user message on the next turn, which is why the middleware needs a `WrapGenerate` hook as well as tools. `edit_file` refuses to touch a file that was not read earlier in the same call, and `write_file` refuses to overwrite an existing one that was not read; both refuse again if the file changed on disk since that read. Creating a new file with `write_file` needs no prior read.
+
+The [filesystem sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/filesystem) ships a small mock project and one flow per mode, read-only and write-enabled.
 
 ## Building your own custom middleware
 
@@ -431,23 +531,39 @@ A `Generate` call runs a tool loop: the model produces output, any tool calls ex
 
 `WrapGenerate` and `WrapModel` are not called concurrently within a single `Generate` call. `WrapTool` may be, since multiple tools can execute in parallel.
 
-### A simple example
+### Logging from a hook
 
-Here is a custom middleware that logs how long each model call takes:
+Log through the `core/logger` helpers in `github.com/firebase/genkit/go/core/logger` rather than through `log` or `fmt`. They take the context as their first argument, and that context is what carries the active span, so each record lands on the trace it belongs to and shows up in the Dev UI beside the span that produced it:
 
 ```go
-type Logger struct {
-    Prefix string `json:"prefix,omitempty"`
+func Debug(ctx context.Context, msg string, args ...any)
+func Info(ctx context.Context, msg string, args ...any)
+func Warn(ctx context.Context, msg string, args ...any)
+func Error(ctx context.Context, msg string, args ...any)
+```
+
+Before writing a middleware whose only job is to log, check whether you need it: Genkit already brackets every generate, model, and tool hook with debug records carrying the middleware name, the hook, its duration, whether it short-circuited, and any error. Middleware is the one layer with no span of its own, so those records exist to fill that gap. Hand-rolled timing middleware usually duplicates them.
+
+### A simple example
+
+Here is a custom middleware that reports how long each model call takes, along with a label from its config:
+
+```go
+type Timing struct {
+    Label string `json:"label,omitempty"`
 }
 
-func (Logger) Name() string { return "mine/logger" }
+func (Timing) Name() string { return "mine/timing" }
 
-func (l Logger) New(ctx context.Context) (*ai.Hooks, error) {
+func (t Timing) New(ctx context.Context) (*ai.Hooks, error) {
     return &ai.Hooks{
         WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
             start := time.Now()
             resp, err := next(ctx, p)
-            log.Printf("%s model call took %s", l.Prefix, time.Since(start))
+            logger.Info(ctx, "model call finished",
+                "label", t.Label,
+                "duration", time.Since(start).Round(time.Millisecond),
+                "error", err)
             return resp, err
         },
     }, nil
@@ -459,9 +575,11 @@ To use it:
 ```go
 resp, err := genkit.Generate(ctx, g,
     ai.WithPrompt("Hello"),
-    ai.WithUse(Logger{Prefix: "[trace]"}),
+    ai.WithUse(Timing{Label: "demo"}),
 )
 ```
+
+Note the receivers. `Timing` declares `Name` and `New` on value receivers, so a bare `Timing{...}` satisfies `ai.Middleware`. The built-in middleware declare theirs on pointer receivers, which is why they are always passed as `&middleware.Retry{...}`.
 
 ### Sharing state across hooks
 
@@ -482,7 +600,7 @@ func (Counter) New(ctx context.Context) (*ai.Hooks, error) {
         WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
             // The same `modelCalls` is visible here: both closures capture it from `New`.
             resp, err := next(ctx, p)
-            log.Printf("iteration %d: %d model calls so far", p.Iteration, modelCalls)
+            logger.Debug(ctx, "iteration finished", "iteration", p.Iteration, "modelCalls", modelCalls)
             return resp, err
         },
     }, nil
@@ -526,8 +644,8 @@ import (
     "io"
     "time"
 
-    "github.com/genkit-ai/genkit/go/ai"
-    "github.com/genkit-ai/genkit/go/core/api"
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/api"
 )
 
 type Logger struct {
@@ -559,6 +677,8 @@ func (p *LoggerPlugin) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, e
     }, nil
 }
 ```
+
+The `io.Writer` above is the plugin-level state the example is about, not a recommendation: middleware that only wants its records on the trace should call the `core/logger` helpers.
 
 Application code then registers the plugin once during `Init`, which makes the middleware available everywhere by name:
 
@@ -596,7 +716,7 @@ For ad-hoc middleware that doesn't need a named type or Dev UI visibility, use `
 ai.WithUse(ai.MiddlewareFunc(func(ctx context.Context) (*ai.Hooks, error) {
     return &ai.Hooks{
         WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
-            log.Printf("model call: %d messages", len(p.Request.Messages))
+            logger.Debug(ctx, "model call", "messages", len(p.Request.Messages))
             return next(ctx, p)
         },
     }, nil
@@ -605,14 +725,16 @@ ai.WithUse(ai.MiddlewareFunc(func(ctx context.Context) (*ai.Hooks, error) {
 
 The adapter satisfies `Middleware` with a placeholder name. Inline middleware is resolved on the local fast path and never touches the registry, so the placeholder is fine.
 
+It works on `genkit.Generate` and on `Prompt.Execute`, but not in `genkit.DefinePrompt`: a prompt action serializes its options and a function value has no JSON form.
+
 ### Composition order
 
 `ai.WithUse(A, B, C)` composes left to right with the first listed middleware as the outermost wrapper, like HTTP middleware: at call time the chain expands to `A { B { C { actual } } }`. Each layer's `next` continuation runs the next inner layer:
 
 ```go
 ai.WithUse(
-    &middleware.Retry{MaxRetries: 3},                  // outer: retries the whole inner stack
-    &middleware.Fallback{Models: fallbackModels},      // inner: tries fallback models on failure
+    &middleware.Retry{MaxRetries: 3},             // outer: retries the whole inner stack
+    &middleware.Fallback{Models: fallbackModels}, // inner: tries fallback models on failure
 )
 // effective chain: Retry { Fallback { model } }
 ```

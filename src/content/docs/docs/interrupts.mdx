@@ -409,10 +409,18 @@ interacting with an LLM:
 
 ## Defining tools with interrupts
 
-Use `genkit.DefineTool()` and call `ai.InterruptWith()` to trigger a
-strongly-typed interrupt. Define a struct to carry the interrupt metadata:
+An interrupting tool is an ordinary tool: pausing is something the tool function
+does, not something its signature declares. Use `genkit.DefineTool()` and call
+`ai.InterruptWith()` with a struct carrying whatever the person answering needs
+to know:
 
 ```go
+// QuestionInput is what the model fills in to call the tool.
+type QuestionInput struct {
+	Question string   `json:"question"`
+	Choices  []string `json:"choices"`
+}
+
 // InterruptMetadata carries information about why the tool was interrupted.
 type InterruptMetadata struct {
 	Reason  string   `json:"reason"`
@@ -421,8 +429,8 @@ type InterruptMetadata struct {
 
 askQuestion := genkit.DefineTool(g, "askQuestion",
 	"use this to ask the user a clarifying question",
-	func(ctx *ai.ToolContext, input QuestionInput) (string, error) {
-		return "", ai.InterruptWith(ctx, InterruptMetadata{
+	func(tc *ai.ToolContext, input QuestionInput) (string, error) {
+		return "", ai.InterruptWith(tc, InterruptMetadata{
 			Reason:  "need_clarification",
 			Choices: input.Choices,
 		})
@@ -460,8 +468,10 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 }
 ```
 
-Responding to an interrupt is done using `tool.RespondWith()` and `ai.WithToolResponses()`
-on a subsequent `Generate` call, passing in the existing message history:
+Responding to an interrupt is done using the tool's `RespondWith()` method and
+`ai.WithToolResponses()` on a subsequent `Generate` call, passing in the existing
+message history. `RespondWith()` answers the paused call outright, so the tool
+function never runs again:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -477,7 +487,8 @@ for resp.FinishReason == ai.FinishReasonInterrupted {
 	var responses []*ai.Part
 
 	for _, interrupt := range resp.Interrupts() {
-		// Use RespondWith to provide a strongly-typed response
+		// RespondWith is typed against the tool's output, so the answer
+		// cannot drift from what the tool would have returned.
 		part, err := askQuestion.RespondWith(interrupt, getUserAnswer(interrupt))
 		if err != nil {
 			return err
@@ -502,11 +513,16 @@ fmt.Println(resp.Text())
 
 Another common pattern is the need to _confirm_ an action that the LLM suggests
 before actually performing it. For example, a payments app might want the user
-to confirm certain kinds of transfers.
+to confirm certain kinds of transfers. The
+[basic-tool-interrupts sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts)
+is this whole pattern as a runnable program.
 
 ### Define a restartable tool
 
-Use `ctx.IsResumed()` to check if the tool is being restarted after an interrupt:
+A restartable tool reads two things from its `*ai.ToolContext`: `IsResumed()`
+tells a first call apart from a restarted one, and `ai.ResumedValue()` reads back
+the decision the caller attached when restarting it. Letting the tool decide,
+rather than the caller, keeps the rule it paused on in one place:
 
 ```go
 type TransferInput struct {
@@ -529,37 +545,53 @@ type TransferInterrupt struct {
 
 transferMoney := genkit.DefineTool(g, "transferMoney",
 	"Transfers money to another account.",
-	func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
-		// Check for insufficient balance
+	func(tc *ai.ToolContext, input TransferInput) (TransferOutput, error) {
+		// More than the account holds: pause and say so.
 		if input.Amount > accountBalance {
-			return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
-				Reason:  "insufficient_balance",
+			return TransferOutput{}, ai.InterruptWith(tc, TransferInterrupt{
+				Reason:    "insufficient_balance",
 				ToAccount: input.ToAccount,
 				Amount:    input.Amount,
 				Balance:   accountBalance,
 			})
 		}
 
-		// Require confirmation for large transfers (only on first execution)
-		if !ctx.IsResumed() && input.Amount > 100 {
-			return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
+		// IsResumed is false on the first call and true once the tool has
+		// been restarted, which is what tells a fresh large transfer from
+		// one that has already been answered.
+		if !tc.IsResumed() && input.Amount > 100 {
+			return TransferOutput{}, ai.InterruptWith(tc, TransferInterrupt{
 				Reason:    "confirm_large",
 				ToAccount: input.ToAccount,
 				Amount:    input.Amount,
 			})
 		}
 
-		// Execute the transfer
+		// The decision arrives as resumed metadata, so it is read back one
+		// key at a time.
+		if approved, ok := ai.ResumedValue[bool](tc, "approved"); ok && !approved {
+			return TransferOutput{
+				Status:  "declined",
+				Message: "The user declined the transfer.",
+			}, nil
+		}
+
 		accountBalance -= input.Amount
-		return TransferOutput{"completed", "Transfer successful", accountBalance}, nil
+		return TransferOutput{
+			Status:     "completed",
+			Message:    "Transfer successful",
+			NewBalance: accountBalance,
+		}, nil
 	},
 )
 ```
 
 ### Restart tools after interruption
 
-Use `tool.RestartWith()` and `ai.WithToolRestarts()` to re-execute an interrupted
-tool. You can optionally replace the input using `ai.WithNewInput()`:
+Use the tool's `RestartWith()` method and `ai.WithToolRestarts()` to run an
+interrupted tool again. `ai.WithResumedMetadata()` is how the decision travels
+back into the tool: whatever you put in that map is what `ai.ResumedValue()`
+reads. `ai.WithNewInput()` restarts the tool with different arguments instead:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -580,36 +612,33 @@ for resp.FinishReason == ai.FinishReasonInterrupted {
 		}
 
 		switch meta.Reason {
+		case "confirm_large":
+			// The answer travels as resumed metadata. The tool reads it
+			// back with ai.ResumedValue and decides what to do.
+			approved := userConfirms("Confirm transfer of $%.2f?", meta.Amount)
+			part, err := transferMoney.RestartWith(interrupt,
+				ai.WithResumedMetadata[TransferInput](map[string]any{"approved": approved}))
+			if err != nil {
+				return err
+			}
+			restarts = append(restarts, part)
+
 		case "insufficient_balance":
 			if userConfirms("Transfer $%.2f instead?", meta.Balance) {
-				// Restart with adjusted amount using WithNewInput
+				// Restart with a different input.
 				part, err := transferMoney.RestartWith(interrupt,
-					ai.WithNewInput(TransferInput{meta.ToAccount, meta.Balance}))
+					ai.WithNewInput(TransferInput{ToAccount: meta.ToAccount, Amount: meta.Balance}))
 				if err != nil {
 					return err
 				}
 				restarts = append(restarts, part)
 			} else {
-				// Provide a response directly without re-running the tool
-				part, err := transferMoney.RespondWith(interrupt,
-					TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
-				if err != nil {
-					return err
-				}
-				responses = append(responses, part)
-			}
-
-		case "confirm_large":
-			if userConfirms("Confirm transfer of $%.2f?", meta.Amount) {
-				// Simple restart (re-run with same input)
-				part, err := transferMoney.RestartWith(interrupt)
-				if err != nil {
-					return err
-				}
-				restarts = append(restarts, part)
-			} else {
-				part, err := transferMoney.RespondWith(interrupt,
-					TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
+				// Answer the call outright, without running the tool again.
+				part, err := transferMoney.RespondWith(interrupt, TransferOutput{
+					Status:     "cancelled",
+					Message:    "Transfer cancelled by user.",
+					NewBalance: accountBalance,
+				})
 				if err != nil {
 					return err
 				}
@@ -640,22 +669,130 @@ the tool using `ai.OriginalInputAs()`:
 ```go
 transferMoney := genkit.DefineTool(g, "transferMoney",
 	"Transfers money to another account.",
-	func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
+	func(tc *ai.ToolContext, input TransferInput) (TransferOutput, error) {
 		// ... interrupt logic ...
 
 		accountBalance -= input.Amount
 		message := fmt.Sprintf("Transferred $%.2f to %s", input.Amount, input.ToAccount)
 
-		// Check if input was replaced and include original amount in message
-		if orig, ok := ai.OriginalInputAs[TransferInput](ctx); ok {
+		// Report the adjustment when the caller replaced the input.
+		if orig, ok := ai.OriginalInputAs[TransferInput](tc); ok {
 			message = fmt.Sprintf("Transferred $%.2f to %s (adjusted from $%.2f)",
 				input.Amount, input.ToAccount, orig.Amount)
 		}
 
-		return TransferOutput{"completed", message, accountBalance}, nil
+		return TransferOutput{
+			Status:     "completed",
+			Message:    message,
+			NewBalance: accountBalance,
+		}, nil
 	},
 )
 ```
+
+## Typed resume payloads
+
+:::caution[In preview]
+The `genkit/exp` tools API is in preview. It may change in any minor release.
+:::
+
+With the stable API, the resume payload is a metadata map: the tool reads
+`"approved"` with `ai.ResumedValue()` and the caller writes `"approved"` with
+`ai.WithResumedMetadata()`, and nothing checks that the two agree. The in-preview
+`genkitx.DefineInterruptibleTool()` takes a third type parameter for what comes
+back on the resume, so the payload becomes a real type that both ends share.
+
+The tool function takes a plain `context.Context` and a pointer to the resume
+type. The pointer is `nil` on the first call and set when the tool is resumed,
+which replaces `IsResumed()`. `tool.Interrupt()` pauses with a typed value in
+place of `ai.InterruptWith()`, and the tool's `Resume()` method carries the typed
+answer in place of `RestartWith()` plus a metadata map. Everything else, including
+`ai.WithToolRestarts()` and the two-turn shape, is unchanged:
+
+```go
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+// Approval is the answer carried back into the tool when it is resumed. It is
+// the tool's third type parameter, so both ends share one type instead of
+// agreeing on metadata keys.
+type Approval struct {
+	Approved bool `json:"approved"`
+}
+
+// The in-preview tool constructors panic without this option.
+g := genkit.Init(ctx, genkit.WithExperimental())
+
+transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
+	"Transfers money to another account.",
+	func(ctx context.Context, input TransferInput, approval *Approval) (*TransferOutput, error) {
+		// approval is nil on the first call and set when the tool is
+		// resumed, which is what tells a fresh large transfer from one
+		// that has already been answered.
+		if approval == nil && input.Amount > 100 {
+			return nil, tool.Interrupt(TransferInterrupt{
+				ToAccount: input.ToAccount,
+				Amount:    input.Amount,
+			})
+		}
+		if approval != nil && !approval.Approved {
+			return &TransferOutput{Status: "declined", NewBalance: accountBalance}, nil
+		}
+
+		accountBalance -= input.Amount
+		return &TransferOutput{Status: "completed", NewBalance: accountBalance}, nil
+	})
+```
+
+Resuming reads the interrupt with `tool.InterruptAs()` and answers it with the
+tool's `Resume()` method:
+
+```go
+for resp.FinishReason == ai.FinishReasonInterrupted {
+	var restarts []*ai.Part
+
+	for _, interrupt := range resp.Interrupts() {
+		meta, ok := tool.InterruptAs[TransferInterrupt](interrupt)
+		if !ok {
+			continue
+		}
+		// Resume carries a typed Approval, so neither end has to agree on
+		// a metadata key.
+		part, err := transferMoney.Resume(interrupt, Approval{
+			Approved: userConfirms("Confirm transfer of $%.2f?", meta.Amount),
+		})
+		if err != nil {
+			return err
+		}
+		restarts = append(restarts, part)
+	}
+
+	resp, err = genkit.Generate(ctx, g,
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transferMoney),
+		ai.WithToolRestarts(restarts...),
+	)
+	if err != nil {
+		return err
+	}
+}
+```
+
+Both the interrupt value and the resume value must serialize to a JSON object, so
+use a struct or a map. A scalar or a slice fails at runtime, not at compile time.
+The tool's `Respond()` method is the in-preview counterpart of `RespondWith()`,
+answering a paused call without running the tool again.
+
+The
+[basic-tool-interrupts-exp sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts-exp)
+is the same program as basic-tool-interrupts written against this in-preview API,
+so reading the two side by side shows exactly what changes.
 
 </Lang>
 

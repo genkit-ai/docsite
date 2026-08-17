@@ -217,8 +217,26 @@ func main() {
 
 ## Usage
 
-To generate content, you first need to create a model definition based on the
-model you installed and want to use. For example, if you installed Gemma 3:
+Name any model your Ollama server has pulled. The plugin resolves it on demand,
+so no registration call is needed:
+
+```go
+resp, err := genkit.Generate(ctx,
+  g,
+  ai.WithModelName("ollama/gemma3"),
+  ai.WithPrompt("Tell me a joke."),
+)
+if err != nil {
+    return err
+}
+
+log.Println(resp.Text())
+```
+
+The tag rides through to Ollama as written, so `ollama/gemma3` and
+`ollama/gemma3:latest` both reach the same model.
+
+You can also register a model explicitly and pass the reference around:
 
 ```go
 model := ollamaPlugin.DefineModel(
@@ -227,20 +245,9 @@ model := ollamaPlugin.DefineModel(
     Name: "gemma3",
     Type: "chat", // "chat" or "generate"
   },
-  &ai.ModelOptions{
-    Supports: &ai.ModelSupports{
-      Multiturn:  true,
-      SystemRole: true,
-      Tools:      false,
-      Media:      false,
-    },
-  },
+  nil, // Take the capabilities the plugin knows about.
 )
-```
 
-Then, you can use the model reference to send requests to your Ollama server:
-
-```go
 resp, err := genkit.Generate(ctx,
   g,
   ai.WithModel(model),
@@ -253,20 +260,59 @@ if err != nil {
 log.Println(resp.Text())
 ```
 
-Or you can refer to the model by its name:
+## Model capabilities
+
+Local models differ widely in what they accept, so the plugin asks the server
+instead of guessing from the model name. Detection runs during model discovery,
+which is what the Dev UI's model list triggers: the plugin lists the installed
+models with `GET /api/tags`, drops any name containing `embed`, then calls
+`POST /api/show` for each of the rest, at most four at a time, each call bounded
+by a five second timeout or by `Timeout` seconds when that is shorter. The
+capabilities the server reports become the model's `ai.ModelSupports`: `tools`
+sets `Tools`, `vision` sets `Media`, and `Multiturn` and `SystemRole` are always
+true. The [`ollama-tools`](https://github.com/genkit-ai/genkit/tree/main/go/samples/ollama-tools)
+and [`ollama-vision`](https://github.com/genkit-ai/genkit/tree/main/go/samples/ollama-vision)
+samples exercise one capability each.
+
+Results are cached in the process and keyed by model name, checked against the
+digest `/api/tags` reports so that a re-pulled model is detected again. A
+successful detection is kept for the life of the process; a failed one is retried
+after 30 seconds. When detection fails, the model falls back to claiming every
+capability and the plugin logs a warning.
+
+Resolving a model by name reads that cache and never queries the server, so a
+model discovery has not covered yet gets the same permissive fallback.
+
+### Overriding detected capabilities
+
+Pass a non-nil `*ai.ModelOptions` to `DefineModel` to state the capabilities
+yourself:
 
 ```go
-resp, err := genkit.Generate(ctx,
+model := ollamaPlugin.DefineModel(
   g,
-  ai.WithModelName("ollama/gemma3:latest"),
-  ai.WithPrompt("Tell me a joke."),
+  ollama.ModelDefinition{Name: "gemma3", Type: "chat"},
+  &ai.ModelOptions{
+    Supports: &ai.ModelSupports{
+      Multiturn:  true,
+      SystemRole: true,
+      Tools:      true,
+      Media:      true,
+    },
+  },
 )
-if err != nil {
-    return err
-}
-
-log.Println(resp.Text())
 ```
+
+With a nil `opts`, `DefineModel` reuses a successful detection for that model when
+one is already cached, and falls back to a built-in name list otherwise. It then
+turns `Tools` off unless `Type` is `"chat"`, because only the chat endpoint
+accepts tools.
+
+That is the only override the plugin offers: there is no map of capability
+overrides on the plugin struct. It describes the exact name you define, so
+`ollama/gemma3` and `ollama/gemma3:latest` are two names and only the one you
+defined carries your options. It also leaves discovery alone, so the Dev UI list
+still reports what the server said.
 
 See [Generating content](/docs/models) for more information.
 

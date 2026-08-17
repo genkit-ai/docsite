@@ -624,7 +624,9 @@ For comprehensive examples demonstrating all plugin features, see the [Genkit An
 
 <Lang lang="go">
 
-The Anthropic plugin provides access to Anthropic's Claude models in Go.
+Go reaches Claude two ways. The `plugins/anthropic` plugin speaks Anthropic's native Messages API and is the default choice. The `plugins/compat_oai/anthropic` plugin reaches the same models through Anthropic's OpenAI-compatible endpoint, which Anthropic positions for testing and comparison. [Choosing between the two plugins](#choosing-between-the-two-plugins) compares them field by field.
+
+Unless stated otherwise, the sections below describe the native plugin.
 
 ## Configuration
 
@@ -636,66 +638,178 @@ import "github.com/firebase/genkit/go/plugins/anthropic"
 g := genkit.Init(context.Background(), genkit.WithPlugins(&anthropic.Anthropic{}))
 ```
 
-You must provide an API key from Anthropic. You can get an API key from the [Anthropic Console](https://console.anthropic.com/). The plugin will automatically use the `ANTHROPIC_API_KEY` environment variable.
+You need an API key from the [Anthropic Console](https://console.anthropic.com/). The plugin reads `ANTHROPIC_API_KEY` from the environment, and `ANTHROPIC_BASE_URL` for the endpoint. `Init` panics when nothing authenticates: no `APIKey` field, no `ANTHROPIC_API_KEY`, no `ANTHROPIC_AUTH_TOKEN`, and an empty `Opts`.
 
-## Supported Models
+The plugin struct carries four fields:
 
-- **claude-opus-4-8** - Most capable model for complex reasoning and agentic tasks
-- **claude-opus-4-7** - Previous-generation Opus, highly capable for long-horizon work
-- **claude-sonnet-4-6** - Balanced model with extended thinking support
-- **claude-haiku-4-5** - Fastest and most cost-effective model
+| Field     | Type                          | Description                                                                          |
+| --------- | ----------------------------- | ------------------------------------------------------------------------------------ |
+| `APIKey`  | `string`                      | The key requests are authenticated with. Falls back to `ANTHROPIC_API_KEY`.           |
+| `BaseURL` | `string`                      | Overrides the endpoint. Falls back to `ANTHROPIC_BASE_URL`, then the SDK's default.   |
+| `Opts`    | `[]option.RequestOption`      | anthropic-sdk-go request options applied to every request.                            |
+| `Models`  | `map[string]ai.ModelOptions`  | Describes or corrects what the plugin knows about a model.                            |
 
-## Usage Example
+`Opts` passes the anthropic-sdk-go client configuration through untouched: retries, timeouts, extra headers, `option.WithMiddleware`, and the SDK's Bedrock and Vertex routing helpers, which are request options too.
 
 ```go
 import (
+    "time"
+
+    "github.com/anthropics/anthropic-sdk-go/option"
+    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/anthropic"
 )
 
-// Initialize Anthropic plugin
-g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{
+    Opts: []option.RequestOption{
+        option.WithMaxRetries(5),
+        option.WithRequestTimeout(30 * time.Second),
+    },
+}))
+```
 
-// Use Claude for tasks requiring reasoning
-model := anthropic.Model(g, "claude-sonnet-4-6")
+Options in `Opts` are applied after the ones derived from `APIKey` and `BaseURL`, and the SDK applies options in order, so an option here wins when it sets the same thing. Distinct settings do not displace each other: the API key rides an `X-Api-Key` header, so a key-less setup such as Bedrock or Vertex routing needs the key unset everywhere, or an `option.WithHeaderDel` for `X-Api-Key` in `Opts`.
+
+## Models
+
+`Init` registers no models. Every Claude model resolves on first use, and the plugin lists Anthropic's live catalog through the models API, cached for an hour. These IDs carry curated capabilities:
+
+- `claude-fable-5`
+- `claude-opus-5`
+- `claude-sonnet-5`
+- `claude-opus-4-8`
+- `claude-opus-4-7`
+- `claude-opus-4-6`
+- `claude-opus-4-5`
+- `claude-sonnet-4-6`
+- `claude-sonnet-4-5`
+- `claude-haiku-4-5`
+
+The list is a starting point, not a limit. Any Claude ID resolves on demand, so a model released after this version of the plugin works before the plugin knows about it, and a dated snapshot such as `claude-sonnet-4-5-20250929` has its date suffix stripped and picks up the description of the alias it points at. A model outside the curated list claims no native constrained generation, so Genkit puts schema instructions in the prompt for it instead.
+
+Use `Models` to describe or correct a model:
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{
+    Models: map[string]ai.ModelOptions{
+        "claude-opus-6": {Label: "Claude Opus 6"},
+    },
+}))
+```
+
+Entries overlay rather than replace: a field left at its zero value keeps what the plugin resolved, so an entry can pin one capability without restating the label or the config schema. They apply wherever a model is described, both to the catalog the Dev UI lists and to the model built to serve a request, so ordering does not matter.
+
+:::note
+See the [Anthropic models documentation](https://platform.claude.com/docs/en/about-claude/model-deprecations#model-status) for a complete list of available models and their deprecation status.
+:::
+
+## Usage example
+
+```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(model),
+    ai.WithModelName("anthropic/claude-sonnet-4-5"),
     ai.WithPrompt("Analyze this complex problem step by step."),
 )
+if err != nil {
+    return err
+}
+
+fmt.Println(resp.Text())
 ```
 
-## Using Multiple Providers
+For a runnable streaming flow built on this plugin, see [go/samples/anthropic](https://github.com/genkit-ai/genkit/tree/main/go/samples/anthropic).
 
-You can use both OpenAI and Anthropic providers in the same application:
+## Configuration options
+
+Claude models take the Anthropic SDK's own request type, `anthropic.MessageNewParams`, as their config, so config keys are Anthropic's wire names. Genkit validates a request's config against the model's advertised schema and deserializes it into that struct before the request goes out. `ModelRef` types the config at the call site. This package and the SDK are both named `anthropic`, so one of them needs an import alias:
 
 ```go
 import (
-    "github.com/firebase/genkit/go/plugins/compat_oai/openai"
+    sdk "github.com/anthropics/anthropic-sdk-go"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/anthropic"
 )
 
-oai := &openai.OpenAI{APIKey: "YOUR_OPENAI_KEY"}
-claude := &anthropic.Anthropic{}
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5", &sdk.MessageNewParams{
+        MaxTokens: 4096,
+        Thinking: sdk.ThinkingConfigParamUnion{
+            OfEnabled: &sdk.ThinkingConfigEnabledParam{BudgetTokens: 2048},
+        },
+    })),
+    ai.WithPrompt("Answer concisely."),
+)
+if err != nil {
+    return err
+}
 
-g := genkit.Init(ctx, genkit.WithPlugins(oai, claude))
-
-// Use OpenAI for embeddings and tool-heavy tasks
-openaiModel := oai.Model(g, "gpt-5.5")
-embedder := oai.Embedder(g, "text-embedding-3-large")
-
-// Use Anthropic for reasoning and analysis
-claudeModel := anthropic.Model(g, "claude-sonnet-4-6")
+fmt.Println(resp.Reasoning())
+fmt.Println(resp.Text())
 ```
 
-## Advanced Features
+`MaxTokens` is an `int64` and falls back to 4096 when left unset. `temperature`, `top_k`, and `top_p` are deprecated on Claude Opus 4.7 and later, which reject any value set.
 
-### Multimodal Support
+The advertised schema is reflected from the anthropic-sdk-go version your build links, so a field Anthropic ships later becomes usable, and validated, by bumping the SDK in your own `go.mod`.
 
-Claude models support vision capabilities:
+### Fields Genkit owns
+
+A config that carries a field Genkit builds from the request is rejected with `INVALID_ARGUMENT`, and the error names the option to use instead:
+
+| Config field                     | Use instead                                     |
+| -------------------------------- | ----------------------------------------------- |
+| `messages`                       | `ai.WithMessages()`, `ai.WithPrompt()`          |
+| `system`                         | `ai.WithSystem()`                               |
+| `model`                          | `ai.WithModel()`, `ai.WithModelName()`          |
+| `output_config.format`           | `ai.WithOutputType()`, `ai.WithOutputSchema()`  |
+| a custom function tool in `tools` | `ai.WithTools()`                               |
+
+`output_config.effort` is unaffected, and the config-level `tools` field stays open for Anthropic's server-side tools. Genkit tools are appended to whatever the config carries rather than replacing it.
+
+### Thinking and reasoning
+
+`Thinking` is a union with three arms:
+
+- `OfEnabled` takes a fixed `BudgetTokens`, which must be at least 1024 and below `MaxTokens`.
+- `OfDisabled` turns thinking off.
+- `OfAdaptive` lets the model pick its own budget per request, so a fixed budget is rejected on a model that thinks adaptively. `OutputConfig.Effort` is the knob there, one of `sdk.OutputConfigEffortLow`, `Medium`, `High`, or `Max`.
 
 ```go
-// Works with Claude models
+var model = anthropic.ModelRef("claude-sonnet-5", &sdk.MessageNewParams{
+    MaxTokens: 4000,
+    Thinking: sdk.ThinkingConfigParamUnion{
+        OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{},
+    },
+    OutputConfig: sdk.OutputConfigParam{Effort: sdk.OutputConfigEffortLow},
+})
+```
+
+Thinking comes back as Genkit reasoning parts, readable through `resp.Reasoning()`, and each block's signature is preserved, so a multi-turn conversation replays its thinking intact even after the history has been serialized and reloaded.
+
+### Server-side tools
+
+The config-level `tools` field reaches Anthropic's server-side tools, such as web search, web fetch, code execution, the text editor, and memory:
+
+```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(model),
+    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5", &sdk.MessageNewParams{
+        MaxTokens: 2048,
+        Tools: []sdk.ToolUnionParam{{
+            OfWebSearchTool20250305: &sdk.WebSearchTool20250305Param{MaxUses: sdk.Int(3)},
+        }},
+    })),
+    ai.WithPrompt("What shipped in Go 1.25?"),
+)
+```
+
+## Multimodal input
+
+Media parts route by content type: `image/*` becomes an image block, `application/pdf` and `text/plain` become document blocks. Any other type, audio for example, fails before the request is sent, with an error naming the accepted set.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("anthropic/claude-sonnet-4-5"),
     ai.WithMessages(
         ai.NewUserMessage(
             ai.NewTextPart("What do you see in this image?"),
@@ -705,13 +819,31 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-### Streaming
-
-Claude models support streaming responses:
+A PDF is sent the same way, as a document block:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(model),
+    ai.WithModelName("anthropic/claude-sonnet-4-5"),
+    ai.WithMessages(
+        ai.NewUserMessage(
+            ai.NewTextPart("Summarize this document."),
+            ai.NewMediaPart("application/pdf", pdfData),
+        ),
+    ),
+)
+```
+
+## Tool calling
+
+Define tools with `genkit.DefineTool` and pass them with `ai.WithTools()`. `ai.ToolChoice` is honored: auto maps to `auto`, required to `any`, and none to `none`. Leaving it unset does not disturb a `tool_choice` set in the config.
+
+A tool that attaches content parts to its response sends them inside the Anthropic `tool_result` block, alongside the structured output, using the same content-type mapping as user media. A part Anthropic cannot carry in a tool result, reasoning or a nested tool request for example, fails rather than being dropped silently. See [Tool calling](/docs/tool-calling) for how to define tools, and [go/samples/basic-tools](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tools) for a runnable example.
+
+## Streaming
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("anthropic/claude-sonnet-4-5"),
     ai.WithPrompt("Write a long explanation."),
     ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
         for _, content := range chunk.Content {
@@ -722,25 +854,111 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-### Configuration
+## Prompt caching and citations
 
-Anthropic models support specific configuration options provided by the Anthropic SDK:
+Neither is available in Go. The plugin never emits a `cache_control` breakpoint, and `system` and `messages` are fields the config cannot carry, so there is no way to mark content for caching from Genkit. Anthropic's cache-read count is still reported as `resp.Usage.CachedContentTokens`, but with no breakpoint to create the cache entry it stays at zero. There is no citations handling either: a document block is sent without citation support, and no citation metadata is read back.
+
+## Choosing between the two plugins
+
+Both plugins reach the same Claude models. The native `plugins/anthropic` plugin is the default choice, because it speaks the Messages API directly:
+
+- **Thinking replays across turns.** The native plugin sends a thinking block back with its signature intact. The compatible endpoint carries reasoning as a plain string with no signature field, and does not return the thinking content at all, only the tokens it cost.
+- **Documents.** The native plugin sends `application/pdf` and `text/plain` as Anthropic document blocks. The compatible endpoint has only `image_url`, so a PDF goes out as an image data URI.
+- **Multipart tool results.** The native plugin puts a tool's extra text and image parts in the `tool_result` content array. The compatible endpoint sends the structured output only, and the extra parts are dropped.
+- **Cached-token accounting.** Only the native plugin reports `cache_read_input_tokens`.
+- **Config surface.** The native config is the whole `anthropic.MessageNewParams`, so server-side tools, thinking, output effort, and service tier are all reachable. The compatible plugin exposes a small curated `ChatConfig`.
+
+Reach for `plugins/compat_oai/anthropic` when the wire shape is what matters: an existing OpenAI-shaped proxy or gateway, or a comparison harness. It also offers a per-request `apiKey` and an `extra` passthrough that the native plugin has no equivalent for, and it registers its curated models at `Init`, so they appear in the Dev UI without a network call.
 
 ```go
-import "github.com/anthropics/anthropic-sdk-go"
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
+)
 
-config := &anthropic.MessageNewParams{
-    Temperature: anthropic.Float(0.7),
-    MaxTokens:   anthropic.Int(1000),
-    TopP:        anthropic.Float(0.9),
-}
+g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
 
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(model),
-    ai.WithPrompt("Your prompt here"),
-    ai.WithConfig(config),
+    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5-20250929", &anthropic.ChatConfig{
+        MaxOutputTokens: 2048,
+        Thinking: &anthropic.ThinkingConfig{
+            Type:         "enabled",
+            BudgetTokens: 2000,
+        },
+    })),
+    ai.WithPrompt("Answer concisely."),
 )
 ```
+
+The compatible plugin reads `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL`, defaulting to `https://api.anthropic.com/v1`; a base URL without the `/v1` segment gets it appended. Unlike the rest of the `compat_oai` family, it does not panic when no key is configured. It registers 16 models at `Init`, keyed mostly by dated snapshot: `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-opus-4-5-20251101`, `claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`, `claude-opus-4-1-20250805`, `claude-3-7-sonnet-20250219`, `claude-3-5-haiku-20241022`, `claude-3-5-sonnet-20240620`, `claude-3-opus-20240229`, and `claude-3-haiku-20240307`. Dateless aliases ride along as versions of the dated entries, and any other Claude ID still resolves on demand. The Claude 3 Opus, Claude 3 Haiku, and Claude 3.5 Sonnet entries are marked as not supporting the system role.
+
+The two samples are written to the same shape so the difference is the plugin and its config: [go/samples/anthropic](https://github.com/genkit-ai/genkit/tree/main/go/samples/anthropic) and [go/samples/compat_oai/anthropic](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/anthropic).
+
+:::caution[Both plugins claim the provider name `anthropic`]
+Passing both to one `genkit.Init` panics at startup with `plugin "anthropic" is already registered`, in either order. Neither plugin can be renamed.
+
+Pick one. If a comparison harness genuinely needs both, give each its own `genkit.Init`, since each instance has its own registry. Both packages are named `anthropic`, so one of them needs an import alias:
+
+```go
+import (
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/anthropic"
+    compatanthropic "github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
+)
+
+native := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+compatible := genkit.Init(ctx, genkit.WithPlugins(&compatanthropic.Anthropic{}))
+```
+
+Both plugins also name their models `anthropic/<model-id>`, so a model name in code does not say which plugin serves it. The import path does.
+:::
+
+## Using multiple providers
+
+You can use OpenAI and Anthropic in the same application. Each plugin takes its own SDK's request type as config, so the OpenAI reference takes `openaiGo.ChatCompletionNewParams` while the Claude reference takes `sdk.MessageNewParams`:
+
+```go
+import (
+    sdk "github.com/anthropics/anthropic-sdk-go"
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/anthropic"
+    "github.com/firebase/genkit/go/plugins/compat_oai/openai"
+    openaiGo "github.com/openai/openai-go"
+)
+
+g := genkit.Init(ctx, genkit.WithPlugins(
+    &openai.OpenAI{APIKey: "YOUR_OPENAI_KEY"},
+    &anthropic.Anthropic{},
+))
+
+gpt, err := genkit.Generate(ctx, g,
+    ai.WithModel(openai.ModelRef("gpt-5.5", &openaiGo.ChatCompletionNewParams{
+        Temperature: openaiGo.Float(0.7),
+    })),
+    ai.WithPrompt("Draft a product summary."),
+)
+if err != nil {
+    return err
+}
+
+claude, err := genkit.Generate(ctx, g,
+    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5", &sdk.MessageNewParams{MaxTokens: 1024})),
+    ai.WithPrompt("Critique this summary: %s", gpt.Text()),
+)
+if err != nil {
+    return err
+}
+
+fmt.Println(claude.Text())
+```
+
+## Learn more
+
+- [Generating content with AI models](/docs/models)
+- [Tool calling](/docs/tool-calling)
+- [Middleware](/docs/middleware) for retry and fallback around a Claude model
 
 </Lang>
 

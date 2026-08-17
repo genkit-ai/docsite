@@ -67,7 +67,9 @@ for _, route := range genkitx.AllAgentRoutes(g) {
 log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 
-Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent.
+Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent. The fields on `Route` are exported, so a router other than `http.ServeMux` can mount the same layout: read `Method` and `Path`, and serve `Action` with `genkit.Handler`.
+
+An agent is a bidirectional streaming action, but the standard handler also runs it one turn per request, which is what these routes serve. The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample serves a store-backed agent and a client-managed one side by side, with `curl` recipes for streaming, detach, poll, and abort.
 
 ## Route layout
 
@@ -77,12 +79,12 @@ Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(
 
 There is currently no `abortSnapshot` route.
 
-Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in `init`. `init` is a required object even for a new conversation: send `init: {}` to start fresh, or include `sessionId`, `snapshotId`, or `state` to continue.
+Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in the optional `init`. Omit `init` to start a fresh conversation, or include `sessionId`, `snapshotId`, or `state` to continue one.
 
 ```sh
 curl -X POST http://localhost:8080/agents/chat \
   -H 'content-type: application/json' \
-  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}},"init":{}}'
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}}}'
 ```
 
 Continue a server-managed conversation:
@@ -126,6 +128,10 @@ curl -X POST http://localhost:8080/agents/chat/abort \
   -H 'content-type: application/json' \
   -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
 ```
+
+## Failure tiers
+
+Failures arrive at two different levels, and a client has to read both. A failed turn still returns 200, reporting `finishReason` `"failed"` with a structured error and the last-good state, so the client can retry without losing the conversation. A rejected init, such as an unknown session or `state` sent to a store-backed agent, fails the request with a 4xx before any turn runs.
 
 </Lang>
 
