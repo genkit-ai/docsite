@@ -504,7 +504,17 @@ Snapshots are saved as files inside the `.sessions` folder.
 
 ## Use a Firestore store
 
-`FirestoreSessionStore` in `genkit-google-cloud` persists snapshots in Cloud Firestore. It is the built-in option for production apps where several server instances share sessions, and it supports snapshot watching for background execution and abort.
+`FirestoreSessionStore` in `genkit-google-cloud` persists snapshots in Cloud Firestore. It is the built-in, horizontally scalable option for multi-instance production deployments (such as Cloud Run or Cloud Functions) that need persistent conversational memory without hitting single-document limits.
+
+### Architecture & Capabilities
+
+Unlike naive implementations that store an entire conversation in a single Firestore document (which quickly hits Firestore's 1 MiB document limit and degrades read performance), `FirestoreSessionStore` is engineered for high concurrency and long-running sessions:
+
+- **Incremental Diffs & Sharded Checkpoints**: Persists each turn as an incremental RFC 6902 JSON Patch diff anchored to periodic full-state checkpoints. Sessions scale indefinitely without document size bottlenecks.
+- **Bounded Document I/O**: The number of documents read or written per turn is bounded by `checkpoint_interval` (default 25) rather than total conversation length, keeping Firestore costs and latency predictable.
+- **Zero Secondary Indexes**: State reconstruction and turn lookups use direct document-ID fetches inside read transactions, requiring no composite indexes.
+- **Atomic Transactions & Concurrency**: Snapshot writes and pointer updates commit inside atomic Firestore transactions with automatic exponential backoff retries when multiple workers update the same session.
+- **Realtime Status Streaming**: Uses native Firestore listeners (`on_snapshot_status_change`) to stream live turn statuses across processes and support distributed aborts.
 
 ```python
 from genkit_google_cloud import FirestoreSessionStore
@@ -523,21 +533,25 @@ store = FirestoreSessionStore(
 
 support_agent = ai.define_agent(
     name='supportAgent',
-    model='googleai/gemini-flash-latest',
+    model='googleai/gemini-pro-latest',
     system='Help customers understand their order status.',
     store=store,
 )
 ```
 
+### Configuration Options
+
 All options are optional:
 
-- **`client`** is an explicit Firestore `AsyncClient`. It defaults to a new client that picks up Application Default Credentials and `FIRESTORE_EMULATOR_HOST`.
-- **`collection`** is the collection that holds snapshot documents. It defaults to `genkit-sessions`. Two companion collections, `<collection>-pointers` and `<collection>-shards`, are derived from it.
-- **`snapshot_path_prefix`** returns a per-tenant prefix from the call context (for example an authenticated user id). When set, snapshots are nested under that prefix so one tenant cannot read another's data even with a `snapshotId`. It defaults to `global`.
-- **`checkpoint_interval`** is the number of turns between full-state checkpoints. Between checkpoints the store writes diffs. It defaults to `25`.
-- **`shard_size`** is the maximum size in bytes of a single shard or diff document. It defaults to 512 KiB.
+- **`client`**: Explicit Firestore `AsyncClient`. Defaults to a client initialized with Application Default Credentials (ADC) or `FIRESTORE_EMULATOR_HOST`.
+- **`sync_client`**: Explicit synchronous `google.cloud.firestore.Client` used for real-time background snapshot listeners. Defaults to an ambient ADC client.
+- **`collection`**: Base collection name for snapshots (defaults to `genkit-sessions`). Two companion collections (`<collection>-pointers` and `<collection>-shards`) are derived automatically.
+- **`snapshot_path_prefix`**: Function returning a per-tenant prefix from the call context (e.g. authenticated user ID). Ensures strong multi-tenant isolation. Defaults to `'global'`.
+- **`checkpoint_interval`**: Number of turns between full-state checkpoints (defaults to `25`). Between checkpoints, only lightweight turn diffs are written.
+- **`shard_size`**: Maximum size in bytes of a single shard or diff document (defaults to 512 KiB).
+- **`transaction_max_attempts`**: Maximum retry attempts for atomic pointer transactions during high write contention (defaults to `5`).
 
-The Firestore store watches snapshot documents to observe status changes, so background execution and aborts work across instances without polling. It does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+The Firestore store watches snapshot documents to observe status changes, so background execution and aborts work across distributed instances without polling. It does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
 
 ## Implement a custom store
 
