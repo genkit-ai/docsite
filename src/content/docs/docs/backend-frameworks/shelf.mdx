@@ -1,0 +1,374 @@
+---
+title: Shelf tutorial
+description: Add Genkit AI features to a Dart Shelf server by building a streaming Bargain Chef recipe flow.
+supportedLanguages:
+  - dart
+---
+
+import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on [Shelf](https://pub.dev/packages/shelf) that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/dart/shelf).
+
+## Prerequisites
+
+- Dart SDK 3.10.0 or later
+
+This tutorial assumes you're already familiar with building Shelf applications.
+
+## Set up the application
+
+### Create the Dart project
+
+Create a new Dart console app:
+
+```bash
+dart create -t console my_genkit_shelf
+cd my_genkit_shelf
+```
+
+### Install the Genkit CLI
+
+The Genkit CLI powers the Developer UI and other local tooling:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+### Install packages
+
+Add the Genkit packages your app needs:
+
+```bash
+dart pub add genkit genkit_google_genai genkit_shelf schemantic shelf shelf_cors_headers shelf_router dev:build_runner
+```
+
+These packages include:
+
+- **`genkit`**: Core Genkit SDK.
+- **`genkit_google_genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`genkit_shelf`**: Exposes Genkit flows as Shelf handlers.
+- **`schemantic`**: Generates JSON schemas from Dart classes for typed flow inputs and outputs.
+- **`shelf`** and **`shelf_router`**: Shelf server and routing.
+- **`shelf_cors_headers`**: CORS middleware. Lets browser frontends served from a different origin call the Genkit endpoint.
+- **`build_runner`**: Generates the schema code from your annotated classes.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+## Create the backend
+
+The backend handles requests over HTTP. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the client as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Describe the data shapes** with `@Schema()` classes so Genkit can validate the model's output and stream partial recipe chunks.
+2. **Initialize Genkit** and register Gemini as the model provider.
+3. **Define a tool** the model can call to fetch sale prices.
+4. **Define the flow** that ties everything together and serve it over HTTP.
+
+Replace `bin/my_genkit_shelf.dart` with the following:
+
+```dart title="bin/my_genkit_shelf.dart"
+import 'dart:io';
+
+import 'package:genkit/genkit.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:schemantic/schemantic.dart';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as io;
+import 'package:shelf_cors_headers/shelf_cors_headers.dart';
+import 'package:shelf_router/shelf_router.dart';
+
+part 'my_genkit_shelf.g.dart';
+
+@Schema()
+abstract class $IngredientOnSaleInput {
+  @Field(description: 'Whether to fetch weekday or weekend sale prices.')
+  @StringField(enumValues: ['weekday', 'weekend'])
+  String get dayType;
+}
+
+@Schema()
+abstract class $SaleIngredient {
+  String get name;
+  String get price;
+}
+
+@Schema()
+abstract class $RecipeIngredient {
+  String get name;
+  String get quantity;
+  bool get onSale;
+}
+
+@Schema()
+abstract class $Recipe {
+  String get title;
+  String get description;
+  int get servings;
+  List<$RecipeIngredient> get ingredients;
+  List<String> get steps;
+}
+
+@Schema()
+abstract class $BargainChefInput {
+  @Field(description: 'What the user feels like eating right now.')
+  String get craving;
+}
+
+void main() async {
+  final ai = Genkit(plugins: [googleAI()]);
+
+  final getIngredientsOnSale = ai.defineTool(
+    name: 'getIngredientsOnSale',
+    description:
+        'Returns the ingredients on sale at the local grocery store, with prices. '
+        'The sale set differs between weekdays and weekends.',
+    inputSchema: IngredientOnSaleInput.$schema,
+    outputSchema: .list(SaleIngredient.$schema),
+    fn: (input, _) async {
+      // Mock data: in a real app, query a pricing database.
+      if (input.dayType == 'weekend') {
+        return [
+          SaleIngredient(name: 'chicken breast', price: r'$2.99/lb'),
+          SaleIngredient(name: 'pasta', price: r'$0.79'),
+          SaleIngredient(name: 'canned tomatoes', price: r'$0.99'),
+          SaleIngredient(name: 'garlic', price: r'$0.50 / head'),
+          SaleIngredient(name: 'olive oil', price: r'$6.99'),
+        ];
+      }
+      return [
+        SaleIngredient(name: 'eggs', price: r'$3.49 / dozen'),
+        SaleIngredient(name: 'spinach', price: r'$1.99'),
+        SaleIngredient(name: 'parmesan', price: r'$4.99'),
+        SaleIngredient(name: 'lemons', price: r'$0.50 each'),
+        SaleIngredient(name: 'rice', price: r'$2.49'),
+        SaleIngredient(name: 'butter', price: r'$3.99'),
+      ];
+    },
+  );
+
+  final bargainChefFlow = ai.defineFlow(
+    name: 'bargainChefFlow',
+    inputSchema: BargainChefInput.$schema,
+    outputSchema: Recipe.$schema,
+    streamSchema: Recipe.$schema,
+    fn: (input, ctx) async {
+      final today = _weekdayName(DateTime.now().weekday);
+
+      final stream = ai.generateStream(
+        model: googleAI.gemini('gemini-flash-latest'),
+        config: GeminiOptions(
+          temperature: 0.7,
+          thinkingConfig: ThinkingConfig(thinkingLevel: 'MINIMAL'),
+        ),
+        prompt:
+            'Today is $today. The user is craving: ${input.craving}.\n\n'
+            'Call the getIngredientsOnSale tool with the dayType that matches '
+            'today. Saturday and Sunday are weekends; all other days are '
+            'weekdays. Then propose ONE recipe that takes advantage of those '
+            'deals. For each ingredient, set onSale=true if it appears in the '
+            "tool's response, false otherwise.",
+        toolNames: [getIngredientsOnSale.name],
+        outputSchema: Recipe.$schema,
+      );
+
+      await for (final chunk in stream) {
+        if (ctx.streamingRequested && chunk.output != null) {
+          ctx.sendChunk(chunk.output!);
+        }
+      }
+
+      final response = await stream.onResult;
+      if (response.output == null) {
+        throw GenkitException(
+          'Failed to generate recipe',
+          status: StatusCodes.INTERNAL,
+        );
+      }
+      return response.output!;
+    },
+  );
+
+  final router = Router();
+  router.post('/bargainChefFlow', shelfHandler(bargainChefFlow));
+
+  final handler = const Pipeline()
+      .addMiddleware(logRequests())
+      .addMiddleware(corsHeaders())
+      .addHandler(router.call);
+  final server = await io.serve(handler, InternetAddress.anyIPv4, 8080);
+  print('Server running on http://localhost:${server.port}');
+}
+
+String _weekdayName(int weekday) => const [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+][weekday - 1];
+```
+
+A few details are worth noting:
+
+- **Data shapes from `@Schema()` classes:** The annotated classes (`Recipe`, `RecipeIngredient`, `SaleIngredient`, `BargainChefInput`, `IngredientOnSaleInput`) declare the structures that flow in and out of the model. The `schemantic` package generates JSON schemas, type-safe constructors, and parsers for each one, and the `@StringField(enumValues: [...])` annotation on `dayType` constrains the tool input to `weekday` or `weekend`.
+- **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape Genkit emits as in-progress chunks during streaming, because early chunks might only include the title or description.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed input schema forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`ctx.sendChunk`:** Each call forwards the latest partial recipe to the client so the response fills in field by field. After the stream completes, the flow awaits `stream.onResult` so the HTTP request still resolves with a validated recipe.
+- **Serving the flow:** The flow is mounted at `/bargainChefFlow` with `shelfHandler`, which adapts the Genkit flow to the Shelf request and response lifecycle, including streamed responses over `text/event-stream`.
+- **CORS:** `corsHeaders()` with no options allows **all origins**, so any browser frontend can call this endpoint during development. Before deploying, pass `corsHeaders(headers: {...})` to restrict it to the origins you actually serve.
+
+### Check the project layout
+
+Verify that your project layout matches the structure below. The `.g.dart` file is generated in the next step.
+
+<FileTree>
+
+- pubspec.yaml
+- bin
+  - **my_genkit_shelf.dart**
+  - my_genkit_shelf.g.dart generated schema code
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Run the app
+
+Generate the schema code from your annotated classes:
+
+```bash
+dart run build_runner build
+```
+
+Then start the server:
+
+```bash
+dart run
+```
+
+You should see:
+
+```
+Server running on http://localhost:8080
+```
+
+## Test and inspect the app
+
+You can test the flow directly with curl, and you can use the Developer UI to inspect every run with a visual trace.
+
+### Send a request with curl
+
+With the server running, use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://localhost:8080/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far: title first, then description, then ingredients (with `onSale` set on the ones the model picked from the tool), then steps. The final event carries the validated `result`.
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   ```bash
+   genkit start -- dart run
+   ```
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Keep build_runner watching]
+   In a separate terminal, run `dart run build_runner watch` so the generated schema code stays in sync as you edit your `@Schema()` classes.
+   :::
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll see the generated recipe, with a trace that builds in real time so you can follow the flow's progress through each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from connected clients]
+While the Developer UI is running, any flow invocation triggered from a connected client (such as a web app, mobile app, or another service) appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on Shelf that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
+- [Connect a web frontend](/docs/client): Wire a standalone web client up to this backend.
+- [Connect a Flutter app](/docs/app-frameworks/flutter): Call your flow from a Flutter client.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.

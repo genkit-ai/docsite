@@ -1,6 +1,6 @@
 export const GOOGLE_DARK_THEME = {
   name: "Google-Dark",
-  codeFontFamily: "0xProto",
+  codeFontFamily: "'Google Sans Mono', monospace",
   colors: {
     focusBorder: "#5876deff",
     foreground: "#e1dfdfff",
@@ -608,7 +608,7 @@ export const GOOGLE_DARK_THEME = {
 
 export const GOOGLE_LIGHT_THEME = {
   name: "Google-Light",
-  codeFontFamily: "0xProto",
+  codeFontFamily: "'Google Sans Mono', monospace",
   colors: {
     focusBorder: "#5876deff",
     foreground: "#292929ff",

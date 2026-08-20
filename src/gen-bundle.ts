@@ -17,12 +17,13 @@
 import { readdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import { parse } from 'yaml';
+import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
 
 export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
 
 async function main() {
 	const documents: Record<string, Doc> = {};
-	for (const lang of ['js', 'go', 'python']) {
+	for (const lang of ['js', 'go', 'dart', 'python']) {
 		const allDocs = await indexDocs('src/content/docs/docs', lang);
 		for (const doc of Object.keys(allDocs)) {
 			documents[`${lang}/${doc}`] = {
@@ -51,13 +52,22 @@ async function indexDocs(dir: string, lang: string) {
 	for (const file of docFiles) {
 		const markdown = await readFile(path.resolve(dir, file), { encoding: 'utf8' });
 		const { frontmatter, body } = await extractFrontmatterAndBody(markdown);
+		const supportedLanguages = Array.isArray(frontmatter.supportedLanguages)
+			? frontmatter.supportedLanguages
+			: ['js', 'go', 'dart', 'python'];
+		if (!supportedLanguages.includes(lang)) {
+			continue;
+		}
 		const headers = body.match(/^#.*\n/gm)?.join('') ?? '';
 		const normalizedFileName = file.endsWith('.mdx') ? file.substring(0, file.length - 1) : file;
+		const slugPath = normalizedFileName.substring(0, normalizedFileName.lastIndexOf('.'));
+		const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
 
 		documents[normalizedFileName] = {
 			text: renderContent(file, body, frontmatter.title || normalizedFileName, lang),
-			url:
-				'https://genkit.dev/docs/' + normalizedFileName.substring(0, normalizedFileName.lastIndexOf('.')) + '/',
+			url: isLanguageAgnostic
+				? `https://genkit.dev/docs/${slugPath}/`
+				: `https://genkit.dev/docs/${lang}/${slugPath}/`,
 			title: frontmatter.title || normalizedFileName,
 			description: frontmatter.description,
 			headers,
@@ -73,9 +83,13 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 	if (file.endsWith('.mdx')) {
 		// Strip out content for other languages
 		rawContent = rawContent.replace(
-			/<LanguageContent\s+lang="([^"]+)"[^>]*>([\s\S]*?)<\/LanguageContent>/g,
+			/<Lang\s+lang="([^"]+)"[^>]*>([\s\S]*?)<\/Lang>/g,
 			(match, blockLang, content) => {
-				if (blockLang === lang) {
+				const languages = String(blockLang)
+					.split(/\s+/)
+					.map((value) => value.trim())
+					.filter(Boolean);
+				if (languages.includes(lang)) {
 					return content;
 				}
 				return '';
@@ -102,7 +116,10 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 			}
 			fullProcessedContent = fullLines.slice(fullFirstNonImportIndex).join('\n').trim();
 			fullProcessedContent = `# ${title}\n\n${fullProcessedContent}`; // Prepend title
-			return fullProcessedContent;
+			return rewriteInternalDocsLinks(fullProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+				context: 'gen-bundle',
+				warnOnUnresolved: true,
+			});
 		} else {
 			// --- Case 2: <LLMs> tag NOT found ---
 			// Apply standard processing:
@@ -131,11 +148,17 @@ function renderContent(file: string, rawContent: string, title: string, lang: st
 
 			// 2c. Prepend H1 title
 			standardProcessedContent = `# ${title}\n\n${standardProcessedContent}`;
-			return standardProcessedContent;
+			return rewriteInternalDocsLinks(standardProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+				context: 'gen-bundle',
+				warnOnUnresolved: true,
+			});
 		}
 	}
 	rawContent = `# ${title}\n\n${rawContent}`; // Prepend title
-	return rawContent;
+	return rewriteInternalDocsLinks(rawContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
+		context: 'gen-bundle',
+		warnOnUnresolved: true,
+	});
 }
 
 export function extractFrontmatterAndBody(source: string) {

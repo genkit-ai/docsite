@@ -37,11 +37,15 @@ class MarkdownCopyManager {
       // Get current language
       const currentLang = this.getCurrentLanguage();
       
-      // Get the current page URL and construct the language-specific .md endpoint
+      // Get the current page URL and construct a markdown endpoint.
+      // On language-prefixed docs pages, fetch the page-local markdown directly.
+      // On neutral pages, fetch the language-specific markdown variant.
       const currentPath = window.location.pathname;
-      // Remove trailing slash if present, then add language extension
       const basePath = currentPath.replace(/\/$/, '');
-      const mdUrl = `${basePath}.${currentLang}.md`;
+      const pathLangMatch = currentPath.match(/^\/docs\/(js|go|dart|python)(\/|$)/);
+      const mdUrl = pathLangMatch
+        ? `${basePath}.md`
+        : `${basePath}.${currentLang}.md`;
       
       // Fetch the language-filtered markdown
       const response = await fetch(mdUrl);

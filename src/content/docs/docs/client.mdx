@@ -1,6 +1,11 @@
 ---
-title: Accessing flows from the client
-description: Learn how to access Genkit flows from client-side applications (JavaScript web apps, Dart or Flutter).
+title: Frontend integration
+description: Learn how to access Genkit flows from client-side applications.
+supportedLanguages:
+  - js
+  - go
+  - dart
+isLanguageAgnostic: true
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -22,12 +27,14 @@ Learn about flows in "[Defining AI workflows](/docs/flows/)".
 You will see the term "action" being used. Genkit's core framework is built on the "action" primitive, which enables observability/tracing, streaming and Dev UI interation. In theory, any action can be made remotely accessible with Genkit, so the client is not limited to flows, but any action that the server makes available.
 :::
 
-### Non-streaming Flow Calls
+### Non-streaming flow calls
 
 For a non-streaming response, use the `runFlow` function (in JS) or `await` the action (in Dart). This is suitable for flows that return a single, complete output.
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 ```typescript
 import { runFlow } from 'genkit/beta/client';
 
@@ -45,36 +52,43 @@ async function callHelloFlow() {
 
 callHelloFlow();
 ```
+
 </TabItem>
+
 <TabItem label="Dart">
+
 ```dart
 // main.dart
 import 'package:genkit/client.dart';
 
-// Define the action (as shown above)
+// defineRemoteAction returns a typed RemoteAction you can call or stream.
 final helloFlow = defineRemoteAction(
   url: 'http://127.0.0.1:3400/helloFlow',
-  fromResponse: (data) => data['greeting'] as String,
+  fromResponse: (data) => (data as Map<String, dynamic>)['greeting'] as String,
 );
 
 Future<void> callHelloFlow() async {
   try {
     final result = await helloFlow(input: {'name': 'Genkit User'});
     print('Non-streaming result: $result');
-  } catch (e) {
-    print('Error calling helloFlow: $e');
+  } on GenkitException catch (e) {
+    print('Error calling helloFlow: ${e.message}');
   }
 }
 ```
+
 </TabItem>
+
 </Tabs>
 
-### Streaming Flow Calls
+### Streaming flow calls
 
 For flows that are designed to stream responses (e.g., for real-time updates or long-running operations), use the `streamFlow` function (in JS) or the `.stream()` method (in Dart).
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 ```typescript
 import { streamFlow } from 'genkit/beta/client';
 
@@ -100,45 +114,53 @@ async function streamHelloFlow() {
 
 streamHelloFlow();
 ```
+
 </TabItem>
+
 <TabItem label="Dart">
+
 ```dart
 // main.dart
 import 'package:genkit/client.dart';
 
-// Define the action with a chunk decoder
+// Provide fromStreamChunk to decode each streamed chunk.
 final helloFlow = defineRemoteAction(
   url: 'http://127.0.0.1:3400/helloFlow',
-  fromResponse: (data) => data['greeting'] as String,
+  fromResponse: (data) => (data as Map<String, dynamic>)['greeting'] as String,
   fromStreamChunk: (chunk) => chunk as String,
 );
 
 Future<void> streamHelloFlow() async {
   try {
-    final result = helloFlow.stream(input: {'name': 'Streaming User'});
+    // stream() returns an ActionStream: a Stream of chunks plus an onResult future.
+    final stream = helloFlow.stream(input: {'name': 'Streaming User'});
 
     // Process the stream chunks as they arrive
-    await for (final chunk in result) {
+    await for (final chunk in stream) {
       print('Stream chunk: $chunk');
     }
 
     // Get the final complete response
-    final finalOutput = await result.onResult;
+    final finalOutput = await stream.onResult;
     print('Final streaming output: $finalOutput');
-  } catch (e) {
-    print('Error streaming helloFlow: $e');
+  } on GenkitException catch (e) {
+    print('Error streaming helloFlow: ${e.message}');
   }
 }
 ```
+
 </TabItem>
+
 </Tabs>
 
-### Custom Object Streaming
+### Custom object streaming
 
 You can also stream custom objects. For robust JSON serialization in Dart, it's recommended to use a code generation library like [`json_serializable`](https://pub.dev/packages/json_serializable). In TypeScript, you can use standard interfaces to define the shape of your data.
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 ```typescript
 // Define the shape of your data
 interface StreamChunk {
@@ -169,24 +191,30 @@ async function streamCustomObjects() {
   }
 }
 ```
+
 </TabItem>
+
 <TabItem label="Dart">
+
 ```dart
 class StreamChunk {
   final String content;
-  
+
   StreamChunk({required this.content});
-  
-  factory StreamChunk.fromJson(Map<String, dynamic> json) => StreamChunk(
-    content: json['content'] as String,
+
+  // fromResponse and fromStreamChunk receive the JSON-decoded value as `dynamic`,
+  // so the factory takes `dynamic` and casts inside. You can then pass the
+  // factory directly (a tear-off) instead of wrapping it in a closure.
+  factory StreamChunk.fromJson(dynamic json) => StreamChunk(
+    content: (json as Map<String, dynamic>)['content'] as String,
   );
 }
 
-// Assumes MyOutput and MyInput classes are defined as in the non-streaming example
+// Assumes MyOutput and MyInput classes are defined with matching fromJson factories.
 final streamAction = defineRemoteAction(
   url: 'http://localhost:3400/stream-process',
-  fromResponse: (data) => MyOutput.fromJson(data),
-  fromStreamChunk: (data) => StreamChunk.fromJson(data),
+  fromResponse: MyOutput.fromJson,
+  fromStreamChunk: StreamChunk.fromJson,
 );
 
 final input = MyInput(message: 'Stream this data', count: 5);
@@ -201,19 +229,23 @@ try {
 
   final finalResult = await stream.onResult;
   print('\nFinal Response: ${finalResult.reply}');
-} catch (e) {
-  print('Error calling streaming flow: $e');
+} on GenkitException catch (e) {
+  print('Error calling streaming flow: ${e.message}');
 }
 ```
+
 </TabItem>
+
 </Tabs>
 
-### Working with Genkit Data Objects
+### Working with Genkit data objects
 
 When interacting with Genkit models, you'll often work with standardized data classes. The client libraries provide these classes for type-safe interaction.
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 ```typescript
 import { streamFlow } from 'genkit/beta/client';
 import type {
@@ -239,42 +271,44 @@ async function streamGenerate() {
     }
 
     const finalResult = await result.output;
-    // Note: A response may have multiple candidates.
-    console.log(
-      '\nFinal Response:',
-      finalResult.message.content[0].text
-    );
+    // Note: A response message may have multiple parts, and not all parts are text.
+    console.log('\nFinal Response:', finalResult.message?.content[0].text);
   } catch (e) {
     console.error('Error calling streaming flow:', e);
   }
 }
 ```
+
 </TabItem>
+
 <TabItem label="Dart">
+
 ```dart
 import 'package:genkit/client.dart';
 
 final generateFlow = defineRemoteAction(
   url: 'http://localhost:3400/generate',
-  fromResponse: (json) => GenerateResponse.fromJson(json),
-  fromStreamChunk: (json) => GenerateResponseChunk.fromJson(json),
+  fromResponse: ModelResponse.fromJson,
+  fromStreamChunk: ModelResponseChunk.fromJson,
 );
 
 final stream = generateFlow.stream(
-  input: Message(role: Role.user, content: [TextPart(text: "hello")]),
+  input: Message(role: Role.user, content: [TextPart(text: 'hello')]),
 );
 
 print('Streaming chunks:');
 await for (final chunk in stream) {
-  // Use the .text getter to easily access the text content of the chunk
+  // The .text getter (from genkit/client.dart) concatenates the text parts.
   print('Chunk: ${chunk.text}');
 }
 
 final finalResult = await stream.onResult;
-// The .text getter also works on the final response
+// The .text getter also works on the final response.
 print('Final Response: ${finalResult.text}');
 ```
+
 </TabItem>
+
 </Tabs>
 
 ### Authentication
@@ -282,7 +316,9 @@ print('Final Response: ${finalResult.text}');
 If your deployed flow requires authentication, you can pass headers with your requests:
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 ```typescript
 const result = await runFlow({
   url: 'http://127.0.0.1:3400/helloFlow', // Replace with your deployed flow's URL
@@ -292,8 +328,11 @@ const result = await runFlow({
   input: { name: 'Authenticated User' },
 });
 ```
+
 </TabItem>
+
 <TabItem label="Dart">
+
 ```dart
 // For non-streaming calls
 final result = await helloFlow(
@@ -307,7 +346,9 @@ final streamResult = helloFlow.stream(
   headers: {'Authorization': 'Bearer your-token-here'},
 );
 ```
+
 </TabItem>
+
 </Tabs>
 
 ## When deploying to Cloud Functions for Firebase
@@ -317,7 +358,9 @@ When deploying to [Cloud Functions for Firebase](/docs/deployment/firebase), use
 Detailed documentation can be found at https://firebase.google.com/docs/functions/callable?gen=2nd
 
 <Tabs>
+
 <TabItem label="JavaScript">
+
 Here's a sample for the web:
 
 ```typescript
@@ -345,8 +388,11 @@ finalizeUi(allWeatherForecasts);
 ```
 
 [source](https://github.com/firebase/functions-samples/blob/c4fde45b65fab584715e786ce3264a6932d996ec/Node/quickstarts/callable-functions-streaming/website/index.html#L58-L78)
+
 </TabItem>
+
 <TabItem label="Dart">
+
 An official Dart client for callable functions is available in the [`cloud_functions` package](https://pub.dev/packages/cloud_functions).
 
 ```dart
@@ -358,6 +404,7 @@ final result = await FirebaseFunctions.instance.httpsCallable('addMessage').call
 );
 _response = result.data as String;
 ```
-</TabItem>
-</Tabs>
 
+</TabItem>
+
+</Tabs>

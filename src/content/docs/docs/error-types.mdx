@@ -1,30 +1,17 @@
 ---
-title: Error Types
-description: Learn about Genkit's specialized error types, GenkitError and UserFacingError, and how they are used to differentiate between internal and user-facing issues.
+title: Error types
+description: Learn about Genkit's error types and how they separate internal failures from messages that are safe to return to a client.
+supportedLanguages:
+  - js
+  - go
+  - python
+  - dart
 ---
 
-import LanguageSelector from '../../../components/LanguageSelector.astro';
-import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
-import LanguageContent from '../../../components/LanguageContent.astro';
+import Lang from '../../../components/Lang.astro';
 
-<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector />
-  <CopyMarkdownButton />
-</div>
+<Lang lang="js">
 
-<LanguageContent lang="go">
-  :::note[Guidance unavailable for Go]
-Error type guidance is not yet available for Go.
-:::
-</LanguageContent>
-
-<LanguageContent lang="python">
-  :::note[Guidance unavailable for Python]
-Error type guidance is not yet available for Python.
-:::
-</LanguageContent>
-
-<LanguageContent lang="js">
 Genkit knows about two specialized types: `GenkitError` and `UserFacingError`.
 `GenkitError` is intended for use by Genkit itself or Genkit plugins.
 `UserFacingError` is intended for [`ContextProviders`](/docs/deployment/authorization) and
@@ -36,4 +23,288 @@ SHOULD capture all other Error types and instead report them as an internal erro
 This adds a layer of security to your application by ensuring that internal details of your application
 do not leak to attackers.
 
-</LanguageContent>
+</Lang>
+
+<Lang lang="go">
+
+Genkit classifies failures with a status, and that classification decides what the
+framework does with the error: which HTTP code a flow server answers with, whether
+retry and fallback middleware act on it, and what the Dev UI shows. The
+`github.com/firebase/genkit/go/core/status` package holds one error type,
+`status.Error`, and one vocabulary of statuses shared with the other Genkit SDKs.
+
+The pattern is three steps: classify once at the source, add context as the error
+travels, and branch with `errors.Is`. The
+[`basic-errors` sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors)
+is a runnable tour of all three, plus the boundary behavior described below.
+
+## Classify at the source
+
+`status.Errorf` builds a classified error from a sentinel and a `fmt`-style message.
+`status.PublicErrorf` is the same call for a message that is safe to return to a
+client; anything built with `status.Errorf` stays server-side.
+
+Sentinels are ordinary values, so you can declare your own with `Subtype`. A subtype
+keeps its parent's status and still matches the parent under `errors.Is`, which lets
+each caller branch at whichever granularity it cares about.
+
+```go
+import (
+	"strings"
+
+	"github.com/firebase/genkit/go/core/status"
+)
+
+// ErrRecipeNotFound classifies lookups for dishes the cookbook doesn't have.
+// A subtype keeps its parent's status, so this is still a NOT_FOUND.
+var ErrRecipeNotFound = status.ErrNotFound.Subtype("recipe not found")
+
+func lookupRecipe(dish string) (string, error) {
+	recipe, ok := cookbook[strings.ToLower(dish)]
+	if !ok {
+		// The message only reflects what the caller sent, so PublicErrorf
+		// returns it to them.
+		return "", status.PublicErrorf(ErrRecipeNotFound, "no recipe for %q in the cookbook", dish)
+	}
+	return recipe, nil
+}
+```
+
+Classify where the failure mode is known, and only there. Code further up the stack
+should not reclassify, because it has less information than the site that raised the
+error, not more.
+
+## Add context as the error travels
+
+Wrap with `fmt.Errorf` and `%w`. Wrapping does not reclassify: the sentinel, the
+status, and the public message all stay reachable through the wrapper.
+
+```go
+recipe, err := lookupRecipe(dish)
+if err != nil {
+	// %w keeps the sentinel, the status, and the public message reachable,
+	// so this still answers 404 with the message lookupRecipe wrote.
+	return "", fmt.Errorf("could not look up the recipe: %w", err)
+}
+```
+
+Use `%w` and not `%v`. `%v` flattens the error to text and throws the classification
+away, which is more than a cosmetic loss: an `INVALID_ARGUMENT` that
+[retry middleware](/docs/middleware/) would have left alone becomes an unclassified
+failure that gets retried through the whole backoff schedule.
+
+## Branch with errors.Is
+
+Match on sentinels, never on message text.
+
+```go
+switch {
+case errors.Is(err, ErrRecipeNotFound):
+	// This exact failure: improvise a recipe instead.
+case errors.Is(err, status.ErrNotFound):
+	// Any not-found, including ai.ErrModelNotFound.
+case errors.Is(err, ai.ErrMaxTurnsExceeded):
+	// The tool loop hit its limit; raise it with ai.WithMaxTurns.
+case errors.Is(err, status.ErrResourceExhausted):
+	// Rate limited or out of quota: back off and try again.
+}
+```
+
+The framework packages ship sentinels for the failures they raise, each a subtype of
+a base sentinel:
+
+- `ai`: `ErrModelNotFound`, `ErrToolNotFound`, `ErrToolFailed`, `ErrMaxTurnsExceeded`,
+  `ErrUnsupportedByModel`, `ErrInvalidPart`, `ErrInputTypeMismatch`,
+  `ErrUnresolvedToolRequest`
+- `core/status`: `ErrInvalidSchema`, `ErrInvalidInput`, `ErrInvalidOutput`,
+  `ErrActionNotFound`, `ErrPanic`
+- `core`: `ErrConnectionClosed`, `ErrActionCompleted`
+
+Three functions inspect an error without unwrapping it by hand. Together they are
+everything a transport needs (`logger` here is `github.com/firebase/genkit/go/core/logger`):
+
+```go
+// PublicMessage returns the error's own message when it is public, and a
+// generic string derived from the status otherwise.
+msg, public := status.PublicMessage(err)
+if !public {
+	logger.Error(ctx, "request failed", "error", err)
+}
+
+// Of picks the response code, whether or not the message was public.
+http.Error(w, msg, status.Of(err).HTTPCode())
+
+// Classified answers the stronger question: did anything in the chain
+// actually classify this, or is INTERNAL only the fallback?
+if s, ok := status.Classified(err); ok && s == status.Unavailable {
+	// A failure the provider told us to retry.
+}
+```
+
+`status.Of` reports the status of the outermost `status.Error` in the chain, so a
+deliberate reclassification at a boundary wins. It maps a cancelled context to
+`CANCELLED`, an expired one to `DEADLINE_EXCEEDED`, and anything unclassified to
+`INTERNAL`. `status.Classified` returns the same status plus whether anything in the
+chain really carried one. That second bit is what middleware needs, so an unclassified
+failure is not mistaken for a deliberate `INTERNAL`.
+
+## The status vocabulary
+
+`status.Name` is the wire status. Each error status has a matching base sentinel named
+`Err` plus the name, so `status.InvalidArgument` pairs with `status.ErrInvalidArgument`.
+The ones you will reach for most:
+
+| Name                       | Base sentinel                  | HTTP |
+| -------------------------- | ------------------------------ | ---- |
+| `status.InvalidArgument`   | `status.ErrInvalidArgument`    | 400  |
+| `status.Unauthenticated`   | `status.ErrUnauthenticated`    | 401  |
+| `status.PermissionDenied`  | `status.ErrPermissionDenied`   | 403  |
+| `status.NotFound`          | `status.ErrNotFound`           | 404  |
+| `status.ResourceExhausted` | `status.ErrResourceExhausted`  | 429  |
+| `status.Unavailable`       | `status.ErrUnavailable`        | 503  |
+| `status.Internal`          | `status.ErrInternal`           | 500  |
+
+The package declares seventeen names in total, following the
+[Google API error model](https://cloud.google.com/apis/design/errors); see the
+[`core/status` reference](https://pkg.go.dev/github.com/firebase/genkit/go/core/status)
+for the full set with its gRPC codes and HTTP mappings. When you only know the status
+at run time, `status.Base(name)` returns its base sentinel.
+
+## At the HTTP boundary
+
+`genkit.Handler` derives the whole response from the classification, so the code and
+the message can never disagree:
+
+- The response code is `status.Of(err).HTTPCode()`, always.
+- The body is `status.PublicMessage(err)`: the message verbatim when the error was
+  built with `status.PublicErrorf`, otherwise a generic string derived from the status.
+- The full error is logged server-side either way, which is the only complete record.
+
+A failure body is plain text, not JSON. Only success is JSON, as `{"result": ...}`.
+
+| What the flow returned                                                      | Code | Body                     |
+| --------------------------------------------------------------------------- | ---- | ------------------------ |
+| `errors.New("connecting to db at 10.0.0.3 as admin: password rejected")`      | 500  | `internal`               |
+| `status.Errorf(status.ErrInvalidArgument, "dish %q is not on the menu", dish)` | 400  | `invalid argument`       |
+| `status.PublicErrorf(status.ErrInvalidArgument, "dish must not be empty")`     | 400  | `dish must not be empty` |
+
+```go
+genkit.DefineFlow(g, "cookbookFlow", func(ctx context.Context, input CookbookRequest) (string, error) {
+	if strings.TrimSpace(input.Dish) == "" {
+		// 400, body: dish must not be empty
+		return "", status.PublicErrorf(status.ErrInvalidArgument, "dish must not be empty")
+	}
+	// 404, body: no recipe for "lasagna" in the cookbook
+	return lookupRecipe(input.Dish)
+})
+
+genkit.DefineFlow(g, "leakyFlow", func(ctx context.Context, _ any) (string, error) {
+	// 500, body: internal. The real text is logged server-side only.
+	return "", errors.New("connecting to db at 10.0.0.3 as admin: password rejected")
+})
+
+mux := http.NewServeMux()
+for _, a := range genkit.ListFlows(g) {
+	mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
+}
+```
+
+`genkit.HandlerFunc` returns the error to you instead of writing a response, for
+frameworks that handle errors centrally. Apply the same two rules there yourself, with
+`status.Of` for the code and `status.PublicMessage` for the body, as in the snippet
+above.
+
+The redaction is environment-gated. With `GENKIT_ENV=dev` the real `err.Error()` text
+is returned instead of the generic string, so the developer causing the failure can
+see it. The response code is the same either way, and a `PublicErrorf` response is
+byte for byte the same either way, since its message already escapes. `GENKIT_ENV` is
+read per request and defaults to production when unset, so treat what you see locally
+as a debugging aid and never as the contract your clients get.
+
+## Errors on a streaming request
+
+A streaming request has already answered 200 with a `text/event-stream` content type
+before the flow runs, so a failure cannot change the status line. It arrives as a
+final event in the body instead, after whatever chunks were already sent, and like
+every event it is terminated by a blank line:
+
+```
+data: {"error":{"status":"INVALID_ARGUMENT","message":"dish must not be empty"}}
+```
+
+The frame carries exactly two fields, `status` and `message`. There is no `details`
+field, and redaction works the same as on the non-streaming path, so an unclassified
+failure arrives as `{"error":{"status":"INTERNAL","message":"internal"}}` and the full
+error reaches the server log only. A client has to read the body to notice a streaming
+failure, because the HTTP status is 200 either way.
+
+## Upgrading from GenkitError and UserFacingError
+
+Older code split error handling between two unrelated types, `core.GenkitError` and
+`core.UserFacingError`. Those names fall into three groups.
+
+**Aliases: nothing to change.** `core.GenkitError` is a type alias of `status.Error`,
+and `core.StatusName` is a type alias of `status.Name`. They are the same types, not
+wrappers, so existing detection code keeps matching every error the framework raises,
+and a `[]core.StatusName` is interchangeable with a `[]status.Name`.
+
+```go
+err := status.Errorf(status.ErrNotFound, "no such order")
+
+var ge *core.GenkitError
+if errors.As(err, &ge) {
+	// *core.GenkitError is *status.Error, so this still matches.
+	_ = ge.Status // status.NotFound
+}
+```
+
+**Deprecated but working.** These keep their behavior, including `UserFacingError`,
+whose message still reaches clients and whose status still picks the response code.
+Move at your own pace.
+
+| Deprecated                                | Use instead                                                  |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| `core.NewError(name, msg, args...)`       | `status.Errorf(sentinel, msg, args...)`                       |
+| `core.NewPublicError(name, msg, details)` | `status.PublicErrorf(sentinel, msg, args...)`                 |
+| `core.UserFacingError`                    | a `status.Error` from `status.PublicErrorf`                   |
+| `core.AsGenkitError(err)`                 | `status.Convert(err)`, or `status.Of(err)` for the status only|
+| `core.HTTPStatusCode(name)`               | `name.HTTPCode()`                                             |
+| `core.StatusFromHTTPCode(code)`           | `status.FromHTTPCode(code)`                                   |
+| `core.StatusNameToCode[name]`             | `name.Code()`                                                 |
+| `core.Status`, `core.NewStatus`           | `status.Error`, `status.Errorf`                               |
+| `core.INVALID_ARGUMENT` and the other SCREAMING_SNAKE constants | `status.InvalidArgument` and the other Go-cased names |
+
+On `status.Error` itself, the `HTTPCode` and `Source` fields are deprecated as well.
+Use `Status.HTTPCode()` instead of the first; the second is never populated.
+
+**Removed.** `core.ReflectionError`, `core.ReflectionErrorDetails`,
+`core.ToReflectionError`, the `(*core.GenkitError).ToReflectionError` method,
+`core.SchemaValidationError`, and `core.NewSchemaValidationError` are not part of
+`core` and have no replacement there. They were framework internals: the reflection
+error envelope is private to the reflection server, and input validation failures
+raise `status.ErrInvalidInput`.
+
+</Lang>
+
+<Lang lang="python">
+
+Genkit knows about two specialized error types: `GenkitError` and `PublicError`.
+`GenkitError` is the base error class for Genkit errors.
+`PublicError` is intended for your code. The separation between these two error types helps you better understand
+where your error is coming from.
+
+Using `PublicError` allows a web framework handler (e.g. FastAPI, Flask) to know it is safe to return the message in a request. Other kinds of errors will result in a generic 500 message to avoid the possibility of internal exceptions being leaked to attackers.
+
+</Lang>
+
+<Lang lang="dart">
+
+Genkit Dart SDK uses a unified `GenkitException` class for error handling.
+This exception interacts closely with the `StatusCodes` enum to provide semantically meaningful error reporting across plugin boundaries and RPC responses.
+
+`GenkitException` is intended to be used by both the framework and user code.
+When an exception includes a specific status code (e.g., `StatusCodes.invalidArgument` or `StatusCodes.notFound`), it helps Genkit tools and observability systems to categorize the failure correctly.
+
+All other exceptions caught by the framework are automatically wrapped or treated as internal errors with `StatusCodes.internal` to prevent implementation details from leaking in production responses.
+
+</Lang>

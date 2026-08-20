@@ -32,3 +32,11 @@ For an example of exactly what we look for when contributing, please see this [r
 All submissions, including submissions by project members, require review. We use GitHub pull requests for this purpose. Consult [GitHub Help](https://help.github.com/articles/about-pull-requests/) for more information on using pull requests.
 
 Once you submit your PR, a maintainer will review it. If it doesn't meet the guidelines, we may drop a standard reply asking you to update the PR. We will also add a tag to surface that the PR has been reviewed. If there is no response in 2 weeks, we will close the PR as stale with a note to file a new PR under the guidelines if you are still experiencing the issue.
+
+## Docsite-specific Notes
+
+When contributing docs:
+
+1. Author in source docs under `src/content/docs/docs/`; do not edit generated `src/content/docs/docs/{js,go,dart,python}/...` pages directly.
+2. Use neutral internal docs links (`/docs/<slug>/`) in source docs. Language-specific paths are resolved during generation/runtime.
+3. Language-specific cross-link warnings during generation are non-blocking and indicate targets missing in a language.

@@ -1,18 +1,15 @@
 ---
-title: Ollama Plugin
-description: Learn how to configure and use the Ollama plugin for Genkit to interact with local LLMs and embedding models across JavaScript, Go, and Python.
+title: Ollama plugin
+description: Learn how to configure and use the Ollama plugin for Genkit to interact with local LLMs and embedders.
+supportedLanguages:
+  - js
+  - go
+  - python
 ---
 
-import LanguageSelector from '../../../../components/LanguageSelector.astro';
-import CopyMarkdownButton from '../../../../components/CopyMarkdownButton.astro';
-import LanguageContent from '../../../../components/LanguageContent.astro';
+import Lang from '../../../../components/Lang.astro';
 
-<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector />
-  <CopyMarkdownButton />
-</div>
-
-<LanguageContent lang="js">
+<Lang lang="js">
 
 The Ollama plugin provides interfaces to any of the local LLMs supported by
 [Ollama](https://ollama.com/).
@@ -39,6 +36,7 @@ To use this plugin, specify it when you initialize Genkit:
 
 ```ts
 import { genkit } from 'genkit';
+
 import { ollama } from 'genkitx-ollama';
 
 const ai = genkit({
@@ -166,9 +164,9 @@ async function getEmbeddings() {
 getEmbeddings().then((e) => console.log(e));
 ```
 
-</LanguageContent>
+</Lang>
 
-<LanguageContent lang="go">
+<Lang lang="go">
 
 The Ollama plugin provides interfaces to any of the local LLMs supported by
 [Ollama](https://ollama.com/).
@@ -219,28 +217,37 @@ func main() {
 
 ## Usage
 
-To generate content, you first need to create a model definition based on the
-model you installed and want to use. For example, if you installed Gemma 3:
+Name any model your Ollama server has pulled. The plugin resolves it on demand,
+so no registration call is needed:
 
 ```go
-model := ollama.DefineModel(
+resp, err := genkit.Generate(ctx,
+  g,
+  ai.WithModelName("ollama/gemma3"),
+  ai.WithPrompt("Tell me a joke."),
+)
+if err != nil {
+    return err
+}
+
+log.Println(resp.Text())
+```
+
+The tag rides through to Ollama as written, so `ollama/gemma3` and
+`ollama/gemma3:latest` both reach the same model.
+
+You can also register a model explicitly and pass the reference around:
+
+```go
+model := ollamaPlugin.DefineModel(
+  g,
   ollama.ModelDefinition{
     Name: "gemma3",
     Type: "chat", // "chat" or "generate"
   },
-  &ai.ModelOptions{
-    Supports: &ai.ModelSupports{
-      Multiturn:  true,
-      SystemRole: true,
-      Tools:      false,
-      Media:      false,
-    },
-  },
+  nil, // Take the capabilities the plugin knows about.
 )
-```
 
-Then, you can use the model reference to send requests to your Ollama server:
-```go
 resp, err := genkit.Generate(ctx,
   g,
   ai.WithModel(model),
@@ -253,26 +260,65 @@ if err != nil {
 log.Println(resp.Text())
 ```
 
-Or you can refer to the model by its name:
-```go
-resp, err := genkit.Generate(ctx,
-  g,
-  ai.WithModelName("ollama/gemma3:latest"),
-  ai.WithPrompt("Tell me a joke."),
-)
-if err != nil {
-    return err
-}
+## Model capabilities
 
-log.Println(resp.Text())
+Local models differ widely in what they accept, so the plugin asks the server
+instead of guessing from the model name. Detection runs during model discovery,
+which is what the Dev UI's model list triggers: the plugin lists the installed
+models with `GET /api/tags`, drops any name containing `embed`, then calls
+`POST /api/show` for each of the rest, at most four at a time, each call bounded
+by a five second timeout or by `Timeout` seconds when that is shorter. The
+capabilities the server reports become the model's `ai.ModelSupports`: `tools`
+sets `Tools`, `vision` sets `Media`, and `Multiturn` and `SystemRole` are always
+true. The [`ollama-tools`](https://github.com/genkit-ai/genkit/tree/main/go/samples/ollama-tools)
+and [`ollama-vision`](https://github.com/genkit-ai/genkit/tree/main/go/samples/ollama-vision)
+samples exercise one capability each.
+
+Results are cached in the process and keyed by model name, checked against the
+digest `/api/tags` reports so that a re-pulled model is detected again. A
+successful detection is kept for the life of the process; a failed one is retried
+after 30 seconds. When detection fails, the model falls back to claiming every
+capability and the plugin logs a warning.
+
+Resolving a model by name reads that cache and never queries the server, so a
+model discovery has not covered yet gets the same permissive fallback.
+
+### Overriding detected capabilities
+
+Pass a non-nil `*ai.ModelOptions` to `DefineModel` to state the capabilities
+yourself:
+
+```go
+model := ollamaPlugin.DefineModel(
+  g,
+  ollama.ModelDefinition{Name: "gemma3", Type: "chat"},
+  &ai.ModelOptions{
+    Supports: &ai.ModelSupports{
+      Multiturn:  true,
+      SystemRole: true,
+      Tools:      true,
+      Media:      true,
+    },
+  },
+)
 ```
 
+With a nil `opts`, `DefineModel` reuses a successful detection for that model when
+one is already cached, and falls back to a built-in name list otherwise. It then
+turns `Tools` off unless `Type` is `"chat"`, because only the chat endpoint
+accepts tools.
+
+That is the only override the plugin offers: there is no map of capability
+overrides on the plugin struct. It describes the exact name you define, so
+`ollama/gemma3` and `ollama/gemma3:latest` are two names and only the one you
+defined carries your options. It also leaves discovery alone, so the Dev UI list
+still reports what the server said.
 
 See [Generating content](/docs/models) for more information.
 
-</LanguageContent>
+</Lang>
 
-<LanguageContent lang="python">
+<Lang lang="python">
 
 The Ollama plugin provides interfaces to any of the local LLMs supported by [Ollama](https://ollama.com/).
 
@@ -293,7 +339,7 @@ For development, you can run Ollama on your development machine. Deployed apps u
 ## Installation
 
 ```bash
-uv add genkit-plugin-ollama
+uv add genkit-ollama
 ```
 
 ## Configuration
@@ -302,8 +348,8 @@ To use this plugin, import `Ollama` and specify it when you initialize Genkit:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.ollama import Ollama, ollama_name
-from genkit.plugins.ollama.models import ModelDefinition
+from genkit_ollama import Ollama, ollama_name
+from genkit_ollama.models import ModelDefinition
 
 ai = Genkit(
     plugins=[
@@ -343,8 +389,8 @@ This plugin doesn't statically export model references. Specify one of the model
 
 ```python
 from genkit import Genkit
-from genkit.plugins.ollama import Ollama, ollama_name
-from genkit.plugins.ollama.models import ModelDefinition
+from genkit_ollama import Ollama, ollama_name
+from genkit_ollama.models import ModelDefinition
 
 ai = Genkit(
     plugins=[
@@ -388,8 +434,8 @@ The Ollama plugin supports embeddings, which can be used for similarity searches
 
 ```python
 from genkit import Genkit
-from genkit.plugins.ollama import Ollama
-from genkit.plugins.ollama.embedders import EmbeddingDefinition
+from genkit_ollama import Ollama
+from genkit_ollama.embedders import EmbeddingDefinition
 
 ai = Genkit(
     plugins=[
@@ -406,7 +452,7 @@ ai = Genkit(
 )
 
 @ai.flow()
-async def get_embeddings(text: str) -> list[float]:
+async def get_embeddings(text: str):
     """Generate embeddings for text.
 
     Args:
@@ -430,7 +476,7 @@ Ollama models support streaming responses for real-time output:
 from genkit import ActionRunContext
 
 @ai.flow()
-async def streaming_story(topic: str, ctx: ActionRunContext | None = None) -> str:
+async def streaming_story(topic: str, ctx: ActionRunContext) -> str:
     """Generate a story with streaming output.
 
     Args:
@@ -440,12 +486,13 @@ async def streaming_story(topic: str, ctx: ActionRunContext | None = None) -> st
     Returns:
         The complete generated story.
     """
-    response = await ai.generate(
+    stream_response = ai.generate_stream(
         model=ollama_name('llama3.2'),
         prompt=f'Write a short story about {topic}',
-        on_chunk=ctx.send_chunk if ctx else None,
     )
-    return response.text
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
 ```
 
 ### Tool Calling
@@ -459,8 +506,8 @@ class WeatherInput(BaseModel):
     """Input for weather tool."""
     location: str = Field(description='City name')
 
-@ai.tool(description='Get current weather for a location')
-def get_weather(input: WeatherInput) -> str:
+@ai.tool()
+async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
     # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
@@ -481,7 +528,7 @@ async def weather_flow(location: str) -> str:
     response = await ai.generate(
         model=ollama_name('mistral-nemo'),
         prompt=f"What's the weather like in {location}?",
-        tools=['get_weather'],
+        tools=[get_weather],
     )
     return response.text
 ```
@@ -492,7 +539,6 @@ Generate structured data using Pydantic models:
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class Recipe(BaseModel):
     """A cooking recipe."""
@@ -514,7 +560,7 @@ async def create_recipe(dish: str) -> Recipe:
     response = await ai.generate(
         model=ollama_name('llama3.2'),
         prompt=f'Create a recipe for {dish}',
-        output=Output(schema=Recipe),
+        output_schema=Recipe,
     )
     return response.output
 ```
@@ -537,4 +583,4 @@ ai = Genkit(
 )
 ```
 
-</LanguageContent>
+</Lang>

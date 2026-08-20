@@ -1,623 +1,18 @@
 ---
 title: Pause generation using interrupts
 description: Learn how to use interrupts in Genkit to pause and resume LLM generation, enabling human-in-the-loop interactions, asynchronous processing, and controlled task completion.
+supportedLanguages:
+  - js
+  - go
+  - dart
+  - python
 ---
 
+import Lang from '../../../components/Lang.astro';
 import ExampleLink from '@/components/ExampleLink.astro';
-import LanguageSelector from '../../../components/LanguageSelector.astro';
-import CopyMarkdownButton from '../../../components/CopyMarkdownButton.astro';
-import LanguageContent from '../../../components/LanguageContent.astro';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-<div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1rem 0 1rem 0;">
-  <LanguageSelector supportedLanguages="js go python" />
-  <CopyMarkdownButton />
-</div>
-
-<LanguageContent lang="go">
-
-_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
-LLM generation-and-tool-calling loop to return control back to you. When
-you're ready, you can then _resume_ generation by sending _replies_ that the LLM
-processes for further generation.
-
-The most common uses for interrupts fall into a few categories:
-
-- **Human-in-the-Loop:** Enabling the user of an interactive AI
-  to clarify needed information or confirm the LLM's action
-  before it is completed, providing a measure of safety and confidence.
-- **Async Processing:** Starting an asynchronous task that can only be
-  completed out-of-band, such as sending an approval notification to
-  a human reviewer or kicking off a long-running background process.
-- **Exit from an Autonomous Task:** Providing the model a way
-  to mark a task as complete, in a workflow that might iterate through
-  a long series of tool calls.
-
-## Before you begin
-
-All of the examples documented here assume that you have already set up a
-project with Genkit dependencies installed. If you want to run the code
-examples on this page, first complete the steps in the
-[Get started](/docs/get-started/) guide.
-
-Before diving too deeply, you should also be familiar with the following
-concepts:
-
-- [Generating content](/docs/models/) with AI models.
-- Genkit's system for [defining input and output schemas](/docs/flows/).
-- General methods of [tool-calling](/docs/tool-calling/).
-
-## Overview of interrupts
-
-At a high level, this is what an interrupt looks like when
-interacting with an LLM:
-
-1.  The calling application prompts the LLM with a request. The prompt includes
-    a list of tools, including at least one for an interrupt that the LLM
-    can use to generate a response.
-2.  The LLM generates either a complete response or a tool call request
-    in a specific format. To the LLM, an interrupt call looks like any
-    other tool call.
-3.  If the LLM calls an interrupting tool,
-    the Genkit library automatically pauses generation rather than immediately
-    passing responses back to the model for additional processing.
-4.  The developer checks whether an interrupt call is made, and performs whatever
-    task is needed to collect the information needed for the interrupt response.
-5.  The developer resumes generation by passing an interrupt response to the
-    model. This action triggers a return to Step 2.
-
-## Defining tools with interrupts
-
-Use `genkit.DefineTool()` and call `ai.InterruptWith()` to trigger a
-strongly-typed interrupt. Define a struct to carry the interrupt metadata:
-
-```go
-// InterruptMetadata carries information about why the tool was interrupted.
-type InterruptMetadata struct {
-	Reason  string   `json:"reason"`
-	Choices []string `json:"choices,omitempty"`
-}
-
-askQuestion := genkit.DefineTool(g, "askQuestion",
-	"use this to ask the user a clarifying question",
-	func(ctx *ai.ToolContext, input QuestionInput) (string, error) {
-		return "", ai.InterruptWith(ctx, InterruptMetadata{
-			Reason:  "need_clarification",
-			Choices: input.Choices,
-		})
-	},
-)
-```
-
-### Use interrupts
-
-Interrupts are passed into the `WithTools()` option when generating content, just like
-other types of tools:
-
-```go
-resp, err := genkit.Generate(ctx, g,
-	ai.WithPrompt("Ask me a movie trivia question."),
-	ai.WithTools(askQuestion),
-)
-```
-
-Genkit immediately returns a response on receipt of an interrupt tool call.
-
-### Respond to interrupts
-
-Check the response for interrupts and handle them. Use `ai.InterruptAs()` to
-extract strongly-typed metadata from the interrupt:
-
-```go
-// Check if generation was interrupted
-if resp.FinishReason == ai.FinishReasonInterrupted {
-	for _, interrupt := range resp.Interrupts() {
-		if meta, ok := ai.InterruptAs[InterruptMetadata](interrupt); ok {
-			fmt.Printf("Interrupt reason: %s\n", meta.Reason)
-		}
-	}
-}
-```
-
-Responding to an interrupt is done using `tool.RespondWith()` and `ai.WithToolResponses()`
-on a subsequent `Generate` call, passing in the existing message history:
-
-```go
-resp, err := genkit.Generate(ctx, g,
-	ai.WithPrompt("Help me plan a backyard BBQ."),
-	ai.WithSystem("Ask clarifying questions until you have a complete solution."),
-	ai.WithTools(askQuestion),
-)
-if err != nil {
-	return err
-}
-
-for resp.FinishReason == ai.FinishReasonInterrupted {
-	var responses []*ai.Part
-
-	for _, interrupt := range resp.Interrupts() {
-		// Use RespondWith to provide a strongly-typed response
-		part, err := askQuestion.RespondWith(interrupt, getUserAnswer(interrupt))
-		if err != nil {
-			return err
-		}
-		responses = append(responses, part)
-	}
-
-	resp, err = genkit.Generate(ctx, g,
-		ai.WithMessages(resp.History()...),
-		ai.WithTools(askQuestion),
-		ai.WithToolResponses(responses...),
-	)
-	if err != nil {
-		return err
-	}
-}
-
-fmt.Println(resp.Text())
-```
-
-## Tools with restartable interrupts
-
-Another common pattern is the need to _confirm_ an action that the LLM suggests
-before actually performing it. For example, a payments app might want the user
-to confirm certain kinds of transfers.
-
-### Define a restartable tool
-
-Use `ctx.IsResumed()` to check if the tool is being restarted after an interrupt:
-
-```go
-type TransferInput struct {
-	ToAccount string  `json:"toAccount"`
-	Amount    float64 `json:"amount"`
-}
-
-type TransferOutput struct {
-	Status     string  `json:"status"`
-	Message    string  `json:"message,omitempty"`
-	NewBalance float64 `json:"newBalance,omitempty"`
-}
-
-type TransferInterrupt struct {
-	Reason    string  `json:"reason"` // "insufficient_balance" or "confirm_large"
-	ToAccount string  `json:"toAccount"`
-	Amount    float64 `json:"amount"`
-	Balance   float64 `json:"balance,omitempty"`
-}
-
-transferMoney := genkit.DefineTool(g, "transferMoney",
-	"Transfers money to another account.",
-	func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
-		// Check for insufficient balance
-		if input.Amount > accountBalance {
-			return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
-				Reason:  "insufficient_balance",
-				ToAccount: input.ToAccount,
-				Amount:    input.Amount,
-				Balance:   accountBalance,
-			})
-		}
-
-		// Require confirmation for large transfers (only on first execution)
-		if !ctx.IsResumed() && input.Amount > 100 {
-			return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
-				Reason:    "confirm_large",
-				ToAccount: input.ToAccount,
-				Amount:    input.Amount,
-			})
-		}
-
-		// Execute the transfer
-		accountBalance -= input.Amount
-		return TransferOutput{"completed", "Transfer successful", accountBalance}, nil
-	},
-)
-```
-
-### Restart tools after interruption
-
-Use `tool.RestartWith()` and `ai.WithToolRestarts()` to re-execute an interrupted
-tool. You can optionally replace the input using `ai.WithNewInput()`:
-
-```go
-resp, err := genkit.Generate(ctx, g,
-	ai.WithPrompt("Transfer $200 to account ABC123"),
-	ai.WithTools(transferMoney),
-)
-if err != nil {
-	return err
-}
-
-for resp.FinishReason == ai.FinishReasonInterrupted {
-	var restarts, responses []*ai.Part
-
-	for _, interrupt := range resp.Interrupts() {
-		meta, ok := ai.InterruptAs[TransferInterrupt](interrupt)
-		if !ok {
-			continue
-		}
-
-		switch meta.Reason {
-		case "insufficient_balance":
-			if userConfirms("Transfer $%.2f instead?", meta.Balance) {
-				// Restart with adjusted amount using WithNewInput
-				part, err := transferMoney.RestartWith(interrupt,
-					ai.WithNewInput(TransferInput{meta.ToAccount, meta.Balance}))
-				if err != nil {
-					return err
-				}
-				restarts = append(restarts, part)
-			} else {
-				// Provide a response directly without re-running the tool
-				part, err := transferMoney.RespondWith(interrupt,
-					TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
-				if err != nil {
-					return err
-				}
-				responses = append(responses, part)
-			}
-
-		case "confirm_large":
-			if userConfirms("Confirm transfer of $%.2f?", meta.Amount) {
-				// Simple restart (re-run with same input)
-				part, err := transferMoney.RestartWith(interrupt)
-				if err != nil {
-					return err
-				}
-				restarts = append(restarts, part)
-			} else {
-				part, err := transferMoney.RespondWith(interrupt,
-					TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
-				if err != nil {
-					return err
-				}
-				responses = append(responses, part)
-			}
-		}
-	}
-
-	resp, err = genkit.Generate(ctx, g,
-		ai.WithMessages(resp.History()...),
-		ai.WithTools(transferMoney),
-		ai.WithToolRestarts(restarts...),
-		ai.WithToolResponses(responses...),
-	)
-	if err != nil {
-		return err
-	}
-}
-
-fmt.Println(resp.Text())
-```
-
-### Access original input after replacement
-
-When you use `ai.WithNewInput()`, you can access the original input inside
-the tool using `ai.OriginalInputAs()`:
-
-```go
-transferMoney := genkit.DefineTool(g, "transferMoney",
-	"Transfers money to another account.",
-	func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
-		// ... interrupt logic ...
-
-		accountBalance -= input.Amount
-		message := fmt.Sprintf("Transferred $%.2f to %s", input.Amount, input.ToAccount)
-
-		// Check if input was replaced and include original amount in message
-		if orig, ok := ai.OriginalInputAs[TransferInput](ctx); ok {
-			message = fmt.Sprintf("Transferred $%.2f to %s (adjusted from $%.2f)",
-				input.Amount, input.ToAccount, orig.Amount)
-		}
-
-		return TransferOutput{"completed", message, accountBalance}, nil
-	},
-)
-```
-
-</LanguageContent>
-
-<LanguageContent lang="python">
-
-_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
-LLM generation-and-tool-calling loop to return control back to you. When
-you're ready, you can then _resume_ generation by sending _replies_ that the LLM
-processes for further generation.
-
-The most common uses for interrupts fall into a few categories:
-
-- **Human-in-the-Loop:** Enabling the user of an interactive AI
-  to clarify needed information or confirm the LLM's action
-  before it is completed, providing a measure of safety and confidence.
-- **Async Processing:** Starting an asynchronous task that can only be
-  completed out-of-band, such as sending an approval notification to
-  a human reviewer or kicking off a long-running background process.
-- **Exit from an Autonomous Task:** Providing the model a way
-  to mark a task as complete, in a workflow that might iterate through
-  a long series of tool calls.
-
-## Before you begin
-
-All of the examples documented here assume that you have already set up a
-project with Genkit dependencies installed. If you want to run the code
-examples on this page, first complete the steps in the
-[Get started](/docs/get-started/) guide.
-
-Before diving too deeply, you should also be familiar with the following
-concepts:
-
-- [Generating content](/docs/models/) with AI models.
-- Genkit's system for [defining input and output schemas](/docs/flows/).
-- General methods of [tool-calling](/docs/tool-calling/).
-
-## Overview of interrupts
-
-At a high level, this is what an interrupt looks like when
-interacting with an LLM:
-
-1.  The calling application prompts the LLM with a request. The prompt includes
-    a list of tools, including at least one for an interrupt that the LLM
-    can use to generate a response.
-2.  The LLM generates either a complete response or a tool call request
-    in a specific format. To the LLM, an interrupt call looks like any
-    other tool call.
-3.  If the LLM calls an interrupting tool,
-    the Genkit library automatically pauses generation rather than immediately
-    passing responses back to the model for additional processing.
-4.  The developer checks whether an interrupt call is made, and performs whatever
-    task is needed to collect the information needed for the interrupt response.
-5.  The developer resumes generation by passing an interrupt response to the
-    model. This action triggers a return to Step 2.
-
-## Define manual-response interrupts
-
-The most common kind of interrupt allows the LLM to request clarification from
-the user, for example by asking a multiple-choice question.
-
-For this use case, use the Genkit instance's `tool()` decorator with `ctx.interrupt()`:
-
-```python
-from genkit import Genkit, ToolRunContext, tool_response
-from genkit.plugins.google_genai import GoogleAI
-from pydantic import BaseModel, Field
-
-ai = Genkit(
-    plugins=[GoogleAI()],
-    model='googleai/gemini-2.5-flash',
-)
-
-class QuestionInput(BaseModel):
-    """Input schema for the question tool."""
-    question: str = Field(description='the question to ask')
-    choices: list[str] = Field(description='the choices to display to the user')
-    allow_other: bool = Field(default=False, description='when true, allow write-ins')
-
-
-@ai.tool()
-def ask_question(input: QuestionInput, ctx: ToolRunContext) -> str:
-    """Use this to ask the user a clarifying question."""
-    # Interrupt with metadata that the caller can use.
-    ctx.interrupt({
-        'question': input.question,
-        'choices': input.choices,
-        'allow_other': input.allow_other,
-    })
-```
-
-Note that the output type of an interrupt tool corresponds to the response data
-you will provide when resuming, as opposed to something that will be automatically
-populated by the tool function.
-
-### Use interrupts
-
-Interrupts are passed into the `tools` list when generating content, just like
-other types of tools. You can pass both normal tools and interrupts to the
-same `generate` call:
-
-```python
-response = await ai.generate(
-    prompt='Ask me a movie trivia question.',
-    tools=['ask_question'],
-)
-```
-
-Genkit immediately returns a response on receipt of an interrupt tool call.
-
-### Respond to interrupts
-
-If you've passed one or more interrupts to your generate call, you
-need to check the response for interrupts so that you can handle them:
-
-```python
-# You can check the 'finish_reason' attribute of the response
-if response.finish_reason == 'interrupted':
-    print("Generation interrupted.")
-
-# Or you can check if any interrupt requests are on the response
-if response.interrupts:
-    print(f"Interrupts found: {len(response.interrupts)}")
-    for interrupt in response.interrupts:
-        # Access the interrupt metadata
-        tool_input = interrupt.tool_request.input
-        print(f"Question: {tool_input.get('question')}")
-        print(f"Choices: {tool_input.get('choices')}")
-```
-
-Responding to an interrupt is done using the `tool_responses` option on a subsequent
-`generate` call, making sure to pass in the existing message history. Use the
-`tool_response` helper function to construct the response:
-
-```python
-from genkit import tool_response
-
-# Get the user's answer (e.g., from user input)
-user_answer = 'b'  # User selected option b
-
-# Resume generation with the tool response
-response = await ai.generate(
-    messages=response.messages,
-    tool_responses=[tool_response(response.interrupts[0], user_answer)],
-    tools=['ask_question'],
-)
-```
-
-### Handle multiple interrupts in a loop
-
-For interactive applications, you'll often need to handle multiple interrupts
-in a loop until the model completes its task:
-
-```python
-async def interactive_session():
-    response = await ai.generate(
-        prompt='Help me plan a backyard BBQ.',
-        system='Ask clarifying questions until you have a complete solution.',
-        tools=['ask_question'],
-    )
-
-    # Continue until no more interrupts
-    while response.interrupts:
-        answers = []
-
-        # Handle all interrupts (multiple can occur at once)
-        for interrupt in response.interrupts:
-            tool_input = interrupt.tool_request.input
-            question = tool_input.get('question', 'Unknown question')
-            choices = tool_input.get('choices', [])
-
-            # Display to user and get their answer
-            print(f"\nQuestion: {question}")
-            for i, choice in enumerate(choices):
-                print(f"  {i + 1}. {choice}")
-
-            user_input = input("Your answer: ")
-            answers.append(tool_response(interrupt, user_input))
-
-        # Resume generation with all answers
-        response = await ai.generate(
-            messages=response.messages,
-            tool_responses=answers,
-            tools=['ask_question'],
-        )
-
-    # No more interrupts - print final response
-    print(f"\nFinal response: {response.text}")
-```
-
-## Tools with confirmation interrupts
-
-Another common pattern is the need to _confirm_ an action that the LLM suggests
-before actually performing it. For example, a payments app might want the user
-to confirm certain kinds of transfers.
-
-```python
-class TransferInput(BaseModel):
-    """Input for money transfer."""
-    to_account: str = Field(description='destination account ID')
-    amount: float = Field(description='amount to transfer')
-
-
-class TransferOutput(BaseModel):
-    """Output from money transfer."""
-    status: str
-    message: str
-
-
-@ai.tool()
-def transfer_money(input: TransferInput, ctx: ToolRunContext) -> TransferOutput:
-    """Transfers money to another account."""
-    # Require confirmation for large transfers
-    if input.amount > 100:
-        ctx.interrupt({
-            'confirm': f'Please confirm transfer of ${input.amount:.2f} to {input.to_account}',
-            'amount': input.amount,
-            'to_account': input.to_account,
-        })
-        # Not reached on first call
-
-    # Execute the transfer (only reached after confirmation or for small amounts)
-    return TransferOutput(
-        status='completed',
-        message=f'Transferred ${input.amount:.2f} to {input.to_account}',
-    )
-```
-
-To handle the confirmation:
-
-```python
-response = await ai.generate(
-    prompt='Transfer $500 to account ABC123',
-    tools=['transfer_money'],
-)
-
-if response.interrupts:
-    interrupt = response.interrupts[0]
-    confirm_msg = interrupt.tool_request.input.get('confirm')
-    print(confirm_msg)
-
-    if input("Confirm? (y/n): ").lower() == 'y':
-        # Provide confirmation response
-        response = await ai.generate(
-            messages=response.messages,
-            tool_responses=[tool_response(interrupt, {'confirmed': True})],
-            tools=['transfer_money'],
-        )
-    else:
-        # Provide rejection response
-        response = await ai.generate(
-            messages=response.messages,
-            tool_responses=[tool_response(interrupt, {'status': 'cancelled', 'message': 'User rejected'})],
-            tools=['transfer_money'],
-        )
-
-print(response.text)
-```
-
-## Using interrupts with flows
-
-You can also use interrupts within flows for more structured applications:
-
-```python
-from genkit import Genkit, ToolRunContext, tool_response
-from genkit.plugins.google_genai import GoogleAI
-from pydantic import BaseModel, Field
-
-ai = Genkit(plugins=[GoogleAI()])
-
-
-class TriviaQuestion(BaseModel):
-    """A trivia question with multiple choice answers."""
-    question: str = Field(description='the trivia question')
-    answers: list[str] = Field(description='multiple choice answers')
-
-
-@ai.tool()
-def present_question(input: TriviaQuestion, ctx: ToolRunContext) -> None:
-    """Presents a trivia question to the user."""
-    ctx.interrupt(input.model_dump())
-
-
-@ai.flow()
-async def play_trivia(theme: str) -> str:
-    """Plays a trivia game on the given theme."""
-    response = await ai.generate(
-        prompt=f'Ask me a trivia question about {theme}.',
-        tools=['present_question'],
-    )
-
-    if response.interrupts:
-        interrupt = response.interrupts[0]
-        question_data = interrupt.tool_request.input
-
-        # In a real app, you'd get this from user input
-        return f"Question: {question_data.get('question')}\nAnswers: {question_data.get('answers')}"
-
-    return response.text
-```
-
-</LanguageContent>
-
-<LanguageContent lang="js">
+<Lang lang="js">
 
 :::caution[Beta]
 This feature of Genkit is in **Beta,** which means it is not yet part of Genkit's stable API. APIs of beta features may change in minor version releases.
@@ -692,7 +87,7 @@ import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 const askQuestion = ai.defineInterrupt({
@@ -717,68 +112,78 @@ other types of tools. You can pass both normal tools and interrupts to the
 same `generate` call:
 
 <Tabs>
-  <TabItem label="Generate">
-    ```ts
-    const response = await ai.generate({
-      prompt: "Ask me a movie trivia question.",
-      tools: [askQuestion],
-    });
-    ```
-  </TabItem>
-  <TabItem label="definePrompt">
-    ```ts
-    const triviaPrompt = ai.definePrompt({
-      name: "triviaPrompt",
-      tools: [askQuestion],
-      input: {
-        schema: z.object({ subject: z.string() }),
-      },
-      prompt: "Ask me a trivia question about {{subject}}.",
-    });
 
-    const response = await triviaPrompt({ subject: "computer history" });
-    ```
+<TabItem label="Generate">
 
-  </TabItem>
-  <TabItem label="Prompt file">
-    ```dotprompt
-    ---
-    tools: [askQuestion]
-    input:
-      schema:
-        partyType: string
-    ---
+```ts
+const response = await ai.generate({
+  prompt: 'Ask me a movie trivia question.',
+  tools: [askQuestion],
+});
+```
 
-    {{role "system"}}
-    Use the askQuestion tool if you need to clarify something.
+</TabItem>
 
-    {{role "user"}}
-    Help me plan a
-    {{partyType}}
-    party next week.
-    ```
+<TabItem label="definePrompt">
 
-    Then you can execute the prompt in your code as follows:
+```ts
+const triviaPrompt = ai.definePrompt({
+  name: 'triviaPrompt',
+  tools: [askQuestion],
+  input: {
+    schema: z.object({ subject: z.string() }),
+  },
+  prompt: 'Ask me a trivia question about {{subject}}.',
+});
 
-    ```ts
-    // assuming prompt file is named partyPlanner.prompt
-    const partyPlanner = ai.prompt("partyPlanner");
+const response = await triviaPrompt({ subject: 'computer history' });
+```
 
-    const response = await partyPlanner({ partyType: "birthday" });
-    ```
+</TabItem>
 
-  </TabItem>
-  <TabItem label="Chat">
-    ```ts
-    const chat = ai.chat({
-      system: "Use the askQuestion tool if you need to clarify something.",
-      tools: [askQuestion],
-    });
+<TabItem label="Prompt file">
 
-    const response = await chat.send("make a plan for my birthday party");
-    ```
+```dotprompt
+---
+tools: [askQuestion]
+input:
+  schema:
+    partyType: string
+---
 
-  </TabItem>
+{{role "system"}}
+Use the askQuestion tool if you need to clarify something.
+
+{{role "user"}}
+Help me plan a
+{{partyType}}
+party next week.
+```
+
+Then you can execute the prompt in your code as follows:
+
+```ts
+// assuming prompt file is named partyPlanner.prompt
+const partyPlanner = ai.prompt('partyPlanner');
+
+const response = await partyPlanner({ partyType: 'birthday' });
+```
+
+</TabItem>
+
+<TabItem label="Chat">
+
+```ts
+const chat = ai.chat({
+  system: 'Use the askQuestion tool if you need to clarify something.',
+  tools: [askQuestion],
+});
+
+const response = await chat.send('make a plan for my birthday party');
+```
+
+</TabItem>
+
 </Tabs>
 
 Genkit immediately returns a response on receipt of an interrupt tool call.
@@ -867,7 +272,9 @@ const transferMoney = ai.defineTool(
     name: 'transferMoney',
     description: 'Transfers money between accounts.',
     inputSchema: z.object({
-      toAccountId: z.string().describe('the account id of the transfer destination'),
+      toAccountId: z
+        .string()
+        .describe('the account id of the transfer destination'),
       amount: z.number().describe('the amount in integer cents (100 = $1.00)'),
     }),
     outputSchema: z.object({
@@ -878,7 +285,10 @@ const transferMoney = ai.defineTool(
   async (input, { context, interrupt, resumed }) => {
     // if the user rejected the transaction
     if (resumed?.status === 'REJECTED') {
-      return { status: 'REJECTED', message: 'The user rejected the transaction.' };
+      return {
+        status: 'REJECTED',
+        message: 'The user rejected the transaction.',
+      };
     }
     // trigger an interrupt to confirm if amount > $100
     if (resumed?.status !== 'APPROVED' && input.amount > 10000) {
@@ -943,4 +353,988 @@ while (response.interrupts.length) {
 console.log(response.text);
 ```
 
-</LanguageContent>
+</Lang>
+
+<Lang lang="go">
+
+_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
+LLM generation-and-tool-calling loop to return control back to you. When
+you're ready, you can then _resume_ generation by sending _replies_ that the LLM
+processes for further generation.
+
+The most common uses for interrupts fall into a few categories:
+
+- **Human-in-the-Loop:** Enabling the user of an interactive AI
+  to clarify needed information or confirm the LLM's action
+  before it is completed, providing a measure of safety and confidence.
+- **Async Processing:** Starting an asynchronous task that can only be
+  completed out-of-band, such as sending an approval notification to
+  a human reviewer or kicking off a long-running background process.
+- **Exit from an Autonomous Task:** Providing the model a way
+  to mark a task as complete, in a workflow that might iterate through
+  a long series of tool calls.
+
+## Before you begin
+
+All of the examples documented here assume that you have already set up a
+project with Genkit dependencies installed. If you want to run the code
+examples on this page, first complete the steps in the
+[Get started](/docs/get-started/) guide.
+
+Before diving too deeply, you should also be familiar with the following
+concepts:
+
+- [Generating content](/docs/models/) with AI models.
+- Genkit's system for [defining input and output schemas](/docs/flows/).
+- General methods of [tool-calling](/docs/tool-calling/).
+
+## Overview of interrupts
+
+At a high level, this is what an interrupt looks like when
+interacting with an LLM:
+
+1.  The calling application prompts the LLM with a request. The prompt includes
+    a list of tools, including at least one for an interrupt that the LLM
+    can use to generate a response.
+2.  The LLM generates either a complete response or a tool call request
+    in a specific format. To the LLM, an interrupt call looks like any
+    other tool call.
+3.  If the LLM calls an interrupting tool,
+    the Genkit library automatically pauses generation rather than immediately
+    passing responses back to the model for additional processing.
+4.  The developer checks whether an interrupt call is made, and performs whatever
+    task is needed to collect the information needed for the interrupt response.
+5.  The developer resumes generation by passing an interrupt response to the
+    model. This action triggers a return to Step 2.
+
+## Defining tools with interrupts
+
+An interrupting tool is an ordinary tool: pausing is something the tool function
+does, not something its signature declares. Use `genkit.DefineTool()` and call
+`ai.InterruptWith()` with a struct carrying whatever the person answering needs
+to know:
+
+```go
+// QuestionInput is what the model fills in to call the tool.
+type QuestionInput struct {
+	Question string   `json:"question"`
+	Choices  []string `json:"choices"`
+}
+
+// InterruptMetadata carries information about why the tool was interrupted.
+type InterruptMetadata struct {
+	Reason  string   `json:"reason"`
+	Choices []string `json:"choices,omitempty"`
+}
+
+askQuestion := genkit.DefineTool(g, "askQuestion",
+	"use this to ask the user a clarifying question",
+	func(tc *ai.ToolContext, input QuestionInput) (string, error) {
+		return "", ai.InterruptWith(tc, InterruptMetadata{
+			Reason:  "need_clarification",
+			Choices: input.Choices,
+		})
+	},
+)
+```
+
+### Use interrupts
+
+Interrupts are passed into the `WithTools()` option when generating content, just like
+other types of tools:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Ask me a movie trivia question."),
+	ai.WithTools(askQuestion),
+)
+```
+
+Genkit immediately returns a response on receipt of an interrupt tool call.
+
+### Respond to interrupts
+
+Check the response for interrupts and handle them. Use `ai.InterruptAs()` to
+extract strongly-typed metadata from the interrupt:
+
+```go
+// Check if generation was interrupted
+if resp.FinishReason == ai.FinishReasonInterrupted {
+	for _, interrupt := range resp.Interrupts() {
+		if meta, ok := ai.InterruptAs[InterruptMetadata](interrupt); ok {
+			fmt.Printf("Interrupt reason: %s\n", meta.Reason)
+		}
+	}
+}
+```
+
+Responding to an interrupt is done using the tool's `RespondWith()` method and
+`ai.WithToolResponses()` on a subsequent `Generate` call, passing in the existing
+message history. `RespondWith()` answers the paused call outright, so the tool
+function never runs again:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Help me plan a backyard BBQ."),
+	ai.WithSystem("Ask clarifying questions until you have a complete solution."),
+	ai.WithTools(askQuestion),
+)
+if err != nil {
+	return err
+}
+
+for resp.FinishReason == ai.FinishReasonInterrupted {
+	var responses []*ai.Part
+
+	for _, interrupt := range resp.Interrupts() {
+		// RespondWith is typed against the tool's output, so the answer
+		// cannot drift from what the tool would have returned.
+		part, err := askQuestion.RespondWith(interrupt, getUserAnswer(interrupt))
+		if err != nil {
+			return err
+		}
+		responses = append(responses, part)
+	}
+
+	resp, err = genkit.Generate(ctx, g,
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(askQuestion),
+		ai.WithToolResponses(responses...),
+	)
+	if err != nil {
+		return err
+	}
+}
+
+fmt.Println(resp.Text())
+```
+
+## Tools with restartable interrupts
+
+Another common pattern is the need to _confirm_ an action that the LLM suggests
+before actually performing it. For example, a payments app might want the user
+to confirm certain kinds of transfers. The
+[basic-tool-interrupts sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts)
+is this whole pattern as a runnable program.
+
+### Define a restartable tool
+
+A restartable tool reads two things from its `*ai.ToolContext`: `IsResumed()`
+tells a first call apart from a restarted one, and `ai.ResumedValue()` reads back
+the decision the caller attached when restarting it. Letting the tool decide,
+rather than the caller, keeps the rule it paused on in one place:
+
+```go
+type TransferInput struct {
+	ToAccount string  `json:"toAccount"`
+	Amount    float64 `json:"amount"`
+}
+
+type TransferOutput struct {
+	Status     string  `json:"status"`
+	Message    string  `json:"message,omitempty"`
+	NewBalance float64 `json:"newBalance,omitempty"`
+}
+
+type TransferInterrupt struct {
+	Reason    string  `json:"reason"` // "insufficient_balance" or "confirm_large"
+	ToAccount string  `json:"toAccount"`
+	Amount    float64 `json:"amount"`
+	Balance   float64 `json:"balance,omitempty"`
+}
+
+transferMoney := genkit.DefineTool(g, "transferMoney",
+	"Transfers money to another account.",
+	func(tc *ai.ToolContext, input TransferInput) (TransferOutput, error) {
+		// More than the account holds: pause and say so.
+		if input.Amount > accountBalance {
+			return TransferOutput{}, ai.InterruptWith(tc, TransferInterrupt{
+				Reason:    "insufficient_balance",
+				ToAccount: input.ToAccount,
+				Amount:    input.Amount,
+				Balance:   accountBalance,
+			})
+		}
+
+		// IsResumed is false on the first call and true once the tool has
+		// been restarted, which is what tells a fresh large transfer from
+		// one that has already been answered.
+		if !tc.IsResumed() && input.Amount > 100 {
+			return TransferOutput{}, ai.InterruptWith(tc, TransferInterrupt{
+				Reason:    "confirm_large",
+				ToAccount: input.ToAccount,
+				Amount:    input.Amount,
+			})
+		}
+
+		// The decision arrives as resumed metadata, so it is read back one
+		// key at a time.
+		if approved, ok := ai.ResumedValue[bool](tc, "approved"); ok && !approved {
+			return TransferOutput{
+				Status:  "declined",
+				Message: "The user declined the transfer.",
+			}, nil
+		}
+
+		accountBalance -= input.Amount
+		return TransferOutput{
+			Status:     "completed",
+			Message:    "Transfer successful",
+			NewBalance: accountBalance,
+		}, nil
+	},
+)
+```
+
+### Restart tools after interruption
+
+Use the tool's `RestartWith()` method and `ai.WithToolRestarts()` to run an
+interrupted tool again. `ai.WithResumedMetadata()` is how the decision travels
+back into the tool: whatever you put in that map is what `ai.ResumedValue()`
+reads. `ai.WithNewInput()` restarts the tool with different arguments instead:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Transfer $200 to account ABC123"),
+	ai.WithTools(transferMoney),
+)
+if err != nil {
+	return err
+}
+
+for resp.FinishReason == ai.FinishReasonInterrupted {
+	var restarts, responses []*ai.Part
+
+	for _, interrupt := range resp.Interrupts() {
+		meta, ok := ai.InterruptAs[TransferInterrupt](interrupt)
+		if !ok {
+			continue
+		}
+
+		switch meta.Reason {
+		case "confirm_large":
+			// The answer travels as resumed metadata. The tool reads it
+			// back with ai.ResumedValue and decides what to do.
+			approved := userConfirms("Confirm transfer of $%.2f?", meta.Amount)
+			part, err := transferMoney.RestartWith(interrupt,
+				ai.WithResumedMetadata[TransferInput](map[string]any{"approved": approved}))
+			if err != nil {
+				return err
+			}
+			restarts = append(restarts, part)
+
+		case "insufficient_balance":
+			if userConfirms("Transfer $%.2f instead?", meta.Balance) {
+				// Restart with a different input.
+				part, err := transferMoney.RestartWith(interrupt,
+					ai.WithNewInput(TransferInput{ToAccount: meta.ToAccount, Amount: meta.Balance}))
+				if err != nil {
+					return err
+				}
+				restarts = append(restarts, part)
+			} else {
+				// Answer the call outright, without running the tool again.
+				part, err := transferMoney.RespondWith(interrupt, TransferOutput{
+					Status:     "cancelled",
+					Message:    "Transfer cancelled by user.",
+					NewBalance: accountBalance,
+				})
+				if err != nil {
+					return err
+				}
+				responses = append(responses, part)
+			}
+		}
+	}
+
+	resp, err = genkit.Generate(ctx, g,
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transferMoney),
+		ai.WithToolRestarts(restarts...),
+		ai.WithToolResponses(responses...),
+	)
+	if err != nil {
+		return err
+	}
+}
+
+fmt.Println(resp.Text())
+```
+
+### Access original input after replacement
+
+When you use `ai.WithNewInput()`, you can access the original input inside
+the tool using `ai.OriginalInputAs()`:
+
+```go
+transferMoney := genkit.DefineTool(g, "transferMoney",
+	"Transfers money to another account.",
+	func(tc *ai.ToolContext, input TransferInput) (TransferOutput, error) {
+		// ... interrupt logic ...
+
+		accountBalance -= input.Amount
+		message := fmt.Sprintf("Transferred $%.2f to %s", input.Amount, input.ToAccount)
+
+		// Report the adjustment when the caller replaced the input.
+		if orig, ok := ai.OriginalInputAs[TransferInput](tc); ok {
+			message = fmt.Sprintf("Transferred $%.2f to %s (adjusted from $%.2f)",
+				input.Amount, input.ToAccount, orig.Amount)
+		}
+
+		return TransferOutput{
+			Status:     "completed",
+			Message:    message,
+			NewBalance: accountBalance,
+		}, nil
+	},
+)
+```
+
+## Typed resume payloads
+
+:::caution[In preview]
+The `genkit/exp` tools API is in preview. It may change in any minor release.
+:::
+
+With the stable API, the resume payload is a metadata map: the tool reads
+`"approved"` with `ai.ResumedValue()` and the caller writes `"approved"` with
+`ai.WithResumedMetadata()`, and nothing checks that the two agree. The in-preview
+`genkitx.DefineInterruptibleTool()` takes a third type parameter for what comes
+back on the resume, so the payload becomes a real type that both ends share.
+
+The tool function takes a plain `context.Context` and a pointer to the resume
+type. The pointer is `nil` on the first call and set when the tool is resumed,
+which replaces `IsResumed()`. `tool.Interrupt()` pauses with a typed value in
+place of `ai.InterruptWith()`, and the tool's `Resume()` method carries the typed
+answer in place of `RestartWith()` plus a metadata map. Everything else, including
+`ai.WithToolRestarts()` and the two-turn shape, is unchanged:
+
+```go
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+// Approval is the answer carried back into the tool when it is resumed. It is
+// the tool's third type parameter, so both ends share one type instead of
+// agreeing on metadata keys.
+type Approval struct {
+	Approved bool `json:"approved"`
+}
+
+// The in-preview tool constructors panic without this option.
+g := genkit.Init(ctx, genkit.WithExperimental())
+
+transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
+	"Transfers money to another account.",
+	func(ctx context.Context, input TransferInput, approval *Approval) (*TransferOutput, error) {
+		// approval is nil on the first call and set when the tool is
+		// resumed, which is what tells a fresh large transfer from one
+		// that has already been answered.
+		if approval == nil && input.Amount > 100 {
+			return nil, tool.Interrupt(TransferInterrupt{
+				ToAccount: input.ToAccount,
+				Amount:    input.Amount,
+			})
+		}
+		if approval != nil && !approval.Approved {
+			return &TransferOutput{Status: "declined", NewBalance: accountBalance}, nil
+		}
+
+		accountBalance -= input.Amount
+		return &TransferOutput{Status: "completed", NewBalance: accountBalance}, nil
+	})
+```
+
+Resuming reads the interrupt with `tool.InterruptAs()` and answers it with the
+tool's `Resume()` method:
+
+```go
+for resp.FinishReason == ai.FinishReasonInterrupted {
+	var restarts []*ai.Part
+
+	for _, interrupt := range resp.Interrupts() {
+		meta, ok := tool.InterruptAs[TransferInterrupt](interrupt)
+		if !ok {
+			continue
+		}
+		// Resume carries a typed Approval, so neither end has to agree on
+		// a metadata key.
+		part, err := transferMoney.Resume(interrupt, Approval{
+			Approved: userConfirms("Confirm transfer of $%.2f?", meta.Amount),
+		})
+		if err != nil {
+			return err
+		}
+		restarts = append(restarts, part)
+	}
+
+	resp, err = genkit.Generate(ctx, g,
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transferMoney),
+		ai.WithToolRestarts(restarts...),
+	)
+	if err != nil {
+		return err
+	}
+}
+```
+
+Both the interrupt value and the resume value must serialize to a JSON object, so
+use a struct or a map. A scalar or a slice fails at runtime, not at compile time.
+The tool's `Respond()` method is the in-preview counterpart of `RespondWith()`,
+answering a paused call without running the tool again.
+
+The
+[basic-tool-interrupts-exp sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts-exp)
+is the same program as basic-tool-interrupts written against this in-preview API,
+so reading the two side by side shows exactly what changes.
+
+</Lang>
+
+<Lang lang="dart">
+
+_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
+LLM generation-and-tool-calling loop to return control back to you. When
+you're ready, you can then _resume_ generation by sending _replies_ that the LLM
+processes for further generation.
+
+The most common uses for interrupts fall into a few categories:
+
+- **Human-in-the-Loop:** Enabling the user of an interactive AI
+  to clarify needed information or confirm the LLM's action
+  before it is completed, providing a measure of safety and confidence.
+- **Async Processing:** Starting an asynchronous task that can only be
+  completed out-of-band, such as sending an approval notification to
+  a human reviewer or kicking off a long-running background process.
+- **Exit from an Autonomous Task:** Providing the model a way
+  to mark a task as complete, in a workflow that might iterate through
+  a long series of tool calls.
+
+## Before you begin
+
+All of the examples documented here assume that you have already set up a
+project with Genkit dependencies installed. If you want to run the code
+examples on this page, first complete the steps in the
+[Get started](/docs/get-started/) guide.
+
+Before diving too deeply, you should also be familiar with the following
+concepts:
+
+- [Generating content](/docs/models/) with AI models.
+- Genkit's system for [defining input and output schemas](/docs/flows/).
+- General methods of [tool-calling](/docs/tool-calling/).
+
+## Overview of interrupts
+
+At a high level, this is what an interrupt looks like when
+interacting with an LLM:
+
+1.  The calling application prompts the LLM with a request. The prompt includes
+    a list of tools, including at least one for an interrupt that the LLM
+    can use to generate a response.
+2.  The LLM generates either a complete response or a tool call request
+    in a specific format. To the LLM, an interrupt call looks like any
+    other tool call.
+3.  If the LLM calls an interrupting tool,
+    the Genkit library automatically pauses generation rather than immediately
+    passing responses back to the model for additional processing.
+4.  The developer checks whether an interrupt call is made, and performs whatever
+    task is needed to collect the information needed for the interrupt response.
+5.  The developer resumes generation by passing an interrupt response to the
+    model. This action triggers a return to Step 2.
+
+## Define manual-response interrupts
+
+The most common kind of interrupt allows the LLM to request clarification from
+the user, for example by asking a multiple-choice question.
+
+For this use case, use the `ai.defineTool()` method and call `ctx.interrupt()`:
+
+```dart
+import 'package:genkit/genkit.dart';
+
+// Input schema for the interrupt tool
+@Schema()
+class QuestionInput {
+  final List<String> choices;
+  final bool? allowOther;
+
+  QuestionInput({required this.choices, this.allowOther});
+}
+
+final askQuestion = ai.defineTool(
+  name: 'askQuestion',
+  description: 'Use this to ask the user a clarifying question',
+  inputSchema: QuestionInput.$schema,
+  outputSchema: .string(), // The expected user answer type
+  fn: (input, ctx) {
+    // Trigger an interrupt with the input data as metadata
+    ctx.interrupt(input);
+  },
+);
+```
+
+Note that the `outputSchema` of an interrupt tool corresponds to the response data
+you will provide (the user's answer) as opposed to something that will be automatically populated
+by a tool function.
+
+### Use interrupts
+
+Interrupts are passed into the `tools` list when generating content, just like
+other types of tools. You can pass both normal tools and interrupts to the
+same `generate` call:
+
+```dart
+final response = await ai.generate(
+  prompt: 'Ask me a movie trivia question.',
+  toolNames: ['askQuestion'],
+);
+```
+
+Genkit immediately returns a response on receipt of an interrupt tool call.
+
+### Respond to interrupts
+
+If you've passed one or more interrupts to your generate call, you
+need to check the response for interrupts so that you can handle them:
+
+```dart
+// Check if the generation stopped due to an interrupt
+if (response.finishReason == FinishReason.interrupted) {
+  print('Generation interrupted.');
+}
+
+// Access the interrupt requests
+if (response.interrupts.isNotEmpty) {
+  print('Found ${response.interrupts.length} interrupts');
+}
+```
+
+Responding to an interrupt is done using the `resume` parameter on a subsequent
+`generate` call, making sure to pass in the existing message history.
+
+Once resumed, the model re-enters the generation loop, including tool
+execution, until either it completes or another interrupt is triggered:
+
+```dart
+var response = await ai.generate(
+  prompt: 'Help me plan a backyard BBQ.',
+  config: GeminiOptions(
+    systemInstruction: 'Ask clarifying questions until you have a complete solution.',
+  ),
+  toolNames: ['askQuestion'],
+);
+
+while (response.finishReason == FinishReason.interrupted) {
+  final resumeResponses = <InterruptResponse>[];
+
+  // Handle all interrupts (multiple can occur)
+  for (final part in response.interrupts) {
+    // In a real app, this would involve UI interaction
+    final input = part.toolRequest.input as QuestionInput;
+    final userAnswer = await askUser(input);
+
+    resumeResponses.add(InterruptResponse(part.toolRequestPart!, userAnswer));
+  }
+
+  // Resume generation
+  response = await ai.generate(
+    messages: response.messages, // Pass history
+    toolNames: ['askQuestion'],
+    interruptRespond: resumeResponses,
+  );
+}
+
+print(response.text);
+```
+
+## Tools with restartable interrupts
+
+Another common pattern for interrupts is the need to _confirm_ an action that the LLM suggests before actually performing it. For example, a payments app might want the user to confirm certain kinds of transfers before proceeding.
+
+### Define a restartable tool
+
+When defining a tool, check `ctx.resumed` to decide whether the action has been approved. It is `null` on the first call, so the tool interrupts. When the tool is restarted, it holds the metadata the client sent, which lets the transfer proceed:
+
+```dart
+ai.defineTool(
+  name: 'transfer_funds',
+  description: 'transfer funds, requires user approval',
+  inputSchema: ApprovalRequest.$schema,
+  fn: (input, ctx) async {
+    // `ctx.resumed` is null on the first call and carries the client's
+    // approval metadata when the tool is restarted.
+    final resumed = ctx.resumed;
+    final approved = resumed is Map && resumed['approved'] == true;
+
+    if (!approved) {
+      ctx.interrupt(input);
+    }
+    return 'Successfully transferred funds! Details: ${input.details}';
+  },
+);
+```
+
+### Restart tools after interruption
+
+To restart the interrupted tool, build a restart part from the interrupted tool request with `.restart(metadata)` and pass it to the `interruptRestart` parameter on your next `ai.generate` call. The metadata surfaces to the tool as `ctx.resumed`, and the model re-executes the tool function:
+
+```dart
+if (response.finishReason == FinishReason.interrupted) {
+  final interrupt = response.interrupts.first;
+
+  // In your app logic: Ask the user to confirm the transfer...
+  // Once confirmed, restart the tool with approval metadata that the tool
+  // reads via `ctx.resumed`.
+  final response2 = await ai.generate(
+    // Ensure you pass the previous messages back
+    messages: response.messages,
+    toolNames: ['transfer_funds'],
+    // Restart the interrupted tool with approval metadata.
+    interruptRestart: [
+      interrupt.toolRequestPart!.restart({'approved': true}),
+    ],
+  );
+}
+```
+
+</Lang>
+
+<Lang lang="python">
+
+_Interrupts_ are a special kind of [tool](/docs/tool-calling) that can pause the
+LLM generation-and-tool-calling loop to return control back to you. When
+you're ready, you can then _resume_ generation by sending _replies_ that the LLM
+processes for further generation.
+
+The most common uses for interrupts fall into a few categories:
+
+- **Human-in-the-Loop:** Enabling the user of an interactive AI
+  to clarify needed information or confirm the LLM's action
+  before it is completed, providing a measure of safety and confidence.
+- **Async Processing:** Starting an asynchronous task that can only be
+  completed out-of-band, such as sending an approval notification to
+  a human reviewer or kicking off a long-running background process.
+- **Exit from an Autonomous Task:** Providing the model a way
+  to mark a task as complete, in a workflow that might iterate through
+  a long series of tool calls.
+
+## Before you begin
+
+All of the examples documented here assume that you have already set up a
+project with Genkit dependencies installed. If you want to run the code
+examples on this page, first complete the steps in the
+[Get started](/docs/get-started/) guide.
+
+Before diving too deeply, you should also be familiar with the following
+concepts:
+
+- [Generating content](/docs/models/) with AI models.
+- Genkit's system for [defining input and output schemas](/docs/flows/).
+- General methods of [tool-calling](/docs/tool-calling/).
+
+## Overview of interrupts
+
+At a high level, this is what an interrupt looks like when
+interacting with an LLM:
+
+1.  The calling application prompts the LLM with a request. The prompt includes
+    a list of tools, including at least one for an interrupt that the LLM
+    can use to generate a response.
+2.  The LLM generates either a complete response or a tool call request
+    in a specific format. To the LLM, an interrupt call looks like any
+    other tool call.
+3.  If the LLM calls an interrupting tool,
+    the Genkit library automatically pauses generation rather than immediately
+    passing responses back to the model for additional processing.
+4.  The developer checks whether an interrupt call is made, and performs whatever
+    task is needed to collect the information needed for the interrupt response.
+5.  The developer resumes generation by passing an interrupt response to the
+    model. This action triggers a return to Step 2.
+
+## Define manual-response interrupts
+
+The most common kind of interrupt allows the LLM to request clarification from
+the user, for example by asking a multiple-choice question.
+
+For this use case, register an interrupt tool with `define_interrupt`, or raise
+`Interrupt` from a normal tool when you need to pause conditionally.
+
+```python
+from genkit import FinishReason, Genkit, respond_to_interrupt
+from genkit_google_genai import GoogleAI
+from pydantic import BaseModel, Field
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
+)
+
+class QuestionInput(BaseModel):
+    """Input schema for the question tool."""
+    question: str = Field(description='the question to ask')
+    choices: list[str] = Field(description='the choices to display to the user')
+    allow_other: bool = Field(default=False, description='when true, allow write-ins')
+
+ask_question = ai.define_interrupt(
+    name='ask_question',
+    description='Use this to ask the user a clarifying question.',
+    input_schema=QuestionInput,
+)
+```
+
+The output you later provide with `respond_to_interrupt` is what the model sees
+as the tool result when generation resumes.
+
+### Use interrupts
+
+Interrupts are passed into the `tools` list when generating content, just like
+other types of tools. You can pass both normal tools and interrupts to the
+same `generate` call:
+
+```python
+response = await ai.generate(
+    prompt='Ask me a movie trivia question.',
+    tools=[ask_question],
+)
+```
+
+Genkit returns as soon as an interrupt tool is called
+(`finish_reason=FinishReason.INTERRUPTED`).
+
+### Respond to interrupts
+
+If you've passed one or more interrupts to your generate call, you
+need to check the response for interrupts so that you can handle them:
+
+```python
+# You can check the finish_reason (use the enum for comparisons)
+if response.finish_reason == FinishReason.INTERRUPTED:
+    print("Generation interrupted.")
+
+# Or you can check if any interrupt requests are on the response
+if response.interrupts:
+    print(f"Interrupts found: {len(response.interrupts)}")
+    for interrupt in response.interrupts:
+        tool_input = interrupt.tool_request.input
+        print(f"Question: {tool_input.get('question')}")
+        print(f"Choices: {tool_input.get('choices')}")
+```
+
+Resume with `respond_to_interrupt` and pass the result to `resume_respond`,
+keeping the existing message history:
+
+```python
+# Get the user's answer (e.g., from user input)
+user_answer = 'b'  # User selected option b
+
+interrupt = response.interrupts[0]
+
+response = await ai.generate(
+    messages=response.messages,
+    resume_respond=respond_to_interrupt(user_answer, interrupt=interrupt),
+    tools=[ask_question],
+)
+```
+
+### Handle multiple interrupts in a loop
+
+For interactive applications, you'll often need to handle multiple interrupts
+in a loop until the model completes its task:
+
+```python
+async def interactive_session():
+    response = await ai.generate(
+        prompt='Help me plan a backyard BBQ.',
+        system='Ask clarifying questions until you have a complete solution.',
+        tools=[ask_question],
+    )
+
+    while response.interrupts:
+        answers = []
+        for interrupt in response.interrupts:
+            tool_input = interrupt.tool_request.input or {}
+            question = tool_input.get('question', 'Unknown question')
+            choices = tool_input.get('choices', [])
+
+            print(f"\nQuestion: {question}")
+            for i, choice in enumerate(choices):
+                print(f"  {i + 1}. {choice}")
+
+            user_input = input("Your answer: ")
+            answers.append(respond_to_interrupt(user_input, interrupt=interrupt))
+
+        response = await ai.generate(
+            messages=response.messages,
+            resume_respond=answers,
+            tools=[ask_question],
+        )
+
+    print(f"\nFinal response: {response.text}")
+```
+
+## Using interrupts with flows
+
+You can also use interrupts within flows for more structured applications:
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+from pydantic import BaseModel, Field
+
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+
+class TriviaQuestion(BaseModel):
+    """A trivia question with multiple choice answers."""
+    question: str = Field(description='the trivia question')
+    answers: list[str] = Field(description='multiple choice answers')
+
+present_question = ai.define_interrupt(
+    name='present_question',
+    description='Presents a trivia question to the user.',
+    input_schema=TriviaQuestion,
+)
+
+@ai.flow()
+async def play_trivia(theme: str) -> str:
+    """Plays a trivia game on the given theme."""
+    response = await ai.generate(
+        prompt=f'Ask me a trivia question about {theme}.',
+        tools=[present_question],
+    )
+
+    if response.interrupts:
+        interrupt = response.interrupts[0]
+        question_data = interrupt.tool_request.input or {}
+        return (
+            f"Question: {question_data.get('question')}\n"
+            f"Answers: {question_data.get('answers')}"
+        )
+
+    return response.text
+```
+
+## Tools with restartable interrupts
+
+Another common pattern is the need to _confirm_ an action that the LLM suggests before actually performing it. For example, a payments app might want the user to confirm certain kinds of transfers before proceeding.
+
+### Define a restartable tool
+
+When defining a tool, you can check your application state or use `ctx.is_resumed()` to determine whether the action has already been approved. If it's the first execution, raise an `Interrupt` exception to pause the loop:
+
+```python
+from genkit import Interrupt, ToolRunContext
+from pydantic import BaseModel, Field
+
+class TransferInput(BaseModel):
+    to_account: str
+    amount: float
+
+@ai.tool()
+async def transfer_money(input: TransferInput, ctx: ToolRunContext) -> dict:
+    """Transfer money between accounts, with confirmation for large amounts."""
+    # Require confirmation for large transfers (only on first execution)
+    if not ctx.is_resumed() and input.amount > 100:
+        raise Interrupt({
+            'reason': 'confirm_large',
+            'to_account': input.to_account,
+            'amount': input.amount,
+        })
+
+    # Execute the transfer (runs when resumed after approval)
+    return {
+        'status': 'confirmed',
+        'message': f'Transferred ${input.amount} to {input.to_account}',
+    }
+```
+
+### Restart tools after interruption
+
+To restart the interrupted tool, use the `restart_tool()` function to construct a restarted tool request part, and pass it to the `resume_restart` parameter of `ai.generate()`.
+
+You can customize the restart behavior by providing optional arguments to `restart_tool()`:
+
+- **`resumed_metadata`**: Pass arbitrary state (e.g. `{'approved_by': 'user'}`) to the tool context. The tool function can retrieve this via `ctx.resumed_metadata`.
+- **`replace_input`**: Provide a new input payload (e.g. a modified Pydantic model or dictionary) to re-run the tool with modified arguments.
+
+```python
+from genkit import restart_tool, respond_to_interrupt
+
+response = await ai.generate(
+    prompt='Transfer $250 to account ABC123',
+    tools=[transfer_money],
+)
+
+messages = response.messages
+
+if response.interrupts:
+    interrupt = response.interrupts[0]
+
+    # Ask the user to confirm the transfer...
+    if user_approved:
+        # Rerun the tool by passing a restart part to resume_restart
+        restart = restart_tool(
+            interrupt=interrupt,
+            resumed_metadata={'approved_by': 'user'},
+        )
+        response = await ai.generate(
+            messages=messages,
+            resume_restart=restart,
+            tools=[transfer_money],
+        )
+    else:
+        # Decline by providing a direct response without re-running the tool
+        decline = respond_to_interrupt(
+            {'status': 'cancelled'},
+            interrupt=interrupt,
+        )
+        response = await ai.generate(
+            messages=messages,
+            resume_respond=decline,
+            tools=[transfer_money],
+        )
+
+print(response.text)
+```
+
+### Replacing input and accessing original input on restart
+
+If you decide to adjust the tool arguments upon restart (for example, asking the user to lower a transfer amount that exceeded limits), pass the adjusted input payload to `replace_input`:
+
+```python
+# Inside your interrupt-handling loop:
+meta = interrupt.tool_request.input
+adjusted_input = TransferInput(to_account=meta.get('to_account'), amount=100.0)
+
+restart = restart_tool(
+    interrupt=interrupt,
+    resumed_metadata={'approved_by': 'user'},
+    replace_input=adjusted_input,
+)
+```
+
+When a tool is restarted with a replaced input, the original input arguments are automatically stashed. Inside the tool function, you can retrieve the original arguments by checking `ctx.original_input` (which will be a dictionary):
+
+```python
+@ai.tool()
+async def transfer_money(input: TransferInput, ctx: ToolRunContext) -> dict:
+    # ... interrupt logic ...
+
+    # Check if the input was replaced upon restart
+    if ctx.original_input:
+        original = ctx.original_input
+        print(f"Adjusted transfer amount from {original.get('amount')} to {input.amount}")
+
+    # Execute the transfer with the current (possibly adjusted) input
+    return {
+        'status': 'confirmed',
+        'message': f"Transferred ${input.amount} to {input.to_account}",
+    }
+```
+
+</Lang>

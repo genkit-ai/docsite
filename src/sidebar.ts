@@ -1,3 +1,112 @@
+import fs from "node:fs";
+import path from "node:path";
+import { parse } from "yaml";
+
+const ALL_LANGUAGES = ["js", "go", "dart", "python"] as const;
+type SupportedLanguage = (typeof ALL_LANGUAGES)[number];
+type DocLanguageMetadata = {
+  supportedLanguages: SupportedLanguage[];
+  isLanguageAgnostic: boolean;
+};
+
+function parseLanguageList(value: string): SupportedLanguage[] {
+  const tokens = value
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.toLowerCase())
+    .filter(Boolean);
+
+  const deduped = [...new Set(tokens)];
+  return ALL_LANGUAGES.filter((language) => deduped.includes(language));
+}
+
+function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
+  const docsRoot = path.resolve(process.cwd(), "src/content/docs");
+  const candidates = [
+    path.join(docsRoot, `${slug}.mdx`),
+    path.join(docsRoot, `${slug}.md`),
+  ];
+  const docFile = candidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!docFile) {
+    return {
+      supportedLanguages: [...ALL_LANGUAGES],
+      isLanguageAgnostic: false,
+    };
+  }
+
+  const source = fs.readFileSync(docFile, "utf8");
+  let isLanguageAgnostic = false;
+  const frontmatterMatch = source.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (frontmatterMatch) {
+    try {
+      const frontmatter = parse(frontmatterMatch[1]) as {
+        supportedLanguages?: unknown;
+        isLanguageAgnostic?: unknown;
+      };
+      if (typeof frontmatter.isLanguageAgnostic === "boolean") {
+        isLanguageAgnostic = frontmatter.isLanguageAgnostic;
+      }
+      if (Array.isArray(frontmatter.supportedLanguages)) {
+        const langs = frontmatter.supportedLanguages
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.toLowerCase())
+          .filter((value): value is SupportedLanguage =>
+            (ALL_LANGUAGES as readonly string[]).includes(value),
+          );
+        if (langs.length > 0) {
+          return {
+            supportedLanguages: ALL_LANGUAGES.filter((language) =>
+              langs.includes(language),
+            ),
+            isLanguageAgnostic,
+          };
+        }
+      }
+    } catch {
+      // Fall through to content-based inference.
+    }
+  }
+
+  const contentLanguages = new Set<SupportedLanguage>();
+  const languageContentPattern =
+    /<Lang[^>]*lang\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  let languageContentMatch = languageContentPattern.exec(source);
+  while (languageContentMatch) {
+    const parsed = parseLanguageList(
+      languageContentMatch[1] || languageContentMatch[2] || "",
+    );
+    parsed.forEach((language) => contentLanguages.add(language));
+    languageContentMatch = languageContentPattern.exec(source);
+  }
+
+  if (contentLanguages.size > 0) {
+    return {
+      supportedLanguages: ALL_LANGUAGES.filter((language) =>
+        contentLanguages.has(language),
+      ),
+      isLanguageAgnostic,
+    };
+  }
+
+  return {
+    supportedLanguages: [...ALL_LANGUAGES],
+    isLanguageAgnostic,
+  };
+}
+
+function createLanguageMetadataMap(
+  sections: Array<{ items: Array<{ slug: string }> }>,
+): Record<string, DocLanguageMetadata> {
+  const map: Record<string, DocLanguageMetadata> = {};
+  sections.forEach((section) => {
+    section.items.forEach((item) => {
+      map[item.slug] = getDocLanguageMetadata(item.slug);
+    });
+  });
+  return map;
+}
+
 const DOCS_SIDEBAR = [
   {
     label: "Get started",
@@ -8,58 +117,124 @@ const DOCS_SIDEBAR = [
     ],
   },
   {
-    label: "Building AI workflows",
+    label: "Core concepts",
     items: [
-      { label: "Creating flows", slug: "docs/flows" },
+      { label: "Flows", slug: "docs/flows" },
       { label: "Generating content", slug: "docs/models" },
       { label: "Tool calling", slug: "docs/tool-calling" },
-      { label: "Implementing Agentic Patterns", slug: "docs/agentic-patterns" },
-      { label: "Managing prompts with Dotprompt", slug: "docs/dotprompt" },
-      { label: "Passing information through context", slug: "docs/context" },
-      { label: "Pause generation using interrupts", slug: "docs/interrupts" },
-      { label: "Creating persistent chat sessions", slug: "docs/chat" },
-      { label: "Model Context Protocol (MCP)", slug: "docs/model-context-protocol" },
-      { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
+      { label: "Prompt templating", slug: "docs/dotprompt" },
+      { label: "Runtime context", slug: "docs/context" },
+      { label: "Middleware", slug: "docs/middleware" },
+      { label: "Agentic patterns", slug: "docs/agentic-patterns" },
+      { label: "Interrupts", slug: "docs/interrupts" },
+      { label: "Persistent chat", slug: "docs/chat" },
       { label: "Building multi-agent systems", slug: "docs/multi-agent" },
-      { label: "Error types", slug: "docs/error-types" },
+      { label: "Retrieval-augmented generation (RAG)", slug: "docs/rag" },
+      {
+        label: "Model Context Protocol (MCP)",
+        slug: "docs/model-context-protocol",
+      },
+      { label: "Durable streaming", slug: "docs/durable-streaming" },
+      { label: "Frontend integration", slug: "docs/client" },
+      { label: "Testing", slug: "docs/testing" },
       { label: "Evaluation", slug: "docs/evaluation" },
-      { label: "Local observability and metrics", slug: "docs/local-observability" },
+      { label: "Error types", slug: "docs/error-types" },
+      {
+        label: "Local observability and metrics",
+        slug: "docs/local-observability",
+      },
+    ],
+  },
+  {
+    label: "Full-stack agents",
+    items: [
+      { label: "Overview", slug: "docs/agents/overview" },
+      { label: "Define agents", slug: "docs/agents/define" },
+      { label: "Run and stream", slug: "docs/agents/run" },
+      { label: "Serve over HTTP", slug: "docs/agents/http" },
+      { label: "Sessions and state", slug: "docs/agents/state" },
+      { label: "Session stores", slug: "docs/agents/session-stores" },
+      { label: "Interrupts", slug: "docs/agents/interrupts" },
+      { label: "Background execution", slug: "docs/agents/background" },
+      { label: "Multi-agent delegation", slug: "docs/agents/multi-agent" },
+      {
+        label: "Custom orchestration",
+        slug: "docs/agents/custom-orchestration",
+      },
+      { label: "Error handling", slug: "docs/agents/errors" },
     ],
   },
   {
     label: "Build with AI",
     items: [
-      { label: "Genkit MCP Server", slug: "docs/mcp-server" },
-      { label: "AI-Assisted Development", slug: "docs/develop-with-ai" },
+      { label: "Genkit MCP server", slug: "docs/mcp-server" },
+      { label: "AI-assisted development", slug: "docs/develop-with-ai" },
     ],
   },
   {
-    label: "Tutorials",
+    label: "Backend frameworks",
     items: [
-      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
-      { label: "Summarize YouTube videos", slug: "docs/tutorials/summarize-youtube-videos" },
+      { label: "Overview", slug: "docs/backend-frameworks/overview" },
+      { label: "Chi", slug: "docs/backend-frameworks/chi" },
+      { label: "Django", slug: "docs/backend-frameworks/django" },
+      { label: "Echo", slug: "docs/backend-frameworks/echo" },
+      { label: "Express.js", slug: "docs/backend-frameworks/express" },
+      { label: "FastAPI", slug: "docs/backend-frameworks/fastapi" },
+      { label: "Fastify", slug: "docs/backend-frameworks/fastify" },
+      { label: "Flask", slug: "docs/backend-frameworks/flask" },
+      { label: "Gin", slug: "docs/backend-frameworks/gin" },
+      { label: "Hono", slug: "docs/backend-frameworks/hono" },
+      { label: "NestJS", slug: "docs/backend-frameworks/nestjs" },
+      { label: "net/http", slug: "docs/backend-frameworks/nethttp" },
+      { label: "Shelf", slug: "docs/backend-frameworks/shelf" },
     ],
   },
   {
-    label: "Model Providers",
+    label: "App frameworks",
     items: [
+      { label: "Overview", slug: "docs/app-frameworks/overview" },
+      { label: "Angular", slug: "docs/app-frameworks/angular" },
+      { label: "Astro", slug: "docs/app-frameworks/astro" },
+      { label: "Flutter", slug: "docs/app-frameworks/flutter" },
+      { label: "Next.js", slug: "docs/app-frameworks/nextjs" },
+      { label: "Nuxt", slug: "docs/app-frameworks/nuxt" },
+      { label: "React (Vite)", slug: "docs/app-frameworks/react" },
+      { label: "Remix", slug: "docs/app-frameworks/remix" },
+      { label: "SvelteKit", slug: "docs/app-frameworks/sveltekit" },
+      { label: "TanStack Start", slug: "docs/app-frameworks/tanstack-start" },
+    ],
+  },
+  {
+    label: "Model providers",
+    items: [
+      { label: "Overview", slug: "docs/integrations/model-providers" },
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
-      { label: "OpenAI-Compatible APIs", slug: "docs/integrations/openai-compatible" },
+      {
+        label: "OpenAI-Compatible APIs",
+        slug: "docs/integrations/openai-compatible",
+      },
       { label: "Anthropic (Claude)", slug: "docs/integrations/anthropic" },
       { label: "AWS Bedrock", slug: "docs/integrations/aws-bedrock" },
       { label: "Azure AI Foundry", slug: "docs/integrations/azure-foundry" },
       { label: "xAI (Grok)", slug: "docs/integrations/xai" },
       { label: "DeepSeek", slug: "docs/integrations/deepseek" },
+      { label: "OpenRouter", slug: "docs/integrations/openrouter" },
+      { label: "Kimi", slug: "docs/integrations/kimi" },
+      { label: "Z.ai", slug: "docs/integrations/zai" },
+      { label: "DashScope (Qwen)", slug: "docs/integrations/dashscope" },
       { label: "Ollama", slug: "docs/integrations/ollama" },
     ],
   },
   {
-    label: "Database Providers",
+    label: "Database providers",
     items: [
       { label: "MCP Toolbox for Databases", slug: "docs/integrations/toolbox" },
-      { label: "Dev Local Vector Store", slug: "docs/integrations/dev-local-vectorstore" },
+      {
+        label: "Dev local vector store",
+        slug: "docs/integrations/dev-local-vectorstore",
+      },
       { label: "Pinecone", slug: "docs/integrations/pinecone" },
       { label: "Chroma", slug: "docs/integrations/chroma" },
       { label: "pgvector", slug: "docs/integrations/pgvector" },
@@ -67,64 +242,96 @@ const DOCS_SIDEBAR = [
       { label: "Astra DB", slug: "docs/integrations/astra-db" },
       { label: "Neo4j", slug: "docs/integrations/neo4j" },
       { label: "AlloyDB for PostgreSQL", slug: "docs/integrations/alloydb" },
-      { label: "Cloud SQL PostgreSQL", slug: "docs/integrations/cloud-sql-postgresql" },
+      {
+        label: "Cloud SQL PostgreSQL",
+        slug: "docs/integrations/cloud-sql-postgresql",
+      },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
-      { label: "Vertex AI VectorSearch with Bigquery", slug: "docs/integrations/vectorsearch-bigquery" },
-      { label: "Vertex AI VectorSearch with Firestore", slug: "docs/integrations/vectorsearch-firestore" },
-    ],
-  },
-  {
-    label: "Web Framework Integrations",
-    items: [
-      { label: "Express.js", slug: "docs/frameworks/express" },
-      { label: "Next.js", slug: "docs/frameworks/nextjs" },
-      { label: "Angular", slug: "docs/frameworks/angular" },
-      { label: "FastAPI", slug: "docs/frameworks/fastapi" },
+      {
+        label: "Vertex AI Vector Search with BigQuery",
+        slug: "docs/integrations/vectorsearch-bigquery",
+      },
+      {
+        label: "Vertex AI Vector Search with Firestore",
+        slug: "docs/integrations/vectorsearch-firestore",
+      },
     ],
   },
   {
     label: "Deployment",
     items: [
+      { label: "Overview", slug: "docs/deployment/overview" },
       { label: "Firebase", slug: "docs/deployment/firebase" },
       { label: "Cloud Run", slug: "docs/deployment/cloud-run" },
-      { label: "Any Platform", slug: "docs/deployment/any-platform" },
-      { label: "Client App Integration", slug: "docs/client" },
+      { label: "Azure Functions", slug: "docs/deployment/azure-functions" },
+      { label: "AWS Lambda", slug: "docs/deployment/aws-lambda" },
+      { label: "Any platform", slug: "docs/deployment/any-platform" },
     ],
   },
   {
     label: "Authorization",
     items: [
-      { label: "Authorization & Integrity", slug: "docs/deployment/authorization" },
+      {
+        label: "Authorization & integrity",
+        slug: "docs/deployment/authorization",
+      },
       { label: "Auth0 AI", slug: "docs/integrations/auth0" },
     ],
   },
   {
-    label: "Writing Plugins",
-    items: [
-      { label: "Overview", slug: "docs/plugin-authoring/overview" },
-    ],
+    label: "Writing plugins",
+    items: [{ label: "Overview", slug: "docs/plugin-authoring/overview" }],
   },
   {
-    label: "Observability and Monitoring",
+    label: "Observability and monitoring",
     items: [
       { label: "Getting started", slug: "docs/observability/getting-started" },
       { label: "Authentication", slug: "docs/observability/authentication" },
-      { label: "Telemetry Collection", slug: "docs/observability/telemetry-collection" },
-      { label: "Advanced Configuration", slug: "docs/observability/advanced-configuration" },
+      {
+        label: "Telemetry collection",
+        slug: "docs/observability/telemetry-collection",
+      },
+      {
+        label: "Advanced configuration",
+        slug: "docs/observability/advanced-configuration",
+      },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
-      { label: "Google Cloud Plugin", slug: "docs/integrations/google-cloud" },
+      { label: "Google Cloud plugin", slug: "docs/integrations/google-cloud" },
+    ],
+  },
+  {
+    label: "Tutorials",
+    items: [
+      { label: "Chat with a PDF", slug: "docs/tutorials/chat-with-pdf" },
+      {
+        label: "Summarize YouTube videos",
+        slug: "docs/tutorials/summarize-youtube-videos",
+      },
     ],
   },
   {
     label: "Reference",
     items: [
-      { label: "API References", slug: "docs/api-references" },
-      { label: "API Stability", slug: "docs/api-stability" },
+      { label: "API references", slug: "docs/api-references" },
+      { label: "API stability", slug: "docs/api-stability" },
       { label: "Feedback", slug: "docs/feedback" },
     ],
   },
 ];
 
-export const sidebar = [
-  ...DOCS_SIDEBAR,
-];
+export const sidebar = [...DOCS_SIDEBAR];
+
+const docsLanguageMetadataBySlug = createLanguageMetadataMap(DOCS_SIDEBAR);
+export const docsLanguageSupportBySlug = Object.fromEntries(
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [
+    slug,
+    metadata.supportedLanguages,
+  ]),
+) as Record<string, SupportedLanguage[]>;
+export const docsLanguageAgnosticBySlug = Object.fromEntries(
+  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [
+    slug,
+    metadata.isLanguageAgnostic,
+  ]),
+) as Record<string, boolean>;
+export const docsAllLanguages = [...ALL_LANGUAGES];
