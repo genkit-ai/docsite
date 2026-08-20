@@ -4,6 +4,7 @@ description: Learn how to configure and use the AWS Bedrock plugin for Genkit to
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -398,5 +399,235 @@ response, err := genkit.Generate(ctx, g,
     ),
 )
 ```
+
+</Lang>
+
+<Lang lang="python">
+
+The `genkit-amazon-bedrock` package provides the `Bedrock` plugin for accessing foundation models, embedders, rerankers, and image generation models hosted on [AWS Bedrock](https://aws.amazon.com/bedrock/).
+
+The plugin supports:
+
+- **Language Models**: Converse and ConverseStream APIs across Anthropic Claude on Bedrock, Amazon Nova, Amazon Titan, Mistral, and Cohere.
+- **Embeddings**: Text and multimodal embeddings with Amazon Titan Embeddings (v1/v2) and Cohere Embed.
+- **Reranking**: High-precision retrieval reranking with Cohere Rerank.
+- **Image Generation**: Amazon Titan Image Generator and Stability AI (SDXL).
+- **Prompt Caching**: Native Bedrock prompt cache checkpoints via `cache_point_part()`.
+- **Async Boto3 Engine**: High-throughput async client dispatch with automatic AWS credential resolution (IAM roles, SSO, environment variables) and exponential backoff retry.
+
+## Installation
+
+```bash
+uv add genkit-amazon-bedrock
+```
+
+## Configuration
+
+Initialize the plugin in Genkit:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+# 1. Initialize Bedrock (uses ambient AWS credentials and AWS_REGION)
+ai = Genkit(
+    plugins=[Bedrock()],
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+)
+```
+
+You can optionally pass an explicit region, credentials, or custom boto3 session:
+
+```python
+ai = Genkit(
+    plugins=[
+        Bedrock(
+            region='us-east-1',
+            # credentials={'aws_access_key_id': '...', 'aws_secret_access_key': '...'},
+            # session=boto3_session,
+        )
+    ],
+)
+```
+
+## AWS Setup
+
+### Model Access
+
+Model access is granted per AWS account and per region in the AWS Bedrock Console under **Model access**. Most foundation models (such as Anthropic Claude) require requesting access and accepting the one-time Anthropic use-case agreement in the console before they can be invoked.
+
+### IAM Permissions
+
+The minimal IAM policy covering model invocation and streaming:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
+    }
+  ]
+}
+```
+
+Cross-region inference profiles (such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`) use inference-profile ARNs, so ensure the policy includes `arn:aws:bedrock:*:*:inference-profile/*`.
+
+### Credentials
+
+Credentials resolve through standard AWS SDK chains:
+- Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`)
+- Shared config and credentials files under `~/.aws` (configurable with `AWS_PROFILE`)
+- IAM roles attached to EC2, ECS, Cloud Run, or AWS Lambda
+- SSO profiles (`aws sso login`)
+
+## Models
+
+Any routable Bedrock model ID or cross-region inference profile resolves dynamically on demand using the `bedrock/<model-id>` namespace:
+
+- **Claude Sonnet 4.5**: `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+- **Claude 3.7 Sonnet**: `bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0`
+- **Amazon Nova Lite**: `bedrock/us.amazon.nova-lite-v1:0`
+- **Amazon Nova Pro**: `bedrock/us.amazon.nova-pro-v1:0`
+- **Meta Llama 3.3 70B**: `bedrock/us.meta.llama3-3-70b-instruct-v1:0`
+- **DeepSeek R1**: `bedrock/us.deepseek.r1-v1:0`
+
+## Basic Usage
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+ai = Genkit(
+    plugins=[Bedrock()],
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+)
+
+response = await ai.generate(
+    prompt='Summarize the key benefits of declarative AI orchestration in three bullets.',
+)
+print(response.text)
+```
+
+## Structured Output
+
+```python
+from pydantic import BaseModel, Field
+
+
+class ProductReview(BaseModel):
+    product: str
+    sentiment: str = Field(description='positive, negative, or neutral')
+    rating: int = Field(description='Rating from 1 to 5')
+    key_features: list[str]
+
+
+response = await ai.generate(
+    prompt='Analyze this review: "The battery lasts all day and the camera is sharp, but the charger was missing."',
+    output_format='json',
+    output_schema=ProductReview,
+    output_instructions=True,
+)
+print(response.output)  # ProductReview instance
+```
+
+## Tool Calling
+
+```python
+from pydantic import BaseModel, Field
+
+
+class OrderStatusInput(BaseModel):
+    order_id: str = Field(description='The order tracking ID')
+
+
+@ai.tool(description='Look up shipping status for an order')
+async def get_order_status(input: OrderStatusInput) -> str:
+    return f'Order {input.order_id} is in transit, arriving tomorrow by 5 PM.'
+
+
+response = await ai.generate(
+    prompt='Check the status of order ORD-98721, then answer in one friendly sentence.',
+    tools=[get_order_status],
+)
+print(response.text)
+```
+
+## Streaming
+
+```python
+from genkit import ActionRunContext
+
+
+@ai.flow()
+async def story_stream(topic: str, ctx: ActionRunContext) -> str:
+    stream_response = ai.generate_stream(
+        prompt=f'Write a short inspiring story about {topic}.',
+    )
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
+
+
+# Consume stream in real-time
+flow_response = story_stream.stream('space exploration')
+async for text in flow_response.stream:
+    print(text, end='', flush=True)
+result = await flow_response.response
+```
+
+## Multimodal Input
+
+```python
+import base64
+from genkit import Media, MediaPart, Part, TextPart
+
+with open('invoice.png', 'rb') as f:
+    image_data_url = 'data:image/png;base64,' + base64.b64encode(f.read()).decode()
+
+response = await ai.generate(
+    prompt=[
+        Part(root=MediaPart(media=Media(url=image_data_url))),
+        Part(root=TextPart(text='Extract the total amount and due date from this invoice.')),
+    ],
+)
+print(response.text)
+```
+
+## Prompt Caching
+
+Bedrock prompt caching saves input token costs and latency by caching reusable prompt prefixes:
+
+```python
+from genkit import Part, TextPart
+from genkit_amazon_bedrock import cache_point_part
+
+# 1. Place the cache point AFTER the long static content
+system = [
+    Part(root=TextPart(text=LONG_DOCUMENTATION_TEXT)),
+    cache_point_part(),
+]
+
+# 2. Subsequent calls with the identical prefix hit the cache
+res1 = await ai.generate(system=system, prompt='What is the refund policy?')
+res2 = await ai.generate(system=system, prompt='How do I cancel my plan?')
+
+# Check cached token usage
+print(res2.usage.cached_content_tokens)
+```
+
+## Additional Capabilities
+
+- **Embedders**: Pass embedder IDs in `Bedrock(embedders=['amazon.titan-embed-text-v2:0'])` and call `ai.embed()`.
+- **Image Generation**: Register image models with `ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')` or `amazon.titan-image-generator-v2:0`.
+- **Reranking**: Use `BedrockRerankOptions` and call `rerank()` directly on the `Bedrock` plugin instance for high-precision retrieval re-ranking.
 
 </Lang>
