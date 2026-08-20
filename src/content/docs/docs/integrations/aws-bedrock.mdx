@@ -404,39 +404,66 @@ response, err := genkit.Generate(ctx, g,
 
 <Lang lang="python">
 
-The `genkit-amazon-bedrock` package provides the `Bedrock` plugin for accessing foundation models, embedders, rerankers, and image generation models hosted on [AWS Bedrock](https://aws.amazon.com/bedrock/).
-
-The plugin supports:
-
-- **Language Models**: Converse and ConverseStream APIs across Anthropic Claude on Bedrock, Amazon Nova, Amazon Titan, Mistral, and Cohere.
-- **Embeddings**: Text and multimodal embeddings with Amazon Titan Embeddings (v1/v2) and Cohere Embed.
-- **Reranking**: High-precision retrieval reranking with Cohere Rerank.
-- **Image Generation**: Amazon Titan Image Generator and Stability AI (SDXL).
-- **Prompt Caching**: Native Bedrock prompt cache checkpoints via `cache_point_part()`.
-- **Async Boto3 Engine**: High-throughput async client dispatch with automatic AWS credential resolution (IAM roles, SSO, environment variables) and exponential backoff retry.
+This Genkit plugin allows you to use [AWS Bedrock](https://aws.amazon.com/bedrock/) through their official APIs. AWS Bedrock is a fully managed service that provides access to foundation models from leading AI companies through a single API. The plugin enables you to use these models for text generation, embeddings, reranking, and image generation. It supports features like tool calling, streaming, multimodal inputs, prompt caching, and cross-region inference for improved performance and resiliency.
 
 ## Installation
+
+Install the plugin in your project with `uv` or `pip`:
 
 ```bash
 uv add genkit-amazon-bedrock
 ```
 
-## Configuration
+## Features
 
-Initialize the plugin in Genkit:
+- **Text Generation**: Support for multiple foundation models (Amazon Nova, Anthropic Claude, Meta Llama, Mistral, Cohere) via the Bedrock Converse and ConverseStream APIs
+- **Embeddings**: Support for text and multimodal embedding models from Amazon Titan and Cohere
+- **Image Generation**: Support for image generation models like Amazon Titan Image Generator and Stability AI (SDXL)
+- **Reranking**: High-precision retrieval reranking with Cohere Rerank
+- **Prompt Caching**: Native Bedrock prompt cache checkpoints via `cache_point_part()`
+- **Streaming**: Full streaming support for real-time responses
+- **Tool Calling**: Complete function calling capabilities with Pydantic schema validation
+- **Multimodal Support**: Support for text, image, and document (PDF/DOCX/CSV) inputs
+- **Cross-Region Inference**: Support for inference profiles to improve throughput and resiliency
+
+## Quick Start
 
 ```python
 from genkit import Genkit
 from genkit_amazon_bedrock import Bedrock
 
-# 1. Initialize Bedrock (uses ambient AWS credentials and AWS_REGION)
+# Initialize Genkit with the Bedrock plugin
 ai = Genkit(
-    plugins=[Bedrock()],
+    plugins=[Bedrock(region='us-east-1')],
     model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
 )
+
+# Basic text generation
+response = await ai.generate(
+    prompt='What are the key benefits of using AWS Bedrock for AI applications?',
+)
+print(response.text)
 ```
 
-You can optionally pass an explicit region, credentials, or custom boto3 session:
+## Configuration
+
+The plugin supports multiple authentication methods depending on your environment.
+
+### Standard Initialization
+
+You can configure the plugin by passing options to `Bedrock()`:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+# Uses ambient AWS credentials and default region from environment
+ai = Genkit(plugins=[Bedrock()])
+```
+
+### Passing Explicit Region and Credentials
+
+For custom configuration, pass explicit region or credentials:
 
 ```python
 ai = Genkit(
@@ -450,15 +477,34 @@ ai = Genkit(
 )
 ```
 
-## AWS Setup
+## AWS Setup and Authentication
 
-### Model Access
+The plugin uses the standard AWS SDK credential resolution chain.
 
-Model access is granted per AWS account and per region in the AWS Bedrock Console under **Model access**. Most foundation models (such as Anthropic Claude) require requesting access and accepting the one-time Anthropic use-case agreement in the console before they can be invoked.
+### Authentication Methods
 
-### IAM Permissions
+1. **Environment Variables**:
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-east-1"
+```
 
-The minimal IAM policy covering model invocation and streaming:
+2. **AWS Credentials File** (`~/.aws/credentials` and `~/.aws/config`):
+```ini
+[default]
+aws_access_key_id = your-access-key
+aws_secret_access_key = your-secret-key
+region = us-east-1
+```
+
+3. **IAM Roles**: When running on AWS compute services (EC2, ECS, Lambda) or Google Cloud Run via workload federation.
+
+4. **AWS SSO / CLI**: Authenticate with `aws sso login`.
+
+### Required IAM Permissions
+
+Create an IAM policy with permissions for model invocation:
 
 ```json
 {
@@ -479,17 +525,13 @@ The minimal IAM policy covering model invocation and streaming:
 }
 ```
 
-Cross-region inference profiles (such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`) use inference-profile ARNs, so ensure the policy includes `arn:aws:bedrock:*:*:inference-profile/*`.
+Cross-region inference profiles (e.g. `us.anthropic.claude-sonnet-4-5-20250929-v1:0`) use inference profile ARNs, so ensure `arn:aws:bedrock:*:*:inference-profile/*` is included in your policy.
 
-### Credentials
+### Model Access
 
-Credentials resolve through standard AWS SDK chains:
-- Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`)
-- Shared config and credentials files under `~/.aws` (configurable with `AWS_PROFILE`)
-- IAM roles attached to EC2, ECS, Cloud Run, or AWS Lambda
-- SSO profiles (`aws sso login`)
+Model access is managed per AWS account and region in the AWS Bedrock Console under **Model access**. Anthropic Claude models additionally require accepting the one-time Anthropic use-case agreement in the console before first invocation.
 
-## Models
+## Using Models & Inference Profiles
 
 Any routable Bedrock model ID or cross-region inference profile resolves dynamically on demand using the `bedrock/<model-id>` namespace:
 
@@ -500,21 +542,11 @@ Any routable Bedrock model ID or cross-region inference profile resolves dynamic
 - **Meta Llama 3.3 70B**: `bedrock/us.meta.llama3-3-70b-instruct-v1:0`
 - **DeepSeek R1**: `bedrock/us.deepseek.r1-v1:0`
 
-## Basic Usage
-
 ```python
-from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock
-
-ai = Genkit(
-    plugins=[Bedrock()],
-    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
-)
-
 response = await ai.generate(
-    prompt='Summarize the key benefits of declarative AI orchestration in three bullets.',
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+    prompt='Explain declarative AI workflows in two sentences.',
 )
-print(response.text)
 ```
 
 ## Structured Output
@@ -555,7 +587,7 @@ async def get_order_status(input: OrderStatusInput) -> str:
 
 
 response = await ai.generate(
-    prompt='Check the status of order ORD-98721, then answer in one friendly sentence.',
+    prompt='Check the status of order ORD-98721, then answer in one sentence.',
     tools=[get_order_status],
 )
 print(response.text)
@@ -604,23 +636,22 @@ print(response.text)
 
 ## Prompt Caching
 
-Bedrock prompt caching saves input token costs and latency by caching reusable prompt prefixes:
+Prompt caching helps save input token costs and reduce latency for repeated contexts:
 
 ```python
 from genkit import Part, TextPart
 from genkit_amazon_bedrock import cache_point_part
 
-# 1. Place the cache point AFTER the long static content
+# The cache point goes AFTER the reusable static context
 system = [
     Part(root=TextPart(text=LONG_DOCUMENTATION_TEXT)),
     cache_point_part(),
 ]
 
-# 2. Subsequent calls with the identical prefix hit the cache
+# Calls sharing the byte-identical prefix will hit the cache
 res1 = await ai.generate(system=system, prompt='What is the refund policy?')
 res2 = await ai.generate(system=system, prompt='How do I cancel my plan?')
 
-# Check cached token usage
 print(res2.usage.cached_content_tokens)
 ```
 
@@ -628,6 +659,6 @@ print(res2.usage.cached_content_tokens)
 
 - **Embedders**: Pass embedder IDs in `Bedrock(embedders=['amazon.titan-embed-text-v2:0'])` and call `ai.embed()`.
 - **Image Generation**: Register image models with `ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')` or `amazon.titan-image-generator-v2:0`.
-- **Reranking**: Use `BedrockRerankOptions` and call `rerank()` directly on the `Bedrock` plugin instance for high-precision retrieval re-ranking.
+- **Reranking**: Call `rerank()` directly on the `Bedrock` plugin instance with `BedrockRerankOptions` for high-precision retrieval re-ranking.
 
 </Lang>
