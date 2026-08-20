@@ -1,8 +1,9 @@
 ---
-title: DeepSeek Plugin
+title: DeepSeek plugin
 description: Learn how to configure and use the Genkit DeepSeek plugin to access DeepSeek models.
 supportedLanguages:
   - js
+  - go
   - python
 ---
 
@@ -69,7 +70,7 @@ export const deepseekFlow = ai.defineFlow(
   },
   async ({ subject }) => {
     // Reference a model
-    const deepseekChat = deepSeek.model('deepseek-chat');
+    const deepseekChat = deepSeek.model('deepseek-v4-flash');
 
     // Use it in a generate call
     const llmResponse = await ai.generate({
@@ -86,7 +87,7 @@ You can also pass model-specific configuration:
 
 ```ts
 const llmResponse = await ai.generate({
-  model: deepSeek.model('deepseek-chat'),
+  model: deepSeek.model('deepseek-v4-flash'),
   prompt: 'Tell me something about deep learning.',
   config: {
     temperature: 0.8,
@@ -125,56 +126,219 @@ specification to work.
 
 </Lang>
 
+<Lang lang="go">
+
+The `deepseek` plugin gives Genkit access to [DeepSeek](https://www.deepseek.com/)'s models through
+DeepSeek's OpenAI-compatible API. Models are named under the `deepseek/` provider prefix.
+
+## Configuration
+
+Add `&deepseek.DeepSeek{}` to your plugin list. The plugin reads the API key from the
+`DEEPSEEK_API_KEY` environment variable.
+
+```go
+package main
+
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
+)
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&deepseek.DeepSeek{}),
+		genkit.WithDefaultModel("deepseek/deepseek-v4-flash"),
+	)
+}
+```
+
+You must provide an API key from DeepSeek. You can get an API key from your
+[DeepSeek account settings](https://platform.deepseek.com/). Set `DEEPSEEK_API_KEY`, or set the
+`APIKey` field. Extra OpenAI client request options ride in `Opts`, applied after the plugin
+defaults so they win on overlap.
+
+```go
+import (
+	"context"
+	"os"
+
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
+)
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx, genkit.WithPlugins(&deepseek.DeepSeek{
+		APIKey: os.Getenv("MY_DEEPSEEK_KEY"),
+	}))
+}
+```
+
+`genkit.Init` panics when neither the `APIKey` field nor `DEEPSEEK_API_KEY` is set. The endpoint
+defaults to `https://api.deepseek.com`; override it with the `DEEPSEEK_BASE_URL` environment
+variable, or with `option.WithBaseURL` in `Opts` to reach DeepSeek's beta endpoint.
+
+As always, avoid embedding API keys directly in your code.
+
+## Models
+
+The plugin registers two models when it initializes:
+
+- `deepseek-v4-flash`: the fast, cost-effective model
+- `deepseek-v4-pro`: the flagship, with the strongest reasoning and agent capabilities
+
+Both take text input, answer with text or JSON, call tools, and support thinking. The catalog is deliberately
+short rather than exhaustive: any other DeepSeek model ID, including the older `deepseek-chat` and
+`deepseek-reasoner` aliases, resolves on demand and takes the same defaults.
+
+DeepSeek's `response_format` accepts `json_object` but not `json_schema`, so no model advertises
+constrained generation and an output schema reaches the model as prompt instructions.
+
+## Usage
+
+`deepseek.ModelRef` pairs a model ID with a typed `deepseek.ChatConfig`, so the config is checked
+where you write it and validated against the model's schema before the request goes out. Thinking
+is on by default, so turn it off for a quick conversational answer.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
+		Thinking: &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled},
+	})),
+	ai.WithPrompt("Tell me a fun fact about Mars."),
+)
+if err != nil {
+	log.Fatalf("could not generate: %v", err)
+}
+
+fmt.Println(resp.Text())
+```
+
+The ID passed to `ModelRef` works bare or provider-prefixed. You can also name a model as a string
+with `ai.WithModelName("deepseek/deepseek-v4-flash")` or `genkit.WithDefaultModel`, and pass the
+config separately with `ai.WithConfig(&deepseek.ChatConfig{...})`. The
+[DeepSeek sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/deepseek)
+runs this as a streaming flow you can call from the Dev UI.
+
+### Reasoning
+
+When thinking is on, the model's reasoning arrives as a Genkit reasoning part alongside the answer.
+Read it with `resp.Reasoning()`.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(deepseek.ModelRef("deepseek-v4-pro", &deepseek.ChatConfig{
+		ReasoningEffort: deepseek.ReasoningEffortMax,
+	})),
+	ai.WithPrompt("What is heavier, one kilo of steel or one kilo of feathers?"),
+)
+if err != nil {
+	log.Fatalf("could not generate: %v", err)
+}
+
+fmt.Println(resp.Reasoning())
+fmt.Println(resp.Text())
+```
+
+### Generation config
+
+`deepseek.ChatConfig` carries the generation fields DeepSeek accepts plus its thinking controls:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `Temperature` | `*float64` | Randomness of token selection, 0 to 2. DeepSeek's default is 1. |
+| `TopP` | `*float64` | Nucleus sampling threshold, up to 1. |
+| `MaxOutputTokens` | `int` | Sent as the API's `max_tokens`. |
+| `StopSequences` | `[]string` | Up to sixteen. |
+| `LogProbs` | `*bool` | Requests log probabilities for the output tokens. |
+| `TopLogProbs` | `*int` | 0 to 20. Requires `LogProbs`. |
+| `UserID` | `string` | Up to 512 characters of letters, digits, hyphen, and underscore. Sent as the API's `user_id`, which partitions DeepSeek's context cache, not OpenAI's `user`. |
+| `ReasoningEffort` | `deepseek.ReasoningEffort` | `low`, `high`, or `max`. DeepSeek's default is high. |
+| `Thinking` | `*deepseek.ThinkingConfig` | `Type` is `enabled` or `disabled`. Thinking is on by default. |
+
+Pointer fields separate unset from a deliberate zero. The frequency and presence penalties are
+deliberately absent, because DeepSeek no longer supports them.
+
+`ChatConfig` also embeds `compat_oai.RequestConfig`, which every plugin in the family shares: a
+per-request `APIKey`, a `Version` pin, and an `Extra` map whose keys ride to the wire verbatim
+under DeepSeek's own names. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible) page.
+
+### Correcting what the plugin knows about a model
+
+Every DeepSeek model works without an entry in `Models`. Supply one only to correct or extend the
+capabilities the plugin resolves, most often for a model released after your Genkit version.
+Fields left at their zero value keep what the plugin resolved.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&deepseek.DeepSeek{
+	Models: map[string]ai.ModelOptions{
+		"deepseek-v4-pro": {
+			Supports: &ai.ModelSupports{
+				Multiturn:  true,
+				Tools:      true,
+				SystemRole: true,
+			},
+		},
+	},
+}))
+```
+
+## Response behavior
+
+Reasoning text, streamed token usage, cached prompt tokens, and mid-generation provider failures
+are handled the same way for every plugin in this family. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible) page.
+
+</Lang>
+
 <Lang lang="python">
 
-The `genkit-plugin-deepseek` package includes a pre-configured plugin for [DeepSeek](https://www.deepseek.com/) models, including the powerful R1 reasoning model and the efficient V3 chat model.
-
-:::note
-The DeepSeek plugin is built on top of the OpenAI-compatible plugin architecture. It is pre-configured for DeepSeek's API endpoints.
-:::
+DeepSeek is available through the OpenAI-compatible plugin in `genkit-openai`.
 
 ## Installation
 
 ```bash
-uv add genkit-plugin-deepseek
+uv add genkit-openai
 ```
 
 ## Configuration
 
-To use this plugin, import `DeepSeek` and specify it when you initialize Genkit:
+Point `OpenAI` at DeepSeek's API:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.deepseek import DeepSeek
+from genkit_openai import OpenAI
+import os
 
 ai = Genkit(
-    plugins=[DeepSeek()],
+    plugins=[
+        OpenAI(
+            base_url='https://api.deepseek.com/v1',
+            api_key=os.getenv('DEEPSEEK_API_KEY'),
+        ),
+    ],
 )
 ```
 
-You must provide an API key from DeepSeek. You can get an API key from your [DeepSeek account settings](https://platform.deepseek.com/).
-
-Configure the plugin to use your API key by doing one of the following:
-
-- Set the `DEEPSEEK_API_KEY` environment variable to your API key.
-- Specify the API key when you initialize the plugin:
-
-```python
-DeepSeek(api_key='YOUR_API_KEY')
-```
-
-As always, avoid embedding API keys directly in your code.
+Get an API key from your [DeepSeek account settings](https://platform.deepseek.com/) and pass it as `api_key=` when you initialize the plugin—for example from the `DEEPSEEK_API_KEY` environment variable. Don't embed API keys directly in code.
 
 ## Usage
 
-Use the `deepseek_name()` helper to reference a DeepSeek model.
+Use the `openai_model()` helper to reference a DeepSeek model.
 
 ```python
 from genkit import Genkit
-from genkit.plugins.deepseek import DeepSeek, deepseek_name
+from genkit_openai import OpenAI, openai_model
+import os
 
 ai = Genkit(
-    plugins=[DeepSeek()],
+    plugins=[OpenAI(base_url='https://api.deepseek.com/v1', api_key=os.getenv('DEEPSEEK_API_KEY'))],
 )
 
 @ai.flow()
@@ -188,7 +352,7 @@ async def deepseek_flow(subject: str) -> str:
         Information about the subject.
     """
     response = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+        model=openai_model('deepseek-v4-flash'),
         prompt=f'Tell me something about {subject}.',
     )
     return response.text
@@ -198,16 +362,16 @@ async def deepseek_flow(subject: str) -> str:
 
 The DeepSeek plugin provides access to several models:
 
-- **`deepseek-chat`**: Standard chat model for most conversational tasks
-- **`deepseek-reasoner`**: R1 reasoning model with chain-of-thought capabilities
-- **`deepseek-v3`**: Latest V3 model with improved performance
-- **`deepseek-r1`**: Advanced R1 reasoning model
+- **`deepseek-v4-flash`**: Fast, cost-effective model with reasoning capabilities that closely approach V4-Pro, supporting both thinking and non-thinking modes
+- **`deepseek-v4-pro`**: Flagship model with the strongest reasoning and agent capabilities, supporting both thinking and non-thinking modes
+
+Both models support a large context window. Prefer the explicit V4 model IDs above over older `deepseek-chat` / `deepseek-reasoner` aliases.
 
 ## Advanced usage
 
 ### Reasoning Model
 
-The `deepseek-reasoner` model shows step-by-step reasoning, making it ideal for complex logic, math, and coding problems:
+DeepSeek thinking mode shows step-by-step reasoning, making it ideal for complex logic, math, and coding problems:
 
 ```python
 @ai.flow()
@@ -221,7 +385,7 @@ async def reasoning_flow(problem: str) -> str:
         The solution with reasoning steps.
     """
     response = await ai.generate(
-        model=deepseek_name('deepseek-reasoner'),
+        model=openai_model('deepseek-v4-pro'),
         prompt=f'Solve this problem step by step: {problem}',
     )
     return response.text
@@ -231,7 +395,7 @@ Example with a classic reasoning problem:
 
 ```python
 response = await ai.generate(
-    model=deepseek_name('deepseek-reasoner'),
+    model=openai_model('deepseek-v4-pro'),
     prompt='What is heavier, one kilo of steel or one kilo of feathers?',
 )
 print(response.text)  # Shows reasoning steps before the answer
@@ -248,8 +412,8 @@ class WeatherInput(BaseModel):
     """Input for weather tool."""
     location: str = Field(description='City name')
 
-@ai.tool(description='Get current weather for a location')
-def get_weather(input: WeatherInput) -> str:
+@ai.tool()
+async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
     # In a real implementation, call a weather API
     return f'22°C and sunny in {input.location}'
@@ -265,9 +429,9 @@ async def weather_flow(location: str) -> str:
         Weather information for the location.
     """
     response = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+        model=openai_model('deepseek-v4-flash'),
         prompt=f'What is the weather in {location}?',
-        tools=['get_weather'],
+        tools=[get_weather],
     )
     return response.text
 ```
@@ -280,7 +444,7 @@ The plugin supports streaming responses for real-time output:
 from genkit import ActionRunContext
 
 @ai.flow()
-async def streaming_flow(topic: str, ctx: ActionRunContext | None = None) -> str:
+async def streaming_flow(topic: str, ctx: ActionRunContext) -> str:
     """Generate content with streaming output.
 
     Args:
@@ -290,12 +454,13 @@ async def streaming_flow(topic: str, ctx: ActionRunContext | None = None) -> str
     Returns:
         The complete generated content.
     """
-    response = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+    stream_response = ai.generate_stream(
+        model=openai_model('deepseek-v4-flash'),
         prompt=f'Tell me about {topic}',
-        on_chunk=ctx.send_chunk if ctx else None,
     )
-    return response.text
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
 ```
 
 ### Multi-turn Chat
@@ -316,7 +481,7 @@ async def chat_flow() -> str:
 
     # First message
     response1 = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+        model=openai_model('deepseek-v4-flash'),
         prompt='I love Japanese food, especially ramen.',
         system='You are a helpful assistant.',
     )
@@ -331,7 +496,7 @@ async def chat_flow() -> str:
 
     # Follow-up using context
     response2 = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+        model=openai_model('deepseek-v4-flash'),
         messages=[
             *history,
             Message(
@@ -350,7 +515,6 @@ Generate structured data using Pydantic models:
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class BookRecommendation(BaseModel):
     """A book recommendation."""
@@ -371,9 +535,9 @@ async def recommend_book(preferences: str) -> BookRecommendation:
         A structured book recommendation.
     """
     response = await ai.generate(
-        model=deepseek_name('deepseek-chat'),
+        model=openai_model('deepseek-v4-flash'),
         prompt=f'Recommend a book for someone who likes: {preferences}',
-        output=Output(schema=BookRecommendation),
+        output_schema=BookRecommendation,
     )
     return response.output
 ```
@@ -384,13 +548,14 @@ You can pass configuration options that are not defined in the plugin's custom c
 
 ```python
 from genkit import Genkit
-from genkit.plugins.deepseek import DeepSeek, deepseek_name
+from genkit_openai import OpenAI, openai_model
+import os
 
-ai = Genkit(plugins=[DeepSeek()])
+ai = Genkit(plugins=[OpenAI(base_url='https://api.deepseek.com/v1', api_key=os.getenv('DEEPSEEK_API_KEY'))])
 
 response = await ai.generate(
     prompt='Tell me a cool story',
-    model=deepseek_name('deepseek-new'),  # hypothetical new model
+    model=openai_model('deepseek-new'),  # hypothetical new model
     config={
         'new_feature_parameter': ...,  # hypothetical config needed for new model
     },

@@ -60,6 +60,7 @@ Rules:
 2. Only include languages also declared in `supportedLanguages`.
 3. Do not wrap entire pages in `Lang` unless every section is truly language-specific.
 4. Do not use legacy `LanguageContent`.
+5. Never refer to multiple languages within a single shared block of copy. The copy must be kept completely language-neutral, or if language-specific references are necessary, must use separate `<Lang>` tags for each language variant (Exception: It is acceptable and necessary to reference multiple languages when describing cross-language boundaries, such as connecting a JS/TS frontend framework or Flutter client to a standalone Go/Python/Dart backend).
 
 ## Page Type Rules
 

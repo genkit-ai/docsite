@@ -276,7 +276,7 @@ export const indexMenu = ai.defineFlow(
 #### Run the indexer flow
 
 ```bash
-genkit flow:run indexMenu '{"filePath": "menu.pdf"}'
+genkit flow:run indexMenu '{"filePath": "menu.pdf"}' -- <command to start your app>
 ```
 
 After running the `indexMenu` flow, the vector database will be seeded with
@@ -311,7 +311,7 @@ export const menuQAFlow = ai.defineFlow(
 
     // generate a response
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `
 You are acting as a helpful AI assistant that can answer 
 questions about the food available on the menu at Genkit Grub Pub.
@@ -332,7 +332,7 @@ Question: ${query}`,
 #### Run the retriever flow
 
 ```bash
-genkit flow:run menuQA '{"query": "Recommend a dessert from the menu while avoiding dairy and nuts"}'
+genkit flow:run menuQA '{"query": "Recommend a dessert from the menu while avoiding dairy and nuts"}' -- <command to start your app>
 ```
 
 The output for this command should contain a response from the model, grounded
@@ -572,7 +572,7 @@ Embedding model support is provided through the following plugins:
 
 The following examples show how you could ingest a collection of restaurant menu
 PDF documents into a vector database and retrieve them for use in a flow that
-determines what food items are available.
+determines what food items are available. The [rag sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/rag) is a runnable version of the same shape against the local vector store, and the [pgvector sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/pgvector) is the PostgreSQL equivalent.
 _Note_: Although retriever functions are defined using Genkit, users are expected to add their own functionality to index the documents.
 
 ### Install dependencies
@@ -733,7 +733,7 @@ genkit.DefineFlow(
 
     // Call Generate, including the menu information in your prompt.
     return genkit.GenerateText(ctx, g,
-        ai.WithModelName("googleai/gemini-2.5-flash"),
+        ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithDocs(resp.Documents...),
         ai.WithSystem(`
 You are acting as a helpful AI assistant that can answer questions about the
@@ -761,17 +761,19 @@ menu retriever defined earlier:
 
 ```go
 type CustomMenuRetrieverOptions struct {
-    K          int
-    PreRerankK int
+    K          int `json:"k,omitempty"`
+    PreRerankK int `json:"preRerankK,omitempty"`
 }
 
-advancedMenuRetriever := genkit.DefineRetriever(
+advancedMenuRetriever := genkit.DefineRetrieverAction(
     g, "custom/advancedMenuRetriever", nil,
-    func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
-        // Handle options passed using our custom type.
-        opts, _ := req.Options.(CustomMenuRetrieverOptions)
-        // Set fields to default values when either the field was undefined
-        // or when req.Options is not a CustomMenuRetrieverOptions.
+    func(ctx context.Context, req *ai.RetrieverRequest, opts *CustomMenuRetrieverOptions) (*ai.RetrieverResponse, error) {
+        // The config type parameter is a pointer, so it is nil when the caller
+        // sends no config at all.
+        if opts == nil {
+            opts = &CustomMenuRetrieverOptions{}
+        }
+        // Set fields to default values when the caller left them unset.
         if opts.K == 0 {
             opts.K = 3
         }
@@ -800,242 +802,95 @@ advancedMenuRetriever := genkit.DefineRetriever(
 )
 ```
 
+`genkit.DefineRetrieverAction` infers the retriever's config schema from the type of its last function parameter and validates every request against it, so your function receives a typed value instead of an `any` it has to assert. A request that carries a key the schema does not allow fails with `INVALID_ARGUMENT` before your code runs.
+
 _Note_: The `rerank` function is a placeholder for your own logic and is not provided by the Genkit framework.
 
 </Lang>
 
 <Lang lang="python">
 
+For **Python**, Genkit’s RAG support centers on the shared **[`Document`](/docs/models)** model and **embedders**: use `ai.embed` and `ai.embed_many` with plugin-registered embedder names to produce vectors. Combine those embeddings with your ingestion, storage, and search code, then pass retrieved documents into **`ai.generate(..., docs=...)`** to ground answers.
+
 RAG is a very broad area and there are many different techniques used to achieve
-the best quality RAG. The core Genkit framework offers three main abstractions
-to help you do RAG:
+the best quality RAG. Conceptually, most pipelines involve:
 
-- **Indexers**: add documents to an "index".
-- **Embedders**: transforms documents into a vector representation
-- **Retrievers**: retrieve documents from an "index", given a query.
+- **Indexing**: add documents to a store (often chunk → embed → upsert vectors).
+- **Embedders**: turn text (or other content) into vectors via a Genkit embedder action.
+- **Retrieval**: fetch relevant chunks for a query (your DB client or search layer).
+- **Generation**: call the model with the user question and retrieved context.
 
-These definitions are broad on purpose because Genkit is un-opinionated about
-what an "index" is or how exactly documents are retrieved from it. Genkit only
-provides a `Document` format and everything else is defined by the retriever or
-indexer implementation provider.
+Genkit provides the [`Document`](/docs/models) model and **embedder** actions for turning content into vectors you can use throughout that pipeline.
 
-### Indexers
+### Ingestion
 
-The index is responsible for keeping track of your documents in such a way that
-you can quickly retrieve relevant documents given a specific query. This is most
-often accomplished using a vector database, which indexes your documents using
-multidimensional vectors called embeddings. A text embedding (opaquely)
-represents the concepts expressed by a passage of text; these are generated
-using special-purpose ML models. By indexing text using its embedding, a vector
-database is able to cluster conceptually related text and retrieve documents
-related to a novel string of text (the query).
-
-Before you can retrieve documents for the purpose of generation, you need to
-ingest them into your document index. A typical ingestion flow does the
-following:
-
-1. Split up large documents into smaller documents so that only relevant
-   portions are used to augment your prompts – "chunking". This is necessary
-   because many LLMs have a limited context window, making it impractical to
-   include entire documents with a prompt.
-
-   Genkit doesn't provide built-in chunking libraries; however, there are open
-   source libraries available that are compatible with Genkit.
-
-2. Generate embeddings for each chunk. Depending on the database you're using,
-   you might explicitly do this with an embedding generation model, or you might
-   use the embedding generator provided by the database.
-3. Add the text chunk and its index to the database.
-
-You might run your ingestion flow infrequently or only once if you are working
-with a stable source of data. On the other hand, if you are working with data
-that frequently changes, you might continuously run the ingestion flow (for
-example, in a Cloud Firestore trigger, whenever a document is updated).
-
-#### Defining an indexer
-
-To define a custom indexer in Python, use the `ai.define_indexer()` method.
-Your indexer function receives a list of `Document` objects plus an optional
-options object.
+Typical steps: chunk source text, compute embeddings with `ai.embed` or `ai.embed_many`, then write text + vector + metadata to your database. The following is illustrative only—the storage calls are placeholders for your client library.
 
 ```python
-from genkit import Genkit, Document
+from genkit import Document, Genkit
+from genkit_google_genai import VertexAI
 
-ai = Genkit(plugins=[...])
+ai = Genkit(plugins=[VertexAI(location='us-central1')])
 
-async def my_indexer(documents: list[Document], options: dict | None) -> None:
-    for doc in documents:
-        # Generate an embedding for the document (example only).
-        embedding = await ai.embed(
-            embedder='vertexai/text-embedding-004',
-            content=doc,
-        )
-
-        # Store the document + embedding in your vector store.
-        # (Pseudocode — use your actual DB client and schema.)
-        await my_vector_db.store(
-            text=doc.text(),
-            embedding=embedding[0].embedding,
-            metadata=doc.metadata,
-        )
-
-ai.define_indexer(name='my_indexer', fn=my_indexer)
-```
-
-#### Using an indexer
-
-Once defined, you can use your indexer to ingest documents:
-
-```python
-from genkit import Document, Part, TextPart
-
-# Prepare your documents
-documents = [
-    Document.from_text('The quick brown fox jumps over the lazy dog.'),
-    Document.from_text('Pack my box with five dozen liquor jugs.'),
-    Document(
-        content=[Part(root=TextPart(text='Custom document with metadata.'))],
-        metadata={'source': 'manual', 'category': 'example'},
-    ),
-]
-
-# Index the documents
-await ai.index(
-    indexer='my_indexer',
-    documents=documents,
-)
-```
-
-#### Using an IndexerRef
-
-You can also use `IndexerRef` to reference an indexer by name:
-
-```python
-from genkit.blocks.retriever import IndexerRef
-
-# Reference an indexer
-my_indexer_ref = IndexerRef(name='my_indexer')
-
-# Use the reference with ai.index()
-await ai.index(
-    indexer=my_indexer_ref,
-    documents=documents,
-)
+async def ingest_chunks(chunks: list[Document], embedder: str) -> None:
+    for doc in chunks:
+        embeddings = await ai.embed(embedder=embedder, content=doc)
+        vector = embeddings[0].embedding
+        # await my_vector_db.upsert(text=doc.text, embedding=vector, metadata=doc.metadata)
+        _ = vector  # replace with real persistence
 ```
 
 ### Embedders
 
-An embedder is a function that takes content (text, images, audio, etc.) and
-creates a numeric vector that encodes the semantic meaning of the original
-content. As mentioned above, embedders are leveraged as part of the process of
-indexing, however, they can also be used independently to create embeddings
-without an index.
+Use plugin-registered embedder names (for example `vertexai/text-embedding-005`) with `ai.embed` / `ai.embed_many`. Keep the same model for indexing and query embedding when using vector similarity search.
 
-### Retrievers
+### Generation with `docs`
 
-A retriever is a concept that encapsulates logic related to any kind of document
-retrieval. The most popular retrieval cases typically include retrieval from
-vector stores, however, in Genkit a retriever can be any function that returns
-data.
-
-To create a retriever, you can use one of the provided implementations or create
-your own.
-
-## Defining a RAG flow
-
-The following examples show how you could ingest a collection of restaurant menu
-PDF documents into a vector database and retrieve them for use in a flow that
-determines what food items are available. Note that indexing is outside the scope
-of Genkit and you should use the SDKs/APIs provided by the vector store you are using.
-
-The following example shows how you might use a retriever in a RAG flow. Like
-the retriever example, this example uses the Firestore vector store helper from
-the Firebase plugin.
+Implement search with your datastore (vector search, hybrid search, etc.), producing a `list[Document]`. Pass that list as **`docs`** to **`ai.generate`** so the model can use the context.
 
 ```python
-from google.cloud import firestore
-from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
-
-from genkit import Genkit
-from genkit.plugins.firebase import define_firestore_vector_store
-from genkit.plugins.google_genai import VertexAI
+from genkit import Document, Genkit
+from genkit_google_genai import VertexAI
 
 ai = Genkit(
-    plugins=[
-        VertexAI(location='us-central1'),
-    ],
+    plugins=[VertexAI(location='us-central1')],
+    model='vertexai/gemini-flash-latest',
 )
 
-firestore_client = firestore.Client()
-
-# Define a Firestore vector store retriever (returns the retriever action name).
-# Important: use the same embedding model for indexing and retrieval.
-EMBEDDING_MODEL = 'vertexai/text-embedding-004'
-
-RETRIEVER_NAME = define_firestore_vector_store(
-    ai,
-    name='my_firestore_retriever',
-    embedder=EMBEDDING_MODEL,
-    collection='mycollection',
-    vector_field='embedding',
-    content_field='text',
-    firestore_client=firestore_client,
-    distance_measure=DistanceMeasure.EUCLIDEAN,
-)
+async def fetch_context(user_query: str, limit: int = 3) -> list[Document]:
+    """Replace with your vector store: embed the query, search, map hits to Documents."""
+    embeddings = await ai.embed(
+        embedder='vertexai/text-embedding-005',
+        content=user_query,
+    )
+    _query_vector = embeddings[0].embedding
+    # rows = await my_vector_db.search(_query_vector, limit=limit)
+    # return [Document.from_text(r.text, metadata=r.meta) for r in rows]
+    return [
+        Document.from_text('Example: seasonal dessert — fruit tart (contains dairy).'),
+        Document.from_text('Example: allergen note — sorbet is dairy-free.'),
+    ][:limit]
 
 @ai.flow()
 async def qa_flow(query: str) -> str:
-    retrieved = await ai.retrieve(
-        retriever=RETRIEVER_NAME,
-        query=query,
-        options={'limit': 3},
-    )
+    docs = await fetch_context(query)
     response = await ai.generate(
-        model='vertexai/gemini-2.5-flash',
         prompt=query,
-        docs=retrieved.documents,
+        docs=docs,
     )
     return response.text
 ```
 
-#### Run the retriever flow
+#### Run the flow
 
 ```python
-result = await qa_flow('Recommend a dessert from the menu while avoiding dairy and nuts')
+result = await qa_flow('Recommend a dessert while avoiding dairy and nuts')
 print(result)
 ```
 
-The output for this command should contain a response from the model, grounded
-in the indexed `menu.pdf` file.
+### Composing search and prompts
 
-## Write your own retrievers
-
-It's also possible to create your own retriever. This is useful if your
-documents are managed in a document store that is not supported in Genkit (eg:
-MySQL, Google Drive, etc.). The Genkit SDK provides flexible methods that let
-you provide custom code for fetching documents. You can also define custom
-retrievers that build on top of existing retrievers in Genkit and apply advanced
-RAG techniques (such as reranking or prompt extensions) on top.
-
-```python
-from genkit import Document, Genkit
-from genkit.types import RetrieverResponse
-
-ai = Genkit(plugins=[...])
-
-async def my_retriever(query: Document, options: dict | None) -> RetrieverResponse:
-    # Use query.text() and options to do a lookup in your datastore.
-    return RetrieverResponse(documents=[Document.from_text('Hello'), Document.from_text('World')])
-
-ai.define_retriever(name='my_retriever', fn=my_retriever)
-```
-
-Then you'll be able to use your retriever with `ai.retrieve`:
-
-```python
-retrieved = await ai.retrieve(retriever='my_retriever', query=query)
-docs = retrieved.documents
-```
+Any async function that returns `list[Document]` can supply context: call databases, APIs, or custom ranking, then pass the result to `generate(docs=...)`. Advanced patterns (reranking, prompt expansion) are ordinary Python code composed around `embed` and `generate`.
 
 </Lang>
 
@@ -1043,5 +898,16 @@ docs = retrieved.documents
 
 - Learn about [tool calling](/docs/tool-calling) to give your RAG system access to external APIs and functions
 - Explore [multi-agent systems](/docs/multi-agent) for coordinating multiple AI agents with RAG capabilities
-- Check out the vector database plugins for production-ready RAG implementations
 - See the [evaluation guide](/docs/evaluation) for testing and improving your RAG system's performance
+
+<Lang lang="js">
+
+- Check out the vector database plugins for production-ready RAG implementations
+
+</Lang>
+
+<Lang lang="go">
+
+- Check out the vector database plugins for production-ready RAG implementations
+
+</Lang>

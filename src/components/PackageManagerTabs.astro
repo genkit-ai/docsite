@@ -1,0 +1,117 @@
+---
+import { Tabs, TabItem, Code } from '@astrojs/starlight/components';
+
+interface Props {
+  command: string;
+  syncKey?: string;
+}
+
+const { command, syncKey = "package-manager" } = Astro.props;
+
+function convertLine(line: string, target: 'npm' | 'pnpm' | 'yarn' | 'bun'): string {
+  const trimmed = line.trim();
+  if (!trimmed) return '';
+
+  // 1. Parse NPM install commands
+  const installRegex = /^npm\s+(install|i)(?:\s+(.*?))?$/;
+  const installMatch = trimmed.match(installRegex);
+  if (installMatch) {
+    const args = installMatch[2] ?? '';
+    if (!args.trim()) {
+      return `${target} install`;
+    }
+    const flagTokens = new Set(['-D', '--save-dev', '-g', '--global']);
+    const tokens = args.split(/\s+/).filter(Boolean);
+    const isDev = tokens.includes('-D') || tokens.includes('--save-dev');
+    const isGlobal = tokens.includes('-g') || tokens.includes('--global');
+    const pkgs = tokens.filter(t => !flagTokens.has(t)).join(' ');
+
+    if (target === 'npm') {
+      const flags = isGlobal ? '-g' : (isDev ? '-D' : '');
+      return `npm install ${flags} ${pkgs}`.replace(/\s+/g, ' ').trim();
+    }
+    if (target === 'pnpm') {
+      const flags = isGlobal ? '-g' : (isDev ? '-D' : '');
+      return `pnpm add ${flags} ${pkgs}`.replace(/\s+/g, ' ').trim();
+    }
+    if (target === 'yarn') {
+      if (isGlobal) {
+        return `yarn global add ${pkgs}`;
+      } else {
+        const flags = isDev ? '-D' : '';
+        return `yarn add ${flags} ${pkgs}`.replace(/\s+/g, ' ').trim();
+      }
+    }
+    if (target === 'bun') {
+      const flags = isGlobal ? '-g' : (isDev ? '-d' : '');
+      return `bun add ${flags} ${pkgs}`.replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  // 1b. Parse npm create / npm init commands
+  const createRegex = /^npm\s+(create|init)\s+(.*?)$/;
+  const createMatch = trimmed.match(createRegex);
+  if (createMatch) {
+    const action = createMatch[1];
+    const args = createMatch[2];
+    if (target === 'npm') return `npm ${action} ${args}`;
+    if (target === 'pnpm') return `pnpm ${action} ${args}`;
+    if (target === 'yarn') return `yarn create ${args}`;
+    if (target === 'bun') return `bun create ${args}`;
+  }
+
+  // 2. Parse and convert npx execution commands (including chained/nested npx)
+  if (trimmed.startsWith('npx') || trimmed.includes(' npx')) {
+    const executors = {
+      npm: 'npx',
+      pnpm: 'pnpm dlx',
+      yarn: 'yarn dlx',
+      bun: 'bunx',
+    };
+    return trimmed.replace(/\bnpx\b/g, executors[target]);
+  }
+
+  // 3. Parse npm run/start commands
+  const runRegex = /^npm\s+(run\s+([a-zA-Z0-9_-]+)|(start|test|stop))$/;
+  const runMatch = trimmed.match(runRegex);
+  if (runMatch) {
+    const isRun = !!runMatch[2];
+    const scriptName = isRun ? runMatch[2] : runMatch[3];
+
+    if (target === 'npm') return isRun ? `npm run ${scriptName}` : `npm ${scriptName}`;
+    if (target === 'pnpm') return isRun ? `pnpm run ${scriptName}` : `pnpm ${scriptName}`;
+    if (target === 'yarn') return `yarn ${scriptName}`;
+    if (target === 'bun') return isRun ? `bun run ${scriptName}` : `bun ${scriptName}`;
+  }
+
+  // 4. Return line unchanged for cd, etc.
+  return line;
+}
+
+function convertBlock(cmdBlock: string, target: 'npm' | 'pnpm' | 'yarn' | 'bun'): string {
+  return cmdBlock
+    .split('\n')
+    .map(line => convertLine(line, target))
+    .join('\n');
+}
+
+const npmCmd = convertBlock(command, 'npm');
+const pnpmCmd = convertBlock(command, 'pnpm');
+const yarnCmd = convertBlock(command, 'yarn');
+const bunCmd = convertBlock(command, 'bun');
+---
+
+<Tabs syncKey={syncKey}>
+  <TabItem label="npm">
+    <Code code={npmCmd} lang="bash" />
+  </TabItem>
+  <TabItem label="pnpm">
+    <Code code={pnpmCmd} lang="bash" />
+  </TabItem>
+  <TabItem label="yarn">
+    <Code code={yarnCmd} lang="bash" />
+  </TabItem>
+  <TabItem label="bun">
+    <Code code={bunCmd} lang="bash" />
+  </TabItem>
+</Tabs>

@@ -279,6 +279,19 @@ export function resolveDocsTarget(
     };
   }
 
+  // When the source URL explicitly names a language (e.g. /docs/dart/foo/), honor it instead of
+  // forcing the active page's language. This lets authors deep-link to a specific SDK variant.
+  if (parsed.explicitLanguage && supportedLanguages.includes(parsed.explicitLanguage)) {
+    const normalizedSlugPath = normalizedBasePath.replace(/^\/docs\//, '');
+    const targetPath = `/docs/${parsed.explicitLanguage}/${normalizedSlugPath}/`;
+    return {
+      resolvedUrl: formatResolvedUrl(parsed, targetPath),
+      wasRewritten: normalizeDocsPath(targetPath) !== parsed.normalizedPath,
+      resolvedLanguage: parsed.explicitLanguage,
+      reason: 'language-supported',
+    };
+  }
+
   if (supportedLanguages.includes(activeLanguage)) {
     const normalizedSlugPath = normalizedBasePath.replace(/^\/docs\//, '');
     const targetPath = `/docs/${activeLanguage}/${normalizedSlugPath}/`;

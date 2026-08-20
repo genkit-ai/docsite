@@ -75,7 +75,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
   async ({ theme }) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
     return { menuItem: text };
@@ -92,6 +92,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -113,13 +114,13 @@ func main() {
 		MenuItem string `json:"menuItem"`
 	}
 
-	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
+	genkit.DefineFlow(g, "menuSuggestionFlow",
 		func(ctx context.Context, input MenuSuggestionInput) (MenuSuggestionOutput, error) {
 			resp, err := genkit.Generate(ctx, g,
 				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 			)
 			if err != nil {
-				return MenuSuggestionOutput{}, err
+				return MenuSuggestionOutput{}, fmt.Errorf("could not invent a menu item: %w", err)
 			}
 
 			return MenuSuggestionOutput{MenuItem: resp.Text()}, nil
@@ -157,7 +158,7 @@ void main() {
     outputSchema: MenuSuggestionOutput.$schema,
     fn: (input, _) async {
       final response = await ai.generate(
-        model: googleAI.gemini('gemini-2.5-flash'),
+        model: googleAI.gemini('gemini-flash-latest'),
         prompt: 'Invent a menu item for a ${input.theme} themed restaurant.',
       );
       return MenuSuggestionOutput(menuItem: response.text);
@@ -172,11 +173,12 @@ void main() {
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
 )
 
 class MenuSuggestionInput(BaseModel):
@@ -187,11 +189,17 @@ class MenuSuggestionOutput(BaseModel):
 
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
+    """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
     )
     return MenuSuggestionOutput(menu_item=response.text)
 ```
+
+The flow name defaults to the function name and the description defaults to the
+docstring (though both can optionally be overridden using `name` and `description`
+parameters in `@ai.flow()`); input and output schemas come from the type hints.
+Choose a clear function name and write a descriptive docstring.
 
 </Lang>
 
@@ -273,7 +281,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
   },
   async ({ theme }) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -301,12 +309,31 @@ type MenuItem struct {
 
 menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
 	func(ctx context.Context, input MenuSuggestionInput) (MenuItem, error) {
-		item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+		item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
 			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 		)
-		return item, err
+		if err != nil {
+			return MenuItem{}, fmt.Errorf("could not invent a menu item: %w", err)
+		}
+		// GenerateData answers with a nil value and no error when the
+		// response carried no text to parse, as an interrupted one does.
+		if item == nil {
+			return MenuItem{}, status.Errorf(status.ErrInternal,
+				"the model returned no menu item (%s)", resp.FinishReason)
+		}
+
+		return *item, nil
 	})
 ```
+
+`genkit.GenerateData[MenuItem]` returns a `*MenuItem`, so a caller has three
+things to check in order: the error, then whether the value is nil, and only
+then the value itself. A nil value with no error means the response carried
+something other than text, such as a tool request or an interrupt, so inspect
+`resp.FinishReason`, `resp.Interrupts()`, or `resp.ToolRequests()` to decide
+what to do. The
+[basic-structured sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
+works through typed output, including the nested and streaming cases.
 
 </Lang>
 
@@ -330,7 +357,7 @@ final menuSuggestionFlow = ai.defineFlow(
   outputSchema: MenuItem.$schema,
   fn: (input, _) async {
     final response = await ai.generate(
-      model: googleAI.gemini('gemini-2.5-flash'),
+      model: googleAI.gemini('gemini-flash-latest'),
       prompt: 'Invent a menu item for a ${input.theme} themed restaurant.',
       outputSchema: MenuItem.$schema,
     );
@@ -348,7 +375,6 @@ final menuSuggestionFlow = ai.defineFlow(
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -359,9 +385,10 @@ class MenuItemSchema(BaseModel):
 
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuItemSchema:
+    """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output=Output(schema=MenuItemSchema),
+      output_schema=MenuItemSchema,
     )
     return response.output
 ```
@@ -383,7 +410,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
   async ({ theme }) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -420,11 +447,15 @@ type FormattedMenuOutput struct {
 
 menuSuggestionMarkdownFlow := genkit.DefineFlow(g, "menuSuggestionMarkdownFlow",
 	func(ctx context.Context, input MenuSuggestionInput) (FormattedMenuOutput, error) {
-		item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+		item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
 			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 		)
 		if err != nil {
-			return FormattedMenuOutput{}, err
+			return FormattedMenuOutput{}, fmt.Errorf("could not invent a menu item: %w", err)
+		}
+		if item == nil {
+			return FormattedMenuOutput{}, status.Errorf(status.ErrInternal,
+				"the model returned no menu item (%s)", resp.FinishReason)
 		}
 
 		return FormattedMenuOutput{
@@ -460,7 +491,7 @@ final menuSuggestionFlow = ai.defineFlow(
   outputSchema: FormattedMenuOutput.$schema,
   fn: (input, _) async {
     final response = await ai.generate(
-      model: googleAI.gemini('gemini-2.5-flash'),
+      model: googleAI.gemini('gemini-flash-latest'),
       prompt: 'Invent a menu item for a ${input.theme} themed restaurant.',
       outputSchema: MenuItem.$schema,
     );
@@ -481,7 +512,6 @@ final menuSuggestionFlow = ai.defineFlow(
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -495,11 +525,15 @@ class FormattedMenuOutput(BaseModel):
 
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> FormattedMenuOutput:
+    """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output=Output(schema=MenuItemSchema),
+      output_schema=MenuItemSchema,
     )
     output: MenuItemSchema = response.output
+    return FormattedMenuOutput(
+        formatted_menu_item=f'**{output.dishname}**: {output.description}'
+    )
 ```
 
 </Lang>
@@ -623,7 +657,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   },
   async ({ theme }, { sendChunk }) => {
     const { stream, response } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${theme} themed restaurant.`,
     });
 
@@ -662,86 +696,49 @@ the callback as often as is useful for your flow.
 
 <Lang lang="go">
 
-#### Using iterator-based streaming
+A streaming flow is defined with `genkit.DefineStreamingFlow`, whose function
+takes a `sendChunk` callback alongside the input. What that function looks like
+depends on what the flow does with the model's output. The
+[basic sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic)
+shows the forwarding shape, and the
+[basic-structured sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
+has both shapes side by side.
 
-The recommended approach for streaming within flows is to use `genkit.GenerateStream()`
-or `genkit.GenerateDataStream[T]()`, which return iterators that integrate naturally
-with Go's range syntax:
+#### Forwarding the model's chunks
 
-```go
-type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-	func(ctx context.Context, theme string, sendChunk core.StreamCallback[string]) (string, error) {
-		stream := genkit.GenerateStream(ctx, g,
-			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-		)
-
-		for result, err := range stream {
-			if err != nil {
-				return "", err
-			}
-			if result.Done {
-				return result.Response.Text(), nil
-			}
-			// Pass each chunk to the flow's output stream
-			sendChunk(ctx, result.Chunk.Text())
-		}
-
-		return "", nil
-	})
-```
-
-For structured output with strong typing, use `genkit.GenerateDataStream[T]()`:
-
-```go
-type MenuItem struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-	func(ctx context.Context, theme string, sendChunk core.StreamCallback[*MenuItem]) (*MenuItem, error) {
-		stream := genkit.GenerateDataStream[*MenuItem](ctx, g,
-			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", theme),
-		)
-
-		for result, err := range stream {
-			if err != nil {
-				return nil, err
-			}
-			if result.Done {
-				// result.Output is strongly typed as *MenuItem
-				return result.Output, nil
-			}
-			// result.Chunk is also strongly typed as *MenuItem
-			sendChunk(ctx, result.Chunk)
-		}
-
-		return nil, nil
-	})
-```
-
-The iterator pattern makes the streaming logic clear and linear, avoiding nested
-callbacks and making error handling straightforward with Go's standard patterns.
-
-#### Using callback-based streaming
-
-Alternatively, you can use the callback-based approach with `ai.WithStreaming()`.
-This is useful when you need to combine streaming with other `Generate` options
-or when integrating with existing callback-based code:
+When the flow passes the model's output straight through, `ai.WithStreaming` is
+the whole job: hand it the flow's own `sendChunk` and the model's chunks reach
+the caller untouched, while `genkit.Generate` still returns the finished
+response.
 
 ```go
 type MenuSuggestionInput struct {
 	Theme string `json:"theme"`
 }
 
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+	func(ctx context.Context, input MenuSuggestionInput, sendChunk ai.ModelStreamCallback) (string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
+			ai.WithStreaming(sendChunk),
+		)
+		if err != nil {
+			return "", fmt.Errorf("could not invent a menu item: %w", err)
+		}
+
+		return resp.Text(), nil
+	})
+```
+
+Declaring the callback as `ai.ModelStreamCallback` is what lets `sendChunk` be
+passed straight through: the flow streams the model's chunks unchanged, so it
+streams the model's chunk type. To stream something else, wrap the callback and
+declare the type you want:
+
+```go
 type Menu struct {
-	Theme  string     `json:"theme"`
-	Items  []MenuItem `json:"items"`
+	Theme string     `json:"theme"`
+	Items []MenuItem `json:"items"`
 }
 
 type MenuItem struct {
@@ -750,40 +747,103 @@ type MenuItem struct {
 }
 
 menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-	func(ctx context.Context, input MenuSuggestionInput, callback core.StreamCallback[string]) (Menu, error) {
-		item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+	func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[string]) (Menu, error) {
+		item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
 			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-				// Process the chunk and send it to the flow's output stream
-				return callback(ctx, chunk.Text())
+				return sendChunk(ctx, chunk.Text())
 			}),
 		)
 		if err != nil {
-			return Menu{}, err
+			return Menu{}, fmt.Errorf("could not invent a menu item: %w", err)
+		}
+		if item == nil {
+			return Menu{}, status.Errorf(status.ErrInternal,
+				"the model returned no menu item (%s)", resp.FinishReason)
 		}
 
 		return Menu{
 			Theme: input.Theme,
-			Items: []MenuItem{item},
+			Items: []MenuItem{*item},
 		}, nil
 	})
 ```
 
-The `string` type in `StreamCallback[string]` specifies the type of
-values your flow streams. This does not necessarily need to be the same
-type as the return type, which is the type of the flow's complete output
-(`Menu` in this example).
+The `string` in `core.StreamCallback[string]` is the type the flow streams. It
+does not have to be the same type as the flow's complete output (`Menu` here).
+`chunk.Text()` is the text that just arrived rather than the message so far, so
+forwarding it gives a client something to append.
 
-In both examples, the values streamed by the flow are directly coupled to
-the values streamed by the generation call inside the flow.
-Although this is often the case, it doesn't have to be: you can output values
-to the stream using the callback as often as is useful for your flow.
+#### Acting on the chunks
+
+When the flow has to inspect, filter, or accumulate what arrives, range over
+`genkit.GenerateStream`, which hands you each chunk and then the final response
+in one loop:
+
+```go
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+	func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[string]) (string, error) {
+		for result, err := range genkit.GenerateStream(ctx, g,
+			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
+		) {
+			if err != nil {
+				return "", fmt.Errorf("could not invent a menu item: %w", err)
+			}
+			if result.Done {
+				return result.Response.Text(), nil
+			}
+			// Forward only the text, dropping the tool traffic a multi-turn
+			// run also carries.
+			if text := result.Chunk.Text(); text != "" {
+				sendChunk(ctx, text)
+			}
+		}
+
+		return "", status.Errorf(status.ErrInternal, "the stream ended without a final result")
+	})
+```
+
+For typed output, `genkit.GenerateDataStream[T]` does the same with the schema
+inferred from `T`:
+
+```go
+menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+	func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[*MenuItem]) (*MenuItem, error) {
+		for result, err := range genkit.GenerateDataStream[*MenuItem](ctx, g,
+			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
+		) {
+			if err != nil {
+				return nil, fmt.Errorf("could not invent a menu item: %w", err)
+			}
+			if result.Done {
+				// result.Output is strongly typed as *MenuItem.
+				return result.Output, nil
+			}
+			// result.Chunk is the whole MenuItem parsed so far.
+			sendChunk(ctx, result.Chunk)
+		}
+
+		return nil, status.Errorf(status.ErrInternal, "the stream ended without a final result")
+	})
+```
+
+With the default JSON format each chunk replaces the previous one rather than
+adding to it: the whole value is reparsed from everything received so far, so
+fields fill in as the model writes them. A chunk that has not parsed into
+anything yet is skipped when the type parameter is a pointer, so `result.Chunk`
+is never nil here. With a value type such as `MenuItem` those chunks arrive as
+the zero value instead.
+
+The values a flow streams are often coupled to the values the generation call
+inside it streams, but they do not have to be. You can call `sendChunk` as often
+as is useful, with whatever your flow has to report.
 
 #### Using channel-based streaming (experimental)
 
 :::caution[Experimental API]
-The channel-based streaming API is experimental and may change in future releases.
-Import it from the `genkit/x` package.
+The channel-based streaming API is in preview and may change in any minor
+release. It lives in `github.com/firebase/genkit/go/genkit/exp` and requires
+`genkit.WithExperimental()` at initialization.
 :::
 
 For a more idiomatic Go approach, you can use the experimental channel-based
@@ -793,30 +853,33 @@ to which it writes stream chunks:
 ```go
 import (
 	"context"
+	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
-	x "github.com/firebase/genkit/go/genkit/x"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
-jokeFlow := x.DefineStreamingFlow(g, "jokeFlow",
+jokeFlow := genkitx.DefineStreamingFlow(g, "jokeFlow",
 	func(ctx context.Context, topic string, streamCh chan<- string) (string, error) {
-		for chunk, err := range genkit.GenerateStream(ctx, g,
+		for result, err := range genkit.GenerateStream(ctx, g,
 			ai.WithPrompt("Tell me a joke about %s.", topic),
 		) {
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("could not generate joke: %w", err)
 			}
-			if chunk.Done {
-				return chunk.Response.Text(), nil
+			if result.Done {
+				return result.Response.Text(), nil
 			}
 			select {
-			case streamCh <- chunk.Chunk.Text():
+			case streamCh <- result.Chunk.Text():
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
 		}
-		return "", nil
+
+		return "", status.Errorf(status.ErrInternal, "the stream ended without a final result")
 	})
 ```
 
@@ -853,7 +916,7 @@ final menuSuggestionFlow = ai.defineFlow(
   streamSchema: .string(),
   fn: (input, ctx) async {
     final stream = ai.generateStream(
-      model: googleAI.gemini('gemini-2.5-flash'),
+      model: googleAI.gemini('gemini-flash-latest'),
       prompt: 'Invent a menu item for a ${input.theme} themed restaurant.',
     );
 
@@ -889,16 +952,17 @@ class MenuOutput(BaseModel):
 
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput, ctx: ActionRunContext) -> MenuOutput:
-    stream, response = ai.generate_stream(
+    """Generate a menu item suggestion based on a theme."""
+    stream_response = ai.generate_stream(
       prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
     )
 
-    async for chunk in stream:
+    async for chunk in stream_response.stream:
         ctx.send_chunk(chunk.text)
 
     return MenuOutput(
         theme=input.theme,
-        menu_item=(await response).text
+        menu_item=(await stream_response.response).text
     )
 ```
 
@@ -954,14 +1018,9 @@ Streaming flows can be run like non-streaming flows with
 `menuSuggestionFlow.Run(ctx, MenuSuggestionInput{Theme: "bistro"})` or they can be streamed:
 
 ```go
-streamCh, err := menuSuggestionFlow.Stream(context.Background(), MenuSuggestionInput{Theme: "bistro"})
-if err != nil {
-	log.Fatal(err)
-}
-
-for result := range streamCh {
-	if result.Err != nil {
-		log.Fatalf("Stream error: %v", result.Err)
+for result, err := range menuSuggestionFlow.Stream(context.Background(), MenuSuggestionInput{Theme: "bistro"}) {
+	if err != nil {
+		log.Fatalf("Stream error: %v", err)
 	}
 	if result.Done {
 		log.Printf("Menu with %s theme:\n", result.Output.Theme)
@@ -973,6 +1032,10 @@ for result := range streamCh {
 	}
 }
 ```
+
+`Stream` returns an iterator, so the error arrives as the loop's second value.
+`result.Stream` carries a chunk while `result.Done` is false, and `result.Output`
+carries the flow's complete output once it is true.
 
 </Lang>
 
@@ -1005,8 +1068,8 @@ rather than a promise. Flow's `stream` method returns the stream async iterable,
 which you can iterate over the streaming output of the flow as it's generated.
 
 ```python
-stream, response = menu_suggestion_flow.stream(MenuSuggestionInput(theme='bistro'))
-async for chunk in stream:
+stream_response = menu_suggestion_flow.stream(MenuSuggestionInput(theme='bistro'))
+async for chunk in stream_response.stream:
     print(chunk)
 ```
 
@@ -1014,11 +1077,72 @@ You can also get the complete output of the flow, as you can with a
 non-streaming flow. The final response is a future that you can `await` on.
 
 ```python
-print(await response)
+print(await stream_response.response)
 ```
 
 Note that the streaming output of a flow might not be the same type as the
 complete output.
+
+</Lang>
+
+<Lang lang="go">
+
+## Handling errors in flows
+
+A flow returns an ordinary Go `error`. Classify it once, where its meaning is
+known, using a sentinel from the `core/status` package. `status.PublicErrorf`
+marks a message as safe to show a client; `status.Errorf` keeps it internal.
+
+```go
+if strings.TrimSpace(input.Dish) == "" {
+	return "", status.PublicErrorf(status.ErrInvalidArgument, "dish must not be empty")
+}
+```
+
+Add context as the error travels with `fmt.Errorf` and `%w`. Wrapping does not
+reclassify, so the status and the public message chosen at the source survive to
+the HTTP boundary. `%v` flattens the error to text and loses both.
+
+```go
+recipe, err := lookupRecipe(input.Dish)
+if err != nil {
+	return "", fmt.Errorf("could not look up the recipe: %w", err)
+}
+```
+
+Branch with `errors.Is` against a sentinel, never on message text:
+
+```go
+if errors.Is(err, ErrRecipeNotFound) {
+	// Recover: improvise a recipe instead of failing the request.
+}
+```
+
+At the HTTP boundary the status picks the response code, and only a message
+written with `status.PublicErrorf` reaches the client. Anything else is replaced
+with a generic string and logged in full server-side. Setting `GENKIT_ENV=dev`
+returns the real message instead, so what you see while developing is not the
+production contract. The status code is the same either way. See
+[Error types](/docs/error-types/) for the sentinels, subtypes, and the redaction
+rules. The
+[basic-errors sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors)
+walks one flow that produces classified errors, one that recovers from them, and
+one that fails unclassified so you can watch the boundary redact it.
+
+### Errors on a streaming request
+
+Asking for a stream changes where a failure lands. The server has already
+answered `200 OK` with `Content-Type: text/event-stream` before the flow runs, so
+the failure arrives in the body as a final event rather than on the status line:
+
+```text
+data: {"error":{"status":"INVALID_ARGUMENT","message":"dish must not be empty"}}
+```
+
+The frame carries exactly two fields, `status` and `message`, and is terminated
+by a blank line like every other event. Chunks sent before the failure are still
+delivered, so a client must read to the end of the stream rather than key on the
+HTTP status.
 
 </Lang>
 
@@ -1029,7 +1153,7 @@ You can run flows from the command line using the Genkit CLI tool:
 <Lang lang="js go">
 
 ```bash
-genkit flow:run menuSuggestionFlow '{"theme": "French"}'
+genkit flow:run menuSuggestionFlow '{"theme": "French"}' -- <command to start your app>
 ```
 
 </Lang>
@@ -1037,7 +1161,7 @@ genkit flow:run menuSuggestionFlow '{"theme": "French"}'
 <Lang lang="python">
 
 ```bash
-genkit flow:run menu_suggestion_flow '{"theme": "French"}'
+genkit flow:run menu_suggestion_flow '{"theme": "French"}' -- uv run main.py
 ```
 
 </Lang>
@@ -1048,7 +1172,7 @@ the `-s` flag:
 <Lang lang="js go dart">
 
 ```bash
-genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s
+genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s -- <command to start your app>
 ```
 
 </Lang>
@@ -1056,7 +1180,7 @@ genkit flow:run menuSuggestionFlow '{"theme": "French"}' -s
 <Lang lang="python">
 
 ```bash
-genkit flow:run menu_suggestion_flow '{"theme": "French"}' -s
+genkit flow:run menu_suggestion_flow '{"theme": "French"}' -s -- uv run main.py
 ```
 
 </Lang>
@@ -1139,7 +1263,7 @@ export const complexMenuSuggestionFlow = ai.defineFlow(
     outputSchema: PrixFixeMenuSchema,
   },
   async ({ theme }): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model('gemini-2.5-flash') });
+    const chat = ai.chat({ model: googleAI.model('gemini-flash-latest') });
     await chat.send('What makes a good prix fixe menu?');
     await chat.send(
       'What are some ingredients, seasonings, and cooking techniques that ' +
@@ -1207,7 +1331,7 @@ export const menuQuestionFlow = ai.defineFlow(
       },
     );
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       system: "Help the user answer questions about today's menu.",
       prompt: question,
       docs: [{ content: [{ text: menu }] }],
@@ -1240,9 +1364,9 @@ Each of Genkit's fundamental actions show up as separate steps in the trace view
 - `genkit.Retrieve()`
 
 If you want to include code other than the above in your traces, you can do so
-by wrapping the code in a `genkit.Run()` call. You might do this for calls to
-third-party libraries that are not Genkit-aware, or for any critical section of
-code.
+by wrapping the code in a `genkit.RunWithContext()` call. You might do this for
+calls to third-party libraries that are not Genkit-aware, or for any critical
+section of code.
 
 For example, here's a flow with two steps: the first step retrieves a menu using
 some unspecified method, and the second step includes the menu as context for a
@@ -1259,33 +1383,36 @@ type MenuQuestionOutput struct {
 
 menuQuestionFlow := genkit.DefineFlow(g, "menuQuestionFlow",
 	func(ctx context.Context, input MenuQuestionInput) (MenuQuestionOutput, error) {
-		menu, err := genkit.Run(ctx, "retrieve-daily-menu", func() (string, error) {
-			// Retrieve today's menu. (This could be a database access or simply
-			// fetching the menu from your website.)
-
-			// ...
-
-			return menu, nil
-		})
+		menu, err := genkit.RunWithContext(ctx, "retrieve-daily-menu",
+			func(ctx context.Context) (string, error) {
+				// Retrieve today's menu. (This could be a database access or
+				// simply fetching the menu from your website.)
+				return fetchMenu(ctx)
+			})
 		if err != nil {
-			return MenuQuestionOutput{}, err
+			return MenuQuestionOutput{}, fmt.Errorf("could not retrieve the menu: %w", err)
 		}
 
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithPrompt(input.Question),
 			ai.WithSystem("Help the user answer questions about today's menu."),
-			ai.WithDocs(ai.NewTextPart(menu)),
+			ai.WithTextDocs(menu),
 		)
 		if err != nil {
-			return MenuQuestionOutput{}, err
+			return MenuQuestionOutput{}, fmt.Errorf("could not answer the question: %w", err)
 		}
 
 		return MenuQuestionOutput{Answer: resp.Text()}, nil
 	})
 ```
 
-Because the retrieval step is wrapped in a `genkit.Run()` call, it's included as a step
-in the trace viewer:
+`RunWithContext` hands the step its own context, so anything the step starts with
+it, an HTTP client or a database call, nests under the step in the trace instead
+of beside it under the flow. Use `genkit.Run` instead when the step is pure work
+that traces nothing of its own; it takes a `func() (Out, error)` with no context.
+
+Because the retrieval step is wrapped in a `genkit.RunWithContext()` call, it's
+included as a step in the trace viewer:
 
 ![Genkit DevUI flows](../../../assets/devui-runstep.png)
 
@@ -1305,13 +1432,10 @@ Each of Genkit's fundamental actions show up as separate steps in the trace view
 
 - `ai.generate()`
 - `ai.embed()`
-- `ai.index()`
-- `ai.retrieve()`
 
-If you want to include code other than the above in your traces, you can do so
-by wrapping the code in an `ai.run()` call. You might do this for calls to
-third-party libraries that are not Genkit-aware, or for any critical section of
-code.
+If you want to include other code in your traces (for example retrieval against
+your own vector store, or calls to third-party libraries), wrap it in an
+`ai.run()` call.
 
 For example, here's a flow with two steps: the first step retrieves a menu using
 some unspecified method, and the second step includes the menu in a `generate()`
@@ -1319,11 +1443,12 @@ call.
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
+    model='googleai/gemini-flash-latest',
 )
 
 class MenuQuestionInput(BaseModel):
@@ -1334,6 +1459,7 @@ class MenuQuestionOutput(BaseModel):
 
 @ai.flow()
 async def menu_question_flow(input: MenuQuestionInput) -> MenuQuestionOutput:
+    """Answer questions about today's menu."""
     async def retrieve_daily_menu() -> str:
         # Retrieve today's menu. (This could be a database access or simply
         # fetching the menu from your website.)
@@ -1342,7 +1468,7 @@ async def menu_question_flow(input: MenuQuestionInput) -> MenuQuestionOutput:
         #
         return "Soup: tomato bisque\nMain: roast chicken\nDessert: panna cotta"
 
-    menu = await ai.run("retrieve-daily-menu", retrieve_daily_menu)
+    menu = await ai.run(name='retrieve-daily-menu', fn=retrieve_daily_menu)
 
     response = await ai.generate(
         system="Help the user answer questions about today's menu.",
@@ -1479,10 +1605,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -1504,10 +1632,17 @@ func main() {
 
 	menuSuggestionFlow := genkit.DefineFlow(g, "menuSuggestionFlow",
 		func(ctx context.Context, input MenuSuggestionInput) (MenuItem, error) {
-			item, _, err := genkit.GenerateData[MenuItem](ctx, g,
+			item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
 				ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 			)
-			return item, err
+			if err != nil {
+				return MenuItem{}, fmt.Errorf("could not invent a menu item: %w", err)
+			}
+			if item == nil {
+				return MenuItem{}, status.Errorf(status.ErrInternal,
+					"the model returned no menu item (%s)", resp.FinishReason)
+			}
+			return *item, nil
 		})
 
 	mux := http.NewServeMux()
@@ -1552,7 +1687,8 @@ log.Fatal(router.Run(":3400"))
 
 ### FastAPI
 
-To deploy flows using FastAPI, create a FastAPI app and expose routes that call your flows:
+Install `genkit-fastapi`, then mount the flow with `serve_flow` so requests use
+the Genkit HTTP envelope (`{"data": ...}`):
 
 ```python
 import os
@@ -1561,12 +1697,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_fastapi import serve_flow
+from genkit_google_genai import GoogleAI
 
-# Initialize Genkit
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
 )
 
 app = FastAPI()
@@ -1579,23 +1715,45 @@ class MenuSuggestionOutput(BaseModel):
 
 @ai.flow()
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuSuggestionOutput:
+    """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
         prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
     )
     return MenuSuggestionOutput(menu_item=response.text)
 
-@app.post("/menuSuggestionFlow")
-async def menu_suggestion_endpoint(input: MenuSuggestionInput) -> MenuSuggestionOutput:
-    return await menu_suggestion_flow(input)
+app.include_router(serve_flow(menu_suggestion_flow))
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import uvicorn
 
     uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 3400)),
+        'main:app',
+        host='0.0.0.0',
+        port=int(os.environ.get('PORT', 3400)),
     )
+```
+
+To attach per-request context (auth, tenancy, and so on), pass a FastAPI dependency as `context_dependency`. Its return value must be a dict; Genkit exposes that dict on the flow as `ctx.context`:
+
+```python
+from fastapi import Header
+from genkit import ActionRunContext
+
+async def user_context(authorization: str = Header(...)) -> dict[str, object]:
+    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+@ai.flow()
+async def menu_suggestion_flow(
+    input: MenuSuggestionInput,
+    ctx: ActionRunContext,
+) -> MenuSuggestionOutput:
+    """Generate a menu item suggestion based on a theme."""
+    uid = (ctx.context or {}).get('uid')
+    ...
+
+app.include_router(
+    serve_flow(menu_suggestion_flow, context_dependency=user_context),
+)
 ```
 
 For production, run your app with a production ASGI server (for example, Uvicorn with Gunicorn workers):
@@ -1624,8 +1782,6 @@ curl -X POST "http://localhost:3400/menuSuggestionFlow" \
   -d '{"data": {"theme": "banana"}}'
 ```
 
-You can also use the Genkit web client library to call flows from web applications. See [Accessing flows from the client](/docs/client) for detailed examples of using the `runFlow()` and `streamFlow()` functions.
-
 ### Learn more about deployment
 
 For detailed deployment instructions and platform-specific guides, see:
@@ -1633,6 +1789,8 @@ For detailed deployment instructions and platform-specific guides, see:
 - [Deploy with Cloud Run](/docs/deployment/cloud-run)
 
 <Lang lang="js">
+
+You can also use the Genkit web client library to call flows from web applications. See [Accessing flows from the client](/docs/client) for detailed examples of using the `runFlow()` and `streamFlow()` functions.
 
 - [Deploy with Firebase](/docs/deployment/firebase)
 - [Authorization and integrity](/docs/deployment/authorization)
@@ -1642,6 +1800,7 @@ For detailed deployment instructions and platform-specific guides, see:
 
 <Lang lang="python">
 
-- [Deploy with FastAPI](/docs/frameworks/fastapi)
+- [FastAPI tutorial](/docs/backend-frameworks/fastapi) (`serve_flow` / `serve_agent`)
+- [Deploy to any platform](/docs/deployment/any-platform)
 
 </Lang>

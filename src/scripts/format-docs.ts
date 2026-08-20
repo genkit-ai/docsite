@@ -124,7 +124,7 @@ function formatFile(filepath: string) {
     text = parts.map((part, i) => {
         if (i % 2 !== 0) {
             const repl = part.replace(/^([ \t]*)```([^\n]*)\n([\s\S]*?)\n[ \t]*```$/, (match, startIndent, lang, content) => {
-                return `\`\`\`${lang}\n${outdentText(content)}\n\`\`\``;
+                return `${startIndent}\`\`\`${lang}\n${outdentText(content, startIndent)}\n${startIndent}\`\`\``;
             });
             return '\n\n' + repl.replace(/\n$/, '') + '\n\n';
         }

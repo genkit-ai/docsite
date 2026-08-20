@@ -1,0 +1,250 @@
+---
+title: Fastify tutorial
+description: Build a standalone Genkit backend with Fastify that exposes a streaming recipe flow over HTTP.
+supportedLanguages:
+  - js
+---
+
+import { Aside, Code, FileTree, LinkButton } from '@astrojs/starlight/components';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+import bargainChefFlowCode from './_snippets/bargainChefFlow.ts?raw';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on Fastify that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/js/fastify).
+
+## Prerequisites
+
+- Node.js v20 or later
+- npm
+- Familiarity with Fastify and TypeScript
+
+## Set up the application
+
+### Create the project
+
+Create a new Fastify project:
+
+<PackageManagerTabs command={`
+mkdir my-genkit-fastify
+cd my-genkit-fastify
+npm init -y
+npm pkg set type=module
+npx tsc --init
+mkdir -p src/genkit
+touch src/index.ts src/genkit/bargainChefFlow.ts
+`} />
+
+### Install packages
+
+Install the packages you need:
+
+<PackageManagerTabs
+  command={`
+npm install fastify @fastify/cors genkit @genkit-ai/google-genai @genkit-ai/fastify
+npm install -D typescript tsx @types/node genkit-cli
+`}
+/>
+
+These packages include:
+
+- **`fastify`**: The Fastify web framework.
+- **`@fastify/cors`**: Fastify CORS plugin. Lets browser frontends served from a different origin call the Genkit endpoint.
+- **`genkit`**: Core Genkit SDK.
+- **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`@genkit-ai/fastify`**: Exposes a Genkit flow as a Fastify route, including server-sent events for streaming.
+- **`genkit-cli`**: CLI tool that enables Genkit testing and observability.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+## Create the backend
+
+The backend handles requests from any client that calls your HTTP endpoint. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Zod so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
+
+Create `src/genkit/bargainChefFlow.ts`:
+
+<Code
+  code={bargainChefFlowCode}
+  lang="ts"
+  meta='title="src/genkit/bargainChefFlow.ts"'
+/>
+
+A few details are worth noting:
+
+- **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape with every field optional (`RecipeSchema.partial()`), because early chunks might only include the title or description.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`sendChunk`:** Each call forwards the latest partial recipe to the caller, so the response fills in field by field as the model generates it.
+
+### Add the server route
+
+Wire up the Genkit backend in `src/index.ts`. The `@genkit-ai/fastify` plugin's `fastifyHandler` adapts the flow to a Fastify route, so there's no request or streaming plumbing to write.
+
+```ts title="src/index.ts"
+import { fastifyHandler } from '@genkit-ai/fastify';
+import cors from '@fastify/cors';
+import Fastify from 'fastify';
+import { bargainChefFlow } from './genkit/bargainChefFlow.js';
+
+const app = Fastify({ logger: true });
+await app.register(cors, { origin: true });
+app.post('/bargainChefFlow', fastifyHandler(bargainChefFlow));
+
+await app.listen({ port: 3000, host: '0.0.0.0' });
+```
+
+`fastifyHandler(bargainChefFlow)` parses the JSON request body, invokes the flow, and (when the client opts in with an `Accept: text/event-stream` header) streams chunks back as server-sent events. It handles the Fastify-to-Genkit bridging for you, including copying CORS headers onto the streamed response so browsers accept it.
+
+`cors, { origin: true }` reflects the request origin, so **any browser frontend** can call this endpoint during development. Before deploying, restrict it to the origins you actually serve (for example, `{ origin: 'https://your-app.com' }`).
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- package.json
+- tsconfig.json
+- src
+  - genkit
+    - bargainChefFlow.ts
+  - **index.ts**
+
+</FileTree>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Run the app
+
+Start the Fastify server:
+
+<PackageManagerTabs command="npx tsx --watch src/index.ts" />
+
+The server listens on `http://localhost:3000`. In another terminal, send a craving and watch the recipe stream in field by field: title first, then description, then ingredients (with `onSale: true` on the ones the model picked from the tool), then steps.
+
+```bash
+curl -N -X POST http://localhost:3000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far.
+
+## Test and inspect the app
+
+You can call the flow directly with curl, and you can use the Developer UI to inspect every run alongside its tool calls and model invocations.
+
+### Send a request with curl
+
+With the server running, post a non-streaming request to get the final validated recipe in one shot:
+
+```bash
+curl -X POST http://localhost:3000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+You'll receive a structured recipe as JSON, with ingredients flagged `onSale` when the model picked them from the tool.
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   <PackageManagerTabs command="npx genkit start -- tsx --watch src/index.ts" />
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts such as in the `package.json`.
+   :::
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll see the generated recipe, with a trace that builds in real time so you can follow the flow's progress through each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from your running app]
+While the Developer UI is running, every request to your Fastify server appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on Fastify that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
+- [Connect a web frontend](/docs/client): Wire a standalone web client up to this backend.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.

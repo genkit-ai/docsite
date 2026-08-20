@@ -120,7 +120,7 @@ import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 const getWeather = ai.defineTool(
@@ -466,7 +466,7 @@ For this to work, several requirements must be met:
 - The model must be trained to make tool requests when it's needed to complete
   a prompt. Most of the larger models provided through web APIs such as Gemini
   can do this, but smaller and more specialized models often cannot. Genkit
-  will throw an error if you try to provide tools to a model that doesn't
+  returns an error if you try to provide tools to a model that doesn't
   support it.
 - The calling application must provide tool definitions to the model in the
   format it expects.
@@ -486,7 +486,7 @@ Tool calling support depends on the model, the model API, and the Genkit plugin.
 Consult the relevant documentation to determine if tool calling is likely to be
 supported. In addition:
 
-- Genkit will throw an error if you try to provide tools to a model that
+- Genkit returns an error if you try to provide tools to a model that
   doesn't support it.
 - If the plugin exports model references, the `ModelInfo.Supports.Tools`
   property will indicate if it supports tool calling.
@@ -508,9 +508,10 @@ import (
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
-// Define the input structure for the tool
+// WeatherInput is the tool's input. The schema the model sees is inferred from
+// this type, so a jsonschema tag is how a field gets described.
 type WeatherInput struct {
-	Location string `json:"location" jsonschema_description:"Location to get weather for"`
+	Location string `json:"location" jsonschema:"description=The location to get the current weather for"`
 }
 
 func main() {
@@ -518,23 +519,54 @@ func main() {
 
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-1.5-flash"), // Updated model name
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 	)
 
-	genkit.DefineTool(
-		g, "getWeather", "Gets the current weather in a given location",
+	getWeather := genkit.DefineTool(g, "getWeather",
+		"Gets the current weather in a given location",
 		func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
-			// Here, we would typically make an API call or database query. For this
-			// example, we just return a fixed value.
-			log.Printf("Tool 'getWeather' called for location: %s", input.Location)
+			// Here, we would typically make an API call or database query. For
+			// this example, we just return a fixed value.
 			return fmt.Sprintf("The current weather in %s is 63°F and sunny.", input.Location), nil
 		})
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithPrompt("What is the weather in San Francisco?"),
+		ai.WithTools(getWeather),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(resp.Text())
 }
 ```
 
-The syntax here looks just like the `genkit.DefineFlow()` syntax; however, you
-must write a description. Take special care with the wording and descriptiveness
-of the description as it is vital for the LLM to decide to use it appropriately.
+The syntax looks like `genkit.DefineFlow()`, with one addition: you must write a
+description. The name and the description are all the model knows about a tool
+besides the schemas inferred from the input and output types, so both are prompt
+and are worth writing as carefully as one.
+
+If the input shape is only known at runtime, declare the input parameter as
+`any` and pass the schema instead:
+
+```go
+genkit.DefineTool(g, "getWeather", "Gets the current weather in a given location",
+	func(ctx *ai.ToolContext, input any) (string, error) {
+		return "sunny", nil
+	},
+	ai.WithInputSchema(schema),
+)
+```
+
+`ai.WithInputSchemaName` references a schema registered with
+`genkit.DefineSchemasFor`, and `ai.WithOutputSchema` and
+`ai.WithOutputSchemaName` do the same for the output. An explicit schema stands
+in for a type parameter, so the parameter it describes must be `any`.
+
+The [basic-tools sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tools)
+is a runnable program built around one tool, and it is where the deployment
+example further down comes from.
 
 ### Using tools
 
@@ -545,7 +577,7 @@ Include defined tools in your prompts to generate content.
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithPrompt("What is the weather in San Francisco?"),
-	ai.WithTools(getWeatherTool),
+	ai.WithTools(getWeather),
 )
 ```
 
@@ -554,7 +586,7 @@ resp, err := genkit.Generate(ctx, g,
 ```go
 weatherPrompt := genkit.DefinePrompt(g, "weatherPrompt",
 	ai.WithPrompt("What is the weather in {{location}}?"),
-	ai.WithTools(getWeatherTool),
+	ai.WithTools(getWeather),
 )
 
 resp, err := weatherPrompt.Execute(ctx,
@@ -582,7 +614,7 @@ Then execute it in your Go code:
 
 ```go
 // Assuming prompt file named weatherPrompt.prompt exists in ./prompts dir.
-weatherPrompt := genkit.LookupPrompt("weatherPrompt")
+weatherPrompt := genkit.LookupPrompt(g, "weatherPrompt")
 if weatherPrompt == nil {
 	log.Fatal("no prompt named 'weatherPrompt' found")
 }
@@ -592,8 +624,165 @@ resp, err := weatherPrompt.Execute(ctx,
 )
 ```
 
-Genkit will automatically handle the tool call if the LLM needs to use the
+Genkit handles the tool call automatically if the LLM needs to use the
 `getWeather` tool to answer the prompt.
+
+### Returning more than one value from a tool
+
+A tool sometimes has more to say than a single value: a chart of what it
+measured, a screenshot of what it saw, a document it retrieved. Define it with
+`genkit.DefineMultipartTool()` and return an `*ai.MultipartToolResponse`. The
+value a plain tool would have answered with goes in `Output`, and whatever is
+not a value goes in `Content`:
+
+```go
+// Deploy is what the model fills in to call the tool.
+type Deploy struct {
+	Service     string `json:"service" jsonschema:"description=The service to deploy"`
+	Environment string `json:"environment" jsonschema:"description=Where to deploy it,enum=staging,enum=production"`
+}
+
+// Rollout is the tool's answer, and the Output half of its response.
+type Rollout struct {
+	Service  string  `json:"service"`
+	Revision string  `json:"revision"`
+	Healthy  bool    `json:"healthy"`
+	P95Ms    float64 `json:"p95Ms" jsonschema:"description=The p95 latency after the rollout in milliseconds"`
+}
+
+deployService := genkit.DefineMultipartTool(g, "deployService",
+	"Deploys a service to an environment and reports how the rollout went.",
+	func(ctx *ai.ToolContext, input Deploy) (*ai.MultipartToolResponse, error) {
+		latencies, err := rollOut(input)
+		if err != nil {
+			return nil, err
+		}
+
+		return &ai.MultipartToolResponse{
+			// The value a plain tool would have returned.
+			Output: &Rollout{
+				Service:  input.Service,
+				Revision: fmt.Sprintf("%s-00042", input.Service),
+				Healthy:  true,
+				P95Ms:    latencies[len(latencies)-1],
+			},
+			// The model receives this as a picture, so it can describe the
+			// shape of the rollout rather than only its last number.
+			Content: []*ai.Part{ai.NewMediaPart("image/png", barChartPNG(latencies))},
+		}, nil
+	})
+```
+
+The attached parts reach the model and the client both, so the model can reason
+about the chart and the Dev UI can render it. They must be media or data parts;
+a text part is not a valid attachment. Pass a multipart tool to `ai.WithTools()`
+like any other. Its advertised output schema is the multipart envelope, not
+`Rollout`; pass `ai.WithOutputSchema` or `ai.WithOutputSchemaName` to advertise
+the `Output` shape instead.
+
+### Streaming and tool calling
+
+A tool call takes several turns, so a stream carries the tool's traffic as well
+as the model's text. Use `genkit.GenerateStream()` when the caller needs to act
+on that traffic, and switch on the part kind:
+
+```go
+genkit.DefineStreamingFlow(g, "deployFlow",
+	func(ctx context.Context, input string, sendChunk core.StreamCallback[string]) (string, error) {
+		for val, err := range genkit.GenerateStream(ctx, g,
+			ai.WithPrompt(input),
+			ai.WithTools(deployService),
+		) {
+			if err != nil {
+				return "", fmt.Errorf("could not deploy: %w", err)
+			}
+			if val.Done {
+				return val.Response.Text(), nil
+			}
+			for _, part := range val.Chunk.Content {
+				switch {
+				case part.IsText():
+					sendChunk(ctx, part.Text)
+				case part.IsToolRequest():
+					sendChunk(ctx, fmt.Sprintf("[calling %s]", part.ToolRequest.Name))
+				case part.IsToolResponse():
+					sendChunk(ctx, fmt.Sprintf("[%s answered]", part.ToolResponse.Name))
+				}
+			}
+		}
+		return "", status.Errorf(status.ErrInternal, "the stream ended without a final result")
+	})
+```
+
+A `core.StreamCallback[*ai.ModelResponseChunk]` handed to `ai.WithStreaming()`
+on an ordinary `genkit.Generate()` call is shorter and forwards every chunk
+untouched. The tool traffic still arrives on it, so the caller switches on the
+part kind the same way.
+
+### Limiting tool call iterations with `WithMaxTurns`
+
+When a tool might trigger several sequential calls, `ai.WithMaxTurns()` caps how
+many back-and-forth iterations the model gets in one generation. It controls
+cost, keeps latency bounded, and guards against a loop that never settles. Each
+turn is one complete cycle of the model calling tools and receiving their
+responses. The default is 5:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Research the latest developments in quantum computing."),
+	ai.WithTools(webSearch),
+	ai.WithMaxTurns(8), // Allow up to 8 tool-calling iterations.
+)
+if err != nil {
+	if errors.Is(err, ai.ErrMaxTurnsExceeded) {
+		// The loop hit its limit before the model produced a final answer.
+	}
+}
+```
+
+When the limit is reached, Genkit stops the loop and returns an error matching
+`ai.ErrMaxTurnsExceeded`, whose status is `ABORTED`. Either raise the limit or
+look for a tool the model keeps retrying.
+
+### Tools that come from middleware
+
+Not every tool is one you write. Middleware attached with `ai.WithUse()` can
+contribute tools to a request, and they join the loop like any other. The
+`Filesystem` middleware from `github.com/firebase/genkit/go/plugins/middleware`
+adds `list_files` and `read_file`, plus `write_file` and `edit_file` when
+`AllowWriteAccess` is set, all confined to one directory:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("What is in the config file, and what does it configure?"),
+	// Adds list_files and read_file, both confined to ./workspace.
+	ai.WithUse(&middleware.Filesystem{RootDir: "./workspace"}),
+	// Exploring a directory takes several rounds, so leave the loop room.
+	ai.WithMaxTurns(20),
+)
+```
+
+The `Skills` middleware adds a single `use_skill` tool and lists the available
+skills in the system prompt, so the heavy instructions stay off the hot path
+until the model asks for one. Both are worked through in the
+[filesystem](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/filesystem)
+and [skills](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/skills)
+samples, and the [middleware guide](/docs/middleware) covers the rest of the
+built-in set.
+
+### Pause the tool loop by using interrupts
+
+By default, Genkit repeatedly calls the LLM until every tool call has been
+resolved. You can conditionally pause execution in situations where you want
+to, for example:
+
+- Ask the user a question or display UI.
+- Confirm a potentially risky action with the user.
+- Request out-of-band approval for an action.
+
+**Interrupts** are special tools that can halt the loop and return control
+to your code so that you can handle more advanced scenarios. Visit the
+[interrupts guide](/docs/interrupts) to learn how to use them.
 
 ### Explicitly handling tool calls
 
@@ -602,27 +791,28 @@ complicated logic, set the `WithReturnToolRequests()` option to `true`. Now it's
 your responsibility to ensure all of the tool requests are fulfilled:
 
 ```go
-getWeatherTool := genkit.DefineTool(
-	g, "getWeather", "Gets the current weather in a given location",
-	func(ctx *ai.ToolContext, location struct {
-		Location string `jsonschema_description:"Location to get weather for"`
-	}) (string, error) {
+getWeather := genkit.DefineTool(g, "getWeather",
+	"Gets the current weather in a given location",
+	func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
 		// Tool implementation...
 		return "sunny", nil
-	},
-)
+	})
 
 resp, err := genkit.Generate(ctx, g,
 	ai.WithPrompt("What is the weather in San Francisco?"),
-	ai.WithTools(getWeatherTool),
+	ai.WithTools(getWeather),
 	ai.WithReturnToolRequests(true),
 )
 if err != nil {
 	log.Fatal(err)
 }
 
+// ToolRequests returns the request parts, so the call itself is on
+// part.ToolRequest.
 parts := []*ai.Part{}
-for _, req := range resp.ToolRequests() {
+for _, part := range resp.ToolRequests() {
+	req := part.ToolRequest
+
 	tool := genkit.LookupTool(g, req.Name)
 	if tool == nil {
 		log.Fatalf("tool %q not found", req.Name)
@@ -630,7 +820,7 @@ for _, req := range resp.ToolRequests() {
 
 	output, err := tool.RunRaw(ctx, req.Input)
 	if err != nil {
-		log.Fatalf("tool %q execution failed: %v", tool.Name(), err)
+		log.Fatalf("tool %q failed: %v", tool.Name(), err)
 	}
 
 	parts = append(parts,
@@ -648,6 +838,106 @@ if err != nil {
 	log.Fatal(err)
 }
 ```
+
+`RunRaw` returns the tool's output value. For a multipart tool, use
+`RunRawMultipart` instead when you also need the attached content parts.
+
+### The tools API in preview
+
+A second tools API is in preview under `go/ai/exp` and `go/genkit/exp`. It is
+slated to replace the stable one in the next major version, and it changes the
+shape of a tool rather than what a tool can do:
+
+- The function takes a plain `context.Context` rather than an `*ai.ToolContext`.
+- It returns its answer directly, so the signature stops having to announce that
+  the tool sometimes has more to say. `tool.AttachParts(ctx, parts...)` attaches
+  the extra content instead of an `*ai.MultipartToolResponse` envelope.
+- `tool.SendPartial(ctx, value)` streams structured progress while the tool
+  works, so a slow tool does not look like a hang.
+- `tool.SendChunk(ctx, chunk)` streams a chunk the tool builds itself, for an
+  update that is a line of prose rather than a value.
+
+Both streaming helpers are best-effort: with a caller that is not streaming they
+are no-ops, and the returned value is always the authoritative answer. Neither
+streamed message is written to history, since progress is for showing rather
+than for the model to read.
+
+The package names collide, so import them deliberately:
+
+```go
+import (
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+```
+
+The constructors panic unless `genkit.Init` was given
+`genkit.WithExperimental()`:
+
+```go
+// Progress is what the tool streams while it works. It is the tool's own
+// shape, not one the API dictates: any value that survives JSON works.
+type Progress struct {
+	Step    string `json:"step"`
+	Percent int    `json:"percent"`
+}
+
+g := genkit.Init(ctx,
+	genkit.WithPlugins(&googlegenai.GoogleAI{}),
+	genkit.WithExperimental(), // Required: the exp constructors panic without it.
+)
+
+deployService := genkitx.DefineTool(g, "deployService",
+	"Deploys a service to an environment and reports how the rollout went.",
+	func(ctx context.Context, input Deploy) (*Rollout, error) {
+		// Structured progress, so a slow tool does not look like a hang.
+		tool.SendPartial(ctx, Progress{Step: "shifting traffic", Percent: 50})
+
+		latencies, err := rollOut(input)
+		if err != nil {
+			return nil, err
+		}
+
+		revision := fmt.Sprintf("%s-00042", input.Service)
+
+		// An update with no structure worth giving it. RoleTool marks the
+		// chunk as the tool's, so the caller can tell it from the model's
+		// own text.
+		tool.SendChunk(ctx, &ai.ModelResponseChunk{
+			Role:    ai.RoleTool,
+			Content: []*ai.Part{ai.NewTextPart(revision + " is live")},
+		})
+
+		// The chart travels beside the answer instead of inside it.
+		tool.AttachParts(ctx, ai.NewMediaPart("image/png", barChartPNG(latencies)))
+
+		return &Rollout{
+			Service:  input.Service,
+			Revision: revision,
+			Healthy:  true,
+			P95Ms:    latencies[len(latencies)-1],
+		}, nil
+	})
+```
+
+The exact signatures are:
+
+```go
+func AttachParts(ctx context.Context, parts ...*ai.Part)
+func SendPartial(ctx context.Context, output any)
+func SendChunk(ctx context.Context, chunk *ai.ModelResponseChunk)
+```
+
+`genkitx.DefineInterruptibleTool` is the interruptible counterpart, which takes
+a third type parameter for the value that comes back on the resume. The
+[interrupts guide](/docs/interrupts) covers it.
+
+The [basic-tools-exp sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tools-exp)
+runs on this in-preview API and is deliberately the same program as basic-tools,
+written twice, so a `diff` between the two files is the whole API lesson.
+Anything under `exp` may change in any minor release.
 
 </Lang>
 
@@ -739,7 +1029,7 @@ Using `ai.generate()`:
 
 ```dart
 final response = await ai.generate(
-  model: googleAI.gemini('gemini-2.5-flash'),
+  model: googleAI.gemini('gemini-flash-latest'),
   prompt: 'What is the weather in Baltimore?',
   tools: ['getWeather'], // Reference tool by name
 );
@@ -760,7 +1050,7 @@ If you want full control over this tool-calling loop, for example to apply more 
 
 ```dart
 final response = await ai.generate(
-  model: googleAI.gemini('gemini-2.5-flash'),
+  model: googleAI.gemini('gemini-flash-latest'),
   prompt: 'What is the weather in Baltimore?',
   tools: ['getWeather'],
   returnToolRequests: true,
@@ -879,28 +1169,30 @@ Use the Genkit instance's `tool()` decorator to write tool definitions:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
 )
 
 class GetWeatherInput(BaseModel):
     location: str = Field(description='The location to get the current weather for')
 
-@ai.tool(name='getWeather', description='Gets the current weather in a given location')
-def get_weather(input: GetWeatherInput) -> str:
+@ai.tool()
+async def get_weather(input: GetWeatherInput) -> str:
+    """Gets the current weather in a given location."""
     # Here, we would typically make an API call or database query. For this
     # example, we just return a fixed value.
     return f'The current weather in {input.location} is 63°F and sunny.'
 ```
 
-The syntax here looks just like the `flow()` syntax; however, a tool `name`,
-`description`, and input schema are required. When writing a tool definition,
-take special care with the wording and descriptiveness of these parameters. They
-are vital for the LLM to make effective use of the available tools.
+The tool name defaults to the function name and the description defaults to the
+docstring (though both can optionally be overridden using `name` and `description`
+parameters in `@ai.tool()`); the input schema comes from the type hints. Choose
+a clear function name and write a descriptive docstring—they're what the model
+uses to decide when to call the tool.
 
 ### Using tools
 
@@ -911,16 +1203,16 @@ Include defined tools in your prompts to generate content.
 ```python
 response = await ai.generate(
     prompt='What is the weather in Baltimore?',
-    tools=['getWeather'],
+    tools=[get_weather],
 )
 ```
 
-**Using `definePrompt()`:**
+**Using `define_prompt()`:**
 
 ```python
 weather_prompt = ai.define_prompt(
     name='weatherPrompt',
-    tools=['getWeather'],
+    tools=[get_weather],
     prompt='What is the weather in {{location}}?',
 )
 
@@ -931,7 +1223,7 @@ response = await weather_prompt({'location': 'Baltimore'})
 
 ```dotprompt
 ---
-tools: [getWeather]
+tools: [get_weather]
 input:
   schema:
     location: string
@@ -951,33 +1243,28 @@ response = await weather_prompt({'location': 'Baltimore'})
 
 ### Streaming and tool calling
 
-When combining tool calling with streaming responses, you will receive `toolRequest` and `toolResponse` content parts in the chunks of the stream. For example, the following code:
+When combining tool calling with streaming, chunks are `ModelResponseChunk` values.
+Use `chunk.text` for text deltas, and inspect `chunk.content` for tool parts:
 
 ```python
-stream, response_future = ai.generate_stream(
+result = ai.generate_stream(
     prompt='What is the weather in Baltimore?',
-    tools=['getWeather'],
+    tools=[get_weather],
 )
 
-async for chunk in stream:
-    print(chunk)
+async for chunk in result.stream:
+    if chunk.text:
+        print(chunk.text, end='', flush=True)
+    for part in chunk.content:
+        if part.root.tool_request is not None:
+            req = part.root.tool_request
+            print(f'\n[tool request] {req.name}({req.input})')
+        if part.root.tool_response is not None:
+            res = part.root.tool_response
+            print(f'\n[tool response] {res.name} -> {res.output}')
 
-response = await response_future
+response = await result.response
 ```
-
-Might produce a sequence of chunks similar to:
-
-```json
-{index: 0, role: "model", content: [{text: "Okay, I'll check the weather"}]}
-{index: 0, role: "model", content: [{text: "for Baltimore."}]}
-// toolRequests will be emitted as a single chunk by most models
-{index: 0, role: "model", content: [{toolRequest: {name: "getWeather", input: {location: "Baltimore"}}}]}
-// when streaming multiple messages, Genkit increments the index and indicates the new role
-{index: 1, role: "tool", content: [{toolResponse: {name: "getWeather", output: "Temperature: 68 degrees\nStatus: Cloudy."}}]}
-{index: 2, role: "model", content: [{text: "The weather in Baltimore is 68 degrees and cloudy."}]}
-```
-
-You can use these chunks to dynamically construct the full generated message sequence.
 
 ### Limiting tool call iterations with `max_turns`
 
@@ -1002,8 +1289,9 @@ from pydantic import BaseModel, Field
 class WebSearchInput(BaseModel):
     query: str = Field(description='Search query')
 
-@ai.tool(name='webSearch', description='Search the web for current information')
-def web_search(input: WebSearchInput) -> str:
+@ai.tool()
+async def web_search(input: WebSearchInput) -> str:
+    """Search the web for current information."""
     # Simulate web search API call
     return f'Search results for "{input.query}": [relevant information here]'
 
@@ -1012,7 +1300,7 @@ response = await ai.generate(
         'Research the latest developments in quantum computing, including recent breakthroughs, '
         'key companies, and future applications.'
     ),
-    tools=['webSearch'],
+    tools=[web_search],
     max_turns=8,  # Allow up to 8 research iterations
 )
 ```
@@ -1025,8 +1313,9 @@ from pydantic import BaseModel, Field
 class CalculatorInput(BaseModel):
     expression: str = Field(description='Mathematical expression to evaluate')
 
-@ai.tool(name='calculator', description='Perform mathematical calculations')
-def calculator(input: CalculatorInput) -> float:
+@ai.tool()
+async def calculator(input: CalculatorInput) -> float:
+    """Perform mathematical calculations."""
     # Safe evaluation of mathematical expressions
     return eval(input.expression)  # In production, use a safe math parser
 
@@ -1035,14 +1324,17 @@ response = await ai.generate(
         'Calculate the total value of my portfolio: 100 shares of AAPL, 50 shares of GOOGL, and '
         '200 shares of MSFT. Also calculate what percentage each holding represents.'
     ),
-    tools=['calculator'],
+    tools=[calculator],
     max_turns=12,  # Multiple calculation steps needed
 )
 ```
 
 **What happens when `max_turns` is reached?**
 
-When the limit is reached, Genkit stops the tool-calling loop and raises a [`GenkitError`](/docs/error-types). You can handle this error in your application to define specific behavior for this scenario.
+When the limit is reached, Genkit stops the tool-calling loop and raises an
+error from the generate path (today: `GenerationResponseError`). That type is
+not a `GenkitError` subclass, so `except GenkitError` will not catch it—catch
+the exception around your `generate` / `generate_stream` call instead.
 
 ### Pause the tool loop by using interrupts
 
@@ -1065,42 +1357,40 @@ apply more complicated logic, set the `return_tool_requests` parameter to `True`
 Now it's your responsibility to ensure all of the tool requests are fulfilled:
 
 ```python
-from genkit import tool_response
+from genkit import Message, Part, Role, ToolResponse, ToolResponsePart
 
-generate_options = dict(
+response = await ai.generate(
     prompt="What's the weather like in Baltimore?",
-    tools=['getWeather'],
+    tools=[get_weather],
     return_tool_requests=True,
 )
 
-llm_response = None
-tool_responses = None
-messages = None
+while response.tool_requests:
+    tool_parts = []
+    for req in response.tool_requests:
+        if req.tool_request.name != 'get_weather':
+            raise ValueError(f'Unexpected tool: {req.tool_request.name}')
+        output = await get_weather(GetWeatherInput(**req.tool_request.input))
+        tool_parts.append(
+            Part(
+                root=ToolResponsePart(
+                    tool_response=ToolResponse(
+                        name=req.tool_request.name,
+                        ref=req.tool_request.ref,
+                        output=output,
+                    )
+                )
+            )
+        )
 
-while True:
-    llm_response = await ai.generate(
-        **generate_options,
-        messages=messages,
-        tool_responses=tool_responses,
+    response = await ai.generate(
+        messages=[
+            *response.messages,
+            Message(role=Role.TOOL, content=tool_parts),
+        ],
+        tools=[get_weather],
+        return_tool_requests=True,
     )
-
-    tool_requests = llm_response.tool_requests
-    if len(tool_requests) < 1:
-        break
-
-    tool_responses = []
-    for req in tool_requests:
-        match req.tool_request.name:
-            case 'getWeather':
-                output = await get_weather(GetWeatherInput(**req.tool_request.input))
-                tool_responses.append(tool_response(req, output))
-            case _:
-                raise ValueError('Tool not found')
-
-    # Continue the loop from the updated message history
-    messages = llm_response.messages
-    # Only include the initial prompt on the first turn
-    generate_options.pop('prompt', None)
 ```
 
 ## Extending tool capabilities with MCP

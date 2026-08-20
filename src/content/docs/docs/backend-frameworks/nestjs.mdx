@@ -1,0 +1,273 @@
+---
+title: NestJS tutorial
+description: Add Genkit AI features to a NestJS app and expose flows as HTTP endpoints using a controller and the Genkit Express handler.
+supportedLanguages:
+  - js
+---
+
+import { Aside, Code, FileTree, LinkButton } from '@astrojs/starlight/components';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+import bargainChefFlowCode from './_snippets/bargainChefFlow.ts?raw';
+
+In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on NestJS that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
+
+## What you'll build
+
+For each request, your server prompts Gemini to draft a recipe, and the model calls a tool to look up mock grocery sale prices so it can prefer on-sale ingredients. The server streams the recipe back field-by-field as it's generated, so clients see progress before the full recipe is ready.
+
+You can find the [finished code on GitHub](https://github.com/genkit-ai/samples/tree/main/quickstarts/backend-frameworks/js/nestjs).
+
+## Prerequisites
+
+- Node.js v20 or later
+- npm
+- Familiarity with NestJS and TypeScript
+
+## Set up the application
+
+### Create the NestJS project
+
+```bash
+npx @nestjs/cli new my-genkit-nestjs
+cd my-genkit-nestjs
+```
+
+When prompted, choose your preferred package manager.
+
+### Install packages
+
+Install the packages you need:
+
+<PackageManagerTabs
+  command={`
+npm install genkit @genkit-ai/google-genai @genkit-ai/express
+npm install -D genkit-cli
+`}
+/>
+
+These packages include:
+
+- **`genkit`**: Core Genkit SDK.
+- **`@genkit-ai/google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`@genkit-ai/express`**: Express handler for exposing flows over HTTP.
+- **`genkit-cli`**: CLI tool that enables Genkit testing and observability.
+
+### Configure a model API key
+
+This tutorial uses the Gemini API from Google AI Studio:
+
+<LinkButton
+  href="https://aistudio.google.com/apikey"
+  icon="external"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Get a Gemini API Key
+</LinkButton>
+
+Set the `GEMINI_API_KEY` environment variable to your key:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+<Aside type="note" title="Prefer a different model?">
+  This tutorial uses Gemini, but Genkit also supports [Anthropic (Claude)](/docs/integrations/anthropic),
+  [OpenAI](/docs/integrations/openai), and
+  many [other model providers](/docs/integrations/model-providers).
+</Aside>
+
+### Optional: install the Genkit agent skills
+
+If you're coding with an AI assistant, install the [Genkit Agent Skills](https://github.com/genkit-ai/skills) so it has structured guidance on Genkit APIs, patterns, and common errors:
+
+```bash
+npx skills add genkit-ai/skills
+```
+
+See [Develop with AI](/docs/develop-with-ai/) for tool-specific installation instructions.
+
+## Create the backend
+
+The backend handles requests from clients. For each request, it prompts Gemini to draft a recipe, lets the model call a tool to look up today's grocery sale prices, and streams the partial recipe back to the caller as it's generated.
+
+The whole pipeline is a single Genkit flow. A flow is a special Genkit function with built-in observability, type safety, and tooling integration.
+
+### Define the flow
+
+You'll build the backend in four parts:
+
+1. **Initialize Genkit** and register Gemini as the model provider.
+2. **Define a tool** the model can call to fetch sale prices.
+3. **Describe the recipe shape** with Zod so Genkit can validate the final output and stream partial recipe chunks.
+4. **Define the flow** that ties everything together.
+
+Create `src/genkit/bargainChefFlow.ts`:
+
+<Code
+  code={bargainChefFlowCode}
+  lang="ts"
+  meta='title="src/genkit/bargainChefFlow.ts"'
+/>
+
+A few details are worth noting before you expose the flow:
+
+- **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape with every field optional (`RecipeSchema.partial()`), because early chunks might only include the title or description.
+- **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed `inputSchema` forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`sendChunk`:** Each call forwards the latest partial recipe to the caller, so output fills in field by field. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
+
+### Add the controller
+
+Create `src/genkit/genkit.controller.ts` to expose the flow over HTTP using Genkit's Express handler:
+
+```ts title="src/genkit/genkit.controller.ts"
+import { Controller, Post, Req, Res, Next } from '@nestjs/common';
+import type { Request, Response, NextFunction } from 'express';
+import { expressHandler } from '@genkit-ai/express';
+import { bargainChefFlow } from './bargainChefFlow';
+
+@Controller()
+export class GenkitController {
+  private readonly handleBargainChef = expressHandler(bargainChefFlow);
+
+  @Post('bargainChefFlow')
+  bargainChef(@Req() req: Request, @Res() res: Response, @Next() next: NextFunction) {
+    return this.handleBargainChef(req, res, next);
+  }
+}
+```
+
+NestJS runs on Express under the hood, so the `@Req()`, `@Res()`, and `@Next()` objects are Express's own request, response, and next function. That lets you pass them straight to Genkit's `expressHandler` (an Express request handler), which reads the input, runs the flow, and streams the response back as chunks arrive. Injecting `@Res()` puts the controller in manual-response mode, so the handler owns sending the reply.
+
+### Register the controller
+
+Add `GenkitController` to your `AppModule`:
+
+```ts title="src/app.module.ts"
+import { Module } from '@nestjs/common';
+import { GenkitController } from './genkit/genkit.controller';
+
+@Module({
+  controllers: [GenkitController],
+})
+export class AppModule {}
+```
+
+### Enable CORS
+
+Enable CORS in `src/main.ts` so a browser frontend served from a different origin (a Vite or Next.js dev server, for example) can call this NestJS backend:
+
+```ts title="src/main.ts" ins={6}
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableCors();
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+```
+
+`app.enableCors()` with no options allows **all origins**, so any browser frontend can call this endpoint during development. Before deploying, restrict it to the origins you actually serve (for example, `app.enableCors({ origin: 'https://your-app.com' })`).
+
+### Check the project layout
+
+Verify that your project layout matches the structure below:
+
+<FileTree>
+
+- package.json
+- tsconfig.json
+- src
+  - app.module.ts
+  - main.ts
+  - genkit
+    - bargainChefFlow.ts
+    - genkit.controller.ts
+
+</FileTree>
+
+## Run the app
+
+Start the NestJS development server:
+
+<PackageManagerTabs command="npm run start:dev" />
+
+By default, NestJS listens on `http://localhost:3000`. The flow is mounted at `/bargainChefFlow` through the controller. In the next section, you'll send a request and watch the recipe stream in field by field: title first, then description, then ingredients (with "on sale" badges on the ones the model picked from the tool), then steps.
+
+## Test and inspect the app
+
+You can test the flow directly with curl, and you can use the Developer UI to inspect both manual runs and requests from the running NestJS server.
+
+### Send a request with curl
+
+With the server running, use the `-N` flag and an `Accept: text/event-stream` header to consume the streamed response:
+
+```bash
+curl -N -X POST http://localhost:3000/bargainChefFlow \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"data":{"craving":"something warm with chicken"}}'
+```
+
+The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
+
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them. The final event contains the complete, validated recipe.
+
+### Use the Developer UI
+
+The Developer UI is Genkit's local console for testing flows and inspecting execution traces. It runs alongside your backend code, gives you a visual runner for any flow in your project, and records every tool call and model invocation so you can iterate on prompts and debug tool behavior.
+
+1. Start the Developer UI from your project root:
+
+   <PackageManagerTabs command="npx genkit start -- nest start --watch" />
+
+   This launches the Developer UI at `http://localhost:4000` by default.
+
+   :::tip[Add a script]
+   To make starting the Developer UI easier, add the above command to your project's scripts as `genkit:start` in the `package.json`.
+   :::
+
+2. Select `bargainChefFlow` from the list of flows.
+3. Enter sample input:
+
+   ```json
+   { "craving": "something warm with chicken" }
+   ```
+
+4. Click **Run**.
+
+   You'll see the generated recipe, with a trace that builds in real time so you can follow the flow's progress through each tool call and model invocation.
+
+   <video
+     controls
+     preload="metadata"
+     muted
+     width="100%"
+     style="max-width: 800px; display: block; margin: 2rem auto 0; border: none;"
+     poster="/videos/devui-flow-runner-poster.png"
+     aria-label="Demonstration of running a Genkit flow in the Developer UI, showing the bargainChefFlow with input parameters and structured output results"
+   >
+     <source src="/videos/devui-flow-runner.mp4" type="video/mp4" />
+     Your browser does not support the video tag. This video demonstrates how to
+     run a Genkit flow in the Developer UI, showing the bargainChefFlow with
+     input parameters and the resulting structured output.
+   </video>
+
+:::tip[Inspect traces from your running app]
+While the Developer UI is running, any flow invocation triggered through the NestJS controller appears in the **Traces** tab alongside flows you run manually.
+:::
+
+## What you built
+
+You now have a standalone Genkit backend on NestJS that streams structured output from Gemini over HTTP, calls a tool during generation to ground the model's response in mock sale-price data, validates input and output against schemas, and surfaces every step in a local trace UI.
+
+## Next steps
+
+- [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
+- [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
+- [Connect a web frontend](/docs/client): Wire a standalone web client up to this backend.
+- [Deploy your app](/docs/deployment/overview): Ship to Cloud Run, Vercel, Firebase, or your own infrastructure.
+- [Developer tools](/docs/devtools): Dig deeper into the Developer UI, tracing, and evaluation.
