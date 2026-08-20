@@ -314,6 +314,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "API references", slug: "docs/api-references" },
       { label: "API stability", slug: "docs/api-stability" },
+      { label: "Roadmap", slug: "docs/roadmap" },
       { label: "Feedback", slug: "docs/feedback" },
     ],
   },
