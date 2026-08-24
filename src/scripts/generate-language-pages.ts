@@ -6,6 +6,10 @@ import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
 
 const SOURCE_ROOT = path.resolve('src/content/docs/docs');
 const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
+// Generated language directories are gitignored, so Starlight's derived edit
+// URLs would 404. Point each generated page back at its source file instead.
+// Must match editLink.baseUrl in astro.config.mjs.
+const EDIT_LINK_BASE_URL = 'https://github.com/genkit-ai/docsite/edit/main/';
 const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const FALLBACK_LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
 const MIN_LANGUAGE_CONTENT_CHARS_WARNING = 120;
@@ -527,6 +531,7 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
       {
         ...frontmatterWithoutDescription,
         ...(resolvedDescription !== undefined ? { description: resolvedDescription } : {}),
+        editUrl: frontmatter.editUrl ?? `${EDIT_LINK_BASE_URL}${fileRelativePath}`,
         supportedLanguages: [language],
       },
       filePath,
