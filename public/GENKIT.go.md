@@ -1,4 +1,8 @@
-# Genkit Go API Rules (v1.20.0)
+# Genkit Go API rules
+
+Written against the current Genkit Go release. Check the released versions at
+https://pkg.go.dev/github.com/firebase/genkit/go?tab=versions and pin one in
+your `go.mod`; the `genkit/exp` packages can change in a minor release.
 
 This document provides rules and examples for building with the Genkit API in Go.
 
