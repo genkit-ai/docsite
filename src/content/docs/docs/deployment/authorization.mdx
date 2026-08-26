@@ -3,6 +3,7 @@ title: Authorization and integrity
 description: This document explains how to manage authorization and integrity in Genkit applications, covering Firebase and non-Firebase HTTP authorization.
 supportedLanguages:
   - js
+  - go
   - dart
 ---
 
@@ -423,5 +424,171 @@ void main() async {
   await io.serve(handler, 'localhost', 3400);
 }
 ```
+
+</Lang>
+
+<Lang lang="go">
+
+When you put a flow behind a public HTTP endpoint, three things have to hold:
+the caller is who they claim to be, every tool call is scoped to that caller,
+and the model cannot talk its way into a wider scope. Genkit for Go gives you
+one mechanism for all three — [action context](/docs/context) — plus the
+[error classification](/docs/error-types) that turns a rejection into the right
+HTTP status.
+
+:::caution[Genkit does not authenticate for you]
+`genkit.Handler` serves whatever it is given. There is no default auth policy,
+no built-in identity provider, and no per-flow ACL. Everything below is
+something you must write.
+:::
+
+## Authenticate at the handler
+
+Attach a context provider to the handler. It runs before the flow, so a
+rejection never reaches your business logic:
+
+```go
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
+)
+
+func authProvider(verify func(context.Context, string) (*Claims, error)) core.ContextProvider {
+	return func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+		token := strings.TrimPrefix(req.Headers["authorization"], "Bearer ")
+		if token == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "missing bearer token")
+		}
+		claims, err := verify(ctx, token)
+		if err != nil {
+			// The message stays server-side; the client gets a bare 401.
+			return nil, status.Errorf(status.ErrUnauthenticated, "token rejected: %w", err)
+		}
+		return core.ActionContext{
+			"uid":    claims.Subject,
+			"tenant": claims.Tenant,
+			"scopes": claims.Scopes,
+		}, nil
+	}
+}
+
+mux.Handle("POST /summarize", genkit.Handler(summarizeFlow,
+	genkit.WithContextProviders(authProvider(verifyIDToken))))
+```
+
+Header names in `req.Headers` are lower-cased, so match on `"authorization"`.
+
+## Map a rejection to the right status
+
+The HTTP status comes from the error's classification, not from the handler:
+
+| Return | Client sees |
+| :----- | :---------- |
+| `status.Errorf(status.ErrUnauthenticated, ...)` | `401` |
+| `status.Errorf(status.ErrPermissionDenied, ...)` | `403` |
+| `status.Errorf(status.ErrInvalidArgument, ...)` | `400` |
+| `errors.New(...)` or any unclassified error | `500` |
+
+Messages are withheld from the client unless you build them with
+`status.PublicErrorf`, which is the right default: an auth failure message is
+exactly the kind of text that leaks internal structure. The full error is
+always logged server-side.
+
+## Authorize inside the flow
+
+Authentication says who the caller is. Authorization says what this particular
+request may touch, and that usually depends on the input:
+
+```go
+summarizeFlow := genkit.DefineFlow(g, "summarize",
+	func(ctx context.Context, in SummarizeInput) (string, error) {
+		actx := core.FromContext(ctx)
+		uid, _ := actx["uid"].(string)
+		if uid == "" {
+			// Reachable when the flow is called in-process without context.
+			return "", status.Errorf(status.ErrUnauthenticated, "no caller identity")
+		}
+		doc, err := store.Get(ctx, in.DocID)
+		if err != nil {
+			return "", err
+		}
+		if doc.OwnerID != uid {
+			return "", status.Errorf(status.ErrPermissionDenied,
+				"user %s does not own document %s", uid, in.DocID)
+		}
+		// ...
+	})
+```
+
+Keep the check inside the flow, not only in the provider. The same flow runs
+from a worker, a test, and the Developer UI, and only the HTTP path goes through
+a context provider.
+
+## Scope tool calls to the caller
+
+This is the part that is specific to LLM applications. A tool that takes the
+user ID as an input field lets the **model** choose whose data to read, and a
+prompt injection in retrieved content or user text can make it choose someone
+else's. Take the identity from the action context instead:
+
+```go
+// Wrong: the model supplies customerID, so the model decides whose orders to read.
+type badInput struct {
+	CustomerID string `json:"customerId"`
+}
+
+// Right: the tool takes only what the model legitimately chooses. Identity comes
+// from the request, which the model cannot influence.
+type ordersInput struct {
+	Status string `json:"status" jsonschema:"enum=open,enum=shipped"`
+}
+
+listOrders := genkit.DefineTool(g, "listOrders",
+	"Lists the signed-in customer's orders.",
+	func(toolCtx *ai.ToolContext, in ordersInput) ([]Order, error) {
+		uid, _ := core.FromContext(toolCtx.Context)["uid"].(string)
+		if uid == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "no signed-in user")
+		}
+		return store.OrdersFor(toolCtx.Context, uid, in.Status)
+	})
+```
+
+Apply the same rule to retrievers: filter by tenant inside the retriever, never
+by a filter value the model produced.
+
+## Verify the client, not just the user
+
+Authenticating the end user does not stop a scraper replaying your endpoint with
+a stolen token, and some deployments have no end user at all. For those, add a
+check on the calling *application*: a service-to-service identity token, a
+signed request from your own frontend, or App Check-style attestation. It goes
+in the same context provider, as a second gate before the user check.
+
+## Deployment notes
+
+- **Cloud Run.** Either let the platform authenticate (deploy without
+  `--allow-unauthenticated` and require an ID token, which keeps unauthenticated
+  traffic off your container entirely), or accept public traffic and do all of
+  the above yourself. Do not do neither. See
+  [Deploy with Cloud Run](/docs/deployment/cloud-run).
+- **The Developer UI reflection server is not authenticated.** It only starts
+  when `GENKIT_ENV=dev`, which is never set in a production image, but do not
+  set it in one.
+- **Agent HTTP routes** need the same treatment; see
+  [Serve agents over HTTP](/docs/agents/http).
+
+## Learn more
+
+- [Passing information through context](/docs/context) — the mechanism these
+  examples are built on
+- [Error types](/docs/error-types) — the full status set and what reaches a client
+- [Testing your AI logic](/docs/testing) — asserting that an unauthenticated
+  request really is rejected
 
 </Lang>

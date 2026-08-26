@@ -124,6 +124,10 @@ const DOCS_SIDEBAR = [
       { label: "Tool calling", slug: "docs/tool-calling" },
       { label: "Prompt templating", slug: "docs/dotprompt" },
       { label: "Runtime context", slug: "docs/context" },
+      {
+        label: "Concurrency and lifecycle",
+        slug: "docs/concurrency",
+      },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Agentic patterns", slug: "docs/agentic-patterns" },
       { label: "Interrupts", slug: "docs/interrupts" },
