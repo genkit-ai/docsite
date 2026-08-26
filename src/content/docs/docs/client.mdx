@@ -79,6 +79,69 @@ Future<void> callHelloFlow() async {
 
 </TabItem>
 
+<TabItem label="Go">
+
+There is no Genkit client library for Go. A Go caller, typically another service rather than a UI, speaks the same HTTP protocol with the standard library: `POST` a `{"data": ...}` body and decode `{"result": ...}`.
+
+```go
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+type helloInput struct {
+	Name string `json:"name"`
+}
+
+type helloOutput struct {
+	Greeting string `json:"greeting"`
+}
+
+func callHelloFlow(ctx context.Context, url string, in helloInput) (helloOutput, error) {
+	body, err := json.Marshal(map[string]any{"data": in})
+	if err != nil {
+		return helloOutput{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return helloOutput{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// If the flow requires authentication, add the token here:
+	// req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return helloOutput{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return helloOutput{}, fmt.Errorf("flow returned %s: %s", resp.Status, msg)
+	}
+
+	var envelope struct {
+		Result helloOutput `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return helloOutput{}, err
+	}
+	return envelope.Result, nil
+}
+```
+
+Canceling `ctx` cancels the request, and the server cancels the flow's own context in turn.
+
+</TabItem>
+
 </Tabs>
 
 ### Streaming flow calls
@@ -148,6 +211,94 @@ Future<void> streamHelloFlow() async {
   }
 }
 ```
+
+</TabItem>
+
+<TabItem label="Go">
+
+Send `Accept: text/event-stream` and read the response line by line. Every event is one `data: <json>` line carrying exactly one of three shapes: `{"message": <chunk>}` for a chunk, `{"result": <output>}` for the final value, or `{"error": {"status": ..., "message": ...}}` if the flow failed after the response committed.
+
+```go
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// streamHelloFlow calls onChunk for each streamed chunk and returns the final result.
+func streamHelloFlow(ctx context.Context, url string, in helloInput, onChunk func(string)) (helloOutput, error) {
+	body, err := json.Marshal(map[string]any{"data": in})
+	if err != nil {
+		return helloOutput{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return helloOutput{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return helloOutput{}, err
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line, ok := strings.CutPrefix(scanner.Text(), "data: ")
+		if !ok {
+			continue
+		}
+
+		var frame struct {
+			Message json.RawMessage `json:"message"`
+			Result  json.RawMessage `json:"result"`
+			Error   *struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(line), &frame); err != nil {
+			return helloOutput{}, err
+		}
+
+		switch {
+		case frame.Error != nil:
+			return helloOutput{}, fmt.Errorf("flow failed (%s): %s", frame.Error.Status, frame.Error.Message)
+		case len(frame.Message) > 0:
+			var chunk string
+			if err := json.Unmarshal(frame.Message, &chunk); err != nil {
+				return helloOutput{}, err
+			}
+			onChunk(chunk)
+		case len(frame.Result) > 0:
+			var out helloOutput
+			if err := json.Unmarshal(frame.Result, &out); err != nil {
+				return helloOutput{}, err
+			}
+			return out, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return helloOutput{}, err
+	}
+	return helloOutput{}, errors.New("stream ended without a final result")
+}
+```
+
+The default `bufio.Scanner` buffer is 64 KiB per line, which one large chunk can exceed. Raise it, as above, or switch to a `bufio.Reader` if your chunks are large.
+
+If the server has a `StreamManager` configured, its response also carries an `X-Genkit-Stream-Id` header. Save it to resume the same stream after a dropped connection: see [Durable streaming](/docs/durable-streaming).
 
 </TabItem>
 
@@ -353,7 +504,10 @@ final streamResult = helloFlow.stream(
 
 ## When deploying to Cloud Functions for Firebase
 
-When deploying to [Cloud Functions for Firebase](/docs/deployment/firebase), use the Firebase callable functions client library.
+If your backend is deployed as [Cloud Functions for Firebase](/docs/js/deployment/firebase/)
+— a JavaScript-only deployment target — use the Firebase callable functions
+client library instead of the helpers above. A Go, Python, or Dart backend is
+reached over plain HTTP as shown earlier on this page.
 
 Detailed documentation can be found at https://firebase.google.com/docs/functions/callable?gen=2nd
 

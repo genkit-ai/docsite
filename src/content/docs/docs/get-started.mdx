@@ -166,6 +166,131 @@ If you're not ready to choose a framework yet, explore [Creating flows](/docs/fl
 
 <Lang lang="go">
 
+## Hello, Genkit
+
+Before picking a framework, get one model call running. This takes about two
+minutes and needs nothing but the Go toolchain and an API key.
+
+**1. Create a module and add Genkit.**
+
+```bash
+mkdir hello-genkit && cd hello-genkit
+go mod init example/hello-genkit
+go get github.com/firebase/genkit/go
+```
+
+Genkit for Go needs **Go 1.25 or later**. The plugins live in the same module,
+so a single `go get` is enough; run `go mod tidy` after you paste the code below
+to pull in the provider SDK it needs.
+
+**2. Get a Gemini API key** from [Google AI Studio](https://aistudio.google.com/apikey)
+and put it in your environment:
+
+```bash
+export GEMINI_API_KEY=<your API key>
+```
+
+**3. Write `main.go`.**
+
+```go title="main.go"
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Init registers the plugin's models and returns the handle every other
+	// Genkit call takes. It returns one value, not (value, error): a plugin
+	// that cannot start panics here, so a missing API key fails at startup
+	// rather than on the first request.
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
+	)
+
+	// A flow is an ordinary Go function that Genkit traces, validates against
+	// the input and output types you declared, and exposes to the Developer UI
+	// and to HTTP.
+	jokeFlow := genkit.DefineFlow(g, "jokeFlow",
+		func(ctx context.Context, topic string) (string, error) {
+			resp, err := genkit.Generate(ctx, g,
+				ai.WithSystem("You are a stand-up comedian. One line, no preamble."),
+				ai.WithPrompt("Tell a joke about %s.", topic),
+			)
+			if err != nil {
+				return "", err
+			}
+			return resp.Text(), nil
+		})
+
+	joke, err := jokeFlow.Run(ctx, "gophers")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(joke)
+}
+```
+
+**4. Run it.**
+
+```bash
+go mod tidy
+go run .
+```
+
+You should see a one-line joke. If you see a panic mentioning `GEMINI_API_KEY`,
+step 2 did not take effect in this shell.
+
+**5. Optional: open the Developer UI.** Install the CLI, then run your program
+under it to get a visual flow runner and a trace for every model call:
+
+```bash
+curl -sL cli.genkit.dev | bash
+genkit start -- go run .
+```
+
+The UI opens at `http://localhost:4000`. See
+[Developer tools](/docs/devtools) for what it can do.
+
+That is the whole core loop: initialize, define a flow, generate, run. Everything
+below builds on it.
+
+### What `Init` gives you
+
+```go
+func Init(ctx context.Context, opts ...GenkitOption) *Genkit
+```
+
+`Init` returns one value and no error. Configuration problems fail loudly at
+startup instead of on the first request: a plugin with a missing API key, two
+plugins claiming the same name, or a prompt directory you named that does not
+exist all panic inside `Init`. There is no error-returning variant, so validate
+anything you need to choose at runtime before you call it.
+
+The `*genkit.Genkit` it returns is the handle every other Genkit call takes.
+Pass it to functions that define flows, tools, or prompts, such as
+`func defineTools(g *genkit.Genkit)`. Create exactly one per process in
+`main()`: it is safe for concurrent use by many goroutines, and so are the
+flow, tool, and prompt values the `Define*` functions return. Define everything
+during startup, before you serve traffic, and share the one instance across all
+request handlers.
+
+There is no default per-request timeout, and retries and provider fallback are
+opt-in [middleware](/docs/middleware) rather than defaults. See
+[Concurrency, cancellation, and lifecycle](/docs/concurrency) before you put
+this behind a server.
+
+## Serve it over HTTP
+
 With Genkit for Go, your AI logic runs in a standalone backend. You'll get there in two steps:
 
 1. **Build a backend.** Pick a backend framework below and follow its guide to expose your Genkit flows over HTTP. This is where your model calls, tools, and flows live.
@@ -264,6 +389,12 @@ Pair a Go Genkit backend with any of these frontends. Each guide shows how to ca
 </CardGrid>
 
 If you're not ready to choose a framework yet, explore [Creating flows](/docs/flows) and [Generating content](/docs/models) to learn the core concepts first. For a runnable version of each of those concepts, the [Go sample programs](https://github.com/genkit-ai/genkit/tree/main/go/samples) are one self-documenting program per topic, starting with [basic](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic).
+
+Two more pages pay off early:
+[Testing your AI logic](/docs/testing), which runs flows in-process against a
+fake model so CI needs no API key, and
+[Concurrency, cancellation, and lifecycle](/docs/concurrency), which states what
+is safe to share and how deadlines propagate.
 
 </Lang>
 

@@ -14,7 +14,7 @@ import Lang from '../../../../components/Lang.astro';
 The Agents API is in **Beta.** It can introduce breaking changes in minor version releases.
 :::
 
-Session stores persist snapshots for server-managed agents. They are the storage layer behind `sessionId`, `snapshotId`, `loadChat()`, snapshot reads, branching, background execution, and aborting detached work.
+Session stores persist snapshots for server-managed agents. They are the storage layer behind `sessionId` and `snapshotId` resumption, snapshot reads, branching, background execution, and aborting detached work.
 
 Use the [Sessions and state](/docs/agents/state) guide first when you are deciding between server-managed and client-managed state. Use this page when you know the server should own state and need to choose or implement the persistence layer.
 
@@ -297,7 +297,38 @@ class MyDatabaseSessionStore implements SessionStore {
 - **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
 - **Custom store** for production web apps that need a different database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence that the built-in stores do not cover.
 
-Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, exposes snapshot companion actions, starts detached work, or aborts an in-flight turn.
+Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, serves `Agent.GetSnapshot` and `Agent.GetLatestSnapshot`, starts detached work, or aborts an in-flight turn with `Agent.Abort`.
+
+## The snapshot record
+
+Every store method reads or writes an `aix.SessionSnapshot[State]`. Both the built-in stores and a custom store move this value verbatim:
+
+```go
+type SessionSnapshot[State any] struct {
+	SnapshotID   string               `json:"snapshotId"`
+	SessionID    string               `json:"sessionId,omitempty"`
+	ParentID     string               `json:"parentId,omitempty"`
+	State        *SessionState[State] `json:"state,omitempty"`
+	Status       SnapshotStatus       `json:"status,omitempty"`
+	FinishReason AgentFinishReason    `json:"finishReason,omitempty"`
+	Error        *status.Error        `json:"error,omitempty"`
+	CreatedAt    time.Time            `json:"createdAt"`
+	UpdatedAt    time.Time            `json:"updatedAt,omitempty"`
+	HeartbeatAt  *time.Time           `json:"heartbeatAt,omitempty"`
+}
+```
+
+The runtime owns the meaning of `SnapshotID`, `SessionID`, `ParentID`, `State`, `Status`, `FinishReason`, `Error`, and `HeartbeatAt`. The store owns durable persistence: it must preserve `SessionID` across rewrites, and it must not advance `UpdatedAt` on a heartbeat-only refresh, so liveness stays distinct from state changes. `SessionState[State]` is described on [Sessions and state](/docs/agents/state).
+
+`Status` is an `aix.SnapshotStatus`, a string with five constants: `pending`, `completed`, `failed`, `aborted`, `expired`.
+
+Three traps that the rest of this page depends on:
+
+- The ID field is `SnapshotID`. There is no `ID`.
+- `State` is a pointer and is nil on a `pending` snapshot, because a detached invocation has not committed its state yet. Check it before reading `snap.State.Messages`, `snap.State.Custom`, or `snap.State.Artifacts`.
+- An empty `Status` must be read as `completed`, for backwards compatibility. `SnapshotStatusExpired` is never persisted: it is computed on read from a stale `HeartbeatAt`, so the raw row stays `pending`.
+
+Full field documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/firebase/genkit/go/ai/exp#SessionSnapshot).
 
 ## Use an in-memory store
 
@@ -346,15 +377,83 @@ if err != nil {
 }
 ```
 
+`NewFileSessionStore[State]` returns `(*localstore.FileSessionStore[State], error)`. The in-memory and Firestore constructors likewise return their concrete types, `*localstore.InMemorySessionStore[State]` and `(*firebasex.FirestoreSessionStore[State], error)`. All of them satisfy `aix.SessionStore[State]`, so hold one in a struct field or pass it around typed as the interface:
+
+```go
+type Service struct {
+	Store aix.SessionStore[SupportState]
+}
+```
+
+Type the value concretely only when you need methods that a specific store adds.
+
 Snapshots are written under the directory passed to `NewFileSessionStore`, inside a subdirectory named by the path prefix. Without the option, every session shares one `global` subdirectory. Each agent in [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) keeps its own file store under `./.genkit/snapshots/<agent>/`, so conversations survive a restart of the command-line client.
 
 Use `WithMaxPersistedChainLength` to bound how many snapshots are retained in one parent chain. A value of `1` keeps only the latest snapshot in a chain. Omitting the option leaves pruning disabled. Pruning follows parent links, so sibling branches are pruned independently when they are extended.
 
-Use `WithSnapshotPathPrefix` to scope reads and writes to a subdirectory. Return a stable tenant or user identity from `context.Context` so one caller cannot read another caller's snapshots. Prefixes may contain `/` for nested directories, but values that escape the store directory are rejected.
+Use `WithSnapshotPathPrefix` to scope reads and writes to a subdirectory. Return a stable tenant or user identity from `context.Context` so one caller cannot read another caller's snapshots. Prefixes may contain `/` for nested directories, but values that escape the store directory are rejected. See [Scope a store by tenant](#scope-a-store-by-tenant) for where the identity in `ctx` comes from.
 
 Use `WithPollInterval` to control how often the file store checks for status changes written by another process or store instance sharing the same directory. The default is one second. A value less than or equal to zero disables cross-process polling, so subscriptions observe only changes written through the same store instance.
 
 The file store is safe for concurrent use inside one process, writes snapshots atomically with temporary files and rename, and implements `aix.SnapshotSubscriber`. It is still a local filesystem store, so use a custom store when many app instances need to coordinate durable sessions.
+
+## Scope a store by tenant
+
+Both `WithSnapshotPathPrefix` options take a `func(ctx context.Context) string`. The `ctx` they receive is the request context the handler built, so the tenant identity travels from the HTTP request into the store through the action context.
+
+Populate the action context with `genkit.WithContextProviders` when you mount the routes:
+
+```go
+import (
+	"context"
+	"net/http"
+
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+```
+
+```go
+for _, route := range genkitx.AgentRoutes(supportAgent) {
+	mux.HandleFunc(route.Pattern(), route.Handler(
+		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+			// Authenticate the request first, then return the identity it proved.
+			return core.ActionContext{"tenantId": req.Headers["x-tenant-id"]}, nil
+		}),
+	))
+}
+```
+
+Read it back out inside the prefix function with `core.FromContext`:
+
+```go
+func tenantIDFromContext(ctx context.Context) string {
+	tenantID, _ := core.FromContext(ctx)["tenantId"].(string)
+	if tenantID == "" {
+		return "global"
+	}
+	return tenantID
+}
+```
+
+The prefix is recomputed from `context.Context` on every store call, so there is no operator bypass. A privileged reader such as a support console or a back-office approval queue must authorize the operator first, then build a context whose prefix function resolves to the target tenant, and only then read:
+
+```go
+ctx = core.WithActionContext(ctx, core.ActionContext{"tenantId": targetTenant})
+
+snap, err := supportAgent.GetSnapshot(ctx, snapshotID)
+```
+
+Do the authorization check outside the prefix function. The prefix is a scoping mechanism, not an access-control check.
+
+## Concurrent turns on one session
+
+The runtime does not serialize invocations that share a `sessionId`. Two concurrent turns both resume from the same latest snapshot and both commit, creating sibling snapshots with the same `ParentID`. The next `GetLatestSnapshot` returns whichever was created last, so the other turn's changes stop being reachable without its `snapshotId`.
+
+Serialize turns per session in your application: a per-session lock, a queue, or disabling the send button client-side. To detect a fork after the fact, compare the `snapshotId` you resumed from with `AgentOutput.SnapshotID`.
+
+An `*aix.Agent` is read-only after definition and safe to share across goroutines. An `*aix.AgentConnection` is a single-owner value: do not call `Output()` from one goroutine while another iterates `Receive()`.
 
 ## Use a Firestore store
 
@@ -370,7 +469,10 @@ import (
 ```
 
 ```go
-g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+g := genkit.Init(ctx,
+	genkit.WithExperimental(),
+	genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}),
+)
 
 store, err := firebasex.NewFirestoreSessionStore[SupportState](ctx, g,
 	firebasex.WithCollection("genkit-sessions"),

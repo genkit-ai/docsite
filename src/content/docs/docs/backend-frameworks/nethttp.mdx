@@ -9,7 +9,7 @@ import { Aside, FileTree, LinkButton } from '@astrojs/starlight/components';
 
 In this tutorial, you'll build **Bargain Chef**, a standalone Genkit backend on net/http that exposes a recipe-generating flow over HTTP. It uses two AI patterns Genkit simplifies: streaming structured output and tool calling.
 
-Because `genkit.Handler` returns a standard `http.Handler`, you can mount it directly on a `net/http` mux with no router or adapter.
+Because `genkit.Handler` returns an `http.HandlerFunc`, you can mount it directly on a `net/http` mux with no router or adapter.
 
 ## What you'll build
 
@@ -44,12 +44,14 @@ Then install the Go packages you need:
 ```bash
 go get github.com/firebase/genkit/go
 go get github.com/firebase/genkit/go/plugins/googlegenai
+go get google.golang.org/genai
 ```
 
 These packages include:
 
 - **`github.com/firebase/genkit/go`**: Core Genkit SDK.
 - **`github.com/firebase/genkit/go/plugins/googlegenai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`google.golang.org/genai`**: Google's GenAI Go SDK. The `googlegenai` plugin takes this SDK's own `*genai.GenerateContentConfig` as its model configuration, so you import it directly to tune a request.
 
 No third-party web framework is required: the HTTP server is built entirely with the standard library.
 
@@ -208,7 +210,8 @@ func main() {
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle("POST /bargainChefFlow", withCORS(genkit.Handler(bargainChefFlow)))
+	// Registered without a method prefix so the CORS wrapper sees OPTIONS too.
+	mux.Handle("/bargainChefFlow", withCORS(genkit.Handler(bargainChefFlow)))
 
 	log.Println("net/http server listening on http://localhost:8080")
 	if err := http.ListenAndServe(":8080", mux); err != nil {
@@ -227,6 +230,10 @@ func withCORS(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -238,9 +245,20 @@ A few details are worth noting:
 - **Final output and streamed chunks:** The `Recipe` struct (with `json` tags) is the structure of the final response. Genkit reflects on the type passed to `GenerateDataStream[Recipe]` to derive a JSON schema, then validates the model's output against it. Because the parser handles partial JSON, the same struct describes both the final response and each in-progress chunk emitted during streaming. Asking for the value type rather than `*Recipe` means the loop never needs a nil check: an early chunk arrives with every field still at its zero value, and the fields fill in as more of the model's JSON parses. Ask for `*Recipe` instead and Genkit skips only the chunks that arrive before the model opens the JSON object; after that you still get a non-nil `*Recipe` with every field at its zero value.
 - **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the `SaleQuery` input struct forces the model to pass `dayType: "weekday"` or `"weekend"`. Genkit derives the JSON schema from the Go type, including the enum constraint declared in the `jsonschema` tag. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`sendChunk`:** `genkit.DefineStreamingFlow` registers a flow that accepts a `sendChunk` callback. Inside, `genkit.GenerateDataStream[Recipe]` yields typed partial recipes as the model produces them, and the loop forwards each chunk to the caller so a client UI can fill in field by field. When the iterator reports `Done`, the flow returns the validated final recipe so the HTTP request still resolves with a complete value.
-- **HTTP wiring:** The bottom of the file mounts the flow as a single route on a standard `http.ServeMux`. `genkit.Handler(bargainChefFlow)` returns an `http.Handler` that parses the `{"data": ...}` envelope, validates input against the flow's schema, runs the flow, and writes either a JSON response or a `text/event-stream` of chunks based on the request's `Accept` header. The `withCORS` wrapper is a small custom middleware that adds the CORS headers a browser frontend needs and handles preflight `OPTIONS` requests. It sets `Access-Control-Allow-Origin: *`, allowing **all origins** during development; before deploying, replace the `*` with the origins you actually serve. Method-prefixed routing (`POST /bargainChefFlow`) requires Go 1.22 or later.
+- **Model configuration:** `ai.WithConfig` takes the provider's own SDK config type, so the struct differs per plugin. For `googlegenai` that type is `*genai.GenerateContentConfig` from the Google GenAI Go SDK. Setting `ThinkingLevel: genai.ThinkingLevelMinimal` caps how much reasoning the model does before it answers, which lowers latency and cost on a task this simple.
+- **HTTP wiring:** The bottom of the file mounts the flow as a single route on a standard `http.ServeMux`. `genkit.Handler(bargainChefFlow)` returns an `http.HandlerFunc`, so it works with both `mux.Handle` and `mux.HandleFunc` and can be wrapped by any `http.Handler` middleware. It parses the `{"data": ...}` envelope, validates input against the flow's schema, runs the flow, and writes either a JSON response or a `text/event-stream` of chunks based on the request's `Accept` header. See [the `genkit.Handler` contract](/docs/backend-frameworks/overview) for the full option set.
+- **Request context:** The flow runs with the request's own `r.Context()`, so values attached by HTTP middleware are visible to the flow, its tools, and its prompts. For request-scoped identity, prefer `genkit.WithContextProviders(...)` and `core.FromContext(ctx)` over a raw context key. See [Passing information through context](/docs/context).
+- **CORS:** The `withCORS` wrapper is a small custom middleware that adds the CORS headers a browser frontend needs and handles the preflight `OPTIONS` request. It sets `Access-Control-Allow-Origin: *`, allowing **all origins** during development; before deploying, replace the `*` with the origins you actually serve. The route is registered as `/bargainChefFlow` with no method prefix on purpose. A method-prefixed pattern such as `POST /bargainChefFlow` makes `http.ServeMux` answer the browser's `OPTIONS` preflight itself with a 405 before the CORS wrapper runs, so the preflight fails and the browser never sends the real request. Because the pattern accepts every method, `withCORS` rejects anything other than `POST` and `OPTIONS` itself. The chi, Gin, and Echo tutorials do not need this because their CORS middleware runs ahead of routing.
 
 The [basic sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic) serves every registered flow the same way, looping over `genkit.ListFlows(g)` instead of naming one route.
+
+### Tidy the module
+
+Resolve the imports and record them in `go.mod`:
+
+```bash
+go mod tidy
+```
 
 ### Check the project layout
 
@@ -355,6 +373,8 @@ You now have a standalone Genkit backend on net/http that streams structured out
 
 - [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
 - [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Error types](/docs/error-types): Classify failures so the handler returns the right HTTP status, and control which messages reach the caller.
+- [Passing information through context](/docs/context): Get the caller's identity to your flow and tools without putting it in the model's input.
 - [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
 - [Connect a web frontend](/docs/client): Wire a standalone web client up to this backend.
 - [Connect a Flutter app](/docs/app-frameworks/flutter): Drive your flow from a Flutter mobile or desktop app.

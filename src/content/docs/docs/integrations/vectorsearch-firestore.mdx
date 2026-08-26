@@ -180,6 +180,19 @@ import "github.com/firebase/genkit/go/plugins/vertexai/vectorsearch"
 1. Create a vector search index in Vertex AI. Details on creating vector search index can be found at [Create your Vector Search Index](https://cloud.google.com/vertex-ai/docs/vector-search/create-manage-index#create-index)
 2. Create a Firestore Dataset and a Collection within that dataset to store the documents that will be indexed. More information to create Firestore datasets is available [here](https://firebase.google.com/docs/firestore/quickstart#create)
 
+### What the Firestore helpers write
+
+`GetFirestoreDocumentIndexer` writes one auto-ID document per `ai.Document` into the named
+collection, with two fields: `content` (the document's `Content` parts) and `metadata`. It commits
+them in a single batch and returns the generated document IDs, which are the IDs the vector search
+index stores as datapoints. `GetFirestoreDocumentRetriever` reads those documents back by ID.
+
+The collection needs no vector index. The embeddings live in the Vertex AI index, not in Firestore;
+Firestore only holds the document bodies.
+
+Write your own `vectorsearch.DocumentIndexer` and `vectorsearch.DocumentRetriever` pair if you need
+a different shape.
+
 To use the GCP vector search with Firestore, initialize it and define a retriever with an embedder. You can also use a custom indexer and retriever for indexing and retrieving documents from the Firestore dataset:
 
 ```go
@@ -208,7 +221,13 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 
 databaseId := "${FIRESTORE_DATABASE_ID}"         // Replace with your Firestore database ID
 collectionName := "${FIRESTORE_COLLECTION_NAME}" // Replace with your Firestore collection name
+
 firestoreClient, err := firestore.NewClientWithDatabase(ctx, vectorsearchPlugin.ProjectID, databaseId)
+if err != nil {
+	log.Fatalf("failed to create Firestore client: %v", err)
+}
+defer firestoreClient.Close()
+
 documentIndexer := vectorsearch.GetFirestoreDocumentIndexer(firestoreClient, collectionName)
 documentRetriever := vectorsearch.GetFirestoreDocumentRetriever(firestoreClient, collectionName)
 
@@ -241,19 +260,51 @@ vectorsearchParams := &VectorsearchConfig{
 }
 ```
 
-### Configuration Options
+### Values you need to collect
+
+`VectorsearchConfig` above is a plain local struct, not a Genkit type. It exists only to carry these
+values from configuration to the call sites below; the plugin never sees it. Name it whatever you
+like.
 
 - **ProjectID** (string): GCP Project ID
 - **Location** (string): GCP Project location
 - **IndexID** (string): Vector search index id
 - **IndexEndpointID** (string): Vector search endpoint id corresponding to the vector search index. More details can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#create-index-endpoint).
 - **DeployedIndexID** (string): Vector search deployed index id corresponding to the vector search endpoint. More details to deploy an index to an index endpoint can be found [here](https://cloud.google.com/vertex-ai/docs/vector-search/deploy-index-public#deploy-index).
-- **ProjectNumber** (string): GCP Project Number
-- **PublicDomainName** (string): Public Domain Name of the vector search index endpoint.
+- **ProjectNumber** (string): the numeric project ID, not the project ID string. Get it with
+  `gcloud projects describe $PROJECT_ID --format='value(projectNumber)'`, or read it from the Cloud
+  console project picker.
+- **PublicDomainName** (string): the `publicEndpointDomainName` of the deployed index endpoint. Get
+  it with
+  `gcloud ai index-endpoints describe $INDEX_ENDPOINT_ID --region=$LOCATION --format='value(publicEndpointDomainName)'`.
 - **Embedder** ([`ai.Embedder`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Embedder)): The embedding model to use. Must be a configured embedder in your Genkit project.
 - **NeighborsCount** (int): Number of neighbors to set in the vector search
 - **DocumentIndexer** (`func(ctx context.Context, docs []*ai.Document) ([]string, error)`): Document indexer used to insert data with unique IDs in Firestore. This can be a custom document indexer as well depending on the user's requirement.
 - **DocumentRetriever** (`func(ctx context.Context, neighbors []Neighbor, options any) ([]*ai.Document, error)`): Document retriever used to retrieve data with corresponding ID from Firestore. This can be a custom document retriever as well depending on the user's requirement.
+
+:::caution
+The plugin queries the public `findNeighbors` endpoint at
+`https://{PublicDomainName}/v1/projects/{ProjectNumber}/locations/{Location}/indexEndpoints/{IndexEndpointID}:findNeighbors`.
+`publicEndpointDomainName` exists only for endpoints deployed with public endpoint access, so index
+endpoints deployed behind VPC peering or Private Service Connect are not supported.
+:::
+
+### Genkit types
+
+These are the types the plugin actually defines.
+
+| Type | Fields |
+| --- | --- |
+| `vectorsearch.VertexAIVectorSearch` | `ProjectID string`, `Location string`. This is the plugin value you pass to `genkit.Init`. |
+| `vectorsearch.Config` | `IndexID string`. The only field, so a retriever definition is `vectorsearch.DefineRetriever(ctx, g, vectorsearch.Config{IndexID: id}, nil)`. |
+| `vectorsearch.IndexParams` | `Docs []*ai.Document`, `Embedder ai.Embedder`, `EmbedderOptions any`, `ProjectID string`, `Location string`, `IndexID string`. |
+| `vectorsearch.RetrieveParams` | `Content *ai.Document`, `Embedder ai.Embedder`, `EmbedderOptions any`, `AuthClient *google.Credentials`, `ProjectNumber string`, `Location string`, `IndexEndpointID string`, `PublicDomainName string`, `DeployedIndexID string`, `NeighborCount int`, `Restricts []Restrict`, `NumericRestricts []NumericRestrict`, `DocumentRetriever DocumentRetriever`. |
+
+The trailing `nil` in `DefineRetriever` is an `*ai.RetrieverOptions`. Pass one to set the retriever's
+label or declare what it supports; `nil` takes the defaults.
+
+`RetrieveParams.Location` is ignored: the plugin uses the `Location` you set on
+`VertexAIVectorSearch`.
 
 ## Usage
 
@@ -295,7 +346,7 @@ if err := vectorsearch.Index(ctx, g, vectorsearch.IndexParams{
 
 ### Retrieving Documents
 
-Use [`ai.Retrieve`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Retrieve) with the retriever you defined:
+Call `Retrieve` on the retriever you defined:
 
 ```go
 // Define the retriever for vector search.
@@ -327,5 +378,18 @@ if err != nil {
     return nil, err
 }
 ```
+
+#### Which Retrieve to call
+
+Three forms exist and the other vector store pages use a different one, so:
+
+- `retriever.Retrieve(ctx, req)` is the `ai.Retriever` interface method. It is used here because the
+  request carries a typed `Options` payload, `*vectorsearch.RetrieveParams`, that the vector search
+  retriever needs on every call.
+- `genkit.Retrieve(ctx, g, ai.WithRetriever(r), ai.WithTextDocs(q))` is the form the other pages use.
+  It is equivalent for retrievers that need no options. To pass options through it, add
+  `ai.WithConfig(&vectorsearch.RetrieveParams{...})`.
+- `ai.Retrieve(ctx, reg, opts...)` is the same call taking an `api.Registry` rather than a
+  `*genkit.Genkit`. Use it from plugin code that has no `*genkit.Genkit`.
 
 </Lang>

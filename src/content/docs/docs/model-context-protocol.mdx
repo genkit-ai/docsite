@@ -377,7 +377,13 @@ Once you start the inspector, you can list prompts and actions and test them out
 
 <Lang lang="go">
 
-The MCP (Model Context Protocol) plugin enables integration with MCP servers and allows you to expose Genkit tools as MCP servers. You can connect to external MCP servers to use their tools and prompts, manage multiple server connections, or turn your Genkit application into an MCP server.
+The MCP (Model Context Protocol) plugin connects Genkit to MCP servers and lets you publish your own Genkit tools and resources as an MCP server. Connect to one server with `GenkitMCPClient`, to several with `MCPHost`, or expose your own application with `NewMCPServer`.
+
+The full API reference is the package documentation: [pkg.go.dev/github.com/firebase/genkit/go/plugins/mcp](https://pkg.go.dev/github.com/firebase/genkit/go/plugins/mcp).
+
+:::note
+This page is about your application talking to MCP servers. The [Genkit MCP server](/docs/mcp-server) page documents a different thing: the MCP server that the Genkit CLI runs so an IDE assistant can list and run your flows.
+:::
 
 ## Prerequisites
 
@@ -389,37 +395,67 @@ This plugin requires MCP servers to be available. For testing and development, y
 
 ## Configuration
 
-### Single Server Connection
+### Connecting to a single server
 
-To connect to a single MCP server, import the `mcp` package and create a `GenkitMCPClient`:
-
-```go
-import "github.com/firebase/genkit/go/plugins/mcp"
-```
+To connect to a single MCP server, create a `GenkitMCPClient`. This program starts `mcp-server-time` as a child process, hands its tools to a model, and shuts the child down on exit:
 
 ```go
-ctx := context.Background()
-g := genkit.Init(ctx)
+package main
 
-client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
-    Name: "mcp-server-time",
-    Stdio: &mcp.StdioConfig{
-        Command: "uvx",
-        Args: []string{"mcp-server-time"},
-    },
-})
-if err != nil {
-    log.Fatal(err)
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/mcp"
+)
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+	client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
+		Name: "mcp-server-time",
+		Stdio: &mcp.StdioConfig{
+			Command: "uvx",
+			Args:    []string{"mcp-server-time"},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Disconnect()
+
+	tools, err := client.GetActiveTools(ctx, g)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// ai.WithTools takes ai.ToolRef, so widen the slice first.
+	refs := make([]ai.ToolRef, 0, len(tools))
+	for _, t := range tools {
+		refs = append(refs, t)
+	}
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithPrompt("What time is it in Tokyo?"),
+		ai.WithTools(refs...),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println(resp.Text())
 }
 ```
+
+Later examples reuse `ctx`, `g`, and `client` from this program and the same import block, plus `fmt`, `net/http`, `os`, `os/signal`, `strings`, `syscall`, and `time` from the standard library where the snippet uses them.
 
 ### Multiple server management
 
 To manage connections to multiple MCP servers, use `MCPHost`:
-
-```go
-import "github.com/firebase/genkit/go/plugins/mcp"
-```
 
 ```go
 host, err := mcp.NewMCPHost(g, mcp.MCPHostOptions{
@@ -452,68 +488,116 @@ if err != nil {
 }
 ```
 
-### Exposing as MCP server
-
-To expose your Genkit tools as an MCP server, create an `MCPServer`:
-
-```go
-import "github.com/firebase/genkit/go/plugins/mcp"
-```
-
-```go
-// Define your tools first
-addTool := genkit.DefineTool(g, "add", "Add two numbers",
-    func(ctx *ai.ToolContext, input struct{A, B int}) (int, error) {
-        return input.A + input.B, nil
-    })
-
-// Create MCP server
-server := mcp.NewMCPServer(g, mcp.MCPServerOptions{
-    Name:    "genkit-calculator",
-    Version: "1.0.0",
-})
-```
+:::caution
+`NewMCPHost` connects to every entry in `MCPServers` synchronously, but it does not report per-server failures. A server it cannot reach is logged at error level and skipped; the call still returns a host and a nil error, so `if err != nil` never fires for a server that is down. To detect a specific failure, construct the host with no `MCPServers` and call `host.Connect(ctx, g, name, config)` yourself, which does return the connection error.
+:::
 
 ## Usage
 
-### Using Tools from MCP Servers
+### Using tools from MCP servers
 
-Once connected to an MCP server, you can retrieve and use its tools:
+`GetActiveTools` returns every tool the connected server advertises:
 
 ```go
-// Get a specific tool
-echoTool, err := client.GetTool(ctx, g, "echo")
+tools, err := client.GetActiveTools(ctx, g)
 if err != nil {
     log.Fatal(err)
 }
+```
 
-// Use the tool in your workflow
-resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(myModel),
-    ai.WithPrompt("Use the echo tool to repeat this message"),
-    ai.WithTools(echoTool),
-)
+There is no single-tool getter on the client. To use one tool, select it from the returned slice. `host.GetActiveTools(ctx, g)` is the same call across every server the host is connected to.
+
+#### Tool, prompt, and resource names
+
+Every action a client registers is namespaced with the client's `Name` and an underscore: `<clientName>_<toolName>`. A client named `mcp-server-time` exposing `get_current_time` registers the tool as `mcp-server-time_get_current_time`. Prompts and resources use the same form. To attribute a tool back to its server, cut the name at the first underscore:
+
+```go
+for _, t := range tools {
+    server, _, _ := strings.Cut(t.Name(), "_")
+    fmt.Println(t.Name(), "from", server)
+}
+```
+
+:::caution
+If you leave `Name` empty, the client falls back to `unnamed`. Two unnamed clients that both expose a `search` tool collide, so always give each server a distinct `Name`.
+:::
+
+#### Tool results
+
+Unlike a Genkit-native tool, an MCP tool returns the MCP result object unchanged. The Genkit Go plugin performs no text or JSON coercion, so the tool's output is a `*mcp.CallToolResult` from `github.com/mark3labs/mcp-go/mcp`, with its `Content` array intact. A model consuming the tool sees that object. Your own code, if it runs a tool directly or inspects a tool response part, has to walk the array. `mcp.ExtractTextFromContent` pulls the text out of one content item:
+
+```go
+// mcpgo "github.com/mark3labs/mcp-go/mcp"
+result, ok := out.(*mcpgo.CallToolResult) // out is the tool's output value
+if !ok {
+    log.Fatalf("unexpected tool output type %T", out)
+}
+for _, c := range result.Content {
+    if text := mcp.ExtractTextFromContent(c); text != "" {
+        fmt.Println(text)
+    }
+}
+```
+
+:::note
+This differs from the JavaScript plugin, which namespaces with `/` and coerces MCP content into a plain Genkit value.
+:::
+
+A disabled or disconnected client returns `nil, nil` from `GetActiveTools`, so an empty list is not distinguishable from a server with no tools. Check `client.IsEnabled()` when the difference matters.
+
+### Using resources from MCP servers
+
+Resources are content a server offers by URI, which a model can pull in. `GetActiveResources` returns them as Genkit `ai.Resource` values, namespaced the same way as tools:
+
+```go
+resources, err := client.GetActiveResources(ctx)
 if err != nil {
     log.Fatal(err)
 }
+for _, r := range resources {
+    fmt.Println(r.Name())
+}
+```
+
+`host.GetActiveResources(ctx)` does the same across every connected server. Both static resources and URI templates are returned. Unlike `GetActiveTools`, these calls return an error when the client is disabled or not connected.
+
+You can define local resources with `genkit.DefineResource`, and an MCP server you run publishes them (see [Running as an MCP server](#running-as-an-mcp-server)):
+
+```go
+genkit.DefineResource(g, "handbook", &ai.ResourceOptions{
+    URI:         "file:///docs/handbook.md",
+    Description: "Company handbook",
+}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
+    b, err := os.ReadFile("/docs/handbook.md")
+    if err != nil {
+        return nil, err
+    }
+    return &ai.ResourceOutput{Content: []*ai.Part{ai.NewTextPart(string(b))}}, nil
+})
 ```
 
 ### Using prompts from MCP servers
 
-Retrieve and use prompts from connected MCP servers:
+`GetPrompt` fetches a prompt from a connected server, registers it on the Genkit instance under its namespaced name, and returns it as an `ai.Prompt`:
 
 ```go
-// Get a specific prompt
-simplePrompt, err := client.GetPrompt(ctx, g, "simple_prompt")
+func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promptName string, args map[string]string) (ai.Prompt, error)
+func (h *MCPHost) GetPrompt(ctx context.Context, g *genkit.Genkit, serverName, promptName string, args map[string]string) (ai.Prompt, error)
+```
+
+MCP prompt arguments are string-valued. Pass `nil` when the prompt takes none. The return value is an `ai.Prompt`, not prompt text, so run it with `Execute` rather than passing it to `ai.WithPrompt`:
+
+```go
+prompt, err := client.GetPrompt(ctx, g, "current_time", map[string]string{"timezone": "UTC"})
 if err != nil {
     log.Fatal(err)
 }
 
-// Use the prompt
-resp, err := genkit.Generate(ctx, g,
-    ai.WithModel(myModel),
-    ai.WithPrompt(simplePrompt),
-)
+resp, err := prompt.Execute(ctx, ai.WithModelName("googleai/gemini-flash-latest"))
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(resp.Text())
 ```
 
 ### Managing multiple servers
@@ -533,8 +617,8 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Disconnect a server completely
-err = host.Disconnect(ctx, "weather")
+// Restart one server's connection
+err = host.Reconnect(ctx, "weather")
 if err != nil {
     log.Fatal(err)
 }
@@ -550,52 +634,147 @@ prompt, err := host.GetPrompt(ctx, g, "mcp-server-time", "current_time", nil)
 if err != nil {
     log.Fatal(err)
 }
-```
 
-For individual client management (disable/enable without disconnecting), you would access the clients directly. The manager focuses on connection lifecycle management.
-
-### Running as MCP server
-
-To run your Genkit application as an MCP server:
-
-```go
-// Auto-expose all defined tools
-server := mcp.NewMCPServer(g, mcp.MCPServerOptions{
-    Name:    "genkit-calculator",
-    Version: "1.0.0",
-})
-
-
-// Start the MCP server
-log.Println("Starting MCP server...")
-if err := server.ServeStdio(); err != nil {
+// Disconnect a server completely, dropping it from the host
+err = host.Disconnect(ctx, "weather")
+if err != nil {
     log.Fatal(err)
 }
 ```
 
+`MCPHost` exposes no accessor for the clients it owns, so per-server control is limited to `Connect`, `Reconnect`, and `Disconnect`. If you need per-client control, build the clients yourself with `NewGenkitMCPClient` and keep the references. Note that `client.Disable()` closes the connection, which kills a stdio child, and `client.Reenable()` reconnects. There is no way to keep a connection open while suppressing its tools.
+
+### Lifecycle and production concerns
+
+Nothing is closed for you. Wire shutdown into your own signal handling:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{ /* ... */ })
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Disconnect() // closes the transport, which reaps the stdio child
+```
+
+For a host, call `host.Disconnect(ctx, name)` for each server you connected. There is no `CloseAll`, so track the names yourself. A stdio child that is never disconnected lives until your process exits.
+
+The rest of the operational picture:
+
+- **Timeouts.** Per-request calls (`GetActiveTools`, `GetActiveResources`, `GetPrompt`, and tool execution) take a context and honor it, so wrap them in `context.WithTimeout`. Connection setup does not: `NewGenkitMCPClient` takes no context and starts the transport with a background context, so a stdio child that never speaks blocks indefinitely. `StreamableHTTPConfig.Timeout` bounds individual HTTP requests; `StdioConfig` and `SSEConfig` have no timeout field.
+- **Concurrency.** Neither `MCPHost` nor `GenkitMCPClient` is safe for concurrent use. `Connect`, `Disconnect`, `Reconnect`, `Disable`, and `Reenable` mutate unguarded internal state. Do connection management at startup, or guard every host and client call with your own mutex. Concurrent reads while nothing is connecting or disconnecting are fine.
+- **Reconnection.** There is no automatic reconnect. Call `host.Reconnect(ctx, name)` or `client.Restart(ctx)` yourself.
+- **Failed handshakes.** If the MCP `initialize` exchange fails, the error is recorded on the connection rather than returned: `NewGenkitMCPClient` still gives you a client, and `GetActiveTools` then returns an empty list with no error. Call `GetActiveTools` right after construction to confirm the server really answered.
+
+### Running as an MCP server
+
+`mcp.NewMCPServer` returns a `GenkitMCPServer` that publishes every tool defined with `genkit.DefineTool` and every resource registered on the Genkit instance. It discovers them from the registry, so you do not list them anywhere:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/mcp"
+)
+
+type addInput struct {
+	A int `json:"a"`
+	B int `json:"b"`
+}
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+
+	// NewMCPServer picks up every tool already defined on g, so this value
+	// does not need to be referenced again.
+	genkit.DefineTool(g, "add", "Add two numbers",
+		func(ctx *ai.ToolContext, in addInput) (int, error) {
+			return in.A + in.B, nil
+		})
+
+	srv := mcp.NewMCPServer(g, mcp.MCPServerOptions{
+		Name:    "genkit-calculator",
+		Version: "1.0.0",
+	})
+
+	log.Println("starting MCP server on stdio")
+	if err := srv.ServeStdio(); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Flows are not published. To expose a flow over MCP, wrap it in a tool defined with `genkit.DefineTool`. The `list_flows` and `run_flow` tools described on the [Genkit MCP server](/docs/mcp-server) page belong to the Genkit CLI's own server, not to yours.
+
+:::caution
+In stdio mode the MCP server owns stdout: every byte written there must be protocol framing. The standard `log` package writes to stderr, so `log.Println` is safe, but `fmt.Println`, anything writing to `os.Stdout`, and any library that prints a startup banner will corrupt the stream. Keep all diagnostics on stderr.
+:::
+
+The server speaks stdio only. `Serve(transport)` ignores its argument and calls `ServeStdio` regardless, and `Close()` is currently a no-op. `GetServer()` returns the underlying `mcp-go` server, but it is nil until `ServeStdio` has run the server's setup pass, so it is not usable as an HTTP escape hatch. `ListRegisteredTools` and `ListRegisteredResources` are empty for the same reason until the server starts.
+
 ## Transport options
 
-### Stdio Transport
+`MCPClientOptions` has three transport fields. Set exactly one.
 
-You can use either Stdio or SSE
+| Field | Use |
+| --- | --- |
+| `Stdio *StdioConfig` | Start a local server process and speak over its stdin and stdout. |
+| `StreamableHTTP *StreamableHTTPConfig` | Connect to a remote server over Streamable HTTP. This is the current HTTP transport in the MCP specification. |
+| `SSE *SSEConfig` | Connect to a remote server over HTTP with server-sent events. This is the legacy HTTP transport; prefer Streamable HTTP for new servers. |
+
+### Stdio
 
 ```go
 Stdio: &mcp.StdioConfig{
     Command: "uvx",
-    Args: []string{"mcp-server-time"},
-    Env: []string{"DEBUG=1"},
+    Args:    []string{"mcp-server-time"},
+    Env:     []string{"DEBUG=1"},
 }
 ```
 
+### Streamable HTTP
+
+`Headers` are sent on every request, which is how you reach an authenticated server:
+
 ```go
-SSE: &mcp.SSEConfig{
-    BaseURL: "http://localhost:3000/sse",
-}
+client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
+    Name: "docs-server",
+    StreamableHTTP: &mcp.StreamableHTTPConfig{
+        BaseURL: "https://mcp.example.com/mcp",
+        Headers: map[string]string{"Authorization": "Bearer " + os.Getenv("MCP_TOKEN")},
+        Timeout: 30 * time.Second,
+    },
+})
+```
+
+### SSE
+
+`SSEConfig` takes the same headers but has no `Timeout` field. Set the timeout on a custom `HTTPClient`, which is also where custom TLS or instrumentation goes:
+
+```go
+client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
+    Name: "legacy-server",
+    SSE: &mcp.SSEConfig{
+        BaseURL:    "https://mcp.example.com/sse",
+        Headers:    map[string]string{"Authorization": "Bearer " + os.Getenv("MCP_TOKEN")},
+        HTTPClient: &http.Client{Timeout: 30 * time.Second},
+    },
+})
 ```
 
 ## Testing
 
-### Testing Your MCP Server
+### Testing your MCP server
 
 To test your Genkit application as an MCP server:
 
@@ -613,11 +792,12 @@ npx @modelcontextprotocol/inspector go run main.go
 
 ```go
 type MCPClientOptions struct {
-    Name     string          // Server identifier
-    Version  string          // Version number (defaults to "1.0.0")
-    Disabled bool            // Disabled flag to temporarily disable this client
-    Stdio    *StdioConfig    // Stdio transport config
-    SSE      *SSEConfig      // SSE transport config
+    Name           string                // Client name; also the namespace prefix (defaults to "unnamed")
+    Version        string                // Version number (defaults to "1.0.0")
+    Disabled       bool                  // Temporarily disable this client
+    Stdio          *StdioConfig          // Stdio transport config
+    SSE            *SSEConfig            // SSE transport config (legacy HTTP transport)
+    StreamableHTTP *StreamableHTTPConfig // Streamable HTTP transport config
 }
 ```
 
@@ -626,10 +806,37 @@ type MCPClientOptions struct {
 ```go
 type StdioConfig struct {
     Command string   // Command to run
+    Env     []string // Extra environment variables, in KEY=VALUE form
     Args    []string // Command arguments
-    Env     []string // Environment variables
 }
 ```
+
+`Env` is appended to the parent process environment (`os.Environ()`), not a replacement for it, so `PATH` and everything else is inherited and `uvx` resolves. A duplicate key overrides the inherited value.
+
+### SSEConfig
+
+```go
+type SSEConfig struct {
+    BaseURL    string            // SSE endpoint, for example https://mcp.example.com/sse
+    Headers    map[string]string // Sent on every request; use for Authorization or API keys
+    HTTPClient *http.Client      // Optional; set the timeout, TLS config, or instrumentation here
+}
+```
+
+`SSEConfig` has no `Timeout` field. Set it on `HTTPClient`.
+
+### StreamableHTTPConfig
+
+```go
+type StreamableHTTPConfig struct {
+    BaseURL    string            // Endpoint, for example https://mcp.example.com/mcp
+    Headers    map[string]string // Sent on every request; use for Authorization or API keys
+    HTTPClient *http.Client      // Currently ignored by this transport; use Timeout instead
+    Timeout    time.Duration     // Per-request HTTP timeout
+}
+```
+
+The Streamable HTTP transport applies `Headers` and `Timeout` only. `HTTPClient` is accepted but not wired up, so custom TLS or instrumentation needs the SSE transport today.
 
 ### MCPServerConfig
 

@@ -5,7 +5,68 @@ supportedLanguages:
   - go
 ---
 
-The AlloyDB plugin provides provides the retriever implementation to search a [AlloyDB](https://cloud.google.com/alloydb/docs) database using the [pgvector](https://github.com/pgvector/pgvector) extension.
+The AlloyDB plugin provides the retriever implementation to search an [AlloyDB](https://cloud.google.com/alloydb/docs) database using the [pgvector](https://github.com/pgvector/pgvector) extension.
+
+The examples on this page use these imports:
+
+```go
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/alloydb"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+```
+
+## Prerequisites
+
+### Google Cloud access
+
+The account or service account that runs your application needs:
+
+- `roles/alloydb.client` to connect through the AlloyDB connector.
+- `roles/serviceusage.serviceUsageConsumer` on the project.
+- The AlloyDB API enabled: `gcloud services enable alloydb.googleapis.com`.
+
+`alloydb.WithIAMAccountEmail` uses IAM database authentication, which also requires the account to
+exist as a database user on the cluster.
+
+### The pgvector extension and the table
+
+The plugin reads and writes an existing table. `PostgresEngine.InitVectorstoreTable` creates it, and
+runs `CREATE EXTENSION IF NOT EXISTS vector` first. Once you have a `pEngine` (step 2 of
+[Configuration](#configuration)), call it once, before `genkit.Init`:
+
+```go
+err = pEngine.InitVectorstoreTable(ctx, alloydb.VectorstoreTableOptions{
+	TableName:          "documents",
+	SchemaName:         "public",
+	VectorSize:         768,
+	ContentColumnName:  "content",
+	EmbeddingColumn:    "embedding",
+	IDColumn:           alloydb.Column{Name: "custom_id", DataType: "TEXT"},
+	MetadataColumns:    []alloydb.Column{{Name: "source", DataType: "TEXT", Nullable: true}},
+	MetadataJSONColumn: "custom_metadata",
+	StoreMetadata:      true,
+})
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+That produces an id column, a `content TEXT NOT NULL` column, an `embedding vector(768) NOT NULL`
+column, one column per entry in `MetadataColumns`, and a JSON column when `StoreMetadata` is true.
+
+`VectorSize` must equal the output dimension of the embedder you configure later; 768 is the size
+`text-embedding-004` produces. A mismatch is not caught until the first write fails in Postgres.
+
+:::caution
+`OverwriteExisting: true` drops the table before recreating it. Leave it false against any database
+that holds data you want to keep.
+:::
 
 ## Configuration
 
@@ -37,12 +98,12 @@ pEngine, err := alloydb.NewPostgresEngine(ctx,
 	alloydb.WithIAMAccountEmail("mail@company.com"))
 ```
 
-- Using custom pool
+- Using custom pool (add `github.com/jackc/pgx/v5/pgxpool` to the imports)
 
 ```go
 pool, err := pgxpool.New(ctx, "add_your_connection_string")
 if err != nil {
-	return err
+	log.Fatal(err)
 }
 
 pEngine, err := alloydb.NewPostgresEngine(ctx,
@@ -61,81 +122,122 @@ postgres := &alloydb.Postgres{
 g := genkit.Init(ctx, genkit.WithPlugins(postgres))
 ```
 
+:::danger
+`alloydb.Postgres` keeps its engine in an unexported field and the package exports no constructor or
+setter for it, so this snippet does not compile outside the plugin's own package and there is no
+spelling that does. Until the field is exported, use
+[Cloud SQL for PostgreSQL](/docs/integrations/cloud-sql-postgresql), whose `postgresql.Postgres`
+exposes `Engine *PostgresEngine` and is otherwise identical.
+:::
+
 ## Usage
 
-To add documents to a AlloyDB index, first create an index definition that specifies the features of the table:
+To add documents to an AlloyDB index, first create a document store that specifies the features of
+the table:
 
 ```go
+embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")
+
 cfg := &alloydb.Config{
-	TableName:             "documents",
-	SchemaName:            "public",
-	ContentColumn:         "content",
-	EmbeddingColumn:       "embedding",
-	MetadataColumns:       []string{"source", "category"},
-	IDColumn:              "custom_id",
-	MetadataJSONColumn:    "custom_metadata",
-	Embedder:              embedder,
-	EmbedderOptions:       nil,
+	TableName:          "documents",
+	SchemaName:         "public",
+	ContentColumn:      "content",
+	EmbeddingColumn:    "embedding",
+	MetadataColumns:    []string{"source", "category"},
+	IDColumn:           "custom_id",
+	MetadataJSONColumn: "custom_metadata",
+	Embedder:           embedder,
+	EmbedderOptions:    nil,
 }
 
-doc, retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
+docStore, retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
-  return err
+	log.Fatal(err)
 }
 
 docs := []*ai.Document{{
-        Content: []*ai.Part{{
-        Kind:        ai.PartText,
-        ContentType: "text/plain",
-        Text:        "The product features include...",
-        }},
-      Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
-  }}
+	Content: []*ai.Part{{
+		Kind:        ai.PartText,
+		ContentType: "text/plain",
+		Text:        "The product features include...",
+	}},
+	Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+}}
 
-if err := doc.Index(ctx, docs); err != nil {
-    return err
+if err := docStore.Index(ctx, docs); err != nil {
+	log.Fatal(err)
 }
 ```
+
+`DefineRetriever` returns an `*alloydb.DocStore` as its first value, the handle used for writes. It
+has two methods: `Index(ctx, docs []*ai.Document) error` and
+`Retrieve(ctx, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error)`. Its second value is the
+`ai.Retriever` registered with Genkit, which is what you pass to `genkit.Retrieve`. Call
+`DefineRetriever` once per table and keep both values.
 
 Similarly, to retrieve documents from an index, use the retriever
 method:
 
 ```go
-doc,  retriever, err := alloydb.DefineRetriever(ctx, g, postgres, cfg)
-if err != nil {
-  return err
-}
-
 d2 := ai.DocumentFromText("The product features include...", nil)
 
 resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
-    Query: d2,
-    Options: &alloydb.RetrieverOptions{
-        K: 5,
-        Filter: "source='website' AND category='product-docs'",
-    },
+	Query: d2,
+	Options: &alloydb.RetrieverOptions{
+		K:      5,
+		Filter: "source = 'website' AND category = 'product-docs'",
+	},
 })
-
 if err != nil {
-    return err
+	log.Fatal(err)
 }
 ```
 
-It's also possible to use the Retrieve method from genkit
+It's also possible to use the Retrieve method from genkit:
 
 ```go
 d2 := ai.DocumentFromText("The product features include...", nil)
 
 retrieverOptions := &alloydb.RetrieverOptions{
 	K:      5,
-	Filter: "source='website' AND category='product-docs'",
+	Filter: "source = 'website' AND category = 'product-docs'",
 }
 
 resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(retriever), ai.WithDocs(d2), ai.WithConfig(retrieverOptions))
 if err != nil {
-    return err
+	log.Fatal(err)
 }
 ```
+
+### Retriever options
+
+`alloydb.RetrieverOptions` has three fields:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `Filter` | `any` | `nil` | Predicate for the query's `WHERE` clause. |
+| `K` | `int` | 4 | Number of documents to return. |
+| `DistanceStrategy` | `DistanceStrategy` | `alloydb.CosineDistance{}` | Vector similarity operator. The others are `alloydb.Euclidean{}` and `alloydb.InnerProduct{}`. |
+
+Any predicate legal in a `WHERE` clause against your table is accepted, including JSON operators on
+`MetadataJSONColumn`, for example `custom_metadata->>'tenant' = 'acme'`.
+
+:::danger
+`Filter` is formatted straight into the `WHERE` clause with `fmt.Sprintf`. It is not parameterised.
+Never build this value from untrusted input. To filter on a user-supplied value, validate it against
+an allowlist first, or map the user's choice onto a fixed predicate you wrote yourself.
+:::
+
+## Production notes
+
+`PostgresEngine` wraps a `*pgxpool.Pool`, so the engine, the `*DocStore` and the `ai.Retriever` it
+produces are safe to share across request goroutines. Build them once at startup, not per request.
+
+- Call `defer pEngine.Close()` on shutdown. `Close` closes the pool unconditionally, including a pool
+  you supplied with `WithPool`, so do not share that pool with code that outlives the engine.
+- To control pool sizing and connection limits, build the pool yourself from a `pgxpool.Config` and
+  pass it in with `WithPool`. `pEngine.GetClient()` returns the pool if you need to reach it later.
+- Per-request `context` deadlines pass through to pgx. Cancelling a request context aborts its query.
 
 See the [Retrieval-augmented generation](/docs/rag) page for a general
 discussion on using retrievers for RAG.

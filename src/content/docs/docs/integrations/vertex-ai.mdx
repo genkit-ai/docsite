@@ -650,6 +650,23 @@ Vector Search has both ingestion and hosting costs. See [Vertex AI pricing](http
 
 <Lang lang="go">
 
+The examples on this page use these imports:
+
+```go
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"google.golang.org/genai"
+)
+```
+
+Vertex AI and the Gemini API are served by the same `googlegenai` package; the
+plugin value you pass to `genkit.Init` decides which backend you talk to.
+
 The Google Generative AI plugin provides access to Google's Gemini models through Vertex AI.
 
 ## Configuration
@@ -663,6 +680,28 @@ import "github.com/firebase/genkit/go/plugins/googlegenai"
 ```go
 g := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.VertexAI{}))
 ```
+
+### Prerequisites
+
+Before the first request:
+
+1. Create or select a Google Cloud project, and make sure billing is enabled on it.
+
+2. Enable the Vertex AI API on that project:
+
+   ```shell
+   gcloud services enable aiplatform.googleapis.com --project=$PROJECT_ID
+   ```
+
+3. Grant the Vertex AI User role (`roles/aiplatform.user`) to the principal your app runs as.
+
+4. For local development, get Application Default Credentials:
+
+   ```shell
+   gcloud auth application-default login
+   ```
+
+A missing step 2 surfaces at request time as an HTTP 403 with reason `SERVICE_DISABLED`, not as a startup error.
 
 ### Google Cloud credentials
 
@@ -700,7 +739,24 @@ gcloud auth application-default login
 
 2. In addition, make sure the account is granted the Vertex AI User IAM role (`roles/aiplatform.user`). See the Vertex AI [access control](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/access-control) docs.
 
-To use credentials other than the detected ones, set `Credentials` to an `*auth.Credentials` from `cloud.google.com/go/auth`.
+On Cloud Run, GKE, or Compute Engine the attached service account is already detected, so leave `Credentials` unset. Set it only to load a key file or to impersonate another service account. It takes an `*auth.Credentials` from `cloud.google.com/go/auth`, which you build with `cloud.google.com/go/auth/credentials`:
+
+```go
+import "cloud.google.com/go/auth/credentials"
+
+creds, err := credentials.DetectDefault(&credentials.DetectOptions{
+	Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+g := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.VertexAI{
+	ProjectID:   "my-project-id",
+	Location:    "us-central1",
+	Credentials: creds,
+}))
+```
 
 ### Express Mode
 
@@ -934,7 +990,11 @@ These behave exactly as they do on the Google AI plugin, so they are documented 
 
 ## Model Garden
 
-Third-party models hosted in Vertex AI Model Garden come from the `vertexai/modelgarden` package, which ships one plugin per family: `modelgarden.Anthropic` for Claude, `modelgarden.Llama` for Meta Llama, and `modelgarden.Mistral` for Mistral and Codestral. Each takes a `ProjectID` and `Location`, falling back to the same environment variables as the main plugin, and registers its models under the `vertexai/` prefix.
+Third-party models hosted in Vertex AI Model Garden come from a separate package, which ships one plugin per family: `modelgarden.Anthropic` for Claude, `modelgarden.Llama` for Meta Llama, and `modelgarden.Mistral` for Mistral and Codestral. Each takes a `ProjectID` and `Location`, falling back to the same environment variables as the main plugin, and registers its models under the `vertexai/` prefix.
+
+```go
+import "github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
+```
 
 ```go
 g := genkit.Init(ctx, genkit.WithPlugins(
@@ -947,11 +1007,31 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-Unlike the Gemini models, Model Garden models cannot be listed through the SDK when authenticating with Google credentials, so each plugin registers a fixed catalog at initialization. See the [`modelgarden`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden), [`modelgarden-llama`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden-llama), and [`modelgarden-mistral`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden-mistral) samples.
+Unlike the Gemini models, Model Garden models cannot be listed through the SDK when authenticating with Google credentials, so each plugin registers a fixed catalog at initialization. An ID outside its family's catalog does not resolve.
+
+**`modelgarden.Anthropic`**
+
+`claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5`, `claude-opus-4-1`, `claude-opus-4`, `claude-sonnet-4-6`, `claude-sonnet-4-5`, `claude-sonnet-4`, `claude-haiku-4-5`, `claude-3-7-sonnet`, `claude-3-5-sonnet-v2`, `claude-3-5-sonnet`, `claude-3-5-haiku`, `claude-3-sonnet`, `claude-3-haiku`, `claude-3-opus`.
+
+Date-pinned spellings of the older models (`claude-opus-4@20250514`, `claude-sonnet-4@20250514`, `claude-3-7-sonnet@20250219`, `claude-3-5-sonnet-v2@20241022`, `claude-3-5-sonnet@20240620`, `claude-3-sonnet@20240229`, `claude-3-haiku@20240307`, `claude-3-opus@20240229`) still resolve, and are marked deprecated. Keys are Vertex AI publisher model IDs, not Anthropic API date-versioned IDs.
+
+**`modelgarden.Llama`**
+
+`meta/llama-4-maverick-17b-128e-instruct-maas`, `meta/llama-4-scout-17b-16e-instruct-maas`, `meta/llama-3.3-70b-instruct-maas`.
+
+**`modelgarden.Mistral`**
+
+`mistral-medium-3`, `mistral-small-2503`, `codestral-2`. The bare publisher ID is the key; `mistralai/`-prefixed forms are accepted too.
+
+:::caution
+A Model Garden model must be enabled for your project in the [Vertex AI Model Garden console](https://console.cloud.google.com/vertex-ai/model-garden) before a request to it succeeds.
+:::
+
+See the [`modelgarden`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden), [`modelgarden-llama`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden-llama), and [`modelgarden-mistral`](https://github.com/genkit-ai/genkit/tree/main/go/samples/modelgarden-mistral) samples.
 
 ## Vector Search
 
-Vertex AI Vector Search is a retriever plugin in the `vertexai/vectorsearch` package, with document storage backed by either BigQuery or Cloud Firestore. See [Vector Search with BigQuery](/docs/integrations/vectorsearch-bigquery) and [Vector Search with Firestore](/docs/integrations/vectorsearch-firestore) for the setup, and the [`vectorsearch-biqguery`](https://github.com/genkit-ai/genkit/tree/main/go/samples/vectorsearch-biqguery) and [`vectorsearch-firestore`](https://github.com/genkit-ai/genkit/tree/main/go/samples/vectorsearch-firestore) samples for working programs.
+Vertex AI Vector Search is a retriever plugin in `github.com/firebase/genkit/go/plugins/vertexai/vectorsearch`, with document storage backed by either BigQuery or Cloud Firestore. See [Vector Search with BigQuery](/docs/integrations/vectorsearch-bigquery) and [Vector Search with Firestore](/docs/integrations/vectorsearch-firestore) for the setup, and the [`vectorsearch-biqguery`](https://github.com/genkit-ai/genkit/tree/main/go/samples/vectorsearch-biqguery) and [`vectorsearch-firestore`](https://github.com/genkit-ai/genkit/tree/main/go/samples/vectorsearch-firestore) samples for working programs.
 
 ## Next steps
 
