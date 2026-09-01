@@ -129,6 +129,12 @@ Choose background execution when the caller should receive a pending snapshot im
 
 ```go
 import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
@@ -198,6 +204,8 @@ A bare detach does not start an extra turn. To ride a final input on the detach,
 
 The client stream is suppressed the moment the detach directive is read, so nothing the background turn produces afterwards reaches `conn.Receive()`. Session-level side effects still apply: an artifact sent through `Responder.SendArtifact` still lands in the final snapshot's state, so agent code does not have to branch on detach.
 
+The invocation context outlives the transport connection. Before a detach lands, a client disconnect cancels the work. After it lands, the context stays live and the turn keeps running; only `Agent.Abort` or the process exiting cancels it.
+
 ## Wait for completion
 
 Read a snapshot by ID with `agent.GetSnapshot`, or a session's most recent one with `agent.GetLatestSnapshot(ctx, sessionID)`.
@@ -211,24 +219,53 @@ if err != nil {
 fmt.Println(snap.Status)
 ```
 
-When the store implements `aix.SnapshotSubscriber`, subscribe to status changes instead of polling, then read the final snapshot.
+Subscribe to status changes instead of polling when you want the terminal status as soon as it lands.
 
 ```go
-subscriber := agent.Store().(aix.SnapshotSubscriber)
-statusCh := subscriber.OnSnapshotStatusChange(ctx, snapshotID)
+func waitForTerminal(ctx context.Context, agent *aix.Agent[ReportState], snapshotID string) (*aix.SessionSnapshot[ReportState], error) {
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-for status := range statusCh {
-	if status != aix.SnapshotStatusPending {
-		break
+	if subscriber, ok := agent.Store().(aix.SnapshotSubscriber); ok {
+		for status := range subscriber.OnSnapshotStatusChange(subCtx, snapshotID) {
+			if status != aix.SnapshotStatusPending {
+				break
+			}
+		}
+	} else {
+		for {
+			snap, err := agent.GetSnapshot(subCtx, snapshotID)
+			if err != nil {
+				return nil, fmt.Errorf("poll snapshot: %w", err)
+			}
+			if snap.Status != aix.SnapshotStatusPending {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 	}
-}
 
-snap, err := agent.GetSnapshot(ctx, snapshotID)
+	return agent.GetSnapshot(ctx, snapshotID)
+}
 ```
 
-If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapshotID)` until `Status` leaves `pending`. Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. Only a completed snapshot is resumable.
+The channel closes when the subscription context is cancelled, so cancel it when you stop reading. Leaving the loop without cancelling leaves the producer running. If the snapshot does not exist when you subscribe, the channel closes without yielding a value.
+
+Every store that supports detach implements `aix.SnapshotSubscriber`, since that subscription is how an abort reaches the background work. The comma-ok branch above therefore only matters for code that also runs against a non-detaching store. Polling `agent.GetSnapshot` until `Status` leaves `pending` is still valid, and is the simpler option when you do not want a subscription goroutine.
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. Only a completed snapshot is resumable. `Status` is the persistence lifecycle, not the outcome: a turn that ended on an interrupt is `completed` and resumable, and you tell it apart by reading `snap.FinishReason == aix.AgentFinishReasonInterrupted`.
 
 The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives this from its CLI: `/detach` leaves a turn running, and returning to the agent later waits on the pending snapshot.
+
+## Lifetime and restarts
+
+Detached work runs in the process that started it. It is not durable execution: a restart, crash, or scale-in orphans every pending snapshot, and no other instance can adopt one.
+
+A running detached turn refreshes its pending snapshot's heartbeat every 30 seconds. A pending snapshot whose heartbeat has not advanced for 60 seconds is reported as `expired` on the next read. `expired` is terminal and not resumable, so treat expiry as a lost run and restart the work from the last completed snapshot.
+
+On `SIGTERM`, either wait for pending snapshots to reach a terminal status before exiting, or call `Agent.Abort` on them. Callers then see `aborted` immediately instead of waiting 60 seconds for expiry.
+
+Detach and durable streaming solve different problems. Detach keeps the work running and gives you a snapshot ID to poll, but it does not replay the stream. [Durable streaming](/docs/durable-streaming) replays the chunk transcript by `streamId`, but it does not keep work alive past the request. `genkitx.Route.Handler` accepts `genkit.HandlerOption`s, so you can apply both to the same agent route.
 
 ## Abort work
 

@@ -438,6 +438,13 @@ askQuestion := genkit.DefineTool(g, "askQuestion",
 )
 ```
 
+`ai.InterruptWith(tc, meta)` is a typed wrapper over
+`tc.Interrupt(&ai.InterruptOptions{Metadata: ...})`: it JSON-marshals `meta`
+into the same metadata map and calls the same method, so both halt the loop
+identically. Prefer `ai.InterruptWith` with a struct, because that is what
+`ai.InterruptAs[T]` reads back. Reach for `tc.Interrupt` only when you already
+hold a `map[string]any`.
+
 ### Use interrupts
 
 Interrupts are passed into the `WithTools()` option when generating content, just like
@@ -471,34 +478,67 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 Responding to an interrupt is done using the tool's `RespondWith()` method and
 `ai.WithToolResponses()` on a subsequent `Generate` call, passing in the existing
 message history. `RespondWith()` answers the paused call outright, so the tool
-function never runs again:
+function never runs again.
+
+A single turn can raise interrupts from more than one tool, so dispatch on the
+tool name rather than assuming which tool paused. This example adds a second
+interrupting tool beside `askQuestion`:
 
 ```go
+type BudgetInput struct {
+	Dollars float64 `json:"dollars"`
+}
+
+// A second tool that pauses, so the loop below has something to dispatch on.
+confirmBudget := genkit.DefineTool(g, "confirmBudget",
+	"use this to have the user approve a spend before committing to it",
+	func(tc *ai.ToolContext, input BudgetInput) (bool, error) {
+		return false, ai.InterruptWith(tc, InterruptMetadata{Reason: "confirm_budget"})
+	},
+)
+
+const maxRounds = 5
+
 resp, err := genkit.Generate(ctx, g,
 	ai.WithPrompt("Help me plan a backyard BBQ."),
 	ai.WithSystem("Ask clarifying questions until you have a complete solution."),
-	ai.WithTools(askQuestion),
+	ai.WithTools(askQuestion, confirmBudget),
 )
 if err != nil {
 	return err
 }
 
-for resp.FinishReason == ai.FinishReasonInterrupted {
+for round := 0; round < maxRounds && resp.FinishReason == ai.FinishReasonInterrupted; round++ {
 	var responses []*ai.Part
 
 	for _, interrupt := range resp.Interrupts() {
-		// RespondWith is typed against the tool's output, so the answer
-		// cannot drift from what the tool would have returned.
-		part, err := askQuestion.RespondWith(interrupt, getUserAnswer(interrupt))
-		if err != nil {
-			return err
+		// Every interrupt in this turn needs exactly one response or restart
+		// part, so dispatch on the tool that raised it.
+		switch interrupt.ToolRequest.Name {
+		case askQuestion.Name():
+			// RespondWith is typed against the tool's output, so the answer
+			// cannot drift from what the tool would have returned.
+			part, err := askQuestion.RespondWith(interrupt, getUserAnswer(interrupt))
+			if err != nil {
+				return err
+			}
+			responses = append(responses, part)
+
+		case confirmBudget.Name():
+			part, err := confirmBudget.RespondWith(interrupt, userApproves(interrupt))
+			if err != nil {
+				return err
+			}
+			responses = append(responses, part)
+
+		default:
+			return fmt.Errorf("no handler for interrupt from tool %q", interrupt.ToolRequest.Name)
 		}
-		responses = append(responses, part)
 	}
 
 	resp, err = genkit.Generate(ctx, g,
 		ai.WithMessages(resp.History()...),
-		ai.WithTools(askQuestion),
+		ai.WithTools(askQuestion, confirmBudget),
 		ai.WithToolResponses(responses...),
 	)
 	if err != nil {
@@ -508,6 +548,114 @@ for resp.FinishReason == ai.FinishReasonInterrupted {
 
 fmt.Println(resp.Text())
 ```
+
+`RespondWith()` and `RestartWith()` check that the part belongs to the tool you
+called them on. Handing `askQuestion` an interrupt raised by `confirmBudget`
+returns an `INVALID_ARGUMENT` error reading
+`tool request is for "confirmBudget", not "askQuestion"`, so a mismatched branch
+fails loudly rather than producing a wrong answer.
+
+:::caution[Answer every interrupt, exactly once]
+Every interrupt in a turn must get exactly one response or restart part.
+
+- Answer some but not all, and the next `Generate` fails with
+  `ai.ErrUnresolvedToolRequest`.
+- Answer none of them, and the resume is empty. Genkit treats an empty resume
+  as no resume at all, re-sends the identical history, and a
+  `for resp.FinishReason == ai.FinishReasonInterrupted` loop never terminates,
+  burning tokens on every pass. That is why the loop above has a round cap and
+  why the `default` branch returns an error instead of skipping the part.
+:::
+
+### Out-of-band approval
+
+The examples above collect the answer inline, but the point of an interrupt is
+usually that the answer arrives later, from a different process. `ai.Message`
+and `ai.Part` are plain structs with JSON tags, so a paused run round-trips
+through `json.Marshal`. Store `resp.History()` and `resp.Interrupts()` under an
+approval ID, return the ID to the caller, and rebuild the call when the decision
+comes back. `askQuestion` is the tool from above, held in a package-level
+`*ai.ToolAction[QuestionInput, string]` so both handlers reach the same one:
+
+```go
+// Store is whatever you already run: Firestore, Redis, a table.
+type Store interface {
+	Put(ctx context.Context, key string, blob []byte) error
+	Get(ctx context.Context, key string) ([]byte, error)
+}
+
+// A paused run is ordinary JSON.
+type pausedRun struct {
+	History    []*ai.Message `json:"history"`
+	Interrupts []*ai.Part    `json:"interrupts"`
+}
+
+// Park the run when generation stops on an interrupt, then hand the caller
+// the approval ID and return.
+func park(ctx context.Context, store Store, approvalID string, resp *ai.ModelResponse) error {
+	blob, err := json.Marshal(pausedRun{
+		History:    resp.History(),
+		Interrupts: resp.Interrupts(),
+	})
+	if err != nil {
+		return err
+	}
+	return store.Put(ctx, approvalID, blob)
+}
+
+// Later, on a different request and possibly in a different process.
+func resume(ctx context.Context, g *genkit.Genkit, store Store, approvalID, answer string) (*ai.ModelResponse, error) {
+	blob, err := store.Get(ctx, approvalID)
+	if err != nil {
+		return nil, err
+	}
+	var run pausedRun
+	if err := json.Unmarshal(blob, &run); err != nil {
+		return nil, err
+	}
+
+	var responses []*ai.Part
+	for _, interrupt := range run.Interrupts {
+		if interrupt.ToolRequest.Name != askQuestion.Name() {
+			return nil, fmt.Errorf("no handler for interrupt from tool %q", interrupt.ToolRequest.Name)
+		}
+		part, err := askQuestion.RespondWith(interrupt, answer)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, part)
+	}
+
+	return genkit.Generate(ctx, g,
+		ai.WithMessages(run.History...),
+		// Every tool named by a pending request has to be on this call, or
+		// Generate fails with ai.ErrToolNotFound.
+		ai.WithTools(askQuestion),
+		ai.WithToolResponses(responses...),
+	)
+}
+```
+
+`ai.WithToolRestarts()` rehydrates the same way when the tool has to run again
+rather than be answered outright.
+
+[Agent interrupts](/docs/agents/interrupts) do this persistence for you: the
+session store holds the paused history, so the resuming request carries only the
+decision.
+
+#### Resuming from an untrusted caller
+
+`Generate` matches each restart or respond part to a pending tool request by
+tool name and ref only. It does not check that a restarted input matches what
+the model originally asked for, and a part that matches nothing pending is
+silently dropped rather than rejected. Respond output is validated against the
+tool's output schema and nothing more.
+
+So if the resume payload arrives over the network, re-read the paused history
+from your own store and verify every part against it before calling `Generate`.
+The agent runtime does exactly this with
+`aix.ValidateResumeAgainstHistory(resume, history)`, described in
+[Agent interrupts](/docs/agents/interrupts).
 
 ## Tools with restartable interrupts
 
@@ -602,13 +750,16 @@ if err != nil {
 	return err
 }
 
-for resp.FinishReason == ai.FinishReasonInterrupted {
+for round := 0; round < maxRounds && resp.FinishReason == ai.FinishReasonInterrupted; round++ {
 	var restarts, responses []*ai.Part
 
 	for _, interrupt := range resp.Interrupts() {
 		meta, ok := ai.InterruptAs[TransferInterrupt](interrupt)
 		if !ok {
-			continue
+			// Skipping the part here would leave the interrupt unanswered,
+			// so fail instead.
+			return fmt.Errorf("interrupt from %q carried no TransferInterrupt metadata",
+				interrupt.ToolRequest.Name)
 		}
 
 		switch meta.Reason {
@@ -644,6 +795,17 @@ for resp.FinishReason == ai.FinishReasonInterrupted {
 				}
 				responses = append(responses, part)
 			}
+
+		default:
+			// An unrecognized reason still has to be answered.
+			part, err := transferMoney.RespondWith(interrupt, TransferOutput{
+				Status:  "cancelled",
+				Message: fmt.Sprintf("Unhandled interrupt reason %q.", meta.Reason),
+			})
+			if err != nil {
+				return err
+			}
+			responses = append(responses, part)
 		}
 	}
 
@@ -660,6 +822,14 @@ for resp.FinishReason == ai.FinishReasonInterrupted {
 
 fmt.Println(resp.Text())
 ```
+
+The type parameter on `ai.WithResumedMetadata[TransferInput]` is the tool's
+input type, and you have to write it out because the option's only argument is a
+`map[string]any`, which gives the compiler nothing to infer from. Its sibling
+`ai.WithNewInput` is generic on the same parameter but infers it from the value
+you pass. Getting it wrong is a compile error rather than a runtime surprise:
+`RestartWith` on a `*ai.ToolAction[In, Out]` accepts only an
+`ai.RestartWithOption[In]`.
 
 ### Access original input after replacement
 

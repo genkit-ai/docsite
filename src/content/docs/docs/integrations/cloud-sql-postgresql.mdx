@@ -277,15 +277,75 @@ The Postgresql plugin provides the retriever implementation to search a [Cloud S
 
 Google Cloud SQL for PostgreSQL with the pgvector extension provides a fully managed PostgreSQL database with vector search capabilities. It combines the reliability and scalability of Google Cloud with the power of PostgreSQL and pgvector, making it ideal for production AI applications that need managed vector storage with enterprise-grade features.
 
+The examples on this page use these imports:
+
+```go
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/postgresql"
+)
+```
+
+## Prerequisites
+
+### Google Cloud access
+
+The account or service account that runs your application needs:
+
+- `roles/cloudsql.client` to connect through the Cloud SQL connector.
+- `roles/cloudsql.instanceUser` in addition, when you connect with
+  `postgresql.WithIAMAccountEmail` instead of a password.
+- The Cloud SQL Admin API enabled on the project:
+  `gcloud services enable sqladmin.googleapis.com`.
+
+`postgresql.WithCloudSQLInstance(projectID, region, instance)` names the instance; the connector
+resolves its IP, so the instance needs no public address.
+
+### The pgvector extension and the table
+
+The plugin reads and writes an existing table. `PostgresEngine.InitVectorstoreTable` creates it, and
+runs `CREATE EXTENSION IF NOT EXISTS vector` first. Once you have a `pEngine` (step 2 of
+[Configuration](#configuration)), call it once, before `genkit.Init`:
+
+```go
+err = pEngine.InitVectorstoreTable(ctx, postgresql.VectorstoreTableOptions{
+	TableName:          "documents",
+	SchemaName:         "public",
+	VectorSize:         768,
+	ContentColumnName:  "content",
+	EmbeddingColumn:    "embedding",
+	IDColumn:           postgresql.Column{Name: "custom_id", DataType: "TEXT"},
+	MetadataColumns:    []postgresql.Column{{Name: "source", DataType: "TEXT", Nullable: true}},
+	MetadataJSONColumn: "custom_metadata",
+	StoreMetadata:      true,
+})
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+That produces an id column, a `content TEXT NOT NULL` column, an `embedding vector(768) NOT NULL`
+column, one column per entry in `MetadataColumns`, and a JSON column when `StoreMetadata` is true.
+
+`VectorSize` must equal the output dimension of the embedder you configure later; 768 is the size
+`text-embedding-004` produces. A mismatch is not caught until the first write fails in Postgres.
+
+:::caution
+`OverwriteExisting: true` drops the table before recreating it. Leave it false against any database
+that holds data you want to keep.
+:::
+
 ## Configuration
 
 To use this plugin, follow these steps:
 
-1. Import the plugin
-
-```go
-import "github.com/firebase/genkit/go/plugins/postgresql"
-```
+1. Import `github.com/firebase/genkit/go/plugins/postgresql`
 
 2. Create a `PostgresEngine` instance:
    - Using basic authentication
@@ -307,12 +367,12 @@ pEngine, err := postgresql.NewPostgresEngine(ctx,
 	postgresql.WithIAMAccountEmail("mail@company.com"))
 ```
 
-- Using custom pool
+- Using custom pool (add `github.com/jackc/pgx/v5/pgxpool` to the imports)
 
 ```go
 pool, err := pgxpool.New(ctx, "add_your_connection_string")
 if err != nil {
-	return err
+	log.Fatal(err)
 }
 
 pEngine, err := postgresql.NewPostgresEngine(ctx,
@@ -333,78 +393,212 @@ g := genkit.Init(ctx, genkit.WithPlugins(postgres))
 
 ## Usage
 
-To add documents to a Postgresql index, first create a retrieve definition that specifies the features of the table:
+To add documents to a Postgresql index, first create a document store that specifies the features of
+the table:
 
 ```go
+embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")
+
 cfg := &postgresql.Config{
-	TableName:             "documents",
-	SchemaName:            "public",
-	ContentColumn:         "content",
-	EmbeddingColumn:       "embedding",
-	MetadataColumns:       []string{"source", "category"},
-	IDColumn:              "custom_id",
-	MetadataJSONColumn:    "custom_metadata",
-	Embedder:              embedder,
-	EmbedderOptions:       nil,
+	TableName:          "documents",
+	SchemaName:         "public",
+	ContentColumn:      "content",
+	EmbeddingColumn:    "embedding",
+	MetadataColumns:    []string{"source", "category"},
+	IDColumn:           "custom_id",
+	MetadataJSONColumn: "custom_metadata",
+	Embedder:           embedder,
+	EmbedderOptions:    nil,
 }
 
-doc, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
+docStore, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
 if err != nil {
-  return err
+	log.Fatal(err)
 }
 
 docs := []*ai.Document{{
-        Content: []*ai.Part{{
-        Kind:        ai.PartText,
-        ContentType: "text/plain",
-        Text:        "The product features include...",
-        }},
-      Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
-  }}
+	Content: []*ai.Part{{
+		Kind:        ai.PartText,
+		ContentType: "text/plain",
+		Text:        "The product features include...",
+	}},
+	Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+}}
 
-if err := doc.Index(ctx, docs); err != nil {
-    return err
+if err := docStore.Index(ctx, docs); err != nil {
+	log.Fatal(err)
 }
 ```
+
+`DefineRetriever` returns a `*postgresql.DocStore` as its first value, the handle used for writes. It
+has two methods: `Index(ctx, docs []*ai.Document) error` and
+`Retrieve(ctx, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error)`. Its second value is the
+`ai.Retriever` registered with Genkit, which is what you pass to `genkit.Retrieve`. Call
+`DefineRetriever` once per table and keep both values.
 
 Similarly, to retrieve documents from an index, use the retrieve method:
 
 ```go
-d2 := ai.DocumentFromText( "The product features include..." , nil)
+d2 := ai.DocumentFromText("The product features include...", nil)
 
 resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
-    Query: d2,
-    Options: &postgresql.RetrieverOptions{
-        K: 5,
-        Filter: "source='website' AND category='product-docs'",
-    },
+	Query: d2,
+	Options: &postgresql.RetrieverOptions{
+		K:      5,
+		Filter: "source = 'website' AND category = 'product-docs'",
+	},
 })
-
 if err != nil {
-    return err
+	log.Fatal(err)
 }
 ```
 
-It's also possible to use the Retrieve method from Retriever
+It's also possible to use the Retrieve method from Genkit:
 
 ```go
-_, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
-if err != nil {
-  return err
-}
-
-d2 := ai.DocumentFromText( "The product features include..." , nil)
+d2 := ai.DocumentFromText("The product features include...", nil)
 
 retrieverOptions := &postgresql.RetrieverOptions{
-    K: 5,
-    Filter: "source='website' AND category='product-docs'",
+	K:      5,
+	Filter: "source = 'website' AND category = 'product-docs'",
 }
 
 resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(retriever), ai.WithDocs(d2), ai.WithConfig(retrieverOptions))
 if err != nil {
-    return err
+	log.Fatal(err)
 }
 ```
+
+### Retriever options
+
+`postgresql.RetrieverOptions` has three fields:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `Filter` | `any` | `nil` | Predicate for the query's `WHERE` clause. |
+| `K` | `int` | 4 | Number of documents to return. |
+| `DistanceStrategy` | `DistanceStrategy` | `postgresql.CosineDistance{}` | Vector similarity operator. The others are `postgresql.Euclidean{}` and `postgresql.InnerProduct{}`. |
+
+Any predicate legal in a `WHERE` clause against your table is accepted, including JSON operators on
+`MetadataJSONColumn`, for example `custom_metadata->>'tenant' = 'acme'`.
+
+:::danger
+`Filter` is formatted straight into the `WHERE` clause with `fmt.Sprintf`. It is not parameterised.
+Never build this value from untrusted input. To filter on a user-supplied value, validate it against
+an allowlist first, or map the user's choice onto a fixed predicate you wrote yourself.
+:::
+
+## Complete example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/postgresql"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// 1. Connect to the instance.
+	pEngine, err := postgresql.NewPostgresEngine(ctx,
+		postgresql.WithCloudSQLInstance("my-project", "us-central1", "my-instance"),
+		postgresql.WithDatabase("my-database"),
+		postgresql.WithIAMAccountEmail("mail@company.com"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pEngine.Close()
+
+	// 2. Create the pgvector extension and the table. Once, not on every start.
+	err = pEngine.InitVectorstoreTable(ctx, postgresql.VectorstoreTableOptions{
+		TableName:          "documents",
+		SchemaName:         "public",
+		VectorSize:         768,
+		ContentColumnName:  "content",
+		EmbeddingColumn:    "embedding",
+		IDColumn:           postgresql.Column{Name: "custom_id", DataType: "TEXT"},
+		MetadataColumns:    []postgresql.Column{{Name: "source", DataType: "TEXT", Nullable: true}, {Name: "category", DataType: "TEXT", Nullable: true}},
+		MetadataJSONColumn: "custom_metadata",
+		StoreMetadata:      true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 3. Register the plugins.
+	postgres := &postgresql.Postgres{Engine: pEngine}
+	g := genkit.Init(ctx, genkit.WithPlugins(postgres, &googlegenai.VertexAI{}))
+
+	var embedder ai.Embedder = googlegenai.VertexAIEmbedder(g, "text-embedding-004")
+
+	// 4. Create the document store and the retriever.
+	cfg := &postgresql.Config{
+		TableName:          "documents",
+		SchemaName:         "public",
+		ContentColumn:      "content",
+		EmbeddingColumn:    "embedding",
+		MetadataColumns:    []string{"source", "category"},
+		IDColumn:           "custom_id",
+		MetadataJSONColumn: "custom_metadata",
+		Embedder:           embedder,
+	}
+
+	docStore, retriever, err := postgresql.DefineRetriever(ctx, g, postgres, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 5. Write.
+	docs := []*ai.Document{{
+		Content: []*ai.Part{{
+			Kind:        ai.PartText,
+			ContentType: "text/plain",
+			Text:        "The product features include...",
+		}},
+		Metadata: map[string]any{"source": "website", "category": "product-docs", "custom_id": "doc-123"},
+	}}
+	if err := docStore.Index(ctx, docs); err != nil {
+		log.Fatal(err)
+	}
+
+	// 6. Read.
+	resp, err := genkit.Retrieve(ctx, g,
+		ai.WithRetriever(retriever),
+		ai.WithDocs(ai.DocumentFromText("What are the key features of the product?", nil)),
+		ai.WithConfig(&postgresql.RetrieverOptions{
+			K:                5,
+			Filter:           "source = 'website'",
+			DistanceStrategy: postgresql.CosineDistance{},
+		}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, d := range resp.Documents {
+		fmt.Println(d.Content[0].Text)
+	}
+}
+```
+
+## Production notes
+
+`PostgresEngine` wraps a `*pgxpool.Pool`, so the engine, the `*DocStore` and the `ai.Retriever` it
+produces are safe to share across request goroutines. Build them once at startup, not per request.
+
+- Call `defer pEngine.Close()` on shutdown. `Close` closes the pool unconditionally, including a pool
+  you supplied with `WithPool`, so do not share that pool with code that outlives the engine.
+- To control pool sizing and connection limits, build the pool yourself from a `pgxpool.Config` and
+  pass it in with `WithPool`. `pEngine.GetClient()` returns the pool if you need to reach it later.
+- Per-request `context` deadlines pass through to pgx. Cancelling a request context aborts its query.
 
 See the [Retrieval-augmented generation](/docs/rag) page for a general
 discussion on using retrievers for RAG.

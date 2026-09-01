@@ -95,21 +95,41 @@ discussion on indexers and retrievers.
 
 <Lang lang="go">
 
-The Pinecone plugin provides retriever implementatons that use the
+The Pinecone plugin provides a retriever implementation that uses the
 [Pinecone](https://www.pinecone.io/) cloud vector database.
 
 Pinecone is a cloud-native vector database that provides fast, scalable similarity search for AI applications. It offers managed infrastructure with automatic scaling and high availability.
 
-## Configuration
+## Prerequisites
 
-To use this plugin, import the `pinecone` package and initialize it via Genkit's `WithPlugins`:
+Create the Pinecone index before you run any of this code. The plugin does not
+create it for you, and two properties have to be decided at creation time:
+
+- **Dimension**: must equal the number of dimensions your embedder emits.
+  `gemini-embedding-001` emits 3072.
+- **Metric**: use `cosine` for the Gemini text embedders.
+
+The examples on this page use these imports:
 
 ```go
-import "github.com/firebase/genkit/go/plugins/pinecone"
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/pinecone"
+)
 ```
 
+## Configuration
+
+Register the Pinecone plugin, along with whichever plugin supplies your
+embedder, when you initialize Genkit:
+
 ```go
-g := genkit.Init(ctx, genkit.WithPlugins(&pinecone.Pinecone{}))
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &pinecone.Pinecone{}))
 ```
 
 The plugin requires your Pinecone API key.
@@ -120,7 +140,7 @@ Configure the plugin to use your API key by doing one of the following:
 - Specify the API key when you initialize the plugin:
 
 ```go
-g := genkit.Init(ctx, genkit.WithPlugins(&pinecone.Pinecone{
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &pinecone.Pinecone{
 	APIKey: pineconeAPIKey,
 }))
 ```
@@ -130,28 +150,70 @@ in conjunction with a service like Cloud Secret Manager or similar.
 
 ## Usage
 
-To retrieve documents from an index or index new documents, first create a retriever definition which returns a `Docstore` (`ds`) and an `ai.Retriever`:
+To retrieve documents from an index or index new documents, first create a
+retriever definition. It returns a `*pinecone.Docstore` (`ds`), used for
+indexing, and an `ai.Retriever`, used for queries:
 
 ```go
+embedder := genkit.LookupEmbedder(g, "googleai/gemini-embedding-001")
+if embedder == nil {
+	log.Fatal("embedder googleai/gemini-embedding-001 is not registered")
+}
+
 ds, menuRetriever, err := pinecone.DefineRetriever(ctx, g, pinecone.Config{
-	IndexID:  "menu_data",                                           // Your Pinecone index
-	Embedder: googlegenai.GoogleAIEmbedder(g, "text-embedding-004"), // Embedding model of your choice
+	IndexID:  "menu-data", // Your Pinecone index
+	Embedder: embedder,
 }, nil)
 if err != nil {
 	log.Fatal(err)
 }
 ```
 
-Index your documents in Pinecone. An example of indexing is provided within the Pinecone plugin as shown below. This functionality should be customized by the user according to their use case.
+`genkit.LookupEmbedder` returns `nil` if no embedder with that identifier is
+registered, so check the result before you use it. The name must carry the
+provider prefix.
+
+The trailing `nil` is a `*ai.RetrieverOptions`: action metadata (`Label`,
+`ConfigSchema`, `Supports`, `Metadata`) for the retriever this call defines.
+Pass `nil` to accept the defaults.
+
+### `pinecone.Config` fields
+
+| Field             | Type          | Purpose                                                                       |
+| ----------------- | ------------- | ----------------------------------------------------------------------------- |
+| `IndexID`         | `string`      | The Pinecone index to read and write.                                          |
+| `Embedder`        | `ai.Embedder` | Embedder used for both indexing and queries. Required.                         |
+| `EmbedderOptions` | `any`         | Options passed through to the embedder on every call.                          |
+| `TextKey`         | `string`      | Metadata key that holds the document text in Pinecone. Defaults to `_content`. |
+
+### Indexing
+
+`pinecone.Index` is a helper to get you started; customize it for your own
+ingestion pipeline. Build the documents first:
 
 ```go
-err = pinecone.Index(ctx, docChunks, ds, "")
-if err != nil {
+docChunks := []*ai.Document{
+	ai.DocumentFromText("Tuesday special: grilled cheese and tomato soup.", map[string]any{
+		"id":     "menu-1",
+		"source": "menu.pdf",
+	}),
+	ai.DocumentFromText("Dessert: lemon sorbet, dairy free.", map[string]any{
+		"id":     "menu-2",
+		"source": "menu.pdf",
+	}),
+}
+
+if err := pinecone.Index(ctx, docChunks, ds, ""); err != nil {
 	log.Fatal(err)
 }
 ```
 
-Then, call Genkit's `Retrieve()` method, passing it the retriever and a text query:
+The last argument is the Pinecone namespace. Pass `""` to use the default
+namespace.
+
+### Retrieving
+
+Call `genkit.Retrieve`, passing it the retriever and a text query:
 
 ```go
 resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(menuRetriever), ai.WithTextDocs(userInput))

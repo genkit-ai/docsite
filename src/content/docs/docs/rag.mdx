@@ -520,10 +520,11 @@ strategies.
 <Lang lang="go">
 
 RAG is a very broad area and there are many different techniques used to achieve
-the best quality RAG. The core Genkit framework offers two main abstractions to
+the best quality RAG. The core Genkit framework offers three main abstractions to
 help you do RAG:
 
-- Embedders: transforms documents into a vector representation
+- Indexers: keep track of your documents so relevant ones can be retrieved for a query.
+- Embedders: transforms documents into a vector representation.
 - Retrievers: retrieve documents from an "index", given a query.
 
 These definitions are broad on purpose because Genkit is un-opinionated about
@@ -549,24 +550,50 @@ data.
 To create a retriever, you can use one of the provided implementations or
 create your own.
 
+### Indexers
+
+The index is responsible for keeping track of your documents so that you can
+quickly retrieve the relevant ones for a query. This is most often a vector
+database: it stores each document alongside its embedding, and retrieves
+documents whose embeddings sit close to the embedding of the query.
+
+Before you can retrieve documents you have to ingest them. A typical ingestion
+pipeline does three things:
+
+1. Split large documents into chunks, so that only the relevant portion
+   augments your prompt and so each chunk fits comfortably in the model's
+   context window. Genkit does not ship a chunker; any Go text splitter works.
+2. Generate an embedding for each chunk.
+3. Write the chunk and its vector to the store.
+
+Ingestion is a batch job, not something that runs per request. Run it once for a
+stable corpus, or on a trigger whenever the source data changes.
+
+Go has no separate indexer action type. Indexing goes through the store handle
+that the plugin's `DefineRetriever` returns alongside the retriever, for example
+`*localvec.DocStore` with `localvec.Index`.
+
 ## Supported retrievers and embedders
 
-Genkit provides retriever support through its plugin system. The
-following plugins are officially supported:
+Genkit provides retriever support through its plugin system:
 
-- [Pinecone](/docs/integrations/pinecone) cloud vector database
-
-In addition, Genkit supports the following vector stores through predefined
-code templates, which you can customize for your database configuration and
-schema:
-
-- PostgreSQL with [`pgvector`](/docs/integrations/pgvector)
+| Vector store                                                                            | Use it when                                                                     |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [Dev local vector store](/docs/integrations/dev-local-vectorstore)                        | Prototyping on one machine. Development only; do not use it in production.       |
+| [Pinecone](/docs/integrations/pinecone)                                                   | You want a managed cloud vector database with no database to operate.            |
+| [AlloyDB for PostgreSQL](/docs/integrations/alloydb)                                      | Your data already lives in AlloyDB and you want pgvector search next to it.      |
+| [Cloud SQL for PostgreSQL](/docs/integrations/cloud-sql-postgresql)                       | Same, on managed PostgreSQL.                                                     |
+| [Cloud Firestore vector search](/docs/integrations/cloud-firestore)                       | Your documents are already Firestore documents.                                  |
+| [Vertex AI Vector Search with BigQuery](/docs/integrations/vectorsearch-bigquery)         | Your corpus is in BigQuery and you want Vertex AI to serve the index.            |
+| [Vertex AI Vector Search with Firestore](/docs/integrations/vectorsearch-firestore)       | Same, with Firestore as the document store.                                      |
+| [Self-managed pgvector](/docs/integrations/pgvector)                                      | You run your own PostgreSQL. This is a code template, not a plugin.              |
 
 Embedding model support is provided through the following plugins:
 
-| Plugin                                                  | Models         |
-| ------------------------------------------------------- | -------------- |
-| [Google Generative AI](/docs/integrations/google-genai) | Text embedding |
+| Plugin                                                  | Embedders                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [Google Generative AI](/docs/integrations/google-genai) | `googleai/gemini-embedding-001` and the other Gemini API text embedders. |
+| [Vertex AI](/docs/integrations/vertex-ai)               | `vertexai/text-embedding-004`, `vertexai/text-embedding-005` and others. |
 
 ## Defining a RAG flow
 
@@ -574,6 +601,22 @@ The following examples show how you could ingest a collection of restaurant menu
 PDF documents into a vector database and retrieve them for use in a flow that
 determines what food items are available. The [rag sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/rag) is a runnable version of the same shape against the local vector store, and the [pgvector sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/pgvector) is the PostgreSQL equivalent.
 _Note_: Although retriever functions are defined using Genkit, users are expected to add their own functionality to index the documents.
+
+### Prerequisites
+
+This walkthrough registers the [Vertex AI plugin](/docs/integrations/vertex-ai),
+which authenticates with Application Default Credentials. Before you run it:
+
+```bash
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=your-project-id
+export GOOGLE_CLOUD_LOCATION=us-central1
+```
+
+To use `googleai/...` models and embedders instead, register
+`&googlegenai.GoogleAI{}` and set `GEMINI_API_KEY`. Provider prefixes are not
+interchangeable: a `googleai/` name only resolves if the Google AI plugin is
+registered, and likewise for `vertexai/`.
 
 ### Install dependencies
 
@@ -585,104 +628,142 @@ go get github.com/tmc/langchaingo/textsplitter
 go get github.com/ledongthuc/pdf
 ```
 
-#### Create chunking config
+Neither is a Genkit dependency. Any Go text splitter and any PDF reader work
+here; these two just keep the example short.
 
-This example uses the `textsplitter` library which provides a simple text
-splitter to break up documents into segments that can be vectorized.
+### The complete program
 
-The following definition configures the chunking function to return document
-segments of 200 characters, with an overlap between chunks of 20 characters.
+Everything below is one `main` package. Later sections walk through the pieces.
 
 ```go
-splitter := textsplitter.NewRecursiveCharacter(
-	textsplitter.WithChunkSize(200),
-	textsplitter.WithChunkOverlap(20),
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/localvec"
+	"github.com/firebase/genkit/go/plugins/server"
+	"github.com/ledongthuc/pdf"
+	"github.com/tmc/langchaingo/textsplitter"
 )
-```
 
-More chunking options for this library can be found in the
-[`langchaingo` documentation](https://pkg.go.dev/github.com/tmc/langchaingo/textsplitter#Option).
+func main() {
+	ctx := context.Background()
 
-### Initialize Genkit and vector store
+	// Initialize Genkit with the Vertex AI plugin.
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
 
-Before defining the flows, initialize the Genkit instance and the vector store.
-This prepares the `menuDocStore` for indexing and the `menuPdfRetriever` for retrieval.
+	// Initialize the local vector store plugin.
+	if err := localvec.Init(); err != nil {
+		log.Fatal(err)
+	}
 
-```go
-ctx := context.Background()
+	embedder := genkit.LookupEmbedder(g, "vertexai/text-embedding-004")
+	if embedder == nil {
+		log.Fatal("embedder vertexai/text-embedding-004 is not registered")
+	}
 
-// Initialize Genkit with the Vertex AI plugin
-g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	// Define the retriever and document store. We keep menuDocStore for the
+	// indexer flow and menuPdfRetriever for the retrieval flow.
+	menuDocStore, menuPdfRetriever, err := localvec.DefineRetriever(
+		g,
+		"menuQA",
+		localvec.Config{
+			Dir:      ".genkit/localvec",
+			Embedder: embedder,
+		},
+		nil,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-// Initialize the Local Vector Store plugin
-if err := localvec.Init(); err != nil {
-    log.Fatal(err)
+	splitter := textsplitter.NewRecursiveCharacter(
+		textsplitter.WithChunkSize(200),
+		textsplitter.WithChunkOverlap(20),
+	)
+
+	genkit.DefineFlow(g, "indexMenu",
+		func(ctx context.Context, path string) (map[string]any, error) {
+			// Extract plain text from the PDF. Wrap the logic in Run so it
+			// appears as a step in your traces.
+			pdfText, err := genkit.Run(ctx, "extract", func() (string, error) {
+				return readPDF(path)
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// Split the text into chunks. Wrap the logic in Run so it appears
+			// as a step in your traces.
+			docs, err := genkit.Run(ctx, "chunk", func() ([]*ai.Document, error) {
+				chunks, err := splitter.SplitText(pdfText)
+				if err != nil {
+					return nil, err
+				}
+
+				var docs []*ai.Document
+				for i, chunk := range chunks {
+					docs = append(docs, ai.DocumentFromText(chunk, map[string]any{
+						"id":     fmt.Sprintf("%s#%d", path, i),
+						"source": path,
+					}))
+				}
+				return docs, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// Add chunks to the index using the vector store.
+			if err := localvec.Index(ctx, docs, menuDocStore); err != nil {
+				return nil, err
+			}
+
+			return map[string]any{
+				"success":          true,
+				"documentsIndexed": len(docs),
+			}, nil
+		})
+
+	genkit.DefineFlow(g, "menuQA",
+		func(ctx context.Context, question string) (string, error) {
+			// Retrieve text relevant to the user's question.
+			resp, err := genkit.Retrieve(ctx, g,
+				ai.WithRetriever(menuPdfRetriever),
+				ai.WithConfig(&localvec.RetrieverOptions{K: 3}),
+				ai.WithTextDocs(question))
+			if err != nil {
+				return "", err
+			}
+			if len(resp.Documents) == 0 {
+				return "I don't have that in the indexed material.", nil
+			}
+
+			// Call Generate, including the menu information in your prompt.
+			return genkit.GenerateText(ctx, g,
+				ai.WithModelName("vertexai/gemini-flash-latest"),
+				ai.WithDocs(resp.Documents...),
+				ai.WithSystem(`
+You are acting as a helpful AI assistant that can answer questions about the
+food available on the menu at Genkit Grub Pub.
+Use only the context provided to answer the question. If you don't know, do not
+make up an answer. Do not add or change items on the menu.`),
+				ai.WithPrompt(question))
+		})
+
+	// Keep the process alive so the CLI and the developer UI can reach the
+	// flows. Ctrl-C stops it.
+	log.Fatal(server.Start(ctx, "127.0.0.1:3400", nil))
 }
 
-// Define the Retriever and Document Store.
-// We capture 'menuDocStore' to use in the Indexer Flow,
-// and 'menuPdfRetriever' to use in the Retrieval Flow.
-menuDocStore, menuPdfRetriever, err := localvec.DefineRetriever(
-    g,
-    "menuQA",
-    localvec.Config{
-        Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004"),
-    },
-    nil,
-)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-#### Define your indexer flow
-
-```go
-genkit.DefineFlow(
-    g, "indexMenu",
-    func(ctx context.Context, path string) (any, error) {
-        // Extract plain text from the PDF. Wrap the logic in Run so it
-        // appears as a step in your traces.
-        pdfText, err := genkit.Run(ctx, "extract", func() (string, error) {
-            return readPDF(path)
-        })
-        if err != nil {
-            return nil, err
-        }
-
-        // Split the text into chunks. Wrap the logic in Run so it appears as a
-        // step in your traces.
-        docs, err := genkit.Run(ctx, "chunk", func() ([]*ai.Document, error) {
-            chunks, err := splitter.SplitText(pdfText)
-            if err != nil {
-                return nil, err
-            }
-
-            var docs []*ai.Document
-            for _, chunk := range chunks {
-                docs = append(docs, ai.DocumentFromText(chunk, nil))
-            }
-            return docs, nil
-        })
-        if err != nil {
-            return nil, err
-        }
-
-        // Add chunks to the index using the vector store
-        if err := localvec.Index(ctx, docs, menuDocStore); err != nil {
-            return nil, err
-        }
-
-        return map[string]interface{}{
-            "success": true,
-            "documentsIndexed": len(docs),
-        }, nil
-    },
-)
-```
-
-```go
-// Helper function to extract plain text from a PDF. Excerpted from
+// readPDF extracts plain text from a PDF. Excerpted from
 // https://github.com/ledongthuc/pdf
 func readPDF(path string) (string, error) {
 	f, r, err := pdf.Open(path)
@@ -707,42 +788,92 @@ func readPDF(path string) (string, error) {
 }
 ```
 
+#### Chunking config
+
+The `textsplitter` call above configures the chunking function to return
+document segments of 200 characters, with an overlap between chunks of 20
+characters. More chunking options for this library can be found in the
+[`langchaingo` documentation](https://pkg.go.dev/github.com/tmc/langchaingo/textsplitter#Option).
+
+#### Document metadata
+
+`ai.DocumentFromText(text string, metadata map[string]any) *ai.Document` builds
+a document from a string. `ai.Document` has two fields: `Content []*ai.Part` and
+`Metadata map[string]any`. The local vector store persists the whole document,
+so whatever metadata you attach at index time comes back on every retrieved
+document. Use it for IDs, titles and source paths. The `id` key doubles as the
+citation marker the model sees; see [Citations](#citations).
+
 #### Run the indexer flow
 
 ```bash
-genkit flow:run indexMenu '"menu.pdf"'
+genkit flow:run indexMenu '"menu.pdf"' -- go run .
 ```
+
+Run this from the module directory. `menu.pdf` is resolved relative to that
+directory.
 
 After running the `indexMenu` flow, the vector database will be seeded with
 documents and ready to be used in Genkit flows with retrieval steps.
 
-### Define a flow with retrieval
+### Calling a retriever
 
-The following example shows how you might use a retriever in a RAG flow. This
-example uses Genkit's file-based vector retriever, which you should not use in production.
+`genkit.Retrieve(ctx, g, ai.WithRetriever(r), ai.WithTextDocs(q))` is the form
+to reach for. It resolves the retriever through the registry and records the
+call as a traced step. Three variants exist and none of them is deprecated:
+
+| Call                                  | Use it when                                                                             |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `genkit.Retrieve(ctx, g, opts...)`    | Default. You have a `*genkit.Genkit`.                                                     |
+| `ai.Retrieve(ctx, reg, opts...)`      | Same call, with the registry passed explicitly, for code that has no `*genkit.Genkit`.    |
+| `r.Retrieve(ctx, req)`                | You hold the `ai.Retriever` and want to build the `ai.RetrieverRequest` yourself.         |
+
+You can name a registered retriever instead of holding its value. Plugin
+retrievers register under a provider prefix; the local vector store uses
+`devLocalVectorStore/<name>`:
 
 ```go
-genkit.DefineFlow(
-  g, "menuQA",
-  func(ctx context.Context, question string) (string, error) {
-    // Retrieve text relevant to the user's question.
-    resp, err := genkit.Retrieve(ctx, g, ai.WithRetriever(menuPdfRetriever), ai.WithTextDocs(question))
-    if err != nil {
-        return "", err
-    }
-
-    // Call Generate, including the menu information in your prompt.
-    return genkit.GenerateText(ctx, g,
-        ai.WithModelName("googleai/gemini-flash-latest"),
-        ai.WithDocs(resp.Documents...),
-        ai.WithSystem(`
-You are acting as a helpful AI assistant that can answer questions about the
-food available on the menu at Genkit Grub Pub.
-Use only the context provided to answer the question. If you don't know, do not
-make up an answer. Do not add or change items on the menu.`),
-        ai.WithPrompt(question))
-  })
+resp, err := genkit.Retrieve(ctx, g,
+	ai.WithRetrieverName("devLocalVectorStore/menuQA"),
+	ai.WithDocs(ai.DocumentFromText(question, nil)))
 ```
+
+### When retrieval comes back empty or weak
+
+`ai.RetrieverResponse` carries `Documents` and nothing else. There is no score
+field, so you cannot filter on relevance after the fact. Guard on the count
+before you call the model, as the `menuQA` flow above does:
+
+```go
+if len(resp.Documents) == 0 {
+	return "I don't have that in the indexed material.", nil
+}
+```
+
+A relevance floor is only available where the store's own options support one,
+for example a `MIN_SCORE` predicate in a pgvector query you write yourself. The
+local vector store ranks by cosine similarity internally but returns the top `K`
+documents with no scores, so `K` is its only relevance control.
+
+### Citations
+
+Documents passed with `ai.WithDocs` land on the request's `Docs` field. What
+happens next depends on the model:
+
+- A model that declares `Supports.Context` receives the documents natively.
+  Genkit inserts no markers, and rendering citations in your UI is up to you.
+- Every other model goes through Genkit's augment-with-context middleware, which
+  appends the documents to the last user message as lines of the form
+  `- [<id>]: <text>`.
+
+The bracketed key comes from `ai.AugmentWithContextOptions.CitationKey`. With
+the default settings it is `Metadata["ref"]`, else `Metadata["id"]`, else the
+zero-based index of the document. Set stable IDs at index time, as the indexer
+flow above does, to make those citations addressable.
+
+Only the document text and that one metadata value reach the model. The rest of
+`Metadata` stays on your side, so you do not need to duplicate document text
+into your prompt.
 
 ## Write your own retrievers
 
@@ -805,6 +936,24 @@ advancedMenuRetriever := genkit.DefineRetrieverAction(
 `genkit.DefineRetrieverAction` infers the retriever's config schema from the type of its last function parameter and validates every request against it, so your function receives a typed value instead of an `any` it has to assert. A request that carries a key the schema does not allow fails with `INVALID_ARGUMENT` before your code runs.
 
 _Note_: The `rerank` function is a placeholder for your own logic and is not provided by the Genkit framework.
+
+### The request your retriever receives
+
+`ai.RetrieverRequest` has exactly two fields:
+
+- `Query *ai.Document`: the query, expressed as a document so you can hand it
+  straight to an embedder.
+- `Options any`: the raw per-request config, as set by `ai.WithConfig`.
+
+Retrievers defined with `genkit.DefineRetrieverAction` get that config decoded
+into the typed last parameter and should ignore `req.Options`, which the
+framework normalizes to the same value.
+
+`genkit.DefineRetriever(g, name, opts, fn)` is the older non-generic form. Its
+callback is `ai.RetrieverFunc`,
+`func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error)`,
+so it has to read and type-assert `req.Options` itself. It is deprecated in
+favor of `DefineRetrieverAction`.
 
 </Lang>
 
@@ -897,7 +1046,7 @@ Any async function that returns `list[Document]` can supply context: call databa
 ## Next steps
 
 - Learn about [tool calling](/docs/tool-calling) to give your RAG system access to external APIs and functions
-- Explore [multi-agent systems](/docs/multi-agent) for coordinating multiple AI agents with RAG capabilities
+- Explore [full-stack agents](/docs/agents/overview) for coordinating multiple AI agents with RAG capabilities
 - See the [evaluation guide](/docs/evaluation) for testing and improving your RAG system's performance
 
 <Lang lang="js">

@@ -282,6 +282,8 @@ sess.UpdateCustom(func(state TravelState) TravelState {
 
 A tool reaches the same session through its context with `aix.SessionFromContext[State]`. The updater takes and returns the state as its own Go type, so a mistyped field is a compile error rather than a lost key.
 
+`SessionFromContext[State]` returns nil in two cases: there is no session in context, and the active session's state type is not `State`. A tool shared between agents with different state types therefore gets nil from the mismatching agent, with no error. Fail closed on nil. Return a `status.ErrFailedPrecondition` (or `status.ErrPermissionDenied` when the state carries scoping) rather than treating nil as an empty identity, or the tool silently drops whatever it derived from state.
+
 ```go
 import (
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -397,6 +399,15 @@ These methods apply `WithStateTransform` and read-time shaping. Reading `agent.S
 
 Synchronous turns write `completed` snapshots. A failed turn does not make its partial state the normal continuation point. The output reports the last-good state or snapshot ID.
 
+`Status` is the persistence lifecycle, not the outcome. A turn that ends on an interrupt still writes `completed`, because it is resumable. To detect an interrupt, read `snap.FinishReason`, which is a separate field:
+
+```go
+paused := snap.Status == aix.SnapshotStatusCompleted &&
+	snap.FinishReason == aix.AgentFinishReasonInterrupted
+```
+
+`FinishReason` carries the semantic outcome of the turn or invocation the snapshot captured: `aix.AgentFinishReasonStop`, `AgentFinishReasonInterrupted`, `AgentFinishReasonFailed`, `AgentFinishReasonAborted`, and the other values on `aix.AgentFinishReason`. See [Agent interrupts](/docs/agents/interrupts) for what a paused turn allows next.
+
 ## Invocation options
 
 Use `WithSessionID` when the caller tracks a conversation:
@@ -425,6 +436,18 @@ out, err := agent.RunText(ctx, "Add buy milk.",
 
 An empty session ID is rejected. `WithState` cannot be combined with snapshot or session options.
 
+You may also choose the session ID yourself. If `aix.WithSessionID(id)` resolves no existing snapshot, the runtime starts a fresh conversation under that ID and stamps it on every snapshot it persists, so a client can mint a UUID up front instead of waiting for a server-issued ID. `SessionID` is framework-owned only in the sense that the framework mints one when you supply none, and that for server-managed agents the snapshot row's ID is canonical.
+
+## Changing your state type
+
+Custom state is persisted as plain JSON and decoded with `encoding/json`. That gives three rules:
+
+- **Adding a field is safe.** Old snapshots load it as the Go zero value.
+- **Removing or renaming a field is safe to load, but drops the old data silently.** Nothing rejects the unknown key.
+- **Changing a field's JSON type is not safe.** The decode fails, the store read returns an error, and the resume fails with it.
+
+Keep changes additive. Keep an old field readable with its original `json` tag through a migration window, and carry your own version field inside `Custom` when you need to branch on shape. There is no schema version on the snapshot envelope.
+
 ## State and stream transforms
 
 `WithStateTransform` redacts or reshapes session state on the way out to clients. It applies to snapshot reads and client-managed output, not to persisted raw state or the agent function's internal view.
@@ -442,15 +465,61 @@ agent := genkitx.DefineAgent(g, "support",
 )
 ```
 
-`WithStreamTransform[State]` runs on every streamed `AgentStreamChunk` at the wire boundary. Return `nil` to drop a chunk. Return an error to fail closed, which prevents unshaped data from reaching the client.
+`aix.WithStreamTransform[State](fn)` runs on every streamed chunk at the wire boundary. It takes a `func(ctx context.Context, chunk *aix.AgentStreamChunk) (*aix.AgentStreamChunk, error)`. A chunk carries no state type, so `State` cannot be inferred and must be written out.
 
-Prefer `WithStateTransform` for custom state redaction because the runtime diffs transformed state before emitting custom patches.
+```go
+aix.WithStreamTransform[SupportState](func(ctx context.Context, chunk *aix.AgentStreamChunk) (*aix.AgentStreamChunk, error) {
+	if chunk.Artifact != nil && chunk.Artifact.Name == "internal-notes" {
+		// Drop the chunk from the wire; the session still records the artifact.
+		return nil, nil
+	}
+	return chunk, nil
+})
+```
+
+`AgentStreamChunk` has four fields, and more than one can be set on a single chunk:
+
+| Field         | Type                       | Contents                                              |
+| ------------- | -------------------------- | ----------------------------------------------------- |
+| `ModelChunk`  | `*ai.ModelResponseChunk`   | Generation tokens from the model.                     |
+| `Artifact`    | `*aix.Artifact`            | A newly produced artifact.                            |
+| `CustomPatch` | `aix.JSONPatch`            | An RFC 6902 delta to custom state.                    |
+| `TurnEnd`     | `*aix.TurnEnd`             | The turn-end signal, including the new snapshot ID.   |
+
+The chunk is a fresh deep copy the transform owns, so mutating it in place is safe. Returning `nil` drops the chunk from the wire only: side effects and the final `AgentOutput` keep the data. Never drop a chunk whose `TurnEnd` is set, because clients pace the conversation on that signal; reshape it instead. Returning an error fails the whole invocation, which is the fail-closed behavior you want when a chunk cannot be shaped safely.
+
+Prefer `WithStateTransform` for custom state redaction. The runtime applies it before diffing, so the patch stream stays consistent; rewriting `CustomPatch` in a stream transform desyncs clients that rebuild custom state from the patch sequence.
 
 ## Custom state and artifacts
 
 Prompt-backed and custom agents can update state through the active session. Custom patches are streamed automatically when custom state changes. `AgentConnection.Receive` applies those patches and `AgentConnection.Custom()` returns the live custom state observed so far.
 
-Artifacts are named collections of parts. `Responder.SendArtifact` both streams the artifact and records it in the session, so the artifact is available in the final output or snapshot.
+An artifact is a named collection of parts:
+
+```go
+type Artifact struct {
+	Metadata map[string]any `json:"metadata,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Parts    []*ai.Part     `json:"parts"`
+}
+```
+
+`Responder.SendArtifact` takes a pointer. It both streams the artifact and records it in the session, so the artifact is available in the final output or snapshot:
+
+```go
+resp.SendArtifact(&aix.Artifact{
+	Name:     "meal-plan",
+	Parts:    []*ai.Part{ai.NewTextPart(draft)},
+	Metadata: map[string]any{"contentType": "text/markdown"},
+})
+```
+
+Read them back from `out.Artifacts` on an `*aix.AgentOutput[State]`, from `snap.State.Artifacts` on a snapshot, or from `sess.Artifacts()` inside a run. `SendArtifact` appends and does not deduplicate names, so two sends with the same `Name` produce two entries. Call `sess.UpdateArtifacts` when you want to replace one instead.
+
+## Next steps
+
+- [Session stores](/docs/agents/session-stores) covers the built-in stores and the `SessionStore` interface a custom store implements.
+- [Background execution](/docs/agents/background) covers detached turns and pending snapshots.
 
 </Lang>
 

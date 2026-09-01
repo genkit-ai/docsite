@@ -51,6 +51,106 @@ Pick the platform you want to host your Genkit backend on. Each guide is self-co
 
 </Lang>
 
+<Lang lang="go">
+
+## Securing your deployment
+
+Genkit's HTTP handlers do no authentication of their own. `genkit.Handler`
+serves the flow to whoever sends the request, so a deployed flow is callable by
+anyone who can reach its URL. Because model calls are metered, an open endpoint
+is a billing risk as well as a data risk.
+
+Choose one of two approaches, or both:
+
+- **Platform authentication.** Deploy behind a layer that rejects unauthenticated
+  callers before they reach your process. On Cloud Run, answer `N` when `gcloud`
+  asks about unauthenticated invocations and let IAM check the caller's identity
+  token.
+- **Authentication in code.** Wrap each flow handler in middleware that validates
+  the caller before the flow runs.
+
+The code path looks like this:
+
+```go
+package main
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/server"
+)
+
+// requireAPIKey rejects any request that does not carry the expected key.
+func requireAPIKey(key string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	ctx := context.Background()
+
+	apiKey := os.Getenv("FLOW_API_KEY")
+	if apiKey == "" {
+		log.Fatal("FLOW_API_KEY is not set")
+	}
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
+	)
+
+	flow := genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell a short joke about %s.", topic))
+		if err != nil {
+			return "", fmt.Errorf("failed to generate joke: %w", err)
+		}
+		return resp.Text(), nil
+	})
+
+	mux := http.NewServeMux()
+	// Register every flow endpoint behind the check, not just this one.
+	mux.Handle("POST /jokesFlow", requireAPIKey(apiKey, genkit.Handler(flow)))
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
+}
+```
+
+Replace the shared-key check with whatever your callers already carry: a Firebase
+ID token, an OIDC token, or a session cookie. To pass the verified identity into
+the flow, use `genkit.WithContextProviders` instead of, or in addition to, the
+wrapper:
+
+```go
+mux.Handle("POST /jokesFlow", requireAPIKey(apiKey, genkit.Handler(flow,
+	genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+		return core.ActionContext{"uid": req.Headers["x-user-id"]}, nil
+	}),
+)))
+```
+
+`core` here is `github.com/firebase/genkit/go/core`. Inside the flow, read the
+value with `core.FromContext(ctx)`.
+
+</Lang>
+
 <Lang lang="js dart">
 
 ## Securing your deployment

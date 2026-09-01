@@ -53,22 +53,42 @@ you up and running quickly. These are the provided defaults:
 <Lang lang="go">
 
 This guide focuses on advanced configuration options for deployed features
-using the Firebase telemetry plugin.
+using the Firebase telemetry plugin. Every option lives on
+`firebase.FirebaseTelemetryOptions`, which you pass to
+`firebase.EnableFirebaseTelemetry`. Pass `nil` to take all of the defaults.
+
+| Field                          | Type                  | Default when unset                                                                  |
+| ------------------------------ | --------------------- | ----------------------------------------------------------------------------------- |
+| `ProjectID`                    | `string`              | Read from `FIREBASE_PROJECT_ID`, then `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT` |
+| `Credentials`                  | `*google.Credentials` | Application Default Credentials                                                     |
+| `Sampler`                      | `sdktrace.Sampler`    | `AlwaysOnSampler`, so every trace is kept                                           |
+| `MetricExportIntervalMillis`   | `*int`                | 5000 in dev, 300000 in production. Google Cloud rejects anything below 5000         |
+| `MetricExportTimeoutMillis`    | `*int`                | Matches `MetricExportIntervalMillis`                                                |
+| `DisableMetrics`               | `bool`                | `false`. Traces and logs are unaffected by this switch                              |
+| `DisableTraces`                | `bool`                | `false`. Metrics and logs are unaffected by this switch                             |
+| `DisableLoggingInputAndOutput` | `bool`                | `false`, so prompts and model responses are written to Cloud Logging                |
+| `ForceDevExport`               | `bool`                | `false`, so nothing is exported while `GENKIT_ENV=dev`                              |
+
+`google.Credentials` is `golang.org/x/oauth2/google.Credentials`, and
+`sdktrace` is `go.opentelemetry.io/otel/sdk/trace`.
+
+The two interval fields are `*int`, so setting them needs an addressable
+variable:
 
 ```go
-// Note: MetricExportIntervalMillis and MetricExportTimeoutMillis are pointers to int (*int).
-// The values shown below represent the internal defaults in production.
-{
-  DisableMetrics: false,
-  DisableTraces: false,
-  DisableLoggingInputAndOutput: false,
-  ForceDevExport: false,
-  // 5 minutes
-  MetricExportIntervalMillis: nil, // defaults to 300000
-  // 5 minutes
-  MetricExportTimeoutMillis: nil,  // defaults to 300000
-  // OpenTelemetry defaults to sdktrace.AlwaysSample()
-  Sampler: nil, // defaults to sdktrace.AlwaysSample()
+package main
+
+import (
+	"github.com/firebase/genkit/go/plugins/firebase"
+)
+
+func main() {
+	interval := 10000 // Milliseconds.
+
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		ForceDevExport:             true,
+		MetricExportIntervalMillis: &interval,
+	})
 }
 ```
 
@@ -76,8 +96,8 @@ using the Firebase telemetry plugin.
 
 ## Export local telemetry
 
-To export telemetry when running locally set the `forceDevExport` option to
-`true`.
+Nothing is exported while the process runs in a dev environment. To export
+telemetry when running locally, turn on the force dev export option.
 
 <Lang lang="js">
 
@@ -95,11 +115,9 @@ enableFirebaseTelemetry({ forceDevExport: true });
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(
-    &firebase.FirebaseTelemetryOptions{
-      ForceDevExport: true,
-    }
-  )
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		ForceDevExport: true,
+	})
 }
 ```
 
@@ -131,15 +149,122 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  interval := 10000
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    MetricExportIntervalMillis: &interval, // 10 seconds
-    MetricExportTimeoutMillis:  &interval, // 10 seconds
-  })
+	interval := 10000
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		MetricExportIntervalMillis: &interval, // 10 seconds
+		MetricExportTimeoutMillis:  &interval, // 10 seconds
+	})
 }
 ```
 
 </Lang>
+
+<Lang lang="go">
+
+## Sampling
+
+`Sampler` accepts any `sdktrace.Sampler`. Left `nil`, the plugin keeps every
+trace, which is fine in development and expensive at production volume: each
+kept trace costs storage in Cloud Trace and counts against your ingestion quota
+the same way a short export interval costs money in Cloud Monitoring.
+
+Sample a fraction instead, and wrap it in `ParentBased` so a trace that starts
+sampled stays sampled all the way down instead of losing its child spans:
+
+```go
+package main
+
+import (
+	"github.com/firebase/genkit/go/plugins/firebase"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+func main() {
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		// Keep 5% of traces. Metrics are unaffected by sampling.
+		Sampler: sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0.05)),
+	})
+}
+```
+
+Metrics are not sampled, so request counts and token counts stay exact no matter
+what you set here.
+
+## Instrumentation beyond Genkit
+
+The Go plugin does not auto-instrument anything. Go has no zero-code
+instrumentation equivalent, so the plugin registers a `TracerProvider` and a
+`MeterProvider` and Genkit's own actions are the only things that produce spans
+on them.
+
+To trace your HTTP handlers, your database calls, or any outbound client, add
+the corresponding OpenTelemetry instrumentation library yourself. For example,
+wrap your mux in
+[`otelhttp`](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp)
+before passing it to your server. Those libraries read the global provider at
+construction time, so build them after you call
+`firebase.EnableFirebaseTelemetry`. Their spans then land in the same traces as
+your flows.
+
+The only trace-shaping knobs the plugin itself offers are `Sampler`,
+`DisableTraces`, and `DisableMetrics`.
+
+## Flush on shutdown
+
+The plugin installs its own `SIGINT`/`SIGTERM` handler that force-flushes spans
+and metrics with a five-second budget, then calls `os.Exit(0)`. A process that
+terminates on a signal loses nothing, and you do not need to sleep for the
+length of `MetricExportIntervalMillis`.
+
+For a shutdown path that does not go through a signal, flush explicitly:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/plugins/googlecloud"
+)
+
+func flush(ctx context.Context) {
+	if err := googlecloud.FlushMetrics(ctx); err != nil {
+		log.Printf("failed to flush metrics: %v", err)
+	}
+}
+```
+
+`googlecloud.FlushMetrics` works for Firebase telemetry too, because
+`firebase.EnableFirebaseTelemetry` delegates to
+`googlecloud.EnableGoogleCloudTelemetry`. Call it after your HTTP server's
+`Shutdown` returns.
+
+## What lands in telemetry
+
+`DisableLoggingInputAndOutput: true` is the only built-in privacy control. It is
+all or nothing: it removes every prompt and every model response from the
+exported payloads. There is no field-level or key-level redaction option.
+
+Traces are not the place to look for content either way. The `genkit/input` and
+`genkit/output` span attributes are always `<redacted>`, because of trace
+attribute size limits rather than for privacy. The full content travels in the
+Cloud Logging payloads, which is exactly what `DisableLoggingInputAndOutput`
+suppresses.
+
+If you need to keep some content and drop the rest, wrap the span exporter. The
+`redactingSpanExporter` pattern in
+[Writing Genkit plugins](/docs/plugin-authoring/overview#pii-redaction) is the
+supported way to do it, and it is fine to use from application code, not just
+from a plugin.
+
+Locally, the Dev UI writes traces to `.genkit/traces` under your project root,
+with full inputs and outputs and no expiry. Add `.genkit/` to `.gitignore`, and
+delete it when you are done with a prompt you would not want kept.
+
+</Lang>
+
+<Lang lang="js">
 
 ## Adjust auto instrumentation
 
@@ -152,8 +277,6 @@ documentation.
 
 To selectively disable or enable instrumentations that are eligible for auto
 instrumentation, update the `autoInstrumentationConfig` field:
-
-<Lang lang="js">
 
 ```typescript
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
@@ -201,11 +324,14 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableLoggingInputAndOutput: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableLoggingInputAndOutput: true,
+	})
 }
 ```
+
+See [What lands in telemetry](#what-lands-in-telemetry) for what this covers
+and what it does not.
 
 </Lang>
 
@@ -235,9 +361,9 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableMetrics: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableMetrics: true,
+	})
 }
 ```
 
@@ -269,9 +395,9 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableTraces: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableTraces: true,
+	})
 }
 ```
 

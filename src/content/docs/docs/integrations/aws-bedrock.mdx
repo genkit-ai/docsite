@@ -201,7 +201,7 @@ This plugin supports all currently available **Chat/Completion** and **Embedding
 
 <Lang lang="go">
 
-An [AWS Bedrock](https://aws.amazon.com/bedrock/) plugin for Genkit Go that provides text generation, image generation, and embedding capabilities using AWS Bedrock foundation models via the Converse API.
+An [AWS Bedrock](https://aws.amazon.com/bedrock/) plugin for Genkit Go that provides text generation, image generation, and embedding capabilities using AWS Bedrock foundation models via the Converse API. The plugin is maintained in the [aws-bedrock-go-plugin](https://github.com/genkit-ai/aws-bedrock-go-plugin) repository.
 
 ## Installation
 
@@ -211,14 +211,7 @@ go get github.com/xavidop/genkit-aws-bedrock-go
 
 ## Features
 
-- **Text Generation**: Support for multiple foundation models via AWS Bedrock Converse API
-- **Image Generation**: Support for image generation models like Amazon Titan Image Generator
-- **Embeddings**: Support for text embedding models from Amazon Titan and Cohere
-- **Streaming**: Full streaming support for real-time responses
-- **Tool Calling**: Complete function calling capabilities with schema validation and type conversion
-- **Multimodal Support**: Support for text + image inputs (vision models)
-- **Schema Management**: Automatic conversion between Genkit and AWS Bedrock schemas
-- **Type Safety**: Robust type conversion for tool parameters (handles AWS document.Number types)
+The plugin covers text generation through the Converse API, streaming, tool calling, multimodal input, image generation, embeddings, and reranking. This page covers text generation, custom models, and prompt caching; for the rest, see the [examples directory](https://github.com/genkit-ai/aws-bedrock-go-plugin/tree/main/examples) in the plugin's repository, which has one runnable program per capability.
 
 ## Quick Start
 
@@ -243,10 +236,12 @@ func main() {
 	// Initialize Genkit
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(bedrockPlugin),
-		genkit.WithDefaultModel("bedrock/anthropic.claude-sonnet-4-6"), // Set default model
+		genkit.WithDefaultModel("bedrock/anthropic.claude-sonnet-4-20250514-v1:0"),
 	)
 
-    bedrock.DefineCommonModels(bedrockPlugin, g) // Optional: Define common models for easy access
+	// Required: the plugin registers nothing at Init, so the default model
+	// above does not resolve until something defines it.
+	bedrock.DefineCommonModels(bedrockPlugin, g)
 
 	log.Println("Starting basic Bedrock example...")
 
@@ -263,6 +258,38 @@ func main() {
 	log.Println("Basic Bedrock example completed")
 }
 ```
+
+## Models
+
+Nothing is registered at `Init`, and the plugin has no dynamic resolver. Every model you generate with has to be defined first, either one at a time with `DefineModel` or in bulk with `DefineCommonModels`. A model name that was never defined fails to resolve at `Generate` time.
+
+`DefineCommonModels(b *bedrock.Bedrock, g *genkit.Genkit) map[string]ai.Model` registers 17 models. Note the argument order: the plugin comes first, unlike the `g`-first order used elsewhere in Genkit Go.
+
+| Model ID | Type |
+| --- | --- |
+| `anthropic.claude-3-haiku-20240307-v1:0` | chat |
+| `anthropic.claude-3-5-sonnet-20241022-v2:0` | chat |
+| `anthropic.claude-3-7-sonnet-20250219-v1:0` | chat |
+| `anthropic.claude-opus-4-20250514-v1:0` | chat |
+| `anthropic.claude-sonnet-4-20250514-v1:0` | chat |
+| `amazon.nova-micro-v1:0` | chat |
+| `amazon.nova-lite-v1:0` | chat |
+| `amazon.nova-pro-v1:0` | chat |
+| `amazon.titan-text-premier-v1:0` | chat |
+| `meta.llama3-8b-instruct-v1:0` | chat |
+| `meta.llama3-1-8b-instruct-v1:0` | chat |
+| `meta.llama3-2-3b-instruct-v1:0` | chat |
+| `meta.llama4-maverick-17b-instruct-v1:0` | chat |
+| `meta.llama4-scout-17b-instruct-v1:0` | chat |
+| `deepseek.r1-v1:0` | chat |
+| `amazon.titan-image-generator-v1` | image |
+| `amazon.nova-canvas-v1:0` | image |
+
+Anything else, including newer Claude, Mistral, Cohere, AI21, and Writer models, goes through `DefineModel`. See the [AWS list of supported foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html) for the IDs Bedrock serves in your region.
+
+:::caution
+Many Bedrock models are only reachable through a cross-region inference profile, whose ID carries a region prefix (`us.`, `eu.`, `apac.`, `jp.`, `au.`, `us-gov.`, or `global.`), for example `us.anthropic.claude-sonnet-4-20250514-v1:0`. Calling the bare foundation-model ID for such a model fails at AWS with a validation error. The plugin strips the prefix before looking up capabilities, so a prefixed ID keeps the right ones.
+:::
 
 ## Using Custom Models
 
@@ -293,8 +320,8 @@ func main() {
 
     // Define a Claude model
     claudeModel := bedrockPlugin.DefineModel(g, bedrock.ModelDefinition{
-        Name: "anthropic.claude-sonnet-4-6",
-        Type: "text",
+        Name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        Type: "chat",
     }, nil)
 
     // Generate text
@@ -311,6 +338,38 @@ func main() {
 
     log.Println(response.Text())
 }
+```
+
+### Model definitions
+
+`ModelDefinition` describes one model:
+
+| Field  | Type     | Description                                                              |
+| ------ | -------- | ------------------------------------------------------------------------ |
+| `Name` | `string` | The model ID as AWS Bedrock spells it, including any inference-profile prefix. |
+| `Type` | `string` | `"chat"`, `"text"`, `"image"`, or `"embedding"`.                          |
+
+`Type` decides how the plugin describes the model and, for `"image"`, which API it calls. `"chat"` and `"text"` behave identically: both go through the Converse API and get multiturn, system-role, and tool support. `"image"` gets media output, no tools, and an open config schema, because image config shapes differ per model family. `"embedding"` gets no tools, no media, and no multiturn.
+
+:::note
+The [Azure AI Foundry plugin](/docs/integrations/azure-foundry) has a `ModelDefinition` with the same name but a different `Type` vocabulary, and its `Type` also routes the request. The two are not interchangeable.
+:::
+
+`DefineModel`'s third parameter is an `*ai.ModelInfo`, the model's capabilities. Pass `nil` to let the plugin infer them from the model ID and `Type`. An ID the plugin's capability registry does not know is inferred as multimodal and tool-capable, and marked unstable, so pass a value instead when the inference would be wrong:
+
+```go
+model := bedrockPlugin.DefineModel(g, bedrock.ModelDefinition{
+    Name: "us.example.some-text-only-model-v1:0",
+    Type: "chat",
+}, &ai.ModelInfo{
+    Label: "Some text-only model",
+    Supports: &ai.ModelSupports{
+        Multiturn:  true,
+        Tools:      true,
+        SystemRole: true,
+        Media:      false,
+    },
+})
 ```
 
 ## Configuration Options
@@ -376,11 +435,16 @@ Create an IAM policy with these permissions:
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream"
       ],
-      "Resource": ["arn:aws:bedrock:*::foundation-model/*"]
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
     }
   ]
 }
 ```
+
+The `inference-profile` entry is what lets a `us.`, `eu.`, or `apac.` prefixed model ID through. Without it, a cross-region inference profile is denied even though the underlying foundation model is allowed.
 
 ### Prompt Caching
 
@@ -399,6 +463,12 @@ response, err := genkit.Generate(ctx, g,
     ),
 )
 ```
+
+## Learn more
+
+- [Generating content with AI models](/docs/models)
+- [Tool calling](/docs/tool-calling)
+- [Middleware](/docs/middleware) for retry and fallback around a Bedrock model
 
 </Lang>
 

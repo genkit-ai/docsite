@@ -120,86 +120,178 @@ import "github.com/firebase/genkit/go/plugins/localvec"
 To use the local vector store, initialize it and define a retriever with an embedder:
 
 ```go
+package main
+
 import (
 	"context"
 	"log"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/localvec"
 )
 
-ctx := context.Background()
+func main() {
+	ctx := context.Background()
 
-g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
 
-if err := localvec.Init(); err != nil {
-	log.Fatal(err)
-}
+	if err := localvec.Init(); err != nil {
+		log.Fatal(err)
+	}
 
-myDocStore, myRetriever, err := localvec.DefineRetriever(
-	g, "my_vectorstore", localvec.Config{
-		Embedder: googlegenai.VertexAIEmbedder(g, "text-embedding-004"),
-	},
-	nil,
-)
-if err != nil {
-	log.Fatal(err)
+	embedder := genkit.LookupEmbedder(g, "vertexai/text-embedding-004")
+	if embedder == nil {
+		log.Fatal("embedder vertexai/text-embedding-004 is not registered")
+	}
+
+	myDocStore, myRetriever, err := localvec.DefineRetriever(
+		g, "my_vectorstore", localvec.Config{
+			Dir:      ".genkit/localvec",
+			Embedder: embedder,
+		},
+		nil,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// The Usage examples below continue from here: myDocStore for indexing,
+	// myRetriever for queries. They also need "fmt" and
+	// "github.com/firebase/genkit/go/ai".
+	_, _ = myDocStore, myRetriever
 }
 ```
 
-### Configuration Options
+`genkit.LookupEmbedder(g, name)` returns `nil` if no embedder with that
+identifier is registered, and the name must carry the provider prefix
+(`vertexai/`, `googleai/`). Check for `nil` before you hand the result to
+`localvec.Config`; a nil embedder panics on the first index or query.
+
+### Function signature
+
+```go
+func DefineRetriever(
+	g *genkit.Genkit,
+	name string,
+	cfg Config,
+	opts *ai.RetrieverOptions,
+) (*DocStore, ai.Retriever, error)
+```
+
+Hold the first result as a `*localvec.DocStore` if you need it later; it is the
+value you pass to `localvec.Index`. The retriever is registered under
+`devLocalVectorStore/<name>`, which is the identifier to use with
+`ai.WithRetrieverName`.
+
+### Configuration options
 
 - **name** (string): A unique name for this vector store instance. This is used as the retriever reference.
+- **Dir** (string): Directory for the database file. Defaults to `os.TempDir()`.
 - **Embedder** ([`ai.Embedder`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Embedder)): The embedding model to use. Must be a configured embedder in your Genkit project.
+- **EmbedderOptions** (`any`): Options passed through to the embedder on every call, for example `&genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"}`.
+- **opts** (`*ai.RetrieverOptions`): Action metadata for the retriever this call defines: `Label`, `ConfigSchema`, `Supports`, `Metadata`. Pass `nil` to accept the defaults.
+
+`ai.RetrieverOptions` describes the action. It is not the per-query options
+struct: that is `localvec.RetrieverOptions`, covered under
+[Retrieving documents](#retrieving-documents).
+
+:::caution
+The store applies the same `EmbedderOptions` to indexing and to queries, so it
+cannot do asymmetric `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` embedding. If you
+need that, define two `DocStore`s over the same `Dir` (one per task type), index
+with the document one and query with the other, or move to a store whose
+retriever accepts separate query options.
+:::
+
+### Where the data lives
+
+The store writes one JSON file per retriever at `<Dir>/__db_<name>.json`,
+rewritten through a `.tmp` file on every `Index` call. The index survives a
+process restart as long as that directory does, so the default `os.TempDir()`
+outlives a restart but not necessarily a reboot or a temp sweep. Set `Dir` to a
+project path such as `.genkit/localvec` if you want it stable, and add that path
+to `.gitignore`. To reset the store, delete the `__db_*.json` file.
 
 ## Usage
 
-### Indexing Documents
+### Indexing documents
 
-The Dev Local Vector Store automatically creates indexes. To populate with data, you need to implement your own indexing logic using the [`ai.Document`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Document) format:
+The Dev Local Vector Store automatically creates indexes. To populate one, build
+[`ai.Document`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Document)
+values and pass them to `localvec.Index` with the doc store:
 
 ```go
-import (
-    "github.com/firebase/genkit/go/ai"
-)
-
-// Create documents from text
 data := []string{
-    "This is the first document.",
-    "This is the second document.",
-    "This is the third document.",
-    "This is the fourth document.",
+	"This is the first document.",
+	"This is the second document.",
+	"This is the third document.",
+	"This is the fourth document.",
 }
 
 var docs []*ai.Document
-for _, text := range data {
-	docs = append(docs, ai.DocumentFromText(text, nil))
+for i, text := range data {
+	docs = append(docs, ai.DocumentFromText(text, map[string]any{
+		"id":     fmt.Sprintf("doc-%d", i),
+		"source": "handbook.md",
+	}))
 }
 
 // Index the documents using the DocStore returned by DefineRetriever
-err := localvec.Index(ctx, docs, myDocStore)
-if err != nil {
-    log.Fatal(err)
+if err := localvec.Index(ctx, docs, myDocStore); err != nil {
+	log.Fatal(err)
 }
 ```
 
-### Retrieving Documents
+The store persists the whole `ai.Document` as JSON, so metadata you attach at
+index time comes back on every retrieved document. Use it for IDs, titles and
+source paths. Because it round-trips through JSON, numeric metadata values come
+back as `float64` even if you stored an `int`.
 
-Use [`ai.Retrieve`](https://pkg.go.dev/github.com/firebase/genkit/go/ai#Retrieve) with the retriever you defined:
+### Concurrency and re-indexing
+
+`localvec.Index` is not safe for concurrent use on the same `DocStore`. It
+mutates an unsynchronized map and rewrites the whole database file, so
+concurrent calls race and can lose writes. Call it from one goroutine at a time.
+Reads through the retriever run against that same unsynchronized map, so do not
+index while you are serving queries.
+
+Indexing is keyed by a hash of the document content, so re-running ingestion
+over unchanged text is a no-op and does not duplicate chunks. Editing a document
+adds a new entry and leaves the old one in place. There is no delete or clear
+API; reset the store by deleting `<Dir>/__db_<name>.json`.
+
+### Retrieving documents
+
+Use [`genkit.Retrieve`](https://pkg.go.dev/github.com/firebase/genkit/go/genkit#Retrieve)
+with the retriever you defined. Pass `&localvec.RetrieverOptions{K: n}` to
+control how many documents come back; the default is 3.
 
 ```go
-// Retrieve documents relevant to a query
-resp, err := ai.Retrieve(ctx, myRetriever, ai.WithTextDocs("search query"))
+resp, err := genkit.Retrieve(ctx, g,
+	ai.WithRetriever(myRetriever),
+	ai.WithConfig(&localvec.RetrieverOptions{K: 5}),
+	ai.WithTextDocs("search query"))
 if err != nil {
 	log.Fatal(err)
 }
 
 // Process the retrieved documents
 for _, doc := range resp.Documents {
-	fmt.Println(doc.Content)
+	fmt.Println(doc.Metadata["source"], doc.Content[0].Text)
 }
 ```
+
+If you do not have the `ai.Retriever` value at hand, name it instead:
+
+```go
+resp, err := genkit.Retrieve(ctx, g,
+	ai.WithRetrieverName("devLocalVectorStore/my_vectorstore"),
+	ai.WithTextDocs("search query"))
+```
+
+`ai.RetrieverResponse` carries only `Documents`. The store ranks by cosine
+similarity internally but does not return the scores, so `K` is its only
+relevance control.
 
 </Lang>
