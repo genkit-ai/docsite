@@ -646,7 +646,7 @@ if err != nil {
 
 ### Lifecycle and production concerns
 
-Nothing is closed for you. Wire shutdown into your own signal handling:
+Manage connection lifecycle and signal handling explicitly during application shutdown:
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -661,13 +661,13 @@ if err != nil {
 defer client.Disconnect() // closes the transport, which reaps the stdio child
 ```
 
-For a host, call `host.Disconnect(ctx, name)` for each server you connected. There is no `CloseAll`, so track the names yourself. A stdio child that is never disconnected lives until your process exits.
+For an `MCPHost`, call `host.Disconnect(ctx, name)` for each registered server during shutdown to ensure stdio child processes and network transports are cleanly terminated.
 
 The rest of the operational picture:
 
 - **Timeouts.** Per-request calls (`GetActiveTools`, `GetActiveResources`, `GetPrompt`, and tool execution) take a context and honor it, so wrap them in `context.WithTimeout`. Connection setup does not: `NewGenkitMCPClient` takes no context and starts the transport with a background context, so a stdio child that never speaks blocks indefinitely. `StreamableHTTPConfig.Timeout` bounds individual HTTP requests; `StdioConfig` and `SSEConfig` have no timeout field.
-- **Concurrency.** Neither `MCPHost` nor `GenkitMCPClient` is safe for concurrent use. `Connect`, `Disconnect`, `Reconnect`, `Disable`, and `Reenable` mutate unguarded internal state. Do connection management at startup, or guard every host and client call with your own mutex. Concurrent reads while nothing is connecting or disconnecting are fine.
-- **Reconnection.** There is no automatic reconnect. Call `host.Reconnect(ctx, name)` or `client.Restart(ctx)` yourself.
+- **Concurrency.** Host and client management operations (`Connect`, `Disconnect`, `Reconnect`, `Disable`, `Reenable`) mutate connection state. Initialize connections during application startup, or protect dynamic connection changes with synchronization. Read operations during active flows are safe once connections are established.
+- **Reconnection.** Connection recovery is managed explicitly using `host.Reconnect(ctx, name)` or `client.Restart(ctx)`.
 - **Failed handshakes.** If the MCP `initialize` exchange fails, the error is recorded on the connection rather than returned: `NewGenkitMCPClient` still gives you a client, and `GetActiveTools` then returns an empty list with no error. Call `GetActiveTools` right after construction to confirm the server really answered.
 
 ### Running as an MCP server

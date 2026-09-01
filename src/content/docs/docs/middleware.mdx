@@ -668,7 +668,7 @@ Both `Request` fields above are the same `*ai.ModelRequest`:
 | `Docs`       | `[]*ai.Document`        |
 
 :::note
-`ai.ModelRequest` carries no model name. In `WrapGenerate`, read `params.Options.Model`. In `WrapModel`, the name is not on `params` at all: capture it in `WrapGenerate` and close over it, as the [caching example](#caching-middleware) does.
+`ai.ModelRequest` carries no model name. In `WrapGenerate`, read `params.Options.Model`. In `WrapModel`, the name is not on `params` at all: if needed, capture it in `WrapGenerate` and close over it.
 :::
 
 **Mutating params.** A hook may edit `params` in place, or build a different value and hand that to `next`; the engine reads whatever it is given. Three rules follow from how the loop owns these values:
@@ -801,123 +801,13 @@ func (Counter) New(ctx context.Context) (*ai.Hooks, error) {
 
 The built-in `Filesystem` middleware uses this pattern: `New` allocates a per-call file-state cache and a path-lock map, then the read, write, and edit tool implementations close over both.
 
-State that must outlive one call goes on the middleware value instead, and the value is shared, so guard it. The caching and budget middleware below both do this.
+### Illustrative example: Guardrails middleware
 
-### Caching middleware
-
-Genkit ships no cache middleware. `WrapModel` is the seam for one: it sees every model call, and it is the layer at which a repeat question can be answered without paying for it.
+The following example demonstrates how to build an illustrative custom middleware that performs pre- and post-generation policy checks. Using `WrapModel` and `WrapGenerate`, the middleware can evaluate inputs before an expensive model invocation runs, and inspect outputs before returning them to the caller:
 
 ```go
-type cacheEntry struct {
-    body    []byte
-    expires time.Time
-}
-
-// Cache serves repeat model calls from memory. Share one value across calls:
-// New runs once per Generate call, so a cache in a closure would never hit.
-type Cache struct {
-    TTL time.Duration
-
-    mu      sync.RWMutex
-    entries map[string]cacheEntry
-}
-
-func (*Cache) Name() string { return "mine/cache" }
-
-func (c *Cache) New(context.Context) (*ai.Hooks, error) {
-    // ModelRequest carries no model name, so read it from the generate hook.
-    var model string
-    return &ai.Hooks{
-        WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
-            model = p.Options.Model
-            return next(ctx, p)
-        },
-        WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
-            // A hit produces no chunks, so decline to serve streaming calls.
-            if p.Callback != nil {
-                return next(ctx, p)
-            }
-            key, err := cacheKey(model, p.Request)
-            if err != nil {
-                return next(ctx, p)
-            }
-            if resp, ok := c.load(key); ok {
-                return resp, nil
-            }
-            resp, err := next(ctx, p)
-            if err != nil {
-                return nil, err
-            }
-            c.save(key, resp)
-            return resp, nil
-        },
-    }, nil
-}
-
-// cacheKey hashes everything that can change the answer. Leaving out Config or
-// Tools would serve a stale answer after either one changes.
-func cacheKey(model string, req *ai.ModelRequest) (string, error) {
-    tools := slices.Clone(req.Tools)
-    slices.SortFunc(tools, func(a, b *ai.ToolDefinition) int { return strings.Compare(a.Name, b.Name) })
-    body, err := json.Marshal(struct {
-        Model      string                `json:"model"`
-        Messages   []*ai.Message         `json:"messages"`
-        Config     any                   `json:"config"`
-        Output     *ai.ModelOutputConfig `json:"output"`
-        ToolChoice ai.ToolChoice         `json:"toolChoice"`
-        Tools      []*ai.ToolDefinition  `json:"tools"`
-        Docs       []*ai.Document        `json:"docs"`
-    }{model, req.Messages, req.Config, req.Output, req.ToolChoice, tools, req.Docs})
-    if err != nil {
-        return "", err
-    }
-    sum := sha256.Sum256(body)
-    return hex.EncodeToString(sum[:]), nil
-}
-
-func (c *Cache) load(key string) (*ai.ModelResponse, bool) {
-    c.mu.RLock()
-    e, ok := c.entries[key]
-    c.mu.RUnlock()
-    if !ok || time.Now().After(e.expires) {
-        return nil, false
-    }
-    var resp ai.ModelResponse
-    if err := json.Unmarshal(e.body, &resp); err != nil {
-        return nil, false
-    }
-    return &resp, true
-}
-
-func (c *Cache) save(key string, resp *ai.ModelResponse) {
-    body, err := json.Marshal(resp)
-    if err != nil {
-        return
-    }
-    c.mu.Lock()
-    defer c.mu.Unlock()
-    if c.entries == nil {
-        c.entries = map[string]cacheEntry{}
-    }
-    c.entries[key] = cacheEntry{body: body, expires: time.Now().Add(c.TTL)}
-}
-```
-
-Storing the marshalled response rather than the pointer costs one round trip but keeps the entry immune to a caller mutating it, and it is the same code you need to move the map to Redis.
-
-Three traps are worth stating plainly:
-
-- **The key must cover the tools and the config.** Drop either and a config change silently serves the old answer. Sort the tool definitions first, since their order is not stable.
-- **The key must cover the model.** `ModelParams` does not carry the model name, so a cache that keys only on `p.Request` will serve one model's answer for another. Capturing `p.Options.Model` in `WrapGenerate`, as above, is the way to get it.
-- **A hit replays nothing.** Streaming callers expect chunks, and a cached response has none. Either decline to serve streaming calls, as above, or replay the cached content through `p.Callback` before returning.
-
-### Guardrails
-
-`WrapModel` and `WrapGenerate` are the two places to put a policy check: one before the expensive model runs, one after it answers. Screening input with a cheap model is the standard way to cap abuse cost, because the expensive call never happens.
-
-```go
-// Guardrail screens the request before the expensive model runs, and checks the
-// answer before the caller sees it. Both hooks use a cheap classifier model.
+// Guardrail screens the request before the model runs, and checks the
+// response before the caller sees it. Both hooks use a classifier model.
 type Guardrail struct {
     Classifier string `json:"classifier,omitempty"`
     g          *genkit.Genkit
@@ -939,7 +829,7 @@ func (gr Guardrail) classify(ctx context.Context, instruction, text string) (str
 
 func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
     return &ai.Hooks{
-        // Input guardrail: screen before spending on the expensive model.
+        // Input guardrail: screen before running the primary model.
         WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
             var sb strings.Builder
             for _, m := range p.Request.Messages {
@@ -953,14 +843,14 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
                 return nil, err
             }
             if verdict != "ALLOW" {
-                // Returning without calling next: the expensive model never runs.
+                // Returning without calling next: the primary model never runs.
                 return nil, status.Errorf(status.ErrFailedPrecondition,
                     "input guardrail tripped: %s", verdict)
             }
             return next(ctx, p)
         },
 
-        // Output guardrail: check the answer before the caller acts on it.
+        // Output guardrail: check the response before returning to the caller.
         WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
             resp, err := next(ctx, p)
             if err != nil || resp.Text() == "" {
@@ -980,74 +870,9 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
 }
 ```
 
-The output hook can also replace the response instead of failing, since `WrapGenerate` returns the `*ai.ModelResponse` the caller receives. Failing is the safer default: a substituted answer is easy to mistake for the model's own.
+The output hook can also modify or replace the response if desired, as `WrapGenerate` returns the `*ai.ModelResponse` received by the caller.
 
-`WrapTool` is the third seam. Refusing a dangerous tool call there, as the [short-circuiting example](#what-each-hook-receives) shows, lets the model read the refusal and try something else on the next turn, rather than ending the run.
-
-### Budgets and limits
-
-Genkit ships no budget primitive. `ai.WithMaxTurns` caps loop iterations (default 5, then `ai.ErrMaxTurnsExceeded`) and `MaxOutputTokens` caps a single response, so a long-context loop can stay inside both and still burn unbounded tokens. `WrapModel` sees every model call and `ai.ModelResponse.Usage` carries the counts, so a real budget is a short middleware:
-
-```go
-// Budget caps the tokens one Generate call may spend across all of its model
-// calls, and how many model calls may be in flight at once.
-type Budget struct {
-    MaxTokens int `json:"maxTokens,omitempty"`
-    sem       chan struct{}
-}
-
-func NewBudget(maxTokens, maxInFlight int) Budget {
-    var sem chan struct{}
-    if maxInFlight > 0 {
-        sem = make(chan struct{}, maxInFlight)
-    }
-    return Budget{MaxTokens: maxTokens, sem: sem}
-}
-
-func (Budget) Name() string { return "mine/budget" }
-
-func (b Budget) New(context.Context) (*ai.Hooks, error) {
-    var (
-        mu   sync.Mutex
-        used int
-    )
-    return &ai.Hooks{
-        WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
-            mu.Lock()
-            spent := used
-            mu.Unlock()
-            if b.MaxTokens > 0 && spent >= b.MaxTokens {
-                return nil, status.Errorf(status.ErrResourceExhausted,
-                    "token budget exhausted: %d/%d", spent, b.MaxTokens)
-            }
-
-            if b.sem != nil {
-                select {
-                case b.sem <- struct{}{}:
-                    defer func() { <-b.sem }()
-                case <-ctx.Done():
-                    return nil, ctx.Err()
-                }
-            }
-
-            resp, err := next(ctx, p)
-            if err != nil {
-                return nil, err
-            }
-            if u := resp.Usage; u != nil {
-                mu.Lock()
-                used += u.InputTokens + u.OutputTokens
-                mu.Unlock()
-            }
-            return resp, nil
-        },
-    }, nil
-}
-```
-
-Note where each piece of state lives. `used` is a closure variable, so it bounds one `Generate` call, which is the useful scope for a per-request cap. `sem` is a field on the middleware value, so one `Budget` shared across handlers caps the whole process. Swap them around and you get the other behavior. `ai.GenerationUsage` also reports `TotalTokens` and `CachedContentTokens` if you want to price cache hits differently.
-
-`ResourceExhausted` is the right status here: it tells the caller to back off rather than retry immediately. See [Error types](/docs/error-types) for how that reaches your HTTP layer.
+Similarly, `WrapTool` can intercept tool calls, allowing you to validate or reject arguments before tool execution occurs.
 
 ### Plugin-provided middleware and plugin-level state
 

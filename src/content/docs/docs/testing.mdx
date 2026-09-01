@@ -555,36 +555,99 @@ func NewSummarizeFlow(g *genkit.Genkit, model string) *core.Flow[string, Summary
 `github.com/firebase/genkit/go/core`. That is the type to name when you store a
 flow in a struct field or pass it to a helper.
 
-## Write a fake model
+## Write a test model stub
 
-A fake model is just a model action whose function returns whatever you tell it
-to. `genkit.DefineModelAction` registers it under a name your flow can resolve,
-and because the function closes over a struct, the same fake can also record
-every request it received.
+A test model is a model action registered on a test `*genkit.Genkit` instance that returns a predetermined response or error. `genkit.DefineModelAction` registers it under a name your flow can resolve, so your tests run deterministically with no network calls or API keys.
 
-```go title="fake_test.go"
-type fake struct {
-	Requests []*ai.ModelRequest   // every request received, in order
-	Replies  []*ai.ModelResponse  // one per call; the last one repeats
-	Err      error                // when set, returned instead of a reply
-	Chunks   []string             // streamed before the reply
-}
-
-func (f *fake) register(t *testing.T, g *genkit.Genkit, name string) {
-	t.Helper()
+```go title="mock_model_test.go"
+// defineTestModel registers a model action that returns a fixed response.
+func defineTestModel(g *genkit.Genkit, name string, response *ai.ModelResponse) {
 	genkit.DefineModelAction(g, name, &ai.ModelOptions{
-		// Claim the capabilities your test depends on. Genkit rewrites requests
-		// for models that do not claim them: with SystemRole false, the system
-		// prompt is folded into a user message prefixed "SYSTEM INSTRUCTIONS:",
-		// which will surprise you when you assert on it.
 		Supports: &ai.ModelSupports{Multiturn: true, Tools: true, SystemRole: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, _ struct{}, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		f.Requests = append(f.Requests, req)
-		if f.Err != nil {
-			return nil, f.Err
-		}
+		return response, nil
+	})
+}
+
+// defineErrorModel registers a model action that returns a designated error.
+func defineErrorModel(g *genkit.Genkit, name string, err error) {
+	genkit.DefineModelAction(g, name, &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true, Tools: true, SystemRole: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, _ struct{}, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, err
+	})
+}
+```
+
+`genkit.Init(ctx)` with no plugins initializes a test-friendly instance: it registers no external providers, reads no credentials, and starts no reflection server. Build a fresh instance per test to isolate registrations.
+
+## Test structured output
+
+Configure the test model to return JSON conforming to your output schema, and assert on the decoded Go value:
+
+```go
+func TestStructuredOutput(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+
+	want := Summary{Headline: "Release notes", Bullets: []string{"a", "b", "c"}}
+	body, _ := json.Marshal(want)
+	defineTestModel(g, "mock/model", &ai.ModelResponse{
+		FinishReason: ai.FinishReasonStop,
+		Message:      ai.NewModelTextMessage(string(body)),
+	})
+
+	flow := NewSummarizeFlow(g, "mock/model")
+	got, err := flow.Run(ctx, "Sample release notes text.")
+	if err != nil {
+		t.Fatalf("flow failed: %v", err)
+	}
+	if got.Headline != want.Headline || len(got.Bullets) != 3 {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+```
+
+## Test tools directly
+
+Because tools in Genkit wrap plain Go functions, you can unit-test tool business logic directly without running a model loop:
+
+```go
+func TestWordCountTool(t *testing.T) {
+	ctx := context.Background()
+
+	type wordCountInput struct {
+		Text string `json:"text"`
+	}
+	toolFn := func(_ *ai.ToolContext, in wordCountInput) (int, error) {
+		return len(strings.Fields(in.Text)), nil
+	}
+
+	got, err := toolFn(&ai.ToolContext{Context: ctx}, wordCountInput{Text: "one two three"})
+	if err != nil {
+		t.Fatalf("tool error: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("got %d, want 3", got)
+	}
+}
+```
+
+## Test streaming
+
+To test streaming flows, pass chunks to the `ModelStreamCallback` inside a custom model action:
+
+```go
+func TestStreaming(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+
+	genkit.DefineModelAction(g, "mock/stream", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, _ struct{}, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		chunks := []string{"Hello", ", ", "world"}
 		if cb != nil {
-			for _, c := range f.Chunks {
+			for _, c := range chunks {
 				if err := cb(ctx, &ai.ModelResponseChunk{
 					Role:    ai.RoleModel,
 					Content: []*ai.Part{ai.NewTextPart(c)},
@@ -593,158 +656,15 @@ func (f *fake) register(t *testing.T, g *genkit.Genkit, name string) {
 				}
 			}
 		}
-		i := min(len(f.Requests)-1, len(f.Replies)-1)
-		return f.Replies[i], nil
-	})
-}
-
-func textReply(s string) *ai.ModelResponse {
-	return &ai.ModelResponse{FinishReason: ai.FinishReasonStop, Message: ai.NewModelTextMessage(s)}
-}
-```
-
-`genkit.Init(ctx)` with no plugins is enough for a test: it registers no
-providers, reads no credentials, and starts no reflection server, because
-`GENKIT_ENV` is unset and Genkit defaults to the production environment. Build a
-fresh instance per test so registrations cannot leak between them.
-
-## Test structured output
-
-The fake returns the JSON your schema expects, and the assertion is on the
-decoded Go value:
-
-```go
-func TestStructuredOutput(t *testing.T) {
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-
-	want := Summary{Headline: "Go 1.24 lands", Bullets: []string{"a", "b", "c"}}
-	body, _ := json.Marshal(want)
-	f := &fake{Replies: []*ai.ModelResponse{textReply(string(body))}}
-	f.register(t, g, "fake/structured")
-
-	got, err := NewSummarizeFlow(g, "fake/structured").Run(ctx, "Go 1.24 was released today.")
-	if err != nil {
-		t.Fatalf("flow: %v", err)
-	}
-	if got.Headline != want.Headline || len(got.Bullets) != 3 {
-		t.Fatalf("got %+v", got)
-	}
-}
-```
-
-Returning JSON that does not satisfy the schema is also worth a test: Genkit
-validates the model's output and the flow returns an error rather than a
-half-filled struct.
-
-## Assert what the model received
-
-`f.Requests` is the whole point of recording. Use it to pin prompt assembly, so
-a careless edit to a system prompt fails a test instead of shipping:
-
-```go
-func TestPromptAssembly(t *testing.T) {
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-	body, _ := json.Marshal(Summary{Headline: "x", Bullets: []string{"a"}})
-	f := &fake{Replies: []*ai.ModelResponse{textReply(string(body))}}
-	f.register(t, g, "fake/prompt")
-
-	if _, err := NewSummarizeFlow(g, "fake/prompt").Run(ctx, "an article about badgers"); err != nil {
-		t.Fatalf("flow: %v", err)
-	}
-
-	var system, user string
-	for _, m := range f.Requests[0].Messages {
-		switch m.Role {
-		case ai.RoleSystem:
-			system = m.Text()
-		case ai.RoleUser:
-			user = m.Text()
-		}
-	}
-	if !strings.Contains(system, "Three bullets") {
-		t.Errorf("system prompt = %q", system)
-	}
-	if !strings.Contains(user, "badgers") {
-		t.Errorf("user prompt = %q", user)
-	}
-}
-```
-
-The request also carries the output schema Genkit derived from your Go type, in
-a user-role part tagged `metadata["purpose"] == "output"`. Assert on it when the
-schema itself is the thing you care about.
-
-## Test tool calling
-
-Script two replies: the first asks for the tool, the second answers using its
-result. Genkit runs the loop, so the test proves your tool was called with the
-input you expect and that its output reached the second request.
-
-```go
-func TestToolCalling(t *testing.T) {
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-
-	var called int
-	wordCount := genkit.DefineTool(g, "wordCount", "Counts words in a string.",
-		func(_ *ai.ToolContext, in struct {
-			Text string `json:"text"`
-		}) (int, error) {
-			called++
-			return len(strings.Fields(in.Text)), nil
-		})
-
-	f := &fake{Replies: []*ai.ModelResponse{
-		{
+		return &ai.ModelResponse{
 			FinishReason: ai.FinishReasonStop,
-			Message: ai.NewModelMessage(ai.NewToolRequestPart(&ai.ToolRequest{
-				Name: "wordCount", Input: map[string]any{"text": "one two three"}, Ref: "call-1",
-			})),
-		},
-		textReply("There are 3 words."),
-	}}
-	f.register(t, g, "fake/tools")
-
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("fake/tools"),
-		ai.WithPrompt("How many words?"),
-		ai.WithTools(wordCount),
-	)
-	if err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-	if called != 1 {
-		t.Fatalf("tool called %d times, want 1", called)
-	}
-	if len(f.Requests) != 2 {
-		t.Fatalf("model calls = %d, want 2", len(f.Requests))
-	}
-	if resp.Text() != "There are 3 words." {
-		t.Fatalf("text = %q", resp.Text())
-	}
-}
-```
-
-## Test streaming
-
-The fake's callback is the model's stream. Drive it from the test and assert on
-what a client would have seen:
-
-```go
-func TestStreaming(t *testing.T) {
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-	f := &fake{
-		Chunks:  []string{"Hello", ", ", "world"},
-		Replies: []*ai.ModelResponse{textReply("Hello, world")},
-	}
-	f.register(t, g, "fake/stream")
+			Message:      ai.NewModelTextMessage("Hello, world"),
+		}, nil
+	})
 
 	var seen []string
 	for chunk, err := range genkit.GenerateStream(ctx, g,
-		ai.WithModelName("fake/stream"),
+		ai.WithModelName("mock/stream"),
 		ai.WithPrompt("greet"),
 	) {
 		if err != nil {
@@ -761,72 +681,17 @@ func TestStreaming(t *testing.T) {
 }
 ```
 
-To test a streaming flow rather than a bare generation, call `flow.Stream`. It
-returns a range-over-func yielding `*core.StreamingFlowValue[Out, Stream]`: while
-`Done` is false the value is in `Stream`, and the single final iteration carries
-the flow's return value in `Output`.
-
-```go
-func TestStreamingFlow(t *testing.T) {
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-	f := &fake{
-		Chunks:  []string{"Hello", ", ", "world"},
-		Replies: []*ai.ModelResponse{textReply("Hello, world")},
-	}
-	f.register(t, g, "fake/flowstream")
-
-	// The flow relays the model's chunks and returns the assembled text.
-	flow := genkit.DefineStreamingFlow(g, "greet",
-		func(ctx context.Context, name string, stream core.StreamCallback[string]) (string, error) {
-			resp, err := genkit.Generate(ctx, g,
-				ai.WithModelName("fake/flowstream"),
-				ai.WithPrompt("Greet %s.", name),
-				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-					if stream == nil {
-						return nil
-					}
-					return stream(ctx, chunk.Text())
-				}),
-			)
-			if err != nil {
-				return "", err
-			}
-			return resp.Text(), nil
-		})
-
-	var chunks []string
-	var final string
-	for v, err := range flow.Stream(ctx, "world") {
-		if err != nil {
-			t.Fatalf("stream: %v", err)
-		}
-		if v.Done {
-			final = v.Output
-			break
-		}
-		chunks = append(chunks, v.Stream)
-	}
-	if strings.Join(chunks, "") != "Hello, world" || final != "Hello, world" {
-		t.Fatalf("chunks = %q, final = %q", chunks, final)
-	}
-}
-```
-
 ## Test the HTTP layer
 
-`genkit.Handler` turns a flow into an `http.HandlerFunc`, and `httptest.Server`
-serves it in-process. This is where you pin the wire contract: the success
-envelope, the status code on failure, and the redacted body.
+`genkit.Handler` turns a flow into an `http.HandlerFunc`, and `httptest.Server` serves it in-process. This verifies the wire contract: the success envelope, status codes, and error formatting.
 
 ```go
 func TestHTTPBoundary(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.Init(ctx)
-	f := &fake{Err: status.Errorf(status.ErrResourceExhausted, "quota exceeded")}
-	f.register(t, g, "fake/http")
+	defineErrorModel(g, "mock/http", status.Errorf(status.ErrResourceExhausted, "quota exceeded"))
 
-	flow := NewSummarizeFlow(g, "fake/http")
+	flow := NewSummarizeFlow(g, "mock/http")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /summarize", genkit.Handler(flow))
@@ -850,26 +715,20 @@ func TestHTTPBoundary(t *testing.T) {
 }
 ```
 
-The request body is `{"data": <flow input>}` and a successful response is
-`{"result": <flow output>}`. A failure body is plain text, and only a message
-built with `status.PublicErrorf` appears in it. See
-[Error types](/docs/error-types) for the rules the handler applies.
+The request body is `{"data": <flow input>}` and a successful response is `{"result": <flow output>}`. A failure body is plain text, and only a message built with `status.PublicErrorf` appears in it. See [Error types](/docs/error-types) for the rules the handler applies.
 
 ## Test failure handling
 
-Set `Err` to a classified error and assert that the classification survives to
-your handler. This is how you pin the mapping your HTTP boundary depends on
-without provoking a real quota error.
+Use `defineErrorModel` with a classified error to verify that the classification propagates to your handler without needing a live provider error:
 
 ```go
 func TestProviderFailureIsClassified(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.Init(ctx)
-	f := &fake{Err: status.Errorf(status.ErrResourceExhausted, "quota exceeded")}
-	f.register(t, g, "fake/broken")
+	defineErrorModel(g, "mock/broken", status.Errorf(status.ErrResourceExhausted, "quota exceeded"))
 
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName("fake/broken"),
+		ai.WithModelName("mock/broken"),
 		ai.WithPrompt("anything"),
 	)
 	if !errors.Is(err, status.ErrResourceExhausted) {
@@ -878,8 +737,7 @@ func TestProviderFailureIsClassified(t *testing.T) {
 }
 ```
 
-See [Error types](/docs/error-types) for the full status set and how each one
-reaches a client.
+See [Error types](/docs/error-types) for the full status set and how each one reaches a client.
 
 ## Test a plugin
 
@@ -970,7 +828,7 @@ import (
 - [Tool calling](/docs/tool-calling) — how tool round-trips work
 - [Error types](/docs/error-types) — the status codes your tests assert on
 - [Writing plugins](/docs/plugin-authoring/overview) — `ai.ModelOptions` and
-  `ai.ModelSupports`, which the fake above uses
+  `ai.ModelSupports`, used when defining test models
 - [Evaluation](/docs/evaluation) — assessing real model output quality
 
 </Lang>
