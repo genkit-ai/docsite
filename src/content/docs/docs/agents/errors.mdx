@@ -114,10 +114,11 @@ res.assertValid();
 
 ## Failure categories
 
-- **Rejected init** returns a non-nil Go error from `Connect`, `Run`, or `RunText`. Fix the caller or selected resume source.
-- **Failed turns** return `AgentOutput` with `AgentFinishReasonFailed` and a non-nil `Error`. Resume from `State` for client-managed agents or `SnapshotID` for server-managed agents.
-- **Tool domain problems** should return structured tool output when the coordinator or model can recover.
-- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect snapshot error details or retry from a completed snapshot.
+- **Rejected init** returns a non-nil Go error from `Connect`, `Run`, `RunText`, or `RunDetached` before any turn runs. Fix the caller or the selected resume source.
+- **Failed turns** return an `AgentOutput` whose `FinishReason` is `AgentFinishReasonFailed` and whose `Error` is non-nil. The tool rounds the turn completed are kept, and the output names the resume point: `SnapshotID` for a server-managed agent, `State` for a client-managed one.
+- **Stopped runs** return the error that stopped them together with an `AgentOutput` whose `FinishReason` is `AgentFinishReasonAborted` and whose `Error` carries the same stop, classified. A cancelled context, an expired deadline, a closed transport, a limit such as `ai.WithMaxTurns`, and `Abort` on a detached run all count. The snapshot keeps the turns that finished.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. The first two resume like their foreground counterparts. An expired run is lost; restart it from the snapshot's `ParentID`.
+- **Tool domain problems** should return structured tool output when the orchestrator or model can recover.
 
 An unrecognized `sessionId` is not an error. The agent starts a new conversation under that ID and every snapshot it writes carries it, so there is no `ErrSessionNotFound` sentinel. `aix.ErrSnapshotNotFound` applies only to an unknown `snapshotId`.
 
@@ -125,7 +126,7 @@ The rejected-init cases from `Run`, `RunText`, and `Connect` are narrow: sending
 
 ## Check both error channels
 
-An agent reports failure through two channels. A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band, so the output can still carry recovery state or a recovery snapshot ID.
+An agent reports failure through two channels. A non-nil Go error means the invocation was rejected, could not produce an output, or was stopped by its caller. A failed turn is in-band, so the output carries the resume point. A stopped run sets both, so read `out` before acting on `err`.
 
 `AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
 
@@ -139,13 +140,17 @@ import (
 ```go
 out, err := agent.RunText(ctx, "Look up order 123.")
 if err != nil {
+	if out != nil {
+		// The caller stopped the run. out.SnapshotID is the resume point.
+		return fmt.Errorf("agent stopped at %s: %w", out.SnapshotID, err)
+	}
 	return fmt.Errorf("agent invocation did not start: %w", err)
 }
 
 if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
 	switch out.Error.Status {
 	case status.Unavailable, status.ResourceExhausted:
-		// Overloaded. Resume from out.SnapshotID in a moment.
+		// Overloaded. Re-attempt the turn from out.SnapshotID in a moment.
 		return nil
 	case status.InvalidArgument:
 		// The model or a tool rejected the request. Rephrase it.
@@ -162,13 +167,14 @@ Return from each recovery arm rather than falling through. A failed turn may hav
 
 What the rest of `AgentOutput` holds depends on how the invocation finished:
 
-| `FinishReason` | `Error`  | `SnapshotID`                                                                    | `State`                    | `Message`      |
-| -------------- | -------- | ------------------------------------------------------------------------------- | -------------------------- | -------------- |
-| `failed`       | non-nil  | The last committed turn's snapshot: the resume point, without the failed turn's partial mutations. | Last-good client-managed state. | May be nil.    |
-| `detached`     | nil      | The pending snapshot.                                                           | Nil; detach needs a store. | May be nil.    |
-| anything else  | nil      | The most recent turn-end snapshot, or empty with no store.                      | Client-managed final state. | The last model message. |
+| `FinishReason` | `Error`  | `SnapshotID`                                                                                       | `State`                          | `Message`               |
+| -------------- | -------- | -------------------------------------------------------------------------------------------------- | -------------------------------- | ----------------------- |
+| `failed`       | non-nil  | The failed turn's own snapshot: the tool rounds it completed, ending at a turn seam. Resumable.     | What the turn committed.         | May be nil.             |
+| `aborted`      | non-nil  | The aborted snapshot, holding the turns that finished before the stop. Resumable.                  | Last-good client-managed state.  | May be nil.             |
+| `detached`     | nil      | The pending snapshot.                                                                              | Nil; detach needs a store.       | May be nil.             |
+| anything else  | nil      | The most recent turn-end snapshot, or empty with no store.                                         | Client-managed final state.      | The last model message. |
 
-The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
+A turn rejected before it reaches the model, such as an invalid input or a render failure, commits nothing: the resume point stays the turn before it, and `SnapshotID` reports that. Either way the newest snapshot of the session is the latest resumable state. The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
 
 ## Snapshot and store failures
 
@@ -185,17 +191,17 @@ if _, err := agent.GetSnapshot(ctx, snapshotID); err != nil {
 }
 ```
 
-## Resume after failure
+## Resume after a failure or a stop
 
-For client-managed agents, pass the last-good state from the failed output:
+A `failed` or `aborted` snapshot ends at a turn seam, so the model can be called on it again. Send an input with no payload to re-attempt the turn as it stood. The turn runs again on the committed messages, so the tool calls that already succeeded are not repeated:
 
 ```go
-retry, err := agent.RunText(ctx, "Try order 456.",
-	aix.WithState(out.State),
+retried, err := agent.Run(ctx, &aix.AgentInput{},
+	aix.WithSnapshotID[OrderState](out.SnapshotID),
 )
 ```
 
-For server-managed agents, resume from the recovery snapshot:
+Send a new message on the same snapshot to change course instead, or resume from the snapshot's `ParentID` to rewind past the turn altogether:
 
 ```go
 retry, err := agent.RunText(ctx, "Try order 456.",
@@ -203,7 +209,17 @@ retry, err := agent.RunText(ctx, "Try order 456.",
 )
 ```
 
-Only completed snapshots are resumable. If the latest session snapshot is failed, aborted, or pending, use a known completed snapshot ID or wait for the pending work to finish.
+For client-managed agents the failed output's `State` is the same resume point inline. Pass it back with `aix.WithState`, with an empty input or a new message:
+
+```go
+retry, err := agent.RunText(ctx, "Try order 456.",
+	aix.WithState(out.State),
+)
+```
+
+Whether a failure is worth another attempt is the caller's decision. The runtime records the status on the row and never classifies it: a `RESOURCE_EXHAUSTED` wants a wait, an `INVALID_ARGUMENT` wants a different message, and a `FAILED_PRECONDITION` from a tool guard may want neither.
+
+Three statuses are not resume points. `pending` and `aborting` describe work that is still settling, so wait for it. `expired` means the worker died; resume from the row's `ParentID`. A custom agent commits a failed turn only when it opts in, as described in [Custom orchestration](/docs/agents/custom-orchestration).
 
 ## Tool errors
 
@@ -228,7 +244,7 @@ func lookupOrder(ctx *ai.ToolContext, input LookupOrderInput) (LookupOrderOutput
 }
 ```
 
-The [basic-errors](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors) sample works the whole pattern through, including what reaches an HTTP client and what stays in the server log.
+A tool error fails the turn. The round it belonged to is discarded whole, including the model message that requested it and any sibling tools that succeeded, because a conversation cannot end on an unanswered tool request. The rounds before it are what the `failed` snapshot keeps. The [basic-errors](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors) sample works the whole pattern through, including what reaches an HTTP client and what stays in the server log.
 
 Return structured output when the model should recover:
 

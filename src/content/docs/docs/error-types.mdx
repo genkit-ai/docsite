@@ -119,8 +119,8 @@ From `ai`, for generation:
 | -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `ErrModelNotFound`         | `status.ErrNotFound`       | The named model is not registered. Usually the providing plugin is missing from `genkit.Init`.                                       |
 | `ErrToolNotFound`          | `status.ErrNotFound`       | The model called a tool that is on neither the request nor the registry.                                                             |
-| `ErrToolFailed`            | `status.ErrInternal`       | A tool returned an error, or its output did not match its declared schema.                                                           |
-| `ErrMaxTurnsExceeded`      | `status.ErrAborted`        | The tool loop hit its turn limit before the model produced a final response. Raise the limit with `ai.WithMaxTurns`.                 |
+| `ErrToolFailed`            | `status.ErrInternal`       | A tool returned an error, or its output did not match its declared schema. The loop's partial response rides alongside it.           |
+| `ErrMaxTurnsExceeded`      | `status.ErrAborted`        | The tool loop hit its turn limit before the model produced a final response. Raise the limit with `ai.WithMaxTurns`, or continue from the partial response's `History()`. |
 | `ErrUnsupportedByModel`    | `status.ErrInvalidArgument` | The request used a capability the model does not advertise: media, tools, tool choice, a system role.                               |
 | `ErrInvalidPart`           | `status.ErrInvalidArgument` | A `Part` is malformed for the operation: the wrong kind, missing a required field, or carrying a field its kind does not allow.     |
 | `ErrInputTypeMismatch`     | `status.ErrInvalidArgument` | A prompt's input could not be interpreted as the type a content function declared, so the function never ran.                       |
@@ -131,6 +131,17 @@ From `ai`, for generation:
 and wraps the tool's own error with `%w`, so `errors.Is` and `errors.As` still reach it.
 There is no structured tool-name field. To tell one tool's failure from another's,
 define a sentinel inside the tool and branch on that rather than on `ErrToolFailed`.
+
+### Generation errors carry the partial response
+
+Once a generate request has resolved, an error arrives beside the partial
+`*ai.ModelResponse` rather than a nil one. The response reports
+`ai.FinishReasonFailed` when something broke and `ai.FinishReasonAborted` when
+the caller stopped the loop, carries the same failure classified in
+`resp.Error`, and its `History()` ends at the last completed tool round, so a
+caller can send it again without repeating work. Errors raised before the
+request was sent, such as `ErrModelNotFound`, still come with a nil response.
+See [Failed and stopped generations](/docs/models#failed-and-stopped-generations).
 
 From `core/status`, for the action machinery:
 
@@ -146,9 +157,10 @@ From `core/status`, for the action machinery:
 unusable and the generation is worth retrying:
 
 ```go
-recipe, _, err := genkit.GenerateData[Recipe](ctx, g, ai.WithPrompt("Suggest a recipe."))
+recipe, resp, err := genkit.GenerateData[Recipe](ctx, g, ai.WithPrompt("Suggest a recipe."))
 if errors.Is(err, status.ErrInvalidOutput) {
-	// The model answered, but not in the shape we asked for. Retry.
+	// The model answered, but not in the shape we asked for. resp.Text()
+	// holds what it wrote, so the retry can show it what to fix.
 }
 ```
 

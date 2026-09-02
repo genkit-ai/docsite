@@ -141,15 +141,17 @@ The examples on this page use these imports:
 ```go
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 ```
 
-Go calls an agent through the agent value itself. `Run` and `RunText` send one turn, and `Connect` opens a live connection that carries many turns. Go has no `Chat` type and no background task handle: a detached invocation is tracked by its pending snapshot ID through `GetSnapshot`, `GetLatestSnapshot`, and `Abort`. See [Background execution](/docs/agents/background).
+Go calls an agent through the agent value itself. `Run` and `RunText` send one turn, `Connect` opens a live connection that carries many turns, and `RunDetached` starts a turn the server finishes on its own, returning a `DetachedTask` to wait on. Go has no `Chat` type: continuity is an invocation option on each call. See [Background execution](/docs/agents/background) for detached work.
 
 `weatherAgent` below is the `*aix.Agent[WeatherState]` that `genkitx.DefineAgent` returned; see [Define agents](/docs/agents/define).
 
@@ -178,7 +180,7 @@ out, err := weatherAgent.Run(ctx, &aix.AgentInput{
 })
 ```
 
-In-band failures resolve as an `AgentOutput` whose `FinishReason` is `aix.AgentFinishReasonFailed`, with structured details in `out.Error`. A non-nil Go error means the invocation did not start or could not produce an output.
+In-band failures resolve as an `AgentOutput` whose `FinishReason` is `aix.AgentFinishReasonFailed`, with structured details in `out.Error`. A non-nil Go error means the invocation did not start or could not produce an output. One case sets both: a run its caller stops, by cancelling the context or letting a deadline expire, returns the error that stopped it together with an output whose `FinishReason` is `aix.AgentFinishReasonAborted` and whose `SnapshotID` names where it stopped. Read `out` before giving up on `err`.
 
 ## Turn input and output
 
@@ -201,7 +203,7 @@ type AgentInput struct {
 type AgentOutput[State any] struct {
 	// Artifacts are the artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
-	// Error is the structured failure, set only when FinishReason is "failed".
+	// Error is the structured failure, set when FinishReason is "failed" or "aborted".
 	Error *status.Error `json:"error,omitempty"`
 	// FinishReason is why the invocation finished.
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
@@ -252,9 +254,9 @@ The first six values are forwarded verbatim from the model's own finish reason. 
 | `aix.AgentFinishReasonInterrupted` | `interrupted` | A tool paused for input. See [Agent interrupts](/docs/agents/interrupts). |
 | `aix.AgentFinishReasonOther` | `other` | The model stopped for some other reason. |
 | `aix.AgentFinishReasonUnknown` | `unknown` | The model gave no reason. |
-| `aix.AgentFinishReasonAborted` | `aborted` | The turn or invocation was aborted. |
+| `aix.AgentFinishReasonAborted` | `aborted` | The caller stopped the run: a cancelled context, an expired deadline, a closed transport, a limit it set such as `ai.WithMaxTurns`, or `Abort` on a detached run. The snapshot keeps the turns that finished. |
 | `aix.AgentFinishReasonDetached` | `detached` | The client detached and the work continues in the background. |
-| `aix.AgentFinishReasonFailed` | `failed` | The turn or invocation ended in an error. Read `out.Error`. |
+| `aix.AgentFinishReasonFailed` | `failed` | A turn broke. Read `out.Error`. The snapshot keeps the tool rounds the turn completed. |
 
 ## Invocation options
 
@@ -300,7 +302,19 @@ defer cancel()
 out, err := weatherAgent.RunText(ctx, "Plan a two-week itinerary.")
 ```
 
-Cancelling that context ends the invocation: `Run`, `RunText`, and `Output` return a non-nil error, and the in-flight turn writes no snapshot, so the last committed turn's snapshot stays the resume point. A custom agent should also check `ctx.Err()` between turns.
+Cancelling that context stops the invocation. `Run` and `RunText` return the cancellation error together with an output whose `FinishReason` is `aix.AgentFinishReasonAborted`. The turn that was in flight is discarded whole, and the `aborted` snapshot the output names holds the turns that finished, so it is a resume point. `ai.WithMaxTurns` ends a turn the same way, because a limit the caller set is a caller stop rather than a failure. A custom agent should still check `ctx.Err()` between turns.
+
+## Re-attempt a turn
+
+An input with neither `Message` nor `Resume` runs the last turn again on the conversation as it stands. That is how a `failed` or `aborted` snapshot is picked up without repeating the tool calls that already succeeded:
+
+```go
+retried, err := weatherAgent.Run(ctx, &aix.AgentInput{},
+	aix.WithSnapshotID[WeatherState](out.SnapshotID),
+)
+```
+
+An empty input is rejected with `INVALID_ARGUMENT` only when the session has no messages to continue. A new message on the same snapshot changes course instead, and the previous snapshot ID rewinds past the turn altogether. See [Agent error handling](/docs/agents/errors) for deciding whether a retry is worth making.
 
 ## Open a bidirectional stream
 
@@ -363,7 +377,7 @@ The `cli.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/ge
 
 ## Concurrency
 
-An `Agent` value is immutable after definition and safe for concurrent use. Share one `*aix.Agent[State]` across every HTTP handler and call `Run`, `RunText`, `Connect`, `GetSnapshot`, `GetLatestSnapshot`, and `Abort` from any goroutine.
+An `Agent` value is immutable after definition and safe for concurrent use. Share one `*aix.Agent[State]` across every HTTP handler and call `Run`, `RunText`, `Connect`, `RunDetached`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort` from any goroutine. A `DetachedTask` holds a snapshot ID and nothing else, so it is safe to share too.
 
 An `AgentConnection` belongs to one invocation and is not a shared object. Do not call `Output()` from one goroutine while another iterates `Receive()`: both consume the stream and would split chunks between them. Finish `Receive` first.
 
@@ -391,12 +405,29 @@ for chunk, err := range conn.Receive() {
 
 The authoritative final state is on `AgentOutput.State` for client-managed agents, or in the saved snapshot for server-managed agents.
 
+## Agent handles
+
+Code that knows an agent only by name, such as an orchestrator, a middleware, or a tool, drives it through an `*aix.AgentHandle`: the same agent with its custom state fixed to `json.RawMessage`. `genkitx.LookupAgent` finds one in the registry, and `agent.Handle()` returns one for an agent value you already hold.
+
+```go
+h := genkitx.LookupAgent(g, "weather") // nil on a miss, like every Lookup
+if h == nil {
+	return fmt.Errorf("no agent named %q", "weather")
+}
+
+out, err := h.RunText(ctx, "Weather in Tokyo?",
+	aix.WithSessionID[json.RawMessage](sessionID),
+)
+```
+
+A handle has every call the typed agent has (`Run`, `RunText`, `RunDetached`, `Task`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort`), plus `Name()` and `Metadata()`, which reports whether the agent is server-managed and abortable. Its invocation options are the same `aix.InvocationOption` values typed at `json.RawMessage`, resolved through the same code as the typed calls, so it rejects the same inputs with the same wording. Every read goes through the agent's companion actions: the state transform applies and a stale detached row reads as `expired`, exactly as over HTTP. `LookupAgent` needs no `genkit.WithExperimental()`, since it only reads the registry and only the gated constructors can register an agent.
+
 ## Next steps
 
 - [Sessions and state](/docs/agents/state) covers custom state, artifacts, and how patches are produced.
 - [Session stores](/docs/agents/session-stores) covers snapshot IDs, branching, and store implementations.
 - [Agent interrupts](/docs/agents/interrupts) covers building the `Resume` payload.
-- [Background execution](/docs/agents/background) covers detach, snapshot polling, and abort.
+- [Background execution](/docs/agents/background) covers detached tasks, waiting, and abort.
 - [Serve agents over HTTP](/docs/agents/http) covers the wire protocol and browser clients.
 - [Agent error handling](/docs/agents/errors) covers failed turns and rejected init payloads.
 

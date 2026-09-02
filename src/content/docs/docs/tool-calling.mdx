@@ -509,9 +509,9 @@ import (
 )
 
 // WeatherInput is the tool's input. The schema the model sees is inferred from
-// this type, so a jsonschema tag is how a field gets described.
+// this type, so a jsonschema_description tag is how a field gets described.
 type WeatherInput struct {
-	Location string `json:"location" jsonschema:"description=The location to get the current weather for"`
+	Location string `json:"location" jsonschema_description:"The location to get the current weather for."`
 }
 
 func main() {
@@ -546,6 +546,11 @@ The syntax looks like `genkit.DefineFlow()`, with one addition: you must write a
 description. The name and the description are all the model knows about a tool
 besides the schemas inferred from the input and output types, so both are prompt
 and are worth writing as carefully as one.
+
+Describe fields with the `jsonschema_description` struct tag. The `jsonschema`
+tag is a comma-separated keyword list for constraints such as `enum=` and
+`minimum=`, so a description written there is cut off at its first comma with no
+error; the separate tag has no list to terminate.
 
 #### The tool context
 
@@ -737,8 +742,8 @@ not a value goes in `Content`:
 ```go
 // Deploy is what the model fills in to call the tool.
 type Deploy struct {
-	Service     string `json:"service" jsonschema:"description=The service to deploy"`
-	Environment string `json:"environment" jsonschema:"description=Where to deploy it,enum=staging,enum=production"`
+	Service     string `json:"service" jsonschema_description:"The service to deploy."`
+	Environment string `json:"environment" jsonschema:"enum=staging,enum=production" jsonschema_description:"Where to deploy it."`
 }
 
 // Rollout is the tool's answer, and the Output half of its response.
@@ -746,7 +751,7 @@ type Rollout struct {
 	Service  string  `json:"service"`
 	Revision string  `json:"revision"`
 	Healthy  bool    `json:"healthy"`
-	P95Ms    float64 `json:"p95Ms" jsonschema:"description=The p95 latency after the rollout in milliseconds"`
+	P95Ms    float64 `json:"p95Ms" jsonschema_description:"The p95 latency after the rollout, in milliseconds."`
 }
 
 deployService := genkit.DefineMultipartTool(g, "deployService",
@@ -848,23 +853,33 @@ resp, err := genkit.Generate(ctx, g,
 if err != nil {
 	if errors.Is(err, ai.ErrMaxTurnsExceeded) {
 		// The loop hit its limit before the model produced a final answer.
+		// resp.History() holds the rounds that completed; send it back with
+		// a higher limit to continue rather than start over.
 	}
 }
 ```
 
 When the limit is reached, Genkit stops the loop and returns an error matching
-`ai.ErrMaxTurnsExceeded`, whose status is `ABORTED`. Either raise the limit or
-look for a tool the model keeps retrying.
+`ai.ErrMaxTurnsExceeded`, whose status is `ABORTED`, beside a partial response:
+`resp.FinishReason` is `ai.FinishReasonAborted`, since a limit the caller set is
+a caller stop, and `resp.History()` carries the completed rounds. Either raise
+the limit or look for a tool the model keeps retrying.
 
 ### When a tool fails
 
-A tool that returns a non-nil error is fail-fast. Genkit stops the tool loop and
-`genkit.Generate()` returns the error wrapped as `ai.ErrToolFailed`, a subtype
-of `status.ErrInternal` (HTTP 500). The model never sees it and never retries.
-Output that does not match the tool's declared schema reports the same sentinel,
-and so does input the model sent that fails the declared input schema: the tool
-function never runs and the call aborts with `ai.ErrToolFailed` wrapping
-`status.ErrInvalidInput`.
+A tool that returns a non-nil error is fail-fast. Genkit stops the tool loop as
+soon as the error arrives, while any siblings in the same round finish on their
+own, and `genkit.Generate()` returns the error wrapped as `ai.ErrToolFailed`, a
+subtype of `status.ErrInternal` (HTTP 500). The model never sees it and never
+retries. The response comes back beside the error with `ai.FinishReasonFailed`:
+its `History()` holds the rounds before the failure and drops the failed round
+whole, the model's request message included, because a conversation cannot end
+on an unanswered tool request. Output that does not match the tool's declared
+schema reports the same sentinel, and so does input the model sent that fails
+the declared input schema: the tool function never runs and the call aborts with
+`ai.ErrToolFailed` wrapping `status.ErrInvalidInput`. A tool that stopped because
+the call's context ended is not a tool failure: that error carries `CANCELLED`,
+and the response reports `ai.FinishReasonAborted`.
 
 The tool's own error is wrapped with `%w`, so both the framework sentinel and
 your own cause still match:
@@ -893,7 +908,7 @@ react:
 ```go
 type Forecast struct {
 	Summary     string `json:"summary,omitempty"`
-	Unavailable bool   `json:"unavailable" jsonschema:"description=True when the forecast could not be read; say so and do not retry"`
+	Unavailable bool   `json:"unavailable" jsonschema_description:"True when the forecast could not be read. Say so, and do not retry."`
 	Reason      string `json:"reason,omitempty"`
 }
 

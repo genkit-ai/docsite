@@ -383,21 +383,24 @@ Use the typed agent methods when reading snapshots locally:
 ```go
 snap, err := agent.GetSnapshot(ctx, snapshotID)
 latest, err := agent.GetLatestSnapshot(ctx, sessionID)
+settled, err := agent.WaitForSnapshot(ctx, snapshotID) // blocks until the row settles
+meta, err := agent.GetSnapshot(ctx, snapshotID, aix.WithMetadataOnly()) // status and timestamps, State nil
 ```
 
-These methods apply `WithStateTransform` and read-time shaping. Reading `agent.Store()` directly returns raw, untransformed state.
+These methods apply `WithStateTransform` and read-time shaping, such as reporting a detached run whose heartbeat went stale as `expired`. Reading `agent.Store()` directly returns raw, untransformed state. `aix.WithMetadataOnly()` skips the conversation entirely on a store that implements `aix.SnapshotMetadataReader`, which the bundled stores and the Firestore store do.
 
 ## Snapshot lifecycle
 
-| Status      | Meaning                                                                                                      |
-| ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `pending`   | A detached invocation is processing queued inputs.                                                           |
-| `completed` | The snapshot captures settled state and can be resumed.                                                      |
-| `failed`    | The invocation failed and the snapshot contains structured error details.                                    |
-| `aborted`   | The detached invocation was canceled.                                                                        |
-| `expired`   | A pending snapshot heartbeat is stale. This status is computed on read and is not written back to the store. |
+| Status      | Meaning                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `pending`   | A detached invocation is still running.                                                                                  |
+| `aborting`  | An abort stopped the work and the worker is saving what it finished.                                                     |
+| `completed` | The turn finished. The snapshot captures settled state and can be resumed.                                               |
+| `failed`    | The turn broke. The snapshot holds the tool rounds it completed and the structured error, and can be resumed.            |
+| `aborted`   | The caller stopped the run. The snapshot holds the turns that finished, and can be resumed.                              |
+| `expired`   | A pending or aborting snapshot's heartbeat is stale. This status is computed on read and is not written back to the store. |
 
-Synchronous turns write `completed` snapshots. A failed turn does not make its partial state the normal continuation point. The output reports the last-good state or snapshot ID.
+A turn that finishes writes `completed`. A turn that breaks writes `failed`, and a run its caller stops, by cancelling the context, letting a deadline expire, or aborting a detached run, writes `aborted`. Both keep the turns that ended at a seam and drop the one that did not, so both are resume points, and the output names them in `SnapshotID`. See [Agent error handling](/docs/agents/errors).
 
 `Status` is the persistence lifecycle, not the outcome. A turn that ends on an interrupt still writes `completed`, because it is resumable. To detect an interrupt, read `snap.FinishReason`, which is a separate field:
 
