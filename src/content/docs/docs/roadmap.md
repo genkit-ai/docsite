@@ -12,19 +12,26 @@ Our plans will evolve over time based on customer feedback and new market opport
 
 ### **Broadening platform portability and ecosystem reach**
 
-Platform portability is a core promise of Genkit: your language, runtime, and deployment target should never limit where your agentic applications can run. Genkit is already a multi-language framework, supporting TypeScript, Go, Dart, and Python. In 2026, we will continue evolving our SDKs to embrace the latest patterns in AI development. The centerpiece of that work is Genkit for Dart, which will graduate from an early preview to a stable 1.0 release this year. This will bring Flutter and Dart developers an idiomatic way to ship agentic features across every platform Dart targets: mobile, web, desktop, and server.
+Platform portability is a core promise of Genkit: your language, runtime, and deployment target should never limit where your agentic applications can run. Genkit is already a multi-language framework, supporting TypeScript, Go, Dart, and Python. In 2026, we will continue evolving our SDKs to embrace the latest patterns in AI development.
+
+A major focus of this work is **bringing both Genkit Dart and Genkit Python to stable 1.0 releases this year**. For Python developers, this delivers production readiness, enterprise-grade stability, and seamless integration with the broader Python AI ecosystem. For Flutter and Dart developers, this provides an idiomatic way to ship agentic features across every platform Dart targets: mobile, web, desktop, and server.
 
 To round out the full-stack story on mobile, we are also introducing client-side SDKs for **Kotlin (Android)** and **Swift (iOS)**. These give native mobile developers a simplified, idiomatic path to integrate Genkit-powered backends directly into their applications.
 
 ### **Expanding agentic capabilities**
 
-High-quality agentic applications need more than a generation loop: they need state persistence, fine-grained context control, and first-class integration with user experiences.&nbsp;
+High-quality agentic applications need more than a generation loop: they need state persistence, fine-grained context control, interactive user interfaces, and first-class integration with agent and enterprise ecosystems.&nbsp;
 
-To support these needs, we have released a preview of our new model-agnostic **Agent Primitive**. This primitive helps developers build high-quality, full-stack, conversational, and multi-step interfaces that require tool use and persistent conversational memory. It is currently available in beta across **TypeScript**, **Go**, and **Dart**, with **Python** support coming soon. We will continue iterating on this preview based on customer feedback, and bring to a stable feature release in the near future.
+To support these needs, we have introduced our model-agnostic **Agents API**. This API empowers developers to build high-quality, full-stack, conversational, and multi-step interfaces that require tool use and persistent conversational memory. While currently available across **TypeScript**, **Go**, **Dart**, and **Python**, our top priority is **bringing the new Agents API to stable across all supported Genkit languages**.
 
-We have also introduced middleware as a first-class way to extend the capabilities and improve the reliability of your agents. Middleware enables features like Agent Skills, retry and fallback behavior, tool approval, and more, giving you composable building blocks to enhance agents for production.
+To make production deployments seamless and robust, we are heavily investing in turnkey building blocks:
+- **Expanding pre-built session stores**: We are expanding the number of turnkey session store implementations to provide scalable, production-grade state persistence out of the box.
+- **Iterating on advanced middleware**: While Genkit already provides middleware for common patterns like retries, fallbacks, tool approvals, and Agent Skills, we are actively iterating on new middleware for **multi-agent delegation patterns**, **context compaction**, and **cost controls**.
 
-Furthermore, this primitive is designed to power Agent-to-Agent (A2A) interactions. It enables developers to easily plug their Genkit agents into the Gemini Enterprise Agent Platform and allows agents to seamlessly interact with other agents, including those built with other frameworks.
+We are also actively driving forward full-stack and ecosystem agent interactions:
+- **Full-stack Generative UI (A2UI)**: We are actively working on end-to-end Agent-to-UI support, enabling agents to stream interactive UI surfaces directly to web and mobile clients (with rich components, form handling, and bidirectional user actions) rather than relying solely on text streams.
+- **Agent-to-Agent (A2A) Orchestration**: We are advancing native support for A2A communication, empowering agents to discover, delegate tasks to, and collaborate with other agents across framework boundaries.
+- **Seamless Gemini Enterprise Integration**: We are building deep, native integration with Gemini Enterprise, allowing developers to connect and deploy Genkit agents directly into enterprise workflows, knowledge bases, and agent systems.
 
 ### **Observability for your agentic features**
 
