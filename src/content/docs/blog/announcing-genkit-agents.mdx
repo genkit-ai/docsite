@@ -9,18 +9,20 @@ cover:
 tags:
   - typescript
   - go
+  - python
+  - dart
   - agents
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import agentRunnerVideo from './_assets/announcing-genkit-agents/agent-runner.mp4';
 
-[Genkit](https://genkit.dev) is an open-source framework for **building full-stack, AI-powered and agentic applications for any platform** with support for TypeScript, Go, Dart, and Python. Some of the most compelling AI features are conversational, like a support assistant that remembers the ticket or a copilot that works across several turns. Each needs more than a single `generate()` call, and building one today means wiring up message history, the tool loop, streaming, persistence, and a frontend protocol by hand. That plumbing repeats on every project and has little to do with what makes your app distinct.
+[Genkit](https://genkit.dev) is an open-source framework for **building full-stack, AI-powered and agentic applications for any platform** with support for TypeScript, Go, Python, and Dart. Some of the most compelling AI features are conversational, like a support assistant that remembers the ticket or a copilot that works across several turns. Each needs more than a single `generate()` call, and building one today means wiring up message history, the tool loop, streaming, persistence, and a frontend protocol by hand. That plumbing repeats on every project and has little to do with what makes your app distinct.
 
 Genkit solves this with the [**Agents API**](https://genkit.dev/docs/agents/overview/), which packages all of that behind one interface. You define an agent on the server, then drive it with the same `chat()` API whether it runs in process or behind an HTTP endpoint.
 
 :::caution[Beta]
-The Agents API is in **Beta** today in TypeScript and Go, with support for Dart and Python coming soon. It can introduce breaking changes in minor version releases.
+The Agents API is in **Beta** today across TypeScript, Go, Python, and Dart. It can introduce breaking changes in minor version releases.
 :::
 
 ## Define an agent
@@ -71,6 +73,48 @@ if err != nil {
 }
 
 fmt.Println(out.Message.Text())
+```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+assistant = ai.define_agent(
+    name='assistant',
+    model='googleai/gemini-flash-latest',
+    system='You are a helpful assistant.',
+)
+
+chat = assistant.chat()
+res = await chat.send('Hello. What can you do?')
+
+print(res.text)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+
+final ai = Genkit(plugins: [GoogleAI()]);
+
+final assistant = ai.defineAgent(
+  name: 'assistant',
+  model: googleAI.model('gemini-flash-latest'),
+  system: 'You are a helpful assistant.',
+);
+
+final chat = assistant.chat();
+final res = await chat.send('Hello. What can you do?');
+
+print(res.text);
 ```
 
   </TabItem>
@@ -130,6 +174,48 @@ weatherAgent := genkit.DefineAgent(g, "weatherAgent",
 ```
 
   </TabItem>
+  <TabItem label="Python">
+
+```python
+from genkit_google_cloud.session_store.firestore import FirestoreSessionStore
+
+store = FirestoreSessionStore[WeatherState](
+    collection='genkit-sessions',
+    # Scope every session to the authenticated user so one tenant can never
+    # read another's snapshots, even with a snapshot ID.
+    snapshot_path_prefix=lambda options: options.get('context', {}).get('auth', {}).get('uid', 'global'),
+)
+
+weather_agent = ai.define_agent(
+    name='weatherAgent',
+    system='Answer weather questions. Ask for a location when one is missing.',
+    tools=[get_weather],
+    store=store,
+)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+import 'package:genkit_google_cloud/firestore_session_store.dart';
+
+final store = FirestoreSessionStore(
+  collection: 'genkit-sessions',
+  // Scope every session to the authenticated user so one tenant can never
+  // read another's snapshots, even with a snapshot ID.
+  snapshotPathPrefix: (options) => options?.context?['auth']?['uid'] ?? 'global',
+);
+
+final weatherAgent = ai.defineAgent(
+  name: 'weatherAgent',
+  system: 'Answer weather questions. Ask for a location when one is missing.',
+  tools: [getWeather],
+  store: store,
+);
+```
+
+  </TabItem>
 </Tabs>
 
 The store you configure decides where snapshots live. For production, the Firestore store gives you a managed, multi-instance database that several server instances can share. Genkit also ships lighter stores for local work and lets you implement your own, which the section below covers.
@@ -163,6 +249,30 @@ out, err := weatherAgent.RunText(ctx, "Continue where we left off.",
 branch, err := weatherAgent.RunText(ctx, "Revise this plan for a smaller budget.",
     aix.WithSnapshotID[WeatherState](approvedPlanSnapshotID),
 )
+```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```python
+# Continue the latest state in a conversation.
+chat = await weather_agent.load_chat(session_id='user-session-123')
+
+# Or branch from a specific saved point.
+branch = await weather_agent.load_chat(snapshot_id=approved_plan_snapshot_id)
+await branch.send('Revise this plan for a smaller budget.')
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+// Continue the latest state in a conversation.
+final chat = weatherAgent.chat(sessionId: 'user-session-123');
+
+// Or branch from a specific saved point.
+final branch = weatherAgent.chat(snapshotId: approvedPlanSnapshotId);
+await branch.send('Revise this plan for a smaller budget.');
 ```
 
   </TabItem>
@@ -211,15 +321,53 @@ log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 
   </TabItem>
+  <TabItem label="Python">
+
+```python
+from fastapi import FastAPI
+from genkit_fastapi import serve_agent
+
+app = FastAPI()
+
+app.include_router(
+    serve_agent(weather_agent, base_path='/weatherAgent'),
+    prefix='/api',
+)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf_router/shelf_router.dart';
+
+final app = Router();
+
+app.post('/api/weatherAgent', shelfHandler(weatherAgent.action));
+app.post(
+  '/api/weatherAgent/getSnapshot',
+  shelfHandler(weatherAgent.getSnapshotDataAction),
+);
+app.post(
+  '/api/weatherAgent/abort',
+  shelfHandler(weatherAgent.abortAgentAction),
+);
+```
+
+  </TabItem>
 </Tabs>
 
-Each agent gets a turn endpoint that handles normal and streaming turns, plus a `getSnapshot` companion when it has a session store and an `abort` companion for detached background work. That same wire protocol is what the client below speaks, so a JavaScript or Go backend serves any client identically.
+Each agent gets a turn endpoint that handles normal and streaming turns, plus a `getSnapshot` companion when it has a session store and an `abort` companion for detached background work. That same wire protocol is what the client below speaks, so a TypeScript, Go, Python, or Dart backend serves any client identically.
 
 ## A rich client for full-stack integration
 
-The piece that ties your server and client together is the remote client. `remoteAgent()` returns a handle with the **same `chat()` interface** as a local agent, so the code that drives an agent in your backend tests is the code that drives it from the browser. There is no separate request and response protocol to design, and no streaming format to invent.
+The piece that ties your server and client together is the remote client. `remoteAgent()` returns a handle with the **same `chat()` interface** as a local agent, so the code that drives an agent in your backend tests is the code that drives it from the browser or mobile app. There is no separate request and response protocol to design, and no streaming format to invent.
 
-We are launching a JavaScript client, so a web frontend can talk to the same agent endpoint. The following is an example of how to connect to a remote agent from a TypeScript frontend.
+We provide rich clients for both JavaScript / TypeScript and Dart / Flutter, so web and mobile apps can connect to any Genkit agent endpoint. Here is how to connect to a remote agent:
+
+<Tabs syncKey="lang">
+  <TabItem label="TypeScript">
 
 ```typescript
 import { remoteAgent } from 'genkit/beta/client';
@@ -234,9 +382,31 @@ const res = await chat.send('Weather in Tokyo?');
 console.log(res.text);
 ```
 
-The client speaks one wire protocol over the agent route, so it works the same against a JavaScript or a Go backend. It resolves dynamic auth headers per request, applies streamed state patches, and continues the next turn with a session ID, a snapshot ID, or client-managed state, whichever your agent uses.
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+import 'package:genkit/client.dart';
+
+final agent = remoteAgent<WeatherState>(
+  url: 'http://localhost:8080/api/weatherAgent',
+);
+
+final chat = agent.chat();
+final res = await chat.send('Weather in Tokyo?');
+
+print(res.text);
+```
+
+  </TabItem>
+</Tabs>
+
+The client speaks one wire protocol over the agent route, so it works the same against a backend written in any supported language. It resolves dynamic auth headers per request, applies streamed state patches, and continues the next turn with a session ID, a snapshot ID, or client-managed state, whichever your agent uses.
 
 Streaming is built into the same interface. `sendStream()` gives you a chunk stream and a final response, and each chunk can carry text, custom state, or an artifact as it is produced.
+
+<Tabs syncKey="lang">
+  <TabItem label="TypeScript">
 
 ```typescript
 const turn = agent.chat().sendStream('Write a long report.');
@@ -249,6 +419,24 @@ for await (const chunk of turn.stream) {
 
 const res = await turn.response;
 ```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+final turn = agent.chat().sendStream('Write a long report.');
+
+await for (final chunk in turn.stream) {
+  if (chunk.text != null) stdout.write(chunk.text);
+  if (chunk.custom != null) updateStatus(chunk.custom);
+  if (chunk.artifact != null) renderArtifact(chunk.artifact);
+}
+
+final res = await turn.response;
+```
+
+  </TabItem>
+</Tabs>
 
 If you already have apps that use the [Vercel AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui) library, the `@genkit-ai/vercel-ai` package provides an adapter for its `useChat` hook. The `GenkitChatTransport` adapter connects `useChat` to your agent, so you can assemble the interface from Vercel's [AI Elements](https://elements.ai-sdk.dev/) components while getting all the benefits of Genkit on the backend.
 
@@ -306,6 +494,50 @@ runShell := genkitx.DefineInterruptibleTool(g, "run_shell",
 ```
 
   </TabItem>
+  <TabItem label="Python">
+
+```python
+from genkit_middleware import ToolApproval
+
+# Require human approval for dangerous or sensitive operations
+tool_approval = ToolApproval(allowed_tools=['read_only_tool'])
+
+agent = ai.define_agent(
+    name='opsAgent',
+    model='googleai/gemini-flash-latest',
+    system='Operations assistant.',
+    tools=[run_shell],
+    use=[tool_approval],
+    store=store,
+)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+final runShell = ai.defineTool(
+  name: 'run_shell',
+  description: 'Run a shell command after a safety check.',
+  inputSchema: ShellInput.$schema,
+  outputSchema: ShellOutput.$schema,
+  fn: (input, ctx) async {
+    final resumed = ctx.resumed;
+    final approved = resumed is Map && resumed['toolApproved'] == true;
+
+    if (isRisky(input.command) && !approved) {
+      return .interrupt({
+        'command': input.command,
+        'reason': 'The command can modify files.',
+      });
+    }
+
+    return .response(await execute(input.command));
+  },
+);
+```
+
+  </TabItem>
 </Tabs>
 
 The turn finishes with an `interrupted` reason and the paused request on the response. The client resumes once the user answers, and the runtime validates the resume payload against session history so a tool cannot be tricked into running with forged input.
@@ -313,6 +545,9 @@ The turn finishes with an `interrupted` reason and the paused request on the res
 ## Work that outlives the request
 
 Some turns take longer than a user wants to wait. With server-managed state, a client can detach a turn, close the tab, and reconnect later by snapshot ID. The agent keeps working on the server, writing progress to a pending snapshot that another session can poll, wait on, or abort.
+
+<Tabs syncKey="lang">
+  <TabItem label="TypeScript">
 
 ```typescript
 const chat = reportAgent.chat({ sessionId: 'report-123' });
@@ -326,6 +561,43 @@ for await (const snapshot of task.poll({ intervalMs: 1000 })) {
   if (snapshot.status === 'completed') renderMessages(snapshot.state.messages);
 }
 ```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```python
+chat = report_agent.chat(session_id='report-123')
+task = await chat.detach('Write the quarterly market report.')
+
+# Persist this so any client can reconnect to the work later.
+save_pending_snapshot(task.snapshot_id)
+
+async for snapshot in task.poll(interval_secs=1.0):
+    render_status(snapshot.status)
+    if snapshot.status == 'completed':
+        render_messages(snapshot.state.messages)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+final chat = reportAgent.chat(sessionId: 'report-123');
+final task = await chat.detach('Write the quarterly market report.');
+
+// Persist this so any client can reconnect to the work later.
+savePendingSnapshot(task.snapshotId);
+
+await for (final snapshot in task.poll(interval: Duration(seconds: 1))) {
+  renderStatus(snapshot.status);
+  if (snapshot.status == AgentRunStatus.completed) {
+    renderMessages(snapshot.state.messages);
+  }
+}
+```
+
+  </TabItem>
+</Tabs>
 
 This makes long research jobs, multi-step planning, and tool-heavy workflows practical without holding a connection open or building a separate job queue.
 
@@ -372,6 +644,48 @@ coordinator := genkit.DefineAgent(g, "coordinator",
         ),
     },
 )
+```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```python
+# Specialists are ordinary agents
+researcher = ai.define_agent(name='researcher', system='Research specialist.')
+coder = ai.define_agent(name='coder', system='Coding specialist.')
+
+@ai.tool(name='delegate_to_researcher')
+async def delegate_to_researcher(task: str) -> str:
+    return (await researcher.chat().send(task)).text
+
+@ai.tool(name='delegate_to_coder')
+async def delegate_to_coder(task: str) -> str:
+    return (await coder.chat().send(task)).text
+
+coordinator = ai.define_agent(
+    name='coordinator',
+    system='Delegate to specialists, inspect results, then answer the user.',
+    tools=[delegate_to_researcher, delegate_to_coder],
+)
+```
+
+  </TabItem>
+  <TabItem label="Dart">
+
+```dart
+import 'package:genkit_middleware/agents.dart';
+
+final coordinator = ai.defineAgent(
+  name: 'coordinator',
+  system: 'Delegate to specialists, inspect their results, then answer the user.',
+  use: [
+    agents(
+      agents: ['researcher', 'coder'],
+      maxDelegations: 5,
+      historyLength: 4,
+    ),
+  ],
+);
 ```
 
   </TabItem>
