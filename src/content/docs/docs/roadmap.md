@@ -1,6 +1,12 @@
 ---
 title: Genkit roadmap and focus areas
 description: Explore the Genkit roadmap to see what's coming next and what we're working on.
+supportedLanguages:
+  - js
+  - go
+  - dart
+  - python
+isLanguageAgnostic: true
 ---
 
 Developers are increasingly building full-stack agentic applications to deliver real value to their users. To meet this moment, **Genkit has officially graduated to become a Google-wide AI framework.** Our thesis is simple: **Genkit is an open-source framework for building full-stack, AI-powered and agentic applications for any platform.** At its core, Genkit is built on these 5 pillars: model-agnosticism, platform portability, rich local tooling, complete observability, and seamless integration into user-facing applications.&nbsp;

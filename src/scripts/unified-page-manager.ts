@@ -106,6 +106,7 @@ export class UnifiedPageManager {
       if (!slugMatch) return;
       const slug = slugMatch[1];
       if ((LANGUAGE_FALLBACK_ORDER as readonly string[]).includes(slug)) return;
+      if (this.docLanguageAgnostic[neutralPath]) return;
       anchor.href = `/docs/${preferred}/${slug}/`;
     });
   }
