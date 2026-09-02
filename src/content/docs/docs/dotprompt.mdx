@@ -451,12 +451,25 @@ helloPrompt := genkit.LookupPrompt(g, "hello")
     section about [specifying input schemas](#input-and-output-schemas)), configuration, and more:
 
 ```go
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"google.golang.org/genai"
+)
+
 resp, err := helloPrompt.Execute(context.Background(),
 	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithInput(map[string]any{"name": "John"}),
 	ai.WithConfig(&genai.GenerateContentConfig{Temperature: genai.Ptr[float32](0.5)}),
 )
 ```
+
+The value passed to `ai.WithConfig` is provider-specific and comes from the
+model plugin's own SDK, not from Genkit. For `googlegenai` that is
+`*genai.GenerateContentConfig` from `google.golang.org/genai`, the Google Gen AI
+Go SDK the plugin wraps. Other plugins take their own config type.
 
     #### Streaming prompt execution
 
@@ -475,6 +488,25 @@ for result, err := range stream {
 	}
 	// Process each chunk
 	fmt.Print(result.Chunk.Text())
+}
+```
+
+`ExecuteStream` yields the same `*ai.ModelStreamValue` as `genkit.GenerateStream`:
+`result.Chunk` is an `*ai.ModelResponseChunk` and `result.Done` marks the final
+value, whose `Response` holds the `*ai.ModelResponse`. So a chunk carries tool
+requests and tool responses the same way, and the same part-kind switch works on
+both paths:
+
+```go
+for _, part := range result.Chunk.Content {
+	switch {
+	case part.IsToolRequest():
+		fmt.Println("tool request:", part.ToolRequest.Name)
+	case part.IsToolResponse():
+		fmt.Println("tool response:", part.ToolResponse.Name)
+	case part.IsText():
+		fmt.Print(part.Text)
+	}
 }
 ```
 
@@ -773,12 +805,16 @@ const response3 = await helloPrompt(
 resp, err := helloPrompt.Execute(context.Background(),
     ai.WithConfig(&genai.GenerateContentConfig{
         Temperature:     genai.Ptr[float32](1.4),
-        TopK:            genai.Ptr[int32](50),
+        TopK:            genai.Ptr[float32](50),
         TopP:            genai.Ptr[float32](0.4),
-        MaxOutputTokens: genai.Ptr[int32](400),
+        MaxOutputTokens: 400,
         StopSequences:   []string{"<end>", "<fin>"},
     }))
 ```
+
+Two field types in `google.golang.org/genai` catch people out: `TopK` is a
+`*float32` even though top-k is conceptually an integer, and `MaxOutputTokens`
+is a plain `int32` rather than a pointer.
 
 </Lang>
 
@@ -835,8 +871,8 @@ fields that control how a prompt runs its model and tool loop:
   to `false`.
 - **`use`** attaches middleware to the prompt's model loop by name, with optional
   config. Each entry is either a bare middleware name or a map with a `name` and
-  a `config`. This mirrors the code API, where `use: [retry(maxRetries: 3)]`
-  passes a middleware name plus optional configuration.
+  a `config`. The code equivalent passes the middleware and its configuration
+  directly instead of naming it, so nothing has to be registered first.
 
 ```dotprompt
 ---
@@ -894,6 +930,11 @@ g := genkit.Init(context.Background(),
 	),
 )
 ```
+
+In Go, a `use:` entry must name the middleware in full, provider prefix
+included. An unregistered name is not skipped: the run fails with a `NOT_FOUND`
+error, `ai: middleware "<name>" not registered (is the providing plugin
+installed?)`, raised when the prompt executes rather than at `genkit.Init`.
 
 The built-in middleware are registered under the plugin's provider prefix, so a
 Go `.prompt` file names them `genkit-middleware/retry`,
@@ -1558,6 +1599,13 @@ resp, err := myPrompt.Execute(ctx,
 Tools passed at execution replace the ones the prompt was defined with rather
 than adding to them, so list every tool this run should have.
 
+Tool names in the front matter resolve when the prompt runs, not when it is
+loaded, so defining tools with `genkit.DefineTool` after `genkit.Init` is the
+normal and supported ordering. An unknown name fails the `Execute` call with
+`ai.ErrToolNotFound` (`NOT_FOUND`), never at startup. The panic `genkit.Init`
+can raise applies only to prompt files that fail to parse or that define an
+invalid prompt; it never looks up tool names.
+
 </Lang>
 
 <Lang lang="python">
@@ -2176,7 +2224,7 @@ type CountryList struct {
 
 geographyPrompt := genkit.DefineDataPrompt[GeoQuery, *CountryList](
     g, "GeographyPrompt",
-    ai.WithModel(googlegenai.GoogleAIModelRef("gemini-flash-latest", nil)),
+    ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", nil)),
     ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
     ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
 )
@@ -2279,6 +2327,23 @@ func WithTextDocs(text ...string) DocumentOption
 func WithDocs(docs ...*Document) DocumentOption
 func WithDocsFn[In any](fn func(context.Context, In) ([]*Document, error)) PromptOption
 ```
+
+    The four return types are not interchangeable. Each one names the set of
+    calls that accepts the option:
+
+| Return type           | Accepted by                                                                   |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `PromptOption`        | `genkit.DefinePrompt` and `genkit.DefineDataPrompt` only                       |
+| `PromptingOption`     | `genkit.DefinePrompt`, `genkit.DefineDataPrompt`, and `genkit.Generate`        |
+| `CommonGenOption`     | all of the above plus `Prompt.Execute` and `ExecuteStream`                     |
+| `DocumentOption`      | all of the above plus `genkit.Embed` and `genkit.Retrieve`                     |
+
+    So `ai.WithMessagesTemplate` is definition-time only, while `ai.WithMessages`
+    can also be passed at execute time. `ai.WithInput` is the mirror case: it is
+    a `PromptExecuteOption`, accepted only by `Prompt.Execute` and
+    `ExecuteStream`. `DocumentOption` values construct the documents a call
+    carries; `ai.WithDocsFn` is a `PromptOption` instead, because it is a
+    definition-time hook rather than a document.
 
     The rule that decides between the two forms: **template text is yours, so it
     is compiled; what a function returns is content you already produced, so it is

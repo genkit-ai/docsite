@@ -194,11 +194,24 @@ All agents implement `api.BidiAction`, so transports and route helpers can serve
 
 ```go
 import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
+
+// TaskState is this agent's custom session state.
+type TaskState struct {
+	Tasks []string `json:"tasks,omitempty"`
+}
 ```
+
+In the snippet below, `g` is the `*genkit.Genkit` that `genkit.Init` returned, and `addTaskTool` and `toggleTaskTool` are tools defined as shown in [Tool calling](/docs/tool-calling).
 
 ```go
 store, err := localstore.NewFileSessionStore[TaskState]("./.genkit/snapshots/tasks")
@@ -218,7 +231,45 @@ taskAgent := genkitx.DefineAgent(g, "taskAgent",
 )
 ```
 
+`genkitx.DefineAgent` returns `*aix.Agent[State]`. The value type lives in `github.com/firebase/genkit/go/ai/exp` even though the constructor lives in `github.com/firebase/genkit/go/genkit/exp`, so write the `aix` type when you store the agent in a struct field or pass it between functions:
+
+```go
+type App struct {
+	Tasks *aix.Agent[TaskState]
+}
+```
+
 The agent's custom state type is inferred from typed options such as `WithSessionStore[TaskState]`, `WithStateTransform[TaskState]`, or the explicit type argument on `DefineAgent[TaskState]`. An agent that passes no typed option needs the argument written out, as in `DefineAgent[any]`.
+
+### Constructor and entry-point signatures
+
+The `genkitx.Define*` constructors all return `aix` types, so a helper that takes an agent, a tool, or a turn result names the type from `github.com/firebase/genkit/go/ai/exp`.
+
+```go
+func DefineAgent[State any](g *genkit.Genkit, name string, prompt aix.InlinePrompt,
+	opts ...aix.AgentOption[State]) *aix.Agent[State]
+
+func DefineTool[In, Out any](g *genkit.Genkit, name, description string,
+	fn aix.ToolFunc[In, Out], opts ...ai.ToolOption) *aix.Tool[In, Out]
+
+func DefineInterruptibleTool[In, Out, Resume any](g *genkit.Genkit, name, description string,
+	fn aix.InterruptibleToolFunc[In, Out, Resume], opts ...ai.ToolOption) *aix.InterruptibleTool[In, Out, Resume]
+```
+
+The entry points on the agent itself:
+
+```go
+func (a *aix.Agent[State]) Run(ctx context.Context, input *aix.AgentInput,
+	opts ...aix.InvocationOption[State]) (*aix.AgentOutput[State], error)
+
+func (a *aix.Agent[State]) RunText(ctx context.Context, text string,
+	opts ...aix.InvocationOption[State]) (*aix.AgentOutput[State], error)
+
+func (a *aix.Agent[State]) Connect(ctx context.Context,
+	opts ...aix.InvocationOption[State]) (*aix.AgentConnection[State], error)
+```
+
+`AgentOutput` and `AgentConnection` are generic over the same `State`, so a helper signature is `*aix.AgentOutput[TaskState]`, never a bare `*aix.AgentOutput`. See [Run and stream agents](/docs/agents/run) for the field sets.
 
 The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) is the shortest working version of this shape: one inline prompt, one file store, no state of its own.
 
@@ -232,6 +283,64 @@ The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai
 
 Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time.
 
+### Prompt options
+
+`aix.InlinePrompt` is a `[]ai.PromptOption`, so every option `genkit.DefinePrompt` accepts is valid inside it, including `ai.WithConfig`, `ai.WithOutputType`, `ai.WithInputType`, `ai.WithMaxTurns`, and `ai.WithDocs` or `ai.WithDocsFn`.
+
+An agent turn runs the same tool loop as `genkit.Generate`, with the same default cap of five tool-call iterations. `ai.WithMaxTurns` returns a `CommonGenOption`, which embeds `PromptOption`, so it belongs in the inline prompt:
+
+```go
+aix.InlinePrompt{
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithSystem("Manage a task list. Use tools when changing tasks."),
+	ai.WithTools(addTaskTool, toggleTaskTool),
+	ai.WithMaxTurns(12),
+}
+```
+
+The cap bounds the tool loop inside one turn, not the number of turns in a conversation. A turn that exceeds it fails with `ai.ErrMaxTurnsExceeded` and the invocation reports `aix.AgentFinishReasonFailed`. See [Agent error handling](/docs/agents/errors).
+
+### Ground a turn in retrieved documents
+
+Because `ai.WithDocsFn` is a prompt option, an agent can retrieve documents on every turn and pass them to the model as context:
+
+```go
+grounded := genkitx.DefineAgent(g, "grounded",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Answer from the provided documents. Say so when they do not cover the question."),
+		ai.WithDocsFn(func(ctx context.Context, _ any) ([]*ai.Document, error) {
+			history := ai.HistoryFromContext(ctx)
+			if len(history) == 0 {
+				return nil, nil
+			}
+			query := history[len(history)-1].Text()
+			res, err := genkit.Retrieve(ctx, g,
+				ai.WithRetriever(retriever),
+				ai.WithTextDocs(query),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("retrieve context for %q: %w", query, err)
+			}
+			return res.Documents, nil
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+`WithDocsFn[In]` receives the prompt's input, and an agent has no per-turn input unless the inline prompt sets `ai.WithInputType`, so `In` is the zero value by default. Build the query from `ai.HistoryFromContext(ctx)` instead, whose last element is the question this turn is about to answer. See [Retrieval-augmented generation](/docs/rag) for retrievers and indexers.
+
+## Tools in an agent
+
+Agent tools use the same constructors as any other tool. Each one reaches the active session the same way, so the choice is about signature and capability:
+
+- **`genkit.DefineTool`** hands the handler an `*ai.ToolContext`. It embeds `context.Context`, so `aix.SessionFromContext[State](ctx)` works on it directly, and it adds `Interrupt`, `IsResumed`, `Resumed`, and `OriginalInput`.
+- **`genkitx.DefineTool`** hands the handler a plain `context.Context`, plus `tool.AttachParts` for returning extra content parts alongside the output.
+- **`genkitx.DefineInterruptibleTool`** adds a typed resume parameter for tools that pause and wait for an answer.
+
+See [Tool calling](/docs/tool-calling), [Sessions and state](/docs/agents/state), and [Agent interrupts](/docs/agents/interrupts).
+
 ## How a turn is composed
 
 Rendering always builds the request in one order: the system message, then the conversation, then the user prompt. On every turn the runtime hands the session's conversation to the render, and where it lands depends on what the prompt declares.
@@ -239,6 +348,10 @@ Rendering always builds the request in one order: the system message, then the c
 - The prompt declares no conversation, the common case of `ai.WithSystem` alone. The session's messages are placed for you, between the system message and the user prompt.
 - The prompt declares a conversation with `ai.WithMessages` or `ai.WithMessagesFn`. The prompt owns placement, so the session's messages are not placed for you. A function reads them with `ai.HistoryFromContext(ctx)` and returns them where it wants them.
 - The prompt declares the conversation as a template, with `ai.WithMessagesTemplate` or the body of a `.prompt` file. The session's messages land at `{{history}}`, or, when the template has no such marker, immediately before the template's final user message.
+
+The conversation handed to the render already ends with this turn's user message, so `ai.HistoryFromContext(ctx)` inside `ai.WithSystemFn`, `ai.WithMessagesFn`, or `ai.WithDocsFn` sees the current question as its last element. A content function can build a retrieval query or a state summary from the message it is about to answer, with no backwards walk.
+
+An agent's typed custom state is exposed to its own templates as `{{@state.fieldName}}`, JSON-serialized and re-evaluated on every render, so a tool that updates state changes the next turn's instruction with no extra wiring. It works in the template forms only: `ai.WithSystem`, `ai.WithPrompt`, `ai.WithMessagesTemplate`, and `.prompt` bodies. The function forms take their text verbatim and never compile a template, so read state there with `aix.SessionFromContext[State](ctx)` as shown in [Sessions and state](/docs/agents/state). Prefer `{{@state.…}}` for straight interpolation and `ai.WithSystemFn` when the instruction needs Go logic.
 
 `ai.WithMessagesTemplate` and `ai.WithMessages` or `ai.WithMessagesFn` have no meaningful combination, since the template is the whole conversation. Passing both to one prompt definition panics with a message naming the prompt.
 

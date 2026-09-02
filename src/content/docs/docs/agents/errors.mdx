@@ -119,6 +119,10 @@ res.assertValid();
 - **Tool domain problems** should return structured tool output when the coordinator or model can recover.
 - **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect snapshot error details or retry from a completed snapshot.
 
+An unrecognized `sessionId` is not an error. The agent starts a new conversation under that ID and every snapshot it writes carries it, so there is no `ErrSessionNotFound` sentinel. `aix.ErrSnapshotNotFound` applies only to an unknown `snapshotId`.
+
+The rejected-init cases from `Run`, `RunText`, and `Connect` are narrow: sending a `sessionId` to a client-managed agent (one defined without `WithSessionStore`) is a `status.FailedPrecondition`, and sending `state` to a store-backed agent is rejected the same way. `ai/exp` ships three sentinels in total: `aix.ErrSnapshotNotFound`, `aix.ErrSessionStoreNotConfigured`, and `aix.ErrSessionIDRequired`.
+
 ## Check both error channels
 
 An agent reports failure through two channels. A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band, so the output can still carry recovery state or a recovery snapshot ID.
@@ -142,8 +146,10 @@ if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
 	switch out.Error.Status {
 	case status.Unavailable, status.ResourceExhausted:
 		// Overloaded. Resume from out.SnapshotID in a moment.
+		return nil
 	case status.InvalidArgument:
 		// The model or a tool rejected the request. Rephrase it.
+		return nil
 	default:
 		return fmt.Errorf("agent turn failed: %s: %s", out.Error.Status, out.Error.Message)
 	}
@@ -151,6 +157,16 @@ if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
 
 fmt.Println(out.Message.Text())
 ```
+
+Return from each recovery arm rather than falling through. A failed turn may have ended before any model response, in which case `out.Message` is nil. `Message.Text()` is nil-safe and returns `""`, so falling through prints a blank line instead of the answer the caller expected.
+
+What the rest of `AgentOutput` holds depends on how the invocation finished:
+
+| `FinishReason` | `Error`  | `SnapshotID`                                                                    | `State`                    | `Message`      |
+| -------------- | -------- | ------------------------------------------------------------------------------- | -------------------------- | -------------- |
+| `failed`       | non-nil  | The last committed turn's snapshot: the resume point, without the failed turn's partial mutations. | Last-good client-managed state. | May be nil.    |
+| `detached`     | nil      | The pending snapshot.                                                           | Nil; detach needs a store. | May be nil.    |
+| anything else  | nil      | The most recent turn-end snapshot, or empty with no store.                      | Client-managed final state. | The last model message. |
 
 The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
 

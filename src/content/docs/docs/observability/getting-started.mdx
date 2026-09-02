@@ -51,7 +51,8 @@ and on the Google Cloud Console.
 
    <Lang lang="go">
 
-   a. [Deploy flows using Cloud Run](/docs/deployment/cloud-run)
+   Deploy your flows [with Cloud Run](/docs/deployment/cloud-run) or
+   [to any platform](/docs/deployment/any-platform) that runs a Go binary.
 
    </Lang>
 
@@ -64,6 +65,30 @@ Install the `@genkit-ai/firebase` plugin in your project:
 ```bash
 npm install @genkit-ai/firebase
 ```
+
+</Lang>
+
+<Lang lang="go">
+
+Add the `firebase` plugin to your module:
+
+```bash
+go get github.com/firebase/genkit/go/plugins/firebase
+```
+
+:::note[The Firebase and Google Cloud telemetry plugins are the same code]
+`firebase.EnableFirebaseTelemetry` copies its options into a
+`googlecloud.GoogleCloudTelemetryOptions` and calls
+`googlecloud.EnableGoogleCloudTelemetry`. The option structs are field for
+field identical. The only behavioral difference is project-ID resolution:
+the Firebase entry point checks `FIREBASE_PROJECT_ID` before
+`GOOGLE_CLOUD_PROJECT` and `GCLOUD_PROJECT`.
+
+Use `firebase.EnableFirebaseTelemetry` if you want the Firebase Genkit
+Monitoring dashboard, and
+[`googlecloud.EnableGoogleCloudTelemetry`](/docs/integrations/google-cloud)
+otherwise. Do not call both.
+:::
 
 </Lang>
 
@@ -84,6 +109,22 @@ export ENABLE_FIREBASE_MONITORING=true
 This will use default configuration values. To
 override configuration options, use "Programmatic configuration".
 :::
+
+</Lang>
+
+<Lang lang="go">
+
+There is no environment variable that turns telemetry on. The Go plugin has no
+equivalent of `ENABLE_FIREBASE_MONITORING`, so you always call
+`firebase.EnableFirebaseTelemetry` in code.
+
+Two environment variables still affect what happens after you call it:
+
+- `GENKIT_ENV`: when set to `dev`, nothing is exported unless you also set
+  `ForceDevExport: true`.
+- `FIREBASE_PROJECT_ID`, then `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT`:
+  checked in that order to resolve the destination project when you leave
+  `ProjectID` empty.
 
 </Lang>
 
@@ -108,27 +149,60 @@ enableFirebaseTelemetry();
 
 <Lang lang="go">
 
-To enable Firebase Genkit Monitoring in code, call `firebase.EnableFirebaseTelemetry` before initializing Genkit. You can pass configuration options to tweak settings like the metric export
-interval or to set up your local environment to export telemetry data.
+Call `firebase.EnableFirebaseTelemetry` before `genkit.Init`. It returns
+nothing, so there is no error to check. Pass `nil` for the defaults, or a
+`*firebase.FirebaseTelemetryOptions` to tweak settings like the metric export
+interval.
 
 ```go
 package main
 
 import (
-   "context"
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
 
-   "github.com/firebase/genkit/go/genkit"
-   "github.com/firebase/genkit/go/plugins/firebase"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/firebase"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/server"
 )
 
 func main() {
-   ctx := context.Background()
+	ctx := context.Background()
 
-   // Enable telemetry with default options
-   firebase.EnableFirebaseTelemetry(nil)
-   g := genkit.Init(ctx)
+	// Enable telemetry with default options, before genkit.Init.
+	firebase.EnableFirebaseTelemetry(nil)
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
+	)
+
+	flow := genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell a short joke about %s.", topic))
+		if err != nil {
+			return "", fmt.Errorf("failed to generate joke: %w", err)
+		}
+		return resp.Text(), nil
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
 }
 ```
+
+The full option list is on
+[Advanced configuration](/docs/observability/advanced-configuration).
 
 </Lang>
 
@@ -171,7 +245,20 @@ dashboard.
 <Lang lang="go">
 
 1. In your Genkit code, set `ForceDevExport` to `true` to send telemetry from
-   your local environment.
+   your local environment. Lower the export interval at the same time so you do
+   not wait five minutes for the first metric:
+
+   ```go
+   interval := 5000 // Milliseconds. Google Cloud rejects anything below 5000.
+
+   firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+   	ForceDevExport:             true,
+   	MetricExportIntervalMillis: &interval,
+   })
+   ```
+
+   `MetricExportIntervalMillis` is a `*int`, so it needs an addressable
+   variable. Leaving it `nil` means 5000 in dev and 300000 in production.
 
 </Lang>
 
@@ -195,7 +282,7 @@ gcloud auth application-default login --impersonate-service-account SERVICE_ACCT
 3. Run and invoke your Genkit feature, and then view metrics on the
    [Genkit Monitoring dashboard](https://console.firebase.google.com/project/_/genai_monitoring).
    Allow for up to 5 minutes to collect the first metric. You can reduce this
-   delay by setting `metricExportIntervalMillis` in the telemetry configuration.
+   delay by lowering the metric export interval in the telemetry configuration.
 
 4. If metrics are not appearing in the Genkit Monitoring dashboard, view the
    [Troubleshooting](/docs/observability/troubleshooting) guide for steps
@@ -224,6 +311,108 @@ It may take up to 5 minutes to collect the first metric (based on the default `m
 
 :::note
 It may take up to 5 minutes to collect the first metric (based on the default `MetricExportIntervalMillis` setting in the telemetry configuration).
+:::
+
+## Correlating a user report to a trace
+
+A support ticket is only useful if you can find the request it describes. Read
+the current trace ID inside the flow and hand it back to the caller.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"go.opentelemetry.io/otel/trace"
+)
+
+type jokeResponse struct {
+	Joke    string `json:"joke"`
+	TraceID string `json:"traceId"`
+}
+
+func defineJokesFlow(g *genkit.Genkit) {
+	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (jokeResponse, error) {
+		traceID := trace.SpanContextFromContext(ctx).TraceID().String()
+
+		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell a short joke about %s.", topic))
+		if err != nil {
+			// Return the ID on the error path too. That is the path users report.
+			return jokeResponse{TraceID: traceID}, fmt.Errorf("failed to generate joke: %w", err)
+		}
+		return jokeResponse{Joke: resp.Text(), TraceID: traceID}, nil
+	})
+}
+```
+
+An `X-Trace-Id` response header works just as well if you do not want to change
+the response body.
+
+With the ID in hand:
+
+- Search for it directly in Cloud Trace, or in the Genkit Monitoring trace
+  viewer.
+- Paste `projects/<project-id>/traces/<trace-id>` into Cloud Logging to pull
+  every log line for that request. Genkit writes the `trace` field of each log
+  entry in exactly that format. See
+  [Telemetry collection](/docs/observability/telemetry-collection).
+
+To capture the ID from outside the flow body, use
+`tracing.WithTelemetryCallback(ctx, func(traceID, spanID string) { ... })` from
+`github.com/firebase/genkit/go/core/tracing` and pass the resulting context into
+the flow.
+
+## Export to any OTLP backend
+
+Firebase and Google Cloud are not the only destinations. `core/tracing` exports
+the SDK tracer provider as application API, so you can attach any OpenTelemetry
+span exporter to it: Datadog, Honeycomb, Grafana, or a self-hosted collector.
+
+```bash
+go get go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+```
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/core/tracing"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+// registerOTLP attaches an OTLP exporter to Genkit's tracer provider and
+// returns a shutdown function that flushes buffered spans.
+func registerOTLP(ctx context.Context) func(context.Context) error {
+	// Reads OTEL_EXPORTER_OTLP_ENDPOINT and the usual OTEL_* variables.
+	exp, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Fatalf("failed to build OTLP exporter: %v", err)
+	}
+
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exp))
+	return tp.Shutdown
+}
+```
+
+Call `registerOTLP` before `genkit.Init` and defer the returned shutdown
+function. For metrics, build an OTLP `metric.Exporter` and install it with
+`otel.SetMeterProvider`; Genkit records its counters and histograms through the
+global meter provider.
+
+:::caution[Order matters if you also enable Firebase or Google Cloud telemetry]
+`EnableFirebaseTelemetry` and `EnableGoogleCloudTelemetry` build a fresh
+`TracerProvider` and install it as the global one, which discards any span
+processor registered earlier. To send spans to both destinations, call
+`registerOTLP` **after** the telemetry plugin, not before.
 :::
 
 </Lang>

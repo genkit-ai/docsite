@@ -128,6 +128,10 @@ func main() {
 }
 ```
 
+`genkit.Init` returns a `*genkit.Genkit`, and that is the value every other
+Genkit call takes. When your flows live in other files, pass it in:
+`func defineMenuFlows(g *genkit.Genkit)`.
+
 </Lang>
 
 <Lang lang="dart">
@@ -334,6 +338,11 @@ something other than text, such as a tool request or an interrupt, so inspect
 what to do. The
 [basic-structured sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
 works through typed output, including the nested and streaming cases.
+
+`status.Errorf` comes from `github.com/firebase/genkit/go/core/status`. It
+classifies the failure as `INTERNAL` so the HTTP boundary can pick a response
+code without re-reading the message; see
+[Handling errors in flows](#handling-errors-in-flows) below.
 
 </Lang>
 
@@ -704,6 +713,24 @@ shows the forwarding shape, and the
 [basic-structured sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
 has both shapes side by side.
 
+The snippets in this section assume these imports:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
+)
+```
+
+`core.StreamCallback[T]` is a type alias for `func(context.Context, T) error`,
+so writing the function type out longhand is the same declaration.
+`ai.ModelStreamCallback` is that alias with `T` set to `*ai.ModelResponseChunk`.
+
 #### Forwarding the model's chunks
 
 When the flow passes the model's output straight through, `ai.WithStreaming` is
@@ -774,6 +801,22 @@ does not have to be the same type as the flow's complete output (`Menu` here).
 `chunk.Text()` is the text that just arrived rather than the message so far, so
 forwarding it gives a client something to append.
 
+`genkit.DefineFlow` returns `*core.Flow[In, Out, struct{}]` and
+`genkit.DefineStreamingFlow` returns `*core.Flow[In, Out, Stream]`, so a flow
+that lives in its own file is declared with its concrete type:
+
+```go
+func newMenuSuggestionFlow(g *genkit.Genkit) *core.Flow[MenuSuggestionInput, Menu, string] {
+	return genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
+		func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[string]) (Menu, error) {
+			// ...
+			return Menu{}, nil
+		})
+}
+```
+
+`genkit.DefineTool` returns `*ai.ToolAction[In, Out]` on the same principle.
+
 #### Acting on the chunks
 
 When the flow has to inspect, filter, or accumulate what arrives, range over
@@ -808,31 +851,33 @@ inferred from `T`:
 
 ```go
 menuSuggestionFlow := genkit.DefineStreamingFlow(g, "menuSuggestionFlow",
-	func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[*MenuItem]) (*MenuItem, error) {
-		for result, err := range genkit.GenerateDataStream[*MenuItem](ctx, g,
+	func(ctx context.Context, input MenuSuggestionInput, sendChunk core.StreamCallback[MenuItem]) (MenuItem, error) {
+		for result, err := range genkit.GenerateDataStream[MenuItem](ctx, g,
 			ai.WithPrompt("Invent a menu item for a %s themed restaurant.", input.Theme),
 		) {
 			if err != nil {
-				return nil, fmt.Errorf("could not invent a menu item: %w", err)
+				return MenuItem{}, fmt.Errorf("could not invent a menu item: %w", err)
 			}
 			if result.Done {
-				// result.Output is strongly typed as *MenuItem.
+				// result.Output is strongly typed as MenuItem.
 				return result.Output, nil
 			}
 			// result.Chunk is the whole MenuItem parsed so far.
 			sendChunk(ctx, result.Chunk)
 		}
 
-		return nil, status.Errorf(status.ErrInternal, "the stream ended without a final result")
+		return MenuItem{}, status.Errorf(status.ErrInternal, "the stream ended without a final result")
 	})
 ```
 
 With the default JSON format each chunk replaces the previous one rather than
 adding to it: the whole value is reparsed from everything received so far, so
-fields fill in as the model writes them. A chunk that has not parsed into
-anything yet is skipped when the type parameter is a pointer, so `result.Chunk`
-is never nil here. With a value type such as `MenuItem` those chunks arrive as
-the zero value instead.
+fields fill in as the model writes them. Guard on a field you care about rather
+than assuming every chunk carries something new. Use the pointer form,
+`GenerateDataStream[*MenuItem]`, only when you want chunks that have not parsed
+into anything yet dropped instead of delivered as a zero value;
+[Generating content](/docs/models#streaming-structured-output) has the full
+rationale.
 
 The values a flow streams are often coupled to the values the generation call
 inside it streams, but they do not have to be. You can call `sendChunk` as often
@@ -1199,8 +1244,15 @@ UI.
 
 The developer UI relies on the Go app continuing to run, even if the logic has
 completed. If you are just getting started and Genkit is not part of a broader
-app, add `select {}` as the last line of `main()` to prevent the app from
-shutting down so that you can inspect it in the UI.
+app, end `main()` by starting a server instead of returning:
+
+```go
+log.Fatal(server.Start(ctx, "127.0.0.1:3400", http.NewServeMux()))
+```
+
+That keeps the process alive, serves whatever you mount on the mux, and still
+exits on Ctrl-C. A bare `select {}` also keeps the process alive, but it ignores
+`SIGINT`, so you have to kill the process to stop it.
 
 </Lang>
 
@@ -1608,6 +1660,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/status"
@@ -1647,13 +1700,27 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /menuSuggestionFlow", genkit.Handler(menuSuggestionFlow))
-	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+
+	// Bind 0.0.0.0 and honor $PORT: Cloud Run and most other hosts inject the
+	// port and health-check the container from outside, so a loopback bind
+	// fails to start.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3400"
+	}
+	log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
 }
 ```
 
-`server.Start()` is an optional helper function that starts the server and
-manages its lifecycle, including capturing interrupt signals to ease local
-development, but you may use your own method.
+`server.Start()` is optional, but it is more than a local-development
+convenience: it traps `SIGINT` and `SIGTERM`, stops accepting new connections,
+and calls `http.Server.Shutdown` with a fixed 5-second budget to drain
+in-flight requests. That budget is not configurable. If a single flow can
+legitimately run longer than five seconds, which a multi-turn model call often
+does, construct your own `http.Server` and drain it on your own schedule.
+
+Bind `127.0.0.1` only when you mean local-only, such as while running under the
+Developer UI.
 
 To serve all the flows defined in your codebase, you can use
 `genkit.ListFlows()`:
@@ -1663,8 +1730,121 @@ mux := http.NewServeMux()
 for _, flow := range genkit.ListFlows(g) {
     mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 }
-log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
 ```
+
+This mounts every registered flow, including any you did not mean to expose.
+Mount flows one at a time, or filter the list, when the process defines internal
+flows as well as public ones.
+
+### Handling flow errors centrally
+
+`genkit.Handler` writes the error itself. When your framework already has one
+place that turns an error into a response, use `genkit.HandlerFunc` instead:
+
+```go
+func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, *http.Request) error
+```
+
+It takes the action, not the `*genkit.Genkit` (`api.Action` is the interface a
+flow, tool, or prompt satisfies), accepts the same `HandlerOption`s as
+`genkit.Handler`, and panics if an option fails to apply.
+The returned function runs the flow and hands you its error, so your own
+middleware decides the status and the body:
+
+```go
+func withErrors(h func(http.ResponseWriter, *http.Request) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := h(w, r)
+		if err == nil {
+			return
+		}
+		log.Printf("flow %s failed: %v", r.URL.Path, err)
+		// PublicMessage substitutes a generic string unless the error was
+		// built with status.PublicErrorf, so internal detail stays server-side.
+		msg, _ := status.PublicMessage(err)
+		http.Error(w, msg, status.Of(err).HTTPCode())
+	})
+}
+
+mux.Handle("POST /menuSuggestionFlow", withErrors(genkit.HandlerFunc(menuSuggestionFlow)))
+```
+
+### Protecting deployed flows
+
+`genkit.Handler` performs no authentication. It decodes the request, applies the
+`HandlerOption`s you passed, and runs the flow. A flow you mount is open to
+anyone who can reach the port, so put your own middleware in front of it. The
+fragments below add `strings` and `github.com/firebase/genkit/go/core` to the
+imports of the program above:
+
+```go
+func requireBearerToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if _, err := verifyToken(r.Context(), token); err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+`verifyToken` is yours to write against whatever issues your tokens; Genkit does
+not supply one.
+
+To let the flow itself see who is calling, pass a context provider. It runs per
+request and its result becomes the flow's action context:
+
+```go
+func callerFromRequest(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+	// req.Headers keys are lowercased.
+	uid, err := verifyToken(ctx, strings.TrimPrefix(req.Headers["authorization"], "Bearer "))
+	if err != nil {
+		return nil, err
+	}
+	return core.ActionContext{"uid": uid}, nil
+}
+
+mux.Handle("POST /menuSuggestionFlow", requireBearerToken(
+	genkit.Handler(menuSuggestionFlow, genkit.WithContextProviders(callerFromRequest)),
+))
+```
+
+Inside the flow, read it back with `core.FromContext`:
+
+```go
+uid, _ := core.FromContext(ctx)["uid"].(string)
+```
+
+Verify the credential in the middleware, not only in the context provider, so an
+unauthenticated request never reaches the flow.
+
+### Concurrency, timeouts, and lifetime
+
+A `*genkit.Genkit`, and the flow, tool, and prompt values the `Define*`
+functions return, are safe for concurrent use by many goroutines; the registry
+behind them is mutex-guarded. Create one instance in `main()`, define every
+flow, tool, and schema during startup before the server begins serving, and
+share that instance across all request handlers. Constructing a `*genkit.Genkit`
+per request re-runs plugin initialization and is never correct.
+
+Genkit has no timeout option. Bound a flow or a generate call with the standard
+library:
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+defer cancel()
+```
+
+The deadline propagates to the model client and to any tool the turn calls. An
+expired deadline surfaces as `DEADLINE_EXCEEDED`, which retry middleware treats
+as retryable; an explicit cancellation surfaces as `CANCELLED` and stops
+retries.
+
+[Concurrency, cancellation, and lifecycle](/docs/concurrency) has the rest:
+parallel tool fan-out, abandoning a stream, and flushing telemetry on shutdown.
 
 ### Other server frameworks
 

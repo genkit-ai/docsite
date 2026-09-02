@@ -3,6 +3,7 @@ title: Passing information through context
 description: Learn how Genkit's context object propagates generation and execution information throughout your application, making it available to flows, tools, and prompts.
 supportedLanguages:
   - js
+  - go
   - dart
 ---
 
@@ -336,5 +337,147 @@ final response = await ai.generate(
 By default, when you provide context it is automatically propagated to all
 actions called as a result of your original call. If your generation calls tools,
 the same context is provided.
+
+</Lang>
+
+<Lang lang="go">
+
+There are different categories of information a developer working with an LLM
+handles at the same time:
+
+- **Input:** information that guides the model's response for a particular call,
+  such as the text to summarize.
+- **Generation context:** information relevant to the model but not specific to
+  the call, such as the current date or the user's display name.
+- **Execution context:** information your code needs and the model must never
+  see, such as the caller's identity, tenant, or auth token.
+
+Genkit for Go carries the third category in the **action context**: a
+`map[string]any` attached to the Go `context.Context`, propagated to every flow,
+tool, and prompt in the call, and never sent to the model.
+
+```go
+import "github.com/firebase/genkit/go/core"
+
+// core.ActionContext is an alias for map[string]any.
+ctx = core.WithActionContext(ctx, core.ActionContext{"uid": "alice"})
+
+// Anywhere downstream:
+uid, _ := core.FromContext(ctx)["uid"].(string)
+```
+
+## Why this matters
+
+Give the model the minimum it needs. Two reasons:
+
+- The less extraneous information the model has, the better it does the task.
+- If a tool takes a user ID as an *input*, the model chooses that ID. A prompt
+  injection can then make it choose someone else's. An identity that arrives
+  through the action context cannot be chosen by the model at all.
+
+That second point is the whole reason to prefer action context over an extra
+field in a tool's input schema.
+
+## Read context in a tool
+
+`*ai.ToolContext` embeds the request's `context.Context` as its `Context` field,
+so a tool reads action context the same way anything else does:
+
+```go
+type empty struct{}
+
+listOrders := genkit.DefineTool(g, "listOrders",
+	"Lists the signed-in customer's orders.",
+	func(toolCtx *ai.ToolContext, _ empty) ([]string, error) {
+		uid, _ := core.FromContext(toolCtx.Context)["uid"].(string)
+		if uid == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "no signed-in user")
+		}
+		return ordersFor(uid), nil
+	})
+```
+
+Note what the tool's input schema does **not** contain: a customer ID. The model
+can ask for "my orders" and nothing else.
+
+A flow reads the same map from its own `ctx`:
+
+```go
+flow := genkit.DefineFlow(g, "orders", func(ctx context.Context, q string) (string, error) {
+	uid, _ := core.FromContext(ctx)["uid"].(string)
+	if uid == "" {
+		return "", status.Errorf(status.ErrUnauthenticated, "no signed-in user")
+	}
+	// ...
+})
+```
+
+## Provide context at an HTTP boundary
+
+`genkit.Handler` and `genkit.HandlerFunc` take
+`genkit.WithContextProviders(...)`. Each provider receives the decoded request
+and returns the action context to merge in. This is where authentication belongs:
+
+```go
+h := genkit.Handler(flow, genkit.WithContextProviders(
+	func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+		token := strings.TrimPrefix(req.Headers["authorization"], "Bearer ")
+		if token == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "missing bearer token")
+		}
+		claims, err := verify(ctx, token) // your verifier
+		if err != nil {
+			return nil, status.Errorf(status.ErrUnauthenticated, "invalid token: %w", err)
+		}
+		return core.ActionContext{"uid": claims.Subject, "tenant": claims.Tenant}, nil
+	}))
+
+mux.Handle("POST /orders", h)
+```
+
+Three details that decide whether this is actually secure:
+
+- **Header keys are lower-cased** before they reach `req.Headers`, and repeated
+  headers are joined with a space. Look up `"authorization"`, not
+  `"Authorization"`.
+- **A provider that returns an error rejects the request before the action
+  runs.** The HTTP status comes from the error's classification, so return
+  `status.Errorf(status.ErrUnauthenticated, ...)` to get a 401 and
+  `status.ErrPermissionDenied` to get a 403. A bare `errors.New` classifies as
+  internal and becomes a 500.
+- **The error message is not sent to the client** unless you built it with
+  `status.PublicErrorf`. It is always logged server-side. See
+  [Error types](/docs/error-types).
+
+Providers run in order and their maps are merged, so a later provider overwrites
+a key an earlier one set. `req.Input` holds the decoded request body if a
+provider needs to look at it.
+
+## Provide context for an in-process call
+
+Outside an HTTP handler — a worker, a cron job, a test — set it yourself before
+you call the flow:
+
+```go
+ctx = core.WithActionContext(ctx, core.ActionContext{"uid": "alice", "tenant": "acme"})
+out, err := flow.Run(ctx, input)
+```
+
+## Propagation
+
+Action context rides on the Go `context.Context`, so it propagates the way every
+other context value does: into nested flows, into `genkit.Run` steps, into
+prompts, and into tools called during the generation loop. Anything that takes
+`ctx` sees it. A goroutine that does **not** receive the request's `ctx` does
+not, which is the usual reason a background task cannot see the caller.
+
+## Learn more
+
+- [Error types](/docs/error-types) — the status codes a context provider should
+  return, and which messages reach the client
+- [Tool calling](/docs/tool-calling) — tool input schemas, and what the model
+  controls
+- [Serve flows over HTTP](/docs/backend-frameworks/overview) — where the
+  handler options go
 
 </Lang>

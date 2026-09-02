@@ -926,23 +926,82 @@ provided externally.
 
 ### Genkit evaluators
 
-Genkit includes a small number of built-in evaluators, ported from
-the [JS evaluators plugin](https://js.api.genkit.dev/enums/_genkit-ai_evaluator.GenkitMetric.html),
-to help you get started:
+Genkit includes a small number of built-in evaluators to help you get started.
+The Go constant you configure the plugin with and the name the evaluator is
+registered under are different strings, and both matter: the constant goes in
+`MetricConfig`, the registered name goes to `--evaluators` and appears in the
+Dev UI.
 
-- EvaluatorDeepEqual -- Checks if the generated output is deep-equal to the
-  reference output provided.
-- EvaluatorRegex -- Checks if the generated output matches the regular
-  expression provided in the reference field.
-- EvaluatorJsonata -- Checks if the generated output matches the
-  [JSONATA](https://jsonata.org/) expression provided in the
-  reference field.
+| Go constant                   | Registered name          | Checks that                                                                         |
+| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| `evaluators.EvaluatorDeepEqual` | `genkitEval/deep_equal` | The output is deep-equal to the reference.                                              |
+| `evaluators.EvaluatorRegex`     | `genkitEval/regex`      | The output matches the regular expression in the reference.                             |
+| `evaluators.EvaluatorJsonata`   | `genkitEval/jsonata`    | The output matches the [JSONata](https://jsonata.org/) expression in the reference.     |
+
+All three require a reference: without one the metric errors with
+`reference was not provided`.
+
+`genkitEval/regex` matches strings only. The reference must be a string regular
+expression, and the output must be a string too. A non-string output, an object
+or an array, is not serialized and is not matched: the metric scores `false` with
+status `FAIL`. For structured outputs use `deep_equal`, or write a custom
+evaluator that marshals the output first.
+
+The Dev UI's Evaluate page lists every registered evaluator name, including the
+custom ones you define.
 
 ### Custom evaluators
 
 You can extend Genkit to support custom evaluation by defining your own evaluator functions. An evaluator can use an LLM as a judge, perform programmatic (heuristic) checks, or call external APIs to assess the quality of a response.
 
 You define a custom evaluator using the `genkit.DefineEvaluatorAction` function. The callback function for the evaluator can contain any logic you need. Its last parameter is the evaluator's config: Genkit infers a JSON schema from that type, validates each request against it, and hands you the deserialized value, so an evaluator that takes no options declares it as `struct{}`.
+
+#### The data point you receive
+
+`req.Input` is one `ai.Example`, the row under evaluation:
+
+```go
+type Example struct {
+	TestCaseId string   `json:"testCaseId,omitempty"`
+	Input      any      `json:"input"`
+	Output     any      `json:"output,omitempty"`
+	Context    []any    `json:"context,omitempty"`
+	Reference  any      `json:"reference,omitempty"`
+	TraceIds   []string `json:"traceIds,omitempty"`
+}
+```
+
+`Input`, `Output` and `Reference` are `any`, holding decoded JSON: a
+`map[string]any` for an object, a `float64` for any number, a `string` for a
+string. `Context` is `[]any` of the same. Reading a structured value therefore
+takes a type assertion, or a round trip through `json.Marshal` into your own
+struct. `Reference` is the field the built-in `deep_equal` and `regex`
+evaluators compare against; it is passed through verbatim from the dataset and
+never touched by inference.
+
+#### The score you return
+
+Each entry in the `Evaluation` slice is an `ai.Score`:
+
+```go
+type Score struct {
+	Id      string         `json:"id,omitempty"`
+	Score   any            `json:"score,omitempty"`
+	Status  string         `json:"status,omitempty"` // UNKNOWN, FAIL, or PASS
+	Error   string         `json:"error,omitempty"`
+	Details map[string]any `json:"details,omitempty"`
+}
+```
+
+`Score` is `any`, so a number, a boolean, or a string are all valid; the
+built-in evaluators store a boolean. `Status` is what the Dev UI keys pass/fail
+highlighting on, so set it with `ai.ScoreStatusPass.String()`,
+`ai.ScoreStatusFail.String()`, or `ai.ScoreStatusUnknown.String()` rather than a
+bare string. `Details` is free-form and displayed alongside the score, which is
+where the reasoning behind a judgement belongs. `Error` carries a per-score
+failure message when one score failed but the others are still usable. `Id`
+labels a score, so one evaluator may return several distinct scores in a single
+`Evaluation` slice.
 
 Here's an example of a custom evaluator that uses an LLM to check for "deliciousness":
 
@@ -951,6 +1010,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -992,9 +1052,25 @@ func NewFoodEvaluator(g *genkit.Genkit) ai.Evaluator {
 			//      Value: outputStr,
 			// })
 
+			// Turn the judge's verdict into a numeric score and a status the
+			// Dev UI can highlight on, and keep its wording as the reasoning.
+			verdict := strings.ToLower(strings.TrimSpace(resp.Text()))
+			score, statusName := 0.0, ai.ScoreStatusFail
+			switch {
+			case strings.HasPrefix(verdict, "yes"):
+				score, statusName = 1.0, ai.ScoreStatusPass
+			case strings.HasPrefix(verdict, "maybe"):
+				score, statusName = 0.5, ai.ScoreStatusUnknown
+			}
+
 			return &ai.EvaluatorCallbackResponse{
 				TestCaseId: req.Input.TestCaseId,
-				Evaluation: []ai.Score{{Score: resp.Text()}},
+				Evaluation: []ai.Score{{
+					Id:      "deliciousness",
+					Score:   score,
+					Status:  statusName.String(),
+					Details: map[string]any{"reasoning": resp.Text()},
+				}},
 			}, nil
 		},
 	)
@@ -1013,6 +1089,47 @@ genkit eval:flow myFlow --input myDataset.json --evaluators=custom/foodEvaluator
 
 Along with its basic functionality, Genkit also provides advanced support for
 certain evaluation use cases.
+
+### Evaluation comparison
+
+The Developer UI can show several evaluation runs side by side, so you can see
+what a prompt or model change did to output quality. One run is designated the
+_Baseline_, and every other run in the comparison is judged improved or
+regressed against it.
+
+<ThemeImage
+  lightSrc="/src/assets/evals_compare_light.png"
+  darkSrc="/src/assets/evals_compare_dark.png"
+  alt="Evaluation comparison with metric highlighting"
+/>
+
+Comparison has three prerequisites:
+
+- The evaluations must come from a dataset source. Runs from a file are not
+  comparable.
+- Every evaluation compared must be from the same dataset.
+- For metric highlighting, they must share at least one metric that produces a
+  number or a boolean score.
+
+To compare runs:
+
+1.  Perform at least two evaluation runs on the same dataset, as described in
+    [Run evaluation and view results](#run-evaluation-and-view-results).
+
+2.  In the Developer UI, go to the **Datasets** page, select the dataset, and
+    open its **Evaluations** tab.
+
+3.  Open the run you want as the baseline and click **+ Comparison**. A disabled
+    button means no other comparable run exists for this dataset.
+
+4.  Pick another run from the dropdown in the new column. Up to three runs can
+    be compared at once.
+
+To color-code the difference, choose a metric from the **Choose a metric to
+compare** menu. Improvements are green and regressions red. By default lower
+numeric scores and `false` boolean values count as improvements; tick the
+checkbox in the menu to reverse that. Highlighting works on numeric and boolean
+metrics only, and the metric has to be present in every run being compared.
 
 ### Evaluation using the CLI
 
@@ -1048,15 +1165,43 @@ field and an optional `reference` field, like below:
   {
     "input": "What green vegetable looks like cauliflower?",
     "reference": "Broccoli"
+  },
+  {
+    "input": { "query": "Which animals did dogs evolve from?", "locale": "en" },
+    "reference": "(?i)wolf|wolves"
   }
 ]
 ```
+
+`input` is handed to the flow as its input value verbatim, and it can be any
+JSON type. The strings in the first two rows are only because the sample
+`qaFlow` takes a `string`; a flow whose input is a struct takes an object, as in
+the third row. Nothing stringifies it on the way in.
 
 If your flow requires auth, you may specify it using the `--context` argument:
 
 ```bash
 genkit eval:flow qaFlow --input testInputs.json --context '{"auth": {"email_verified": true}}' -- go run main.go
 ```
+
+That JSON object becomes the flow's runtime context. Read it inside the flow
+with `core.FromContext`, which returns a `core.ActionContext`, an alias for
+`map[string]any`:
+
+```go
+import "github.com/firebase/genkit/go/core"
+
+genkit.DefineFlow(g, "qaFlow", func(ctx context.Context, query string) (string, error) {
+	auth, _ := core.FromContext(ctx)["auth"].(map[string]any)
+	if verified, _ := auth["email_verified"].(bool); !verified {
+		return "", status.PublicErrorf(status.ErrPermissionDenied, "verified email required")
+	}
+	// ...
+})
+```
+
+In production the same map is populated by `genkit.WithContextProviders`, so the
+flow reads context identically whether it was invoked by the CLI or over HTTP.
 
 By default, the `eval:flow` and `eval:run` commands use all available metrics
 for evaluation. To run on a subset of the configured evaluators, use the
@@ -1086,10 +1231,11 @@ Run your flow over your test inputs:
 genkit flow:batchRun qaFlow testInputs.json -- go run main.go
 ```
 
-Extract the evaluation data:
+Extract the evaluation data. `--maxRows` defaults to 100; the dataset built
+earlier in this guide has 3 examples:
 
 ```bash
-genkit eval:extractData qaFlow --maxRows 2 --output factsEvalDataset.json
+genkit eval:extractData qaFlow --maxRows 3 --output factsEvalDataset.json -- go run main.go
 ```
 
 The exported data has a format different from the dataset format presented
@@ -1112,12 +1258,195 @@ to the context array. You can run evaluation metrics on this extracted dataset
 using the `eval:run` command.
 
 ```bash
-genkit eval:run factsEvalDataset.json
+genkit eval:run factsEvalDataset.json -- go run main.go
 ```
+
+Like every other command on this page, `eval:extractData` and `eval:run` attach
+to a running runtime, so pass one after `--`.
 
 By default, `eval:run` runs against all configured evaluators, and as with
 `eval:flow`, results for `eval:run` appear in the evaluation page of Developer
 UI, located at `localhost:4000/evaluate`.
+
+### Evaluation in CI
+
+Both `eval:flow` and `eval:run` can write the run to disk instead of leaving it
+in the Dev UI. `--output-format` accepts `json` (the default) or `csv`:
+
+```bash
+genkit eval:flow qaFlow --input testInputs.json -o results.json --output-format json -- go run main.go
+```
+
+`eval:run` takes the same pair of flags, spelled `--output` (it has no `-o`
+short form).
+
+:::note[Score assertions in CI]
+`eval:flow` and `eval:run` exit with a non-zero code if the evaluation process encounters an error. To enforce custom quality thresholds in automated pipelines, read the output JSON file and assert on the `metrics` array (for example, verifying that required metrics meet your target pass rate).
+:::
+
+The JSON file is an array of results, one per test case, each carrying the
+extracted `input`, `output` and `context` plus a `metrics` array whose entries
+look like this:
+
+```json
+{
+  "evaluator": "genkitEval/regex",
+  "scoreId": "deliciousness",
+  "score": true,
+  "status": "PASS",
+  "rationale": "...",
+  "error": null,
+  "traceId": "..."
+}
+```
+
+### Custom extractors
+
+Genkit's tooling has default logic for pulling the `input`, `output` and
+`context` fields out of a trace. When you need something else, override it with
+an extractor. Extractors apply to the `eval:extractData` and `eval:flow`
+commands.
+
+Extraction works off named steps, so give the step you want to read from a name
+with `genkit.Run`:
+
+```go
+genkit.DefineFlow(g, "qaFlow", func(ctx context.Context, query string) (string, error) {
+	factDocs, err := genkit.Retrieve(ctx, g, ai.WithRetriever(factsRetriever), ai.WithTextDocs(query))
+	if err != nil {
+		return "", err
+	}
+
+	// Keep only the facts worth answering from; isSillyFact is your own
+	// predicate. Any step you name here can be referenced by an extractor.
+	factDocsModified, err := genkit.Run(ctx, "factModified", func() ([]*ai.Document, error) {
+		var kept []*ai.Document
+		for _, d := range factDocs.Documents {
+			if isSillyFact(d.Content[0].Text) {
+				kept = append(kept, d)
+			}
+		}
+		return kept, nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithPrompt("Answer this question with the given context: %s", query),
+		ai.WithDocs(factDocsModified...),
+	)
+	if err != nil {
+		return "", err
+	}
+	return resp.Text(), nil
+})
+```
+
+Extractors are configured in `genkit-tools.conf.js` at your project root. That
+file belongs to the Genkit CLI, not to any one SDK, so it is a JavaScript file
+even in a Go project and it needs no Node dependencies:
+
+```bash
+cd /path/to/your/genkit/app
+touch genkit-tools.conf.js
+```
+
+```js
+module.exports = {
+  evaluators: [
+    {
+      actionRef: '/flow/qaFlow',
+      extractors: {
+        context: { outputOf: 'factModified' },
+      },
+    },
+  ],
+};
+```
+
+Run the evaluation again and `context` is now the output of the `factModified`
+step rather than the retriever's raw result:
+
+```bash
+genkit eval:flow qaFlow --input testInputs.json -- go run main.go
+```
+
+The config takes:
+
+- `evaluators`: an array of entries, each scoped to one action by `actionRef`.
+- `extractors`: the overrides for that action. The supported keys are `input`,
+  `output` and `context`. A value can be:
+  - a string, read as a step name, whose output is extracted;
+  - `{ inputOf: 'step' }` or `{ outputOf: 'step' }`, to pick one side of a step;
+  - a function taking the trace and returning any value, for anything more
+    involved. The trace schema is in
+    `genkit-tools/common/src/types/trace.ts`.
+
+The extracted value keeps the type the step produced. If `factModified` returns
+an array of documents, the extracted `context` is an array of documents.
+
+### Synthesizing test data using an LLM
+
+A dataset is easier to build if a model drafts it. This flow reads a PDF and
+turns each chunk into a candidate question. It uses the same two libraries as
+the [RAG guide](/docs/rag): `github.com/ledongthuc/pdf` to read the file and
+`github.com/tmc/langchaingo/textsplitter` to chunk it.
+
+```bash
+go get github.com/tmc/langchaingo/textsplitter
+go get github.com/ledongthuc/pdf
+```
+
+```go
+type QuestionSet struct {
+	Questions []string `json:"questions"`
+}
+
+splitter := textsplitter.NewRecursiveCharacter(
+	textsplitter.WithChunkSize(2000),
+	textsplitter.WithChunkOverlap(100),
+)
+
+genkit.DefineFlow(g, "synthesizeQuestions", func(ctx context.Context, path string) (*QuestionSet, error) {
+	// readPDF extracts the file's text; see the RAG guide for its body.
+	text, err := genkit.Run(ctx, "extract-text", func() (string, error) {
+		return readPDF(path)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	chunks, err := genkit.Run(ctx, "chunk-it", func() ([]string, error) {
+		return splitter.SplitText(text)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := &QuestionSet{}
+	for _, chunk := range chunks {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("Generate one question about the following text: %s", chunk),
+		)
+		if err != nil {
+			return nil, err
+		}
+		out.Questions = append(out.Questions, resp.Text())
+	}
+	return out, nil
+})
+```
+
+Run it and write the questions to a file:
+
+```bash
+genkit flow:run synthesizeQuestions '"my_input.pdf"' --output synthesizedQuestions.json -- go run main.go
+```
+
+Reshape that file into the `[{"input": ...}]` dataset format before passing it
+to `eval:flow`, and read the questions before you trust them: a model drafting
+its own test set will happily write questions the source text does not answer.
 
 ## Next steps
 

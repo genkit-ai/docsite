@@ -74,6 +74,42 @@ Pick the server framework that matches your backend. Each guide is self-containe
   />
 </CardGrid>
 
+## The `genkit.Handler` contract
+
+Every guide above mounts a flow with the same two functions:
+
+```go
+func Handler(a api.Action, opts ...HandlerOption) http.HandlerFunc
+func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, *http.Request) error
+```
+
+`Handler` returns an `http.HandlerFunc`, so it satisfies `http.Handler` and can be wrapped by any standard middleware. `HandlerFunc` returns an error instead of writing it, which suits frameworks with centralized error middleware.
+
+The argument is any `api.Action`: a flow from `genkit.DefineFlow` or `genkit.DefineStreamingFlow`, or an `*aix.Agent`, which implements `api.BidiAction` and is served one turn per request.
+
+What the handler does on the wire:
+
+| Concern | Behavior |
+| :------ | :------- |
+| Request body | `{"data": <flow input>}`. The input is validated against the flow's schema. |
+| Non-streaming response | `application/json` body of `{"result": <flow output>}`. |
+| Streaming response | `text/event-stream` when the request sends `Accept: text/event-stream` or `?stream=true`. Each event is `data: {"message": <chunk>}`, then a final `data: {"result": <output>}`. |
+| Options | Variadic `HandlerOption`. Today: `genkit.WithContextProviders` (see [Passing information through context](/docs/context)) and `genkit.WithStreamManager` (see [Durable streaming](/docs/durable-streaming)). An option that fails to apply **panics at construction**, not per request, so a misconfiguration fails at startup. |
+| Context | The action runs with the request's own `r.Context()`, so values attached by HTTP middleware reach the flow, its tools, and its prompts. A client disconnect cancels that context and therefore the in-flight model call. The one exception is a durable stream, which deliberately keeps running after the client goes away. |
+
+## Errors and timeouts
+
+The handler derives the HTTP status from the error the flow returns, using the same classification described in [Error types](/docs/error-types):
+
+- `status.Of(err).HTTPCode()` picks the status. An unclassified error, such as a bare `errors.New`, is `Internal` and becomes a 500.
+- The error's **message** is withheld from the client unless you built it with `status.PublicErrorf`. Everything else is replaced with a generic string derived from the status. The full error is always logged server-side.
+- On a streaming request the response has already committed a 200, so a mid-stream failure arrives as a terminal `data: {"error": {"status": ..., "message": ...}}` event instead of a status code. See [Errors on a streaming request](/docs/error-types#errors-on-a-streaming-request).
+
+Two deployment settings can truncate a stream that the code handles correctly:
+
+- An `http.Server` with a `WriteTimeout` cuts the response off at that deadline. Leave it unset, or set it longer than your slowest generation, for routes that stream.
+- A reverse proxy that buffers responses holds every event until the flow finishes. Disable response buffering on the streaming route.
+
 </Lang>
 
 <Lang lang="dart">

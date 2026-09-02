@@ -1,0 +1,198 @@
+---
+title: Concurrency, cancellation, and lifecycle
+description: What is safe to share across goroutines, how deadlines and cancellation propagate, when tool functions run in parallel, and how to shut a Genkit service down cleanly.
+supportedLanguages:
+  - go
+---
+
+import Lang from '../../../components/Lang.astro';
+
+<Lang lang="go">
+
+A Genkit service is an ordinary Go server: one process, many goroutines, one
+request each. This page details the concurrency model and execution guarantees
+of Genkit Go servers.
+
+## Share one Genkit instance
+
+Call `genkit.Init` **once per process** and share the returned `*genkit.Genkit`
+across every goroutine. It is safe for concurrent use: the registry behind it is
+guarded by a `sync.RWMutex`, and lookups on the hot path take a read lock.
+
+```go
+var g *genkit.Genkit // set once in main, read everywhere
+
+func main() {
+	ctx := context.Background()
+	g = genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	// ... one handler per flow; Cloud Run will run many of them at once
+}
+```
+
+Do not create an instance per request. Each `Init` builds a fresh registry,
+re-initializes every plugin, and re-reads your prompt directory, so a
+per-request instance is both slow and a duplicate-registration hazard.
+
+The same values are safe to share: a flow returned by `genkit.DefineFlow`, a
+tool returned by `genkit.DefineTool`, a prompt, a retriever, and an
+`ai.Model`. They are handles onto registry entries, not per-call state.
+
+## Define at startup
+
+`genkit.Define*` is safe to call concurrently, but **defining the same name
+twice panics**. In practice that means:
+
+- Define everything during startup, before you start serving.
+- If you must define at runtime — one model per tenant, say — generate a unique
+  name and guard the call so a retry cannot register the same name twice.
+
+There is no `Undefine`, and no way to test-and-register atomically from outside
+the registry.
+
+## Tool functions can run in parallel
+
+When a model asks for several tool calls in one turn, Genkit runs them
+**concurrently**, one goroutine per call, and waits for all of them.
+
+That has a direct consequence: a tool function must be safe for concurrent use.
+Two invocations of the *same* tool can be in flight at once. Anything a tool
+closes over — a counter, a map, a cache, a batch buffer — needs a mutex or a
+channel, exactly as it would in any other handler.
+
+```go
+var mu sync.Mutex
+var seen = map[string]int{}
+
+recordLookup := genkit.DefineTool(g, "recordLookup", "…",
+	func(toolCtx *ai.ToolContext, in Query) (Result, error) {
+		mu.Lock()
+		seen[in.Key]++
+		mu.Unlock()
+		// ...
+	})
+```
+
+Genkit does not bound tool fan-out. A model that requests twenty tool calls gets
+twenty goroutines, so a tool that talks to a database should use a pooled client
+or its own semaphore.
+
+## Deadlines and cancellation
+
+Every Genkit entry point takes a `context.Context` and honors it. A deadline on
+the context bounds the whole call, including the provider request:
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+defer cancel()
+
+resp, err := genkit.Generate(ctx, g, ai.WithModelName(model), ai.WithPrompt(p))
+```
+
+There is no separate per-call timeout option; standard Go `context.WithTimeout`
+is the recommended mechanism. Without a deadline, a stalled provider request can
+hold execution until the client disconnects or times out.
+
+A few specifics:
+
+- **Cancellation reaches the provider.** When the context is done, the in-flight
+  HTTP request to the model provider is cancelled and `Generate` returns
+  promptly rather than at the provider's own timeout.
+- **`ai.WithMaxTurns` bounds iterations, not time.** A tool loop with a slow
+  tool can run far longer than you expect within its turn budget. Use both.
+- **A cancelled request still emits its trace**, truncated at the point of
+  cancellation, so a timeout is visible in the Developer UI and in production
+  telemetry.
+
+## Abandoning a stream is safe
+
+The streaming iterators (`genkit.GenerateStream`,
+`genkit.GenerateDataStream[T]`, `Flow.Stream`) are range-over-func iterators.
+Breaking out early — because the HTTP client disconnected, or because you have
+seen enough — stops the iteration and releases the producer. It does not leak a
+goroutine.
+
+```go
+for chunk, err := range genkit.GenerateStream(ctx, g, opts...) {
+	if err != nil {
+		return err
+	}
+	if clientGone(w) {
+		break // safe
+	}
+	// ...
+}
+```
+
+Cancelling the context is still the better signal when the work upstream is
+expensive, because it stops the provider request as well as the iteration.
+
+## Shutting down
+
+`plugins/server` has a `Start` helper that handles the lifecycle Cloud Run
+expects: it listens, traps `SIGINT` and `SIGTERM`, and drains in-flight requests
+for up to five seconds before returning.
+
+```go
+import "github.com/firebase/genkit/go/plugins/server"
+
+mux := http.NewServeMux()
+mux.HandleFunc("POST /myFlow", genkit.Handler(myFlow))
+
+// Blocks until interrupted, then drains.
+log.Fatal(server.Start(ctx, "0.0.0.0:"+os.Getenv("PORT"), mux))
+```
+
+If you run your own `http.Server`, replicate that: `signal.NotifyContext` for
+`SIGTERM`, then `srv.Shutdown` with a fresh context, because the signal context
+is already cancelled by the time you get there.
+
+There is no `genkit.Shutdown` or `Close`. The instance holds no resources that
+need releasing at exit; plugin clients are HTTP clients that the runtime
+reclaims.
+
+### Flush telemetry before you exit
+
+Telemetry is the exception. The Google Cloud plugin batches metrics and exports
+them on an interval — 5 seconds in dev, 5 minutes in production — so a process
+that exits between ticks loses everything since the last one. Flush explicitly:
+
+```go
+import "github.com/firebase/genkit/go/plugins/googlecloud"
+
+defer func() {
+	flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := googlecloud.FlushMetrics(flushCtx); err != nil {
+		slog.Error("flush metrics", "error", err)
+	}
+}()
+```
+
+Put the flush after the server drain, not before it, so the requests that drained
+are included.
+
+## Health checks
+
+Genkit adds no health endpoint. Add your own, and keep it off the model path so
+a provider outage does not take your instance out of rotation:
+
+```go
+mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+})
+```
+
+If you want readiness to reflect the provider, check it on a timer in the
+background and serve the cached result — never by calling the model inside the
+probe.
+
+## Learn more
+
+- [Deploy to Cloud Run](/docs/deployment/cloud-run) — the platform these rules
+  are written for
+- [Error types](/docs/error-types) — how a cancellation or deadline reaches a client
+- [Middleware](/docs/middleware) — where to put retries and per-call timeouts
+- [Testing your AI logic](/docs/testing) — test models and verifying concurrency
+  guarantees under `go test -race`
+
+</Lang>

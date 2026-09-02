@@ -148,12 +148,20 @@ Wait for the final response before treating the turn as durably interrupted, bec
 
 <Lang lang="go">
 
+Interrupts are one feature with two transports. The tool-side API is the same as on [Interrupts](/docs/interrupts): `genkitx.DefineInterruptibleTool`, `tool.Interrupt`, `tool.InterruptAs`, and the tool's `Resume`/`Respond` builders. Only the delivery differs. A plain generate call takes the resume parts through `ai.WithToolRestarts` and `ai.WithToolResponses`; an agent takes them through `conn.SendResume` or `AgentInput.Resume`, which the agent forwards to the identical generate resume path.
+
 ## Interrupt from a tool
 
 Define an interruptible tool with `genkitx.DefineInterruptibleTool`. Its third parameter is a typed _resume payload_: `nil` on the first call, and populated with the client's answer when the turn is resumed. The tool pauses by returning `tool.Interrupt(metadata)`; on resume it runs again from the top with the payload set. Keep approval and execution logic in one tool, and require the client to explicitly resume the turn.
 
 ```go
 import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/tool"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -200,6 +208,16 @@ transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
 )
 ```
 
+`DefineInterruptibleTool` returns `*aix.InterruptibleTool[In, Out, Resume]`, so the tool above has type `*aix.InterruptibleTool[TransferInput, TransferOutput, Confirmation]`. Write the type out when the tool must outlive the enclosing function:
+
+```go
+type App struct {
+	Transfer *aix.InterruptibleTool[TransferInput, TransferOutput, Confirmation]
+}
+```
+
+`InterruptibleTool` embeds `aix.Tool[In, Out]` and adds two resume-part builders, `Resume(part *ai.Part, res Resume) (*ai.Part, error)` and `Respond(part *ai.Part, out Out) (*ai.Part, error)`.
+
 The banker agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample runs this end to end: its tool interrupts with a discriminated payload, and the CLI asks the user and resumes the turn.
 
 ## Collect interrupts from the stream
@@ -231,13 +249,45 @@ if ok {
 }
 ```
 
+### Recover interrupts from a snapshot
+
+`(*ai.ModelResponse).Interrupts()` and `chunk.ModelChunk.Interrupts()` cover the live paths. From a stored snapshot there is no response object, so filter the messages yourself: take the newest message whose `Role` is `ai.RoleModel` and keep the parts for which `part.IsInterrupt()` reports true. `*ai.Part` implements `MarshalJSON` and `UnmarshalJSON`, so an interrupt part can be persisted in your own queue and reloaded verbatim.
+
+```go
+// BankState is the agent's custom state type.
+type BankState struct {
+	Balance float64 `json:"balance,omitempty"`
+}
+
+func pendingInterrupts(snap *aix.SessionSnapshot[BankState]) []*ai.Part {
+	if snap == nil || snap.State == nil {
+		// State is nil on a pending snapshot: detached work is still running.
+		return nil
+	}
+
+	for i := len(snap.State.Messages) - 1; i >= 0; i-- {
+		msg := snap.State.Messages[i]
+		if msg.Role != ai.RoleModel {
+			continue
+		}
+
+		var pending []*ai.Part
+		for _, part := range msg.Content {
+			if part.IsInterrupt() {
+				pending = append(pending, part)
+			}
+		}
+		return pending
+	}
+	return nil
+}
+```
+
+Stop at the first model message. Resume validation only searches the most recent model response, so parts from an earlier turn are rejected as stale.
+
 ## Resume an interrupted turn
 
 Build resume parts from the tool, then send them with `conn.SendResume`. Use `Resume` to re-execute the tool, delivering the client's typed answer to its resume parameter. The tool runs again from the top, this time with a non-nil payload.
-
-```go
-import aix "github.com/firebase/genkit/go/ai/exp"
-```
 
 ```go
 part, err := transferMoney.Resume(interrupts[0], Confirmation{Approved: true})
@@ -277,6 +327,82 @@ A resumed turn can interrupt again. Streaming clients should handle interrupts i
 
 The same interruptible-tool API works outside an agent. The [basic-tool-interrupts-exp](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts-exp) sample runs the pause-and-resume cycle across two ordinary generate turns instead.
 
+## Resume without a live connection
+
+An `AgentConnection` is a convenience, not a requirement. `aix.AgentInput` carries the same payload on its `Resume` field, and `Agent.Run` accepts invocation options alongside a full `AgentInput`, so one call resumes a session from any process:
+
+```go
+out, err := agent.Run(ctx, &aix.AgentInput{
+	Resume: &aix.ToolResume{Restart: []*ai.Part{part}},
+}, aix.WithSessionID[BankState](sessionID))
+```
+
+An `AgentInput` carrying only `Resume`, with no `Message`, is valid. The two fields of `aix.ToolResume` match the two builders:
+
+| Field     | Type         | Effect                                                          |
+| --------- | ------------ | --------------------------------------------------------------- |
+| `Restart` | `[]*ai.Part` | Re-runs the tool with the typed resume payload attached.        |
+| `Respond` | `[]*ai.Part` | Supplies the tool output directly; the tool does not run again. |
+
+Both may appear in one payload. Over HTTP the same object rides in `data.resume`.
+
+### Resume from another process
+
+The process that paused the turn does not need to be the one that answers it. Read the session's latest snapshot, find the pending interrupt parts, build the resume parts with the tool, then run:
+
+```go
+func approveTransfer(
+	ctx context.Context,
+	agent *aix.Agent[BankState],
+	transferMoney *aix.InterruptibleTool[TransferInput, TransferOutput, Confirmation],
+	sessionID string,
+) error {
+	snap, err := agent.GetLatestSnapshot(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("read latest snapshot: %w", err)
+	}
+	if snap.FinishReason != aix.AgentFinishReasonInterrupted {
+		return fmt.Errorf("session %q is not waiting on an interrupt", sessionID)
+	}
+
+	var restarts []*ai.Part
+	for _, part := range pendingInterrupts(snap) {
+		meta, ok := tool.InterruptAs[TransferInterrupt](part)
+		if !ok {
+			continue
+		}
+		fmt.Printf("Approve transfer of %.2f to %s?\n", meta.Amount, meta.To)
+
+		restart, err := transferMoney.Resume(part, Confirmation{Approved: true})
+		if err != nil {
+			return fmt.Errorf("build resume part: %w", err)
+		}
+		restarts = append(restarts, restart)
+	}
+	if len(restarts) == 0 {
+		return errors.New("no pending interrupts for this tool")
+	}
+
+	out, err := agent.Run(ctx, &aix.AgentInput{
+		Resume: &aix.ToolResume{Restart: restarts},
+	}, aix.WithSessionID[BankState](sessionID))
+	if err != nil {
+		return fmt.Errorf("resume session: %w", err)
+	}
+
+	fmt.Println(out.Message.Text())
+	return nil
+}
+```
+
+The approver never sees the original request payload, and does not need to: the server re-validates the payload with `aix.ValidateResumeAgainstHistory` before it reaches the model, so a forged restart is rejected.
+
+## Durability
+
+An interrupted turn is an ordinary completed turn. With a session store it writes a snapshot whose `Status` is `completed` and whose `FinishReason` is `interrupted`, so it satisfies the "only a completed snapshot is resumable" rule on [Background execution](/docs/agents/background). Read `FinishReason`, not `Status`, to tell an interrupt apart from a plain finished turn.
+
+There is no expiry on a paused turn. The `pending` and `expired` statuses apply only to detached background work. The only constraint is that a resume must target tool requests in the snapshot's most recent model message, so answer the interrupt before sending an unrelated user message on the same session.
+
 ## Resume validation
 
 The runtime validates a resume payload against session history before it reaches the model. A `respond` entry must match an interrupted tool request by name and ref. A `restart` entry must match the original request and carry its unmodified input. This protects server tools from forged client payloads.
@@ -292,6 +418,12 @@ if input.Resume != nil {
 	}
 }
 ```
+
+## Next steps
+
+- [Interrupts](/docs/interrupts) covers the same tool API outside an agent turn.
+- [Sessions and state](/docs/agents/state) explains snapshots and the `FinishReason` field a paused turn records.
+- [Background execution](/docs/agents/background) covers detaching from a turn and reading its snapshot later.
 
 </Lang>
 

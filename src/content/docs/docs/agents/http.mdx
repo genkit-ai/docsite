@@ -52,86 +52,77 @@ The primary endpoint handles normal and streaming turns. The snapshot endpoint r
 
 ## Route helpers
 
-The experimental route helpers live in `github.com/firebase/genkit/go/genkit/exp`. They return route descriptors that you can mount on `http.ServeMux` or another router.
+The experimental route helpers live in `github.com/firebase/genkit/go/genkit/exp`. They return route descriptors that you can mount on `http.ServeMux` or any standard Go router.
 
 ```go
-import genkitx "github.com/firebase/genkit/go/genkit/exp"
-```
+package main
 
-```go
-mux := http.NewServeMux()
-for _, route := range genkitx.AllAgentRoutes(g) {
-	mux.HandleFunc(route.Pattern(), route.Handler())
+import (
+	"context"
+	"log"
+	"net/http"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Initialize Genkit with experimental support enabled for Agents.
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithExperimental(),
+	)
+
+	store, err := localstore.NewFileSessionStore[any]("./.genkit/snapshots/chat")
+	if err != nil {
+		log.Fatalf("open session store: %v", err)
+	}
+
+	genkitx.DefineAgent(g, "chat",
+		aix.InlinePrompt{
+			ai.WithModelName("googleai/gemini-flash-latest"),
+			ai.WithSystem("You are a helpful travel assistant."),
+		},
+		aix.WithSessionStore(store),
+	)
+
+	mux := http.NewServeMux()
+	for _, route := range genkitx.AllAgentRoutes(g) {
+		mux.HandleFunc(route.Pattern(), route.Handler())
+	}
+
+	log.Println("listening on http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
-
-log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 
 Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent. The fields on `Route` are exported, so a router other than `http.ServeMux` can mount the same layout: read `Method` and `Path`, and serve `Action` with `genkit.Handler`.
 
-An agent is a bidirectional streaming action, but the standard handler also runs it one turn per request, which is what these routes serve. The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample serves a store-backed agent and a client-managed one side by side, with `curl` recipes for streaming, detach, poll, and abort.
+### Handler options
 
-## Route layout
+`Route.Handler` takes the same options as `genkit.Handler`:
 
-- **`POST /agents/{name}`** always exists. It handles one turn per request. Add `?stream=true` for server-sent events.
-- **`POST /agents/{name}/getSnapshot`** exists only when the agent has a session store. Use it to read by `snapshotId` or by latest `sessionId`.
-- **`POST /agents/{name}/abort`** exists only when the agent has a store that supports status subscriptions. Use it to cancel detached background work.
-
-There is currently no `abortSnapshot` route.
-
-Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in the optional `init`. Omit `init` to start a fresh conversation, or include `sessionId`, `snapshotId`, or `state` to continue one.
-
-```sh
-curl -X POST http://localhost:8080/agents/chat \
-  -H 'content-type: application/json' \
-  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}}}'
+```go
+func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc
 ```
 
-Continue a server-managed conversation:
+Pass `genkit.WithContextProviders` to derive request context server-side, or `genkit.WithStreamManager` to make a streamed turn reconnectable:
 
-```sh
-curl -X POST http://localhost:8080/agents/chat \
-  -H 'content-type: application/json' \
-  -d '{"data":{"message":{"role":"user","content":[{"text":"What about Paris?"}]}},"init":{"sessionId":"SESSION_ID"}}'
+```go
+mux.Handle(route.Pattern(), route.Handler(genkit.WithStreamManager(sm)))
 ```
 
-Continue a client-managed conversation:
+The turn response then carries an `X-Genkit-Stream-Id` header. A client that reconnects with `?stream=true` and that header resubscribes to the in-flight stream instead of starting a new turn. See [Durable streaming](/docs/durable-streaming).
 
-```sh
-curl -X POST http://localhost:8080/agents/statelessChat \
-  -H 'content-type: application/json' \
-  -d '{"data":{"message":{"role":"user","content":[{"text":"What is my name?"}]}},"init":{"state":STATE_FROM_PREVIOUS_RESPONSE}}'
-```
+### Browser clients and CORS
 
-Stream a turn as server-sent events:
-
-```sh
-curl -N -X POST 'http://localhost:8080/agents/chat?stream=true' \
-  -H 'content-type: application/json' \
-  -d '{"data":{"message":{"role":"user","content":[{"text":"Suggest three day trips from Tokyo."}]}},"init":{}}'
-```
-
-## Snapshot and abort companions
-
-Read a snapshot:
-
-```sh
-curl -X POST http://localhost:8080/agents/chat/getSnapshot \
-  -H 'content-type: application/json' \
-  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
-```
-
-Abort detached work:
-
-```sh
-curl -X POST http://localhost:8080/agents/chat/abort \
-  -H 'content-type: application/json' \
-  -d '{"data":{"snapshotId":"SNAPSHOT_ID"}}'
-```
-
-## Failure tiers
-
-Failures arrive at two different levels, and a client has to read both. A failed turn still returns 200, reporting `finishReason` `"failed"` with a structured error and the last-good state, so the client can retry without losing the conversation. A rejected init, such as an unknown session or `state` sent to a store-backed agent, fails the request with a 4xx before any turn runs.
+When browser clients connect across origins, apply standard CORS middleware (such as `github.com/rs/cors` or your framework's CORS middleware) to your HTTP router to allow `POST` and `OPTIONS` requests along with headers such as `Content-Type` and `Authorization`. When the frontend and the Go process share an origin, or the frontend proxies to it, no CORS wrapper is needed.
 
 </Lang>
 
@@ -211,15 +202,215 @@ The turn endpoint handles both streaming and non-streaming requests. The snapsho
 
 </Lang>
 
+## Route layout
+
+Agent routes follow a consistent layout across backend frameworks:
+
+- **`POST /agents/{name}`** (or `/api/{name}`): Always exists. It handles one turn per request. Add `?stream=true` for server-sent events.
+- **`POST /agents/{name}/getSnapshot`** (or `/api/{name}/getSnapshot`): Exists when the agent has a session store. Use it to read by `snapshotId` or by latest `sessionId`.
+- **`POST /agents/{name}/abort`** (or `/api/{name}/abort`): Exists when the agent has a store that supports status subscriptions. Use it to cancel detached background work.
+
+Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in the optional `init`. Omit `init` to start a fresh conversation, or include `sessionId`, `snapshotId`, or `state` to continue one.
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Weather in Tokyo?"}]}}}'
+```
+
+## Response envelope
+
+A non-streaming turn answers with the reflection API's `result` envelope wrapping one `AgentOutput`:
+
+```json
+{
+  "result": {
+    "message": {
+      "role": "model",
+      "content": [{ "text": "Tokyo is 18°C and clear." }]
+    },
+    "sessionId": "6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11",
+    "snapshotId": "9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40",
+    "finishReason": "stop"
+  }
+}
+```
+
+The fields of `AgentOutput`:
+
+| Field | Meaning |
+| --- | --- |
+| `message` | The last model response message of the conversation. |
+| `sessionId` | The conversation's ID. The framework assigns it on the first invocation and it is stable across resumes. |
+| `snapshotId` | The most recent turn-end snapshot. Present only when the agent has a session store. |
+| `state` | The full `SessionState`. Present only for client-managed agents, those with no store. |
+| `artifacts` | Artifacts produced during the session. |
+| `finishReason` | Why the invocation finished: `stop`, `length`, `blocked`, `interrupted`, `other`, `unknown`, `aborted`, `detached`, or `failed`. |
+| `error` | Structured failure details. Present only when `finishReason` is `failed`. |
+
+Copy `result.sessionId` into `init.sessionId` on the next request, and `result.snapshotId` into the `getSnapshot` and `abort` bodies. When streaming, read the session ID from the terminal `data: {"result": ...}` frame; chunk frames do not carry it. For a client-managed agent it also rides at `result.state.sessionId`.
+
+Continue a server-managed conversation with the ID the previous response returned:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What about Paris?"}]}},"init":{"sessionId":"6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11"}}'
+```
+
+Continue a client-managed conversation by sending back the `state` object from the previous response. An agent defined without a session store returns responses that carry the whole `SessionState`: `sessionId`, `messages`, `custom`, and `artifacts`.
+
+```sh
+curl -X POST http://localhost:8080/agents/statelessChat \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"What is my name?"}]}},"init":{"state":{"sessionId":"6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11","messages":[{"role":"user","content":[{"text":"My name is Alex."}]},{"role":"model","content":[{"text":"Nice to meet you, Alex."}]}],"custom":{}}}}'
+```
+
+## Streaming
+
+Stream a turn as server-sent events:
+
+```sh
+curl -N -X POST 'http://localhost:8080/agents/chat?stream=true' \
+  -H 'content-type: application/json' \
+  -d '{"data":{"message":{"role":"user","content":[{"text":"Suggest three day trips from Tokyo."}]}},"init":{}}'
+```
+
+Sending `Accept: text/event-stream` turns streaming on as well, with or without `?stream=true`.
+
+Every frame is one `data:` line. There are three shapes:
+
+```
+data: {"message":{"modelChunk":{"role":"model","content":[{"text":"Nikko"}]}}}
+
+data: {"message":{"modelChunk":{"role":"model","content":[{"text":" is a good day trip."}]}}}
+
+data: {"message":{"turnEnd":{"finishReason":"stop","snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40"}}}
+
+data: {"result":{"message":{"role":"model","content":[{"text":"Nikko is a good day trip."}]},"sessionId":"6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11","snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40","finishReason":"stop"}}
+```
+
+- **`{"message": <chunk>}`** repeats for each streamed chunk. The inner object represents the stream chunk, carrying fields such as `modelChunk`, `customPatch`, `artifact`, and `turnEnd`.
+- **`{"result": <AgentOutput>}`** is the terminal frame and the only one that carries `sessionId`.
+- **`{"error": {"status": ..., "message": ...}}`** replaces the terminal frame when the stream fails.
+
+### Reading custom state from a raw client
+
+Custom state reaches a raw HTTP client as `customPatch` on a chunk, an RFC 6902 JSON Patch rooted at the custom document. Its pointers have no `/custom` prefix, so a field named `agentStatus` is at `/agentStatus`:
+
+```
+data: {"message":{"customPatch":[{"op":"replace","path":"","value":{"agentStatus":"searching"}}]}}
+
+data: {"message":{"customPatch":[{"op":"replace","path":"/agentStatus","value":"summarizing"}]}}
+```
+
+The first patch of each turn is a whole-document replace at the root pointer `""`, which re-bases a client that joined mid-conversation. Apply later patches incrementally to keep a local copy live. In Go, use `aix.ApplyPatch`; browser clients can use standard RFC 6902 libraries like `fast-json-patch`. The Vercel AI SDK transport described below performs this reassembly automatically.
+
+## Interrupts over HTTP
+
+When an interruptible tool pauses, the turn returns HTTP 200: `finishReason` is `interrupted` and the interrupt rides as a tool-request part on the message content, carrying the tool's payload under `metadata.interrupt`.
+
+```json
+{
+  "result": {
+    "finishReason": "interrupted",
+    "message": {
+      "role": "model",
+      "content": [
+        {
+          "toolRequest": {
+            "name": "transferMoney",
+            "ref": "call_1",
+            "input": { "toAccount": "alice", "amount": 200 }
+          },
+          "metadata": {
+            "interrupt": { "reason": "large_amount", "amount": 200 }
+          }
+        }
+      ]
+    },
+    "sessionId": "6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11",
+    "snapshotId": "9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40"
+  }
+}
+```
+
+Answer it on the next request through `data.resume`, which takes `respond`, `restart`, or both:
+
+```sh
+curl -X POST http://localhost:8080/agents/banker \
+  -H 'content-type: application/json' \
+  -d '{"data":{"resume":{"restart":[{"toolRequest":{"name":"transferMoney","ref":"call_1","input":{"toAccount":"alice","amount":200}},"metadata":{"resumed":{"approved":true}}}]}},"init":{"sessionId":"6b1c2f3e-6a1e-4c1b-9c74-1f2b8d0a5e11"}}'
+```
+
+`respond` supplies the tool's output directly; `restart` re-runs the tool with a typed answer. The runtime validates the payload: `name` and `ref` must match a pending tool request in the most recent model response, and a restarted request must carry its original input unmodified. See [Agent interrupts](/docs/agents/interrupts).
+
+## Snapshot and abort companions
+
+Read a snapshot:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40"}}'
+```
+
+Abort detached work:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/abort \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40"}}'
+```
+
+Both take the `snapshotId` a previous turn returned at `result.snapshotId`. See [Background execution](/docs/agents/background).
+
+## Failure tiers
+
+Failures arrive at two different levels:
+- **Turn-level failures:** A failed turn returns 200 with `finishReason: "failed"` along with structured error details and the last known good state, allowing the client to retry or handle the failure without losing conversation state.
+- **Request-level failures:** A malformed init payload (such as an unknown `snapshotId` or sending `state` to a store-backed agent) fails immediately with an HTTP 4xx error before running the turn.
+
+:::note[Session ID handling]
+If a store-backed agent receives a `sessionId` that does not exist in the store, it initializes a new conversation under that ID. If your application needs to restrict client-generated session IDs, validate the identifier in your authentication or authorization middleware before invoking the agent handler.
+:::
+
 ## Connect a client
 
 The client is independent of the backend language. Point it at the primary turn URL your server exposes, the route you mounted above, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
 
+<Lang lang="go">
+
+Go ships no prebuilt HTTP agent client. Server code should hold the agent value and call `RunText`, `Run`, or `Connect` in process; see [Run and stream agents](/docs/agents/run). Another Go service can POST the envelope shown above directly.
+
+For a browser or mobile frontend in front of a Go backend, use the JavaScript client. It is in the `genkit` npm package:
+
+```sh
+npm i genkit
+```
+
+```ts
+import { remoteAgent } from 'genkit/beta/client';
+
+const agent = remoteAgent({ url: 'http://localhost:8080/agents/chat' });
+
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+```
+
+The JavaScript version of this page documents the client in full.
+
+</Lang>
+
+<Lang lang="js dart python">
+
 The snippets below apply whichever backend language you selected.
+
+</Lang>
 
 <Lang lang="js">
 
-`remoteAgent()` from `genkit/beta/client` creates a browser-safe client with the same `AgentAPI` shape as a local agent.
+`remoteAgent()` from the `genkit` npm package (`npm i genkit`) creates a browser-safe client with the same `AgentAPI` shape as a local agent.
 
 ```ts
 import { remoteAgent } from 'genkit/beta/client';
@@ -347,7 +538,11 @@ res = await turn.response
 
 ## Client behavior
 
+<Lang lang="js dart python">
+
 The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts, applies streamed custom-state patches, and throws `AgentError` for failed turns.
+
+</Lang>
 
 When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
 
@@ -361,7 +556,15 @@ With the agent behind an AI SDK UI binding, you drive it from the SDK's chat pri
 
 This path is server-managed only. The transport sends the chat `id` to the agent as its `sessionId`, and the agent persists each turn in its session store, so there is no client-side snapshot bookkeeping. The `id` must be a bare UUID.
 
-Point the transport at the same agent route you serve for turns. These examples use React and Angular; the Vue and Svelte bindings accept the same `GenkitChatTransport`.
+Install it alongside the AI SDK UI binding you use:
+
+```sh
+npm i @genkit-ai/vercel-ai
+```
+
+Point the transport at the same agent route you serve for turns. The examples below use `/api/weatherAgent`; replace it with the path your own server mounts, shown in the routing section above. A same-origin path works when the frontend is served from the backend process or proxied to it. A cross-origin URL such as `http://localhost:8080/agents/weatherAgent` needs CORS headers on the agent route.
+
+These examples use React and Angular; the Vue and Svelte bindings accept the same `GenkitChatTransport`.
 
 <Tabs syncKey="ai-sdk-ui">
 <TabItem label="React">
