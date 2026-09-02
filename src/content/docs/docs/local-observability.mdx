@@ -44,11 +44,19 @@ tooling of your choice.
 
 ## Tracing & metrics
 
-Genkit automatically collects traces and metrics without requiring explicit configuration, allowing you to observe and debug your Genkit code's behavior
-in the Developer UI. Genkit stores these traces, enabling you to analyze
-your Genkit flows step-by-step with detailed input/output logging and
-statistics. In production, Genkit can export traces and metrics to Firebase
-Genkit Monitoring for further analysis.
+Genkit automatically collects traces and metrics without requiring explicit
+configuration. Genkit stores the traces and the Developer UI displays them, so
+you can analyze a flow step-by-step with its inputs, outputs, and timing.
+
+Metrics travel a separate path. Genkit records metric families for feature,
+flow, action, generate, and tool activity, including `genkit/flow/latency` and
+the token counters `genkit/ai/generate/input/tokens` and
+`genkit/ai/generate/output/tokens`. The full table is in
+[Telemetry collection](/docs/observability/telemetry-collection). The Developer
+UI does not display metrics: they only leave the process once an exporting
+plugin such as the Firebase plugin is installed. In production, Genkit can
+export both traces and metrics to Firebase Genkit Monitoring for further
+analysis.
 
 <Lang lang="js">
 
@@ -65,6 +73,266 @@ import { logger } from 'genkit/logging';
 // Set the desired log level
 logger.setLogLevel('debug');
 ```
+
+</Lang>
+
+<Lang lang="go">
+
+## Log and export events
+
+Genkit Go logs through `github.com/firebase/genkit/go/core/logger`, a thin
+layer over the standard library's `log/slog`. Log with the package-level
+functions, passing the context first:
+
+```go
+import "github.com/firebase/genkit/go/core/logger"
+
+genkit.DefineFlow(g, "summarize", func(ctx context.Context, input string) (string, error) {
+	logger.Info(ctx, "summarizing", "size", len(input))
+
+	resp, err := genkit.Generate(ctx, g, ai.WithPrompt(input))
+	if err != nil {
+		logger.Warn(ctx, "generation failed, returning the input unchanged", "error", err)
+		return input, nil
+	}
+
+	logger.Debug(ctx, "summary ready", "outputSize", len(resp.Text()))
+	return resp.Text(), nil
+})
+```
+
+Passing the context is what ties a record to its surroundings. The context
+carries the trace span that is active at that moment, so the record is
+correlated with the step that produced it, and it carries any attributes bound
+to the context's logger. The
+[basic-errors sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors)
+logs through these helpers as it classifies and recovers from failures.
+
+`logger.FromContext(ctx)` is still supported and still correlates: it returns
+the context's logger bound to that context, so records logged through its plain
+methods keep the span. Reach for it when you want to bind attributes once and
+have them follow everything logged downstream:
+
+```go
+ctx = logger.WithContext(ctx, logger.FromContext(ctx).With("requestId", requestID))
+
+// Everything logged below carries requestId, with no extra plumbing.
+logger.Info(ctx, "handling request")
+```
+
+Plain `slog` works too, with one caveat: only the `*Context` methods carry the
+span. `slog.InfoContext(ctx, ...)` is correlated, `slog.Info(...)` is not.
+
+### View logs in the Developer UI
+
+Running your app under the CLI is enough to get logs into the Developer UI:
+
+```bash
+genkit start -- go run .
+```
+
+No code change and no configuration is needed. The CLI sets the environment the
+runtime looks for, `genkit.Init` installs the export handler, and records stream
+to the Developer UI, which lists them against the span that emitted them in the
+trace viewer. Starting the Developer UI separately with `genkit ui:start` also
+works, since the CLI hands the telemetry server's address to the running app.
+
+The Developer UI receives every record at debug level and above, independent of
+the console level, so the terminal can stay quiet while the full debug narrative
+lands in the trace viewer. Genkit's own records travel the same channel: span
+start and finish, the resolved generate request, each model turn with its finish
+reason and token counts, tool batches, and each middleware hook with its duration
+and whether it short-circuited.
+
+A record logged without a context is still exported, but it carries no span, so
+it never appears against a step.
+
+:::caution[Do not call slog.SetDefault after genkit.Init]
+`slog.SetDefault` replaces the composed handler wholesale and silently
+disconnects the Developer UI sink. Use `logger.AddHandler` to add a destination
+alongside the ones already installed, or `logger.SetDefaultHandler` to replace
+the base console handler while keeping them.
+:::
+
+```go
+// Mirror every record to a file without disturbing console output or
+// Developer UI streaming.
+f, err := os.Create("genkit.log")
+if err != nil {
+	log.Fatal(err)
+}
+logger.AddHandler(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug}))
+```
+
+### Set the console level
+
+The console starts at info. To see Genkit's per-request detail in the terminal
+as well, lower the level:
+
+```go
+func main() {
+	ctx := context.Background()
+
+	// Console only. In dev the Developer UI already receives debug and above,
+	// whatever this is set to.
+	logger.SetLevel(slog.LevelDebug)
+
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	// ... define flows, serve ...
+	_ = g
+}
+```
+
+Order relative to `genkit.Init` does not matter. `SetLevel` is not
+`slog.SetDefault`: it recomposes Genkit's console handler with every sink already
+registered rather than replacing the default outright, and `genkit.Init`
+recomposes again when it registers the Developer UI sink. The caution above does
+not apply to it.
+
+If your application configured its own default `slog` handler, Genkit leaves it
+alone and warns instead, so set that handler's level rather than calling
+`SetLevel`.
+
+### Environment variables
+
+| Variable | Accepted values | Default | Effect |
+| --- | --- | --- | --- |
+| `GENKIT_LOG_LEVEL` | `debug`, `info`, `warn`, `error`, case-insensitive, with an optional offset such as `error+2` | `info` | Minimum level for the console. It never changes what the Developer UI receives. A value it cannot parse, such as `warning`, `verbose`, or a number, is ignored with a warning, and so is the variable as a whole if your application installed its own default `slog` handler. |
+| `GENKIT_OTEL_ENABLE_LOGS` | any value that parses as false (`false`, `0`, `f`) turns export off | unset, so export is on | An opt-out. You do not have to set it to see logs. Unset, `true`, and anything that does not parse as false all leave export on. |
+| `GENKIT_ENV` | `dev` installs the Developer UI log sink | `prod` | `genkit start` sets `dev`. Nothing is exported outside the dev environment. |
+| `GENKIT_TELEMETRY_SERVER` | a base URL, for example `http://localhost:4033` | empty | Where records are posted. `genkit start` sets it. When it is empty, the CLI supplies the address at runtime instead. |
+
+:::note[Coming from the JS SDK]
+`GENKIT_OTEL_ENABLE_LOGS` reads the opposite way in Go: JS treats it as an
+opt-in and stays silent until you set it, Go treats it as an opt-out and
+exports by default.
+:::
+
+### What survives the trip
+
+Attribute values reach the Developer UI as strings, integers, or booleans.
+Everything else is rendered to text on the way: a `float64` arrives as its
+decimal string, a `time.Duration` as `412ms`, an `error` as its `Error()` text,
+and anything else as JSON. `slog` groups flatten into dotted keys.
+
+Export never blocks your code. Records are batched and posted in the background,
+and dropped rather than queued when the buffer fills, with one warning on
+stderr.
+
+## Trace your own work
+
+### Add a step and attach attributes
+
+A step is a named span inside a flow. `genkit.Run` creates one:
+
+```go
+hits, err := genkit.Run(ctx, "retrieve", func() (int, error) {
+	return len(docs), nil
+})
+```
+
+`genkit.Run` does not pass the step's context into `fn`, so anything inside it
+that traces its own work reports against the enclosing flow instead of the step.
+Use `genkit.RunWithContext` when the work inside takes a context:
+
+```go
+file, err := genkit.RunWithContext(ctx, "upload-image",
+	func(ctx context.Context) (*genai.File, error) {
+		// The upload's own HTTP spans nest under "upload-image".
+		return client.Files.UploadFromPath(ctx, path, nil)
+	})
+```
+
+To attach a measurement to the active span, use the OpenTelemetry API directly.
+The attributes appear on the span in the Developer UI trace viewer:
+
+```go
+import (
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+)
+
+trace.SpanFromContext(ctx).SetAttributes(
+	attribute.Float64("retrieval.hitRate", rate),
+	attribute.Int("retrieval.docs", len(docs)),
+)
+```
+
+### Get the current trace id
+
+Inside a flow, a step, or a tool, `tracing.SpanTraceInfo(ctx)` returns the ids of
+the span that is active:
+
+```go
+import (
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/tracing"
+)
+
+info := tracing.SpanTraceInfo(ctx)
+logger.Error(ctx, "request failed",
+	"traceId", info.TraceID,
+	"spanId", info.SpanID,
+	"path", tracing.SpanPath(ctx))
+```
+
+Return that trace id to the caller in a response header and an operator can go
+straight to `genkit trace:get <traceId>`. `tracing.SpanPath(ctx)` gives the step's
+path within the trace, which is what identifies a step in the Developer UI.
+
+Genkit's spans are ordinary OpenTelemetry spans, so the standard API works too:
+`trace.SpanContextFromContext(ctx).TraceID().String()` from
+`go.opentelemetry.io/otel/trace` returns the same value.
+
+### Export to any OTel backend
+
+Genkit's traces go through a standard OpenTelemetry `TracerProvider`, so any
+exporter can be attached alongside the Developer UI sink. Register the span
+processor after `genkit.Init`, so the provider Genkit installed is the one you
+extend:
+
+```go
+import (
+	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/genkit"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+g := genkit.Init(ctx)
+tracing.TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(yourExporter))
+```
+
+`yourExporter` is any `sdktrace.SpanExporter`: OTLP, Jaeger, or one you wrote. If
+you are packaging the exporter for other people to install rather than wiring it
+into one application, do it as a plugin instead; see
+[Writing Genkit plugins](/docs/plugin-authoring/overview).
+
+## Shutdown and flushing
+
+The Genkit instance itself needs no shutdown. There is no `Close` or `Shutdown`
+method; background work is released by cancelling the context you passed to
+`genkit.Init`.
+
+Traces can be drained explicitly, because `tracing.TracerProvider` hands you the
+OpenTelemetry provider:
+
+```go
+import "github.com/firebase/genkit/go/core/tracing"
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	g := genkit.Init(ctx)
+	defer tracing.TracerProvider().Shutdown(context.Background())
+	// ... define flows, serve ...
+	_ = g
+}
+```
+
+Use `ForceFlush` instead of `Shutdown` if the process keeps running afterwards.
+Log export has no equivalent hook, so a short-lived `go run .` can still lose its
+last few log records; sleep briefly before exit if that matters.
 
 </Lang>
 

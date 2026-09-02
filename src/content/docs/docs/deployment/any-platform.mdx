@@ -297,7 +297,9 @@ binary. This page, as an example, walks you through the general process of
 deploying the default sample flow, and points out where you must take
 provider-specific actions.
 
-1.  Create a directory for the Genkit sample project:
+## 1. Set up your project
+
+Create a directory for the Genkit sample project:
 
 ```bash
 mkdir -p ~/tmp/genkit-cloud-project
@@ -305,9 +307,9 @@ mkdir -p ~/tmp/genkit-cloud-project
 cd ~/tmp/genkit-cloud-project
 ```
 
-    If you're going to use an IDE, open it to this directory.
+If you're going to use an IDE, open it to this directory.
 
-2.  Initialize a Go module in your project directory:
+Initialize a Go module in your project directory:
 
 ```bash
 go mod init example/cloudrun
@@ -315,7 +317,7 @@ go mod init example/cloudrun
 go get github.com/firebase/genkit/go
 ```
 
-3.  Create a sample app using Genkit:
+## 2. Configure your Genkit app
 
 ```go
 package main
@@ -336,7 +338,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Initialize Genkit with the Google AI plugin and Gemini 2.0 Flash.
+    // Initialize Genkit with the Google AI plugin and the latest Gemini Flash model.
     // Alternatively, use &googlegenai.VertexAI{} and "vertexai/gemini-flash-latest"
     // to use Vertex AI as the provider instead.
     g := genkit.Init(ctx,
@@ -357,74 +359,89 @@ func main() {
 
     mux := http.NewServeMux()
     mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
-    log.Fatal(server.Start(ctx, "127.0.0.1:"+os.Getenv("PORT"), mux))
+
+    // Bind 0.0.0.0, not 127.0.0.1: inside a container, a loopback-only
+    // listener is unreachable from the platform's health check and from any
+    // other container. Fall back to a port so `go run .` works locally.
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+    // server.Start traps SIGINT and SIGTERM and drains in-flight requests
+    // before returning, which is what most platforms expect on a redeploy.
+    log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
 }
 ```
 
-4.  Implement some form of authentication and authorization to gate access to
-    the flows you plan to deploy.
+## 3. Gate access to the flow
 
-    Because most generative AI services are metered, you most likely do not want
-    to allow open access to any endpoints that call them. Some hosting services
-    provide an authentication layer as a frontend to apps deployed on them,
-    which you can use for this purpose.
+Implement some form of authentication and authorization before you deploy.
+Because most generative AI services are metered, you most likely do not want to
+allow open access to any endpoint that calls them, and `genkit.Handler` performs
+no check of its own.
 
-5.  Make API credentials available to your deployed function. Do one of the
-    following, depending on the model provider you chose:
+Some hosting services provide an authentication layer as a frontend to apps
+deployed on them, which you can use for this purpose. For a check inside your
+own binary, see
+[Securing your deployment](/docs/deployment/overview#securing-your-deployment).
+
+## 4. Make API credentials available
+
+Do one of the following, depending on the model provider you chose.
+
+**Gemini (Google AI)**
+
+1.  Make sure Google AI is [available in your
+    region](https://ai.google.dev/available_regions).
+
+2.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
+    Gemini API using Google AI Studio.
+
+3.  Make the API key available in the deployed environment.
+
+Most app hosts provide some system for securely handling secrets such as
+API keys. Often, these secrets are available to your app in the form of
+environment variables. If you can assign your API key to the
+`GEMINI_API_KEY` variable, Genkit will use it automatically. Otherwise,
+you need to modify the `googlegenai.GoogleAI` plugin struct to explicitly
+set the key. (But don't embed the key directly in code! Use the secret
+management facilities provided by your hosting provider.)
+
+**Gemini (Vertex AI)**
+
+1.  In the Cloud console, [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
+    for your project.
+
+2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
+    page, create a service account for accessing the Vertex AI API if you
+    don't already have one.
+
+    Grant the account the **Vertex AI User** role.
+
+3.  [Set up Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc#on-prem)
+    in your hosting environment.
+
+4.  Configure the plugin with your Google Cloud project ID and the Vertex
+    AI API location you want to use. You can do so either by setting the
+    `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` environment
+    variables in your hosting environment, or in your
+    `googlegenai.VertexAI{}` constructor.
+
+The only secret you need to set up for this tutorial is for the model
+provider, but in general, you must do something similar for each service
+your flow uses.
+
+## Optional: Try your flow in the developer UI
+
+1.  Set up your local environment for the model provider you chose.
 
     **Gemini (Google AI)**
-
-    1.  Make sure Google AI is [available in your
-        region](https://ai.google.dev/available_regions).
-
-    2.  [Generate an API key](https://aistudio.google.com/app/apikey) for the
-        Gemini API using Google AI Studio.
-
-    3.  Make the API key available in the deployed environment.
-
-    Most app hosts provide some system for securely handling secrets such as
-    API keys. Often, these secrets are available to your app in the form of
-    environment variables. If you can assign your API key to the
-    `GEMINI_API_KEY` variable, Genkit will use it automatically. Otherwise,
-    you need to modify the `googlegenai.GoogleAI` plugin struct to explicitly
-    set the key. (But don't embed the key directly in code! Use the secret
-    management facilities provided by your hosting provider.)
-
-    **Gemini (Vertex AI)**
-
-    1.  In the Cloud console, [Enable the Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=_)
-        for your project.
-
-    2.  On the [IAM](https://console.cloud.google.com/iam-admin/iam?project=_)
-        page, create a service account for accessing the Vertex AI API if you
-        don't alreacy have one.
-
-        Grant the account the **Vertex AI User** role.
-
-    3.  [Set up Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc#on-prem)
-        in your hosting environment.
-
-    4.  Configure the plugin with your Google Cloud project ID and the Vertex
-        AI API location you want to use. You can do so either by setting the
-        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` environment
-        variables in your hosting environment, or in your
-        `googlegenai.VertexAI{}` constructor.
-
-        The only secret you need to set up for this tutorial is for the model
-        provider, but in general, you must do something similar for each
-        service your flow uses.
-
-6.  **Optional**: Try your flow in the developer UI:
-
-    1.  Set up your local environment for the model provider you chose:
-
-        **Gemini (Google AI)**
 
 ```bash
 export GEMINI_API_KEY=<your API key>
 ```
 
-        **Gemini (Vertex AI)**
+    **Gemini (Vertex AI)**
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=<your project ID>
@@ -434,26 +451,124 @@ export GOOGLE_CLOUD_LOCATION=us-central1
 gcloud auth application-default login
 ```
 
-    2.  Start the UI:
+2.  Start the UI:
 
 ```bash
 genkit start -- go run .
 ```
 
-    3.  In the developer UI (`http://localhost:4000/`), run the flow:
+3.  In the developer UI (`http://localhost:4000/`), click **jokesFlow**.
 
-    4.  Click **jokesFlow**.
-
-    5.  On the **Input JSON** tab, provide a subject for the model:
+4.  On the **Input JSON** tab, provide a subject for the model:
 
 ```json
 "bananas"
 ```
 
-    6.  Click **Run**.
+5.  Click **Run**.
 
-7.  If everything's working as expected so far, you can build and deploy the
-    flow using your provider's tools.
+## 5. Build and deploy
+
+If everything's working as expected so far, you can build and deploy the flow
+using your provider's tools.
+
+## Running in production
+
+### What `server.Start` already does
+
+`server.Start` is not a development-only helper. It installs a
+`signal.NotifyContext` for `os.Interrupt` and `SIGTERM`, and on either signal it
+calls `http.Server.Shutdown`, which stops accepting connections and waits for
+in-flight requests to finish. It also stops intercepting signals at that point,
+so a second interrupt kills the process immediately instead of hanging.
+
+The drain window is fixed at five seconds. Requests still running when it
+expires are cut off.
+
+### When five seconds is not enough
+
+A single model turn frequently runs longer than five seconds, and a tool loop
+runs much longer. If your turns are long, run your own `http.Server` with a
+deadline you choose. This is also where you add health and readiness endpoints,
+which Genkit does not register for you:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/firebase/genkit/go/genkit"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	g := genkit.Init(ctx)
+	flow := genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+		return topic, nil // Replace with the flow body from step 2.
+	})
+
+	// ready flips to false the moment shutdown begins, so the load balancer
+	// stops sending new requests while the old ones drain.
+	var ready atomic.Bool
+	ready.Store(true)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /jokesFlow", genkit.Handler(flow))
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	srv := &http.Server{Addr: "0.0.0.0:" + port, Handler: mux}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	stop() // A second interrupt now kills the process immediately.
+	ready.Store(false)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
+}
+```
+
+Keep the deadline inside your platform's SIGTERM grace period. Cloud Run kills
+the container ten seconds after SIGTERM by default, so a 25-second drain there
+buys you nothing.
+
+### The reflection server is not exposed
+
+`genkit.Init` starts the Dev UI reflection server on port 3100 only when
+`GENKIT_ENV` is set to `dev`. In production, leave `GENKIT_ENV` unset and no
+extra listener is opened.
 
 </Lang>
 
@@ -548,14 +663,20 @@ This page shows one way to deploy a Python Genkit app to _any_ platform: run a
 FastAPI server that calls your flows. (FastAPI is ASGI and works well on most
 Python hosting providers.)
 
+:::tip[Prefer `serve_flow`?]
+Start from the [FastAPI tutorial](/docs/backend-frameworks/fastapi)
+(`serve_flow` / `serve_agent`) when you want the Genkit HTTP envelope and SSE.
+The sample below is a plain FastAPI REST wrapper with custom request bodies.
+:::
+
 ## 1. Set up your project (uv)
 
 ```bash
-mkdir -p ~/tmp/genkit-fastapi-project
-cd ~/tmp/genkit-fastapi-project
+mkdir -p ~/tmp/genkit-plain-fastapi
+cd ~/tmp/genkit-plain-fastapi
 
 uv init
-uv add genkit genkit-plugin-google-genai fastapi uvicorn
+uv add genkit genkit-google-genai fastapi uvicorn
 ```
 
 ## 2. Define a flow
@@ -564,7 +685,7 @@ Create `flows.py`:
 
 ```python title="flows.py"
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],

@@ -46,6 +46,7 @@ go get github.com/firebase/genkit/go
 go get github.com/firebase/genkit/go/plugins/googlegenai
 go get github.com/go-chi/chi/v5
 go get github.com/go-chi/cors
+go get google.golang.org/genai
 ```
 
 These packages include:
@@ -54,6 +55,7 @@ These packages include:
 - **`github.com/firebase/genkit/go/plugins/googlegenai`**: Plugin that connects Genkit to Google's Gemini models.
 - **`github.com/go-chi/chi/v5`**: Chi router.
 - **`github.com/go-chi/cors`**: CORS middleware for Chi.
+- **`google.golang.org/genai`**: Google's GenAI Go SDK. The `googlegenai` plugin takes this SDK's own `*genai.GenerateContentConfig` as its model configuration, so you import it directly to tune a request.
 
 ### Configure a model API key
 
@@ -180,15 +182,14 @@ func main() {
 	)
 
 	bargainChefFlow := genkit.DefineStreamingFlow(g, "bargainChefFlow",
-		func(ctx context.Context, input CravingInput, sendChunk func(context.Context, *Recipe) error) (*Recipe, error) {
+		func(ctx context.Context, input CravingInput, sendChunk func(context.Context, Recipe) error) (Recipe, error) {
 			today := time.Now().Weekday().String()
 
 			prompt := "Today is " + today + ". The user is craving: " + input.Craving + ".\n\n" +
 				"Call the getIngredientsOnSale tool with the dayType that matches today. Saturday and Sunday are weekends; all other days are weekdays. " +
 				"Then propose ONE recipe that takes advantage of those deals. For each ingredient, set onSale=true if it appears in the tool's response, false otherwise."
 
-			var final *Recipe
-			for value, err := range genkit.GenerateDataStream[*Recipe](ctx, g,
+			for value, err := range genkit.GenerateDataStream[Recipe](ctx, g,
 				ai.WithModelName("googleai/gemini-flash-latest"),
 				ai.WithConfig(&genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
@@ -199,23 +200,17 @@ func main() {
 				ai.WithTools(getIngredientsOnSale),
 			) {
 				if err != nil {
-					return nil, err
+					return Recipe{}, err
 				}
 				if value.Done {
-					final = value.Output
-					break
+					return value.Output, nil
 				}
-				if value.Chunk != nil {
-					if err := sendChunk(ctx, value.Chunk); err != nil {
-						return nil, err
-					}
+				if err := sendChunk(ctx, value.Chunk); err != nil {
+					return Recipe{}, err
 				}
 			}
 
-			if final == nil {
-				return nil, errors.New("failed to generate recipe")
-			}
-			return final, nil
+			return Recipe{}, errors.New("the stream ended without a final recipe")
 		},
 	)
 
@@ -238,10 +233,19 @@ func main() {
 A few details are worth noting:
 
 - **Initialize Genkit:** `genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))` sets up the SDK and registers Gemini as the model provider.
-- **Final output and streamed chunks:** The `Recipe` struct (with `json` tags) is the structure of the final response. Genkit reflects on the type passed to `GenerateDataStream[*Recipe]` to derive a JSON schema, then validates the model's output against it. Because the parser handles partial JSON, the same struct describes both the final response and each in-progress chunk emitted during streaming. The flow streams `*Recipe` values so an in-progress chunk can be `nil` until the first fields arrive.
+- **Final output and streamed chunks:** The `Recipe` struct (with `json` tags) is the structure of the final response. Genkit reflects on the type passed to `GenerateDataStream[Recipe]` to derive a JSON schema, then validates the model's output against it. Because the parser handles partial JSON, the same struct describes both the final response and each in-progress chunk emitted during streaming. Asking for the value type rather than `*Recipe` means the loop never needs a nil check: an early chunk arrives with every field still at its zero value, and the fields fill in as more of the model's JSON parses. Ask for `*Recipe` instead and Genkit skips only the chunks that arrive before the model opens the JSON object; after that you still get a non-nil `*Recipe` with every field at its zero value.
 - **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, letting it reach outside its training data and into your code to fetch live sale prices before finalizing the recipe. The `SaleQuery` input struct forces the model to pass `dayType: "weekday"` or `"weekend"`; Genkit derives the JSON schema from the Go type, including the enum constraint declared in the `jsonschema` tag. In a real app, the tool would query a pricing database, inventory system, or third-party API.
-- **`sendChunk`:** `genkit.DefineStreamingFlow` registers a flow that accepts a `sendChunk` callback. Inside, `genkit.GenerateDataStream[*Recipe]` yields typed partial recipes as the model produces them, and the loop forwards each chunk to the caller so a client UI can fill in field by field. When the iterator reports `Done`, the flow reads the validated final recipe from the response and returns it so the HTTP request still resolves with a complete value.
+- **`sendChunk`:** `genkit.DefineStreamingFlow` registers a flow that accepts a `sendChunk` callback. Inside, `genkit.GenerateDataStream[Recipe]` yields typed partial recipes as the model produces them, and the loop forwards each chunk to the caller so a client UI can fill in field by field. When the iterator reports `Done`, the flow returns the validated final recipe so the HTTP request still resolves with a complete value.
 - **CORS:** `AllowedOrigins: []string{"*"}` allows **all origins**, so any browser frontend can call this endpoint during development. Before deploying, restrict it to the origins you actually serve.
+- **Request context:** The flow runs with the request's own `r.Context()`, so values attached by Chi middleware are visible to the flow, its tools, and its prompts. For request-scoped identity, prefer `genkit.WithContextProviders(...)` and `core.FromContext(ctx)` over a raw context key. See [Passing information through context](/docs/context), and [the `genkit.Handler` contract](/docs/backend-frameworks/overview) for the full option set and the error and timeout behavior.
+
+### Tidy the module
+
+Resolve the imports and record them in `go.mod`:
+
+```bash
+go mod tidy
+```
 
 ### Check the project layout
 
@@ -348,6 +352,8 @@ You now have a standalone Genkit backend on Chi that streams structured output f
 
 - [Creating flows](/docs/flows): Compose multi-step flows, branch on input, and chain model calls.
 - [Generating content](/docs/models): Swap Gemini for another provider, tune sampling parameters, and work with multimodal input.
+- [Error types](/docs/error-types): Classify failures so the handler returns the right HTTP status, and control which messages reach the caller.
+- [Passing information through context](/docs/context): Get the caller's identity to your flow and tools without putting it in the model's input.
 - [Connect an app framework](/docs/app-frameworks/overview): Add a full-stack UI that calls your flow.
 - [Connect a web frontend](/docs/client): Wire a standalone web client up to this backend.
 - [Connect a Flutter app](/docs/app-frameworks/flutter): Stream the recipe into a Flutter UI.

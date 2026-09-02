@@ -4,6 +4,8 @@ description: Let Genkit agents keep working after the client disconnects, then c
 supportedLanguages:
   - js
   - go
+  - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -44,7 +46,7 @@ app.post(
 
 The runtime writes a `pending` snapshot and refreshes its heartbeat while work runs. If the heartbeat becomes stale, reads surface the snapshot as `expired`.
 
-</Lang>
+
 
 ## Detach from a turn
 
@@ -115,6 +117,7 @@ await reportAgent.abort(snapshotId);
 ```
 
 Abort flips a pending snapshot to `aborted`. The background worker observes the status change and cancels the work.
+</Lang>
 
 <Lang lang="go">
 
@@ -126,6 +129,12 @@ Choose background execution when the caller should receive a pending snapshot im
 
 ```go
 import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
@@ -148,9 +157,11 @@ agent := genkitx.DefineAgent(g, "report",
 )
 ```
 
-The default HTTP abort route is `/agents/{name}/abort`.
+The default HTTP abort route is `/agents/{name}/abort`. The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample walks the whole background lifecycle over plain HTTP with `curl`: detach, poll, and abort.
 
 ## Detach locally
+
+Go has no handle type for a background task. A detached run is identified only by the pending snapshot ID on the output, which you poll with `Agent.GetSnapshot` or `Agent.GetLatestSnapshot` and cancel with `Agent.Abort`. Store that ID before the process that started the work goes away.
 
 With a local `AgentConnection`, send an input that has `Detach: true`.
 
@@ -179,26 +190,82 @@ fmt.Println(out.FinishReason)
 fmt.Println(out.SnapshotID)
 ```
 
-A detached output has `FinishReason` set to `detached` and `SnapshotID` set to the pending snapshot.
+A detached output has `FinishReason` set to `aix.AgentFinishReasonDetached` and `SnapshotID` set to the pending snapshot.
+
+`conn.Detach()` sends the same directive with no message, for leaving a turn that is already under way:
+
+```go
+if err := conn.Detach(); err != nil {
+	return fmt.Errorf("detach: %w", err)
+}
+```
+
+A bare detach does not start an extra turn. To ride a final input on the detach, set `Message` alongside `Detach` as in the first example.
+
+The client stream is suppressed the moment the detach directive is read, so nothing the background turn produces afterwards reaches `conn.Receive()`. Session-level side effects still apply: an artifact sent through `Responder.SendArtifact` still lands in the final snapshot's state, so agent code does not have to branch on detach.
+
+The invocation context outlives the transport connection. Before a detach lands, a client disconnect cancels the work. After it lands, the context stays live and the turn keeps running; only `Agent.Abort` or the process exiting cancels it.
 
 ## Wait for completion
 
-When the store implements `aix.SnapshotSubscriber`, subscribe to status changes and then read the final snapshot.
+Read a snapshot by ID with `agent.GetSnapshot`, or a session's most recent one with `agent.GetLatestSnapshot(ctx, sessionID)`.
 
 ```go
-subscriber := agent.Store().(aix.SnapshotSubscriber)
-statusCh := subscriber.OnSnapshotStatusChange(ctx, snapshotID)
-
-for status := range statusCh {
-	if status != aix.SnapshotStatusPending {
-		break
-	}
+snap, err := agent.GetSnapshot(ctx, snapshotID)
+if err != nil {
+	return fmt.Errorf("read snapshot: %w", err)
 }
 
-snap, err := agent.GetSnapshot(ctx, snapshotID)
+fmt.Println(snap.Status)
 ```
 
-If the store does not support subscriptions, poll `agent.GetSnapshot(ctx, snapshotID)` until `Status` leaves `pending`.
+Subscribe to status changes instead of polling when you want the terminal status as soon as it lands.
+
+```go
+func waitForTerminal(ctx context.Context, agent *aix.Agent[ReportState], snapshotID string) (*aix.SessionSnapshot[ReportState], error) {
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if subscriber, ok := agent.Store().(aix.SnapshotSubscriber); ok {
+		for status := range subscriber.OnSnapshotStatusChange(subCtx, snapshotID) {
+			if status != aix.SnapshotStatusPending {
+				break
+			}
+		}
+	} else {
+		for {
+			snap, err := agent.GetSnapshot(subCtx, snapshotID)
+			if err != nil {
+				return nil, fmt.Errorf("poll snapshot: %w", err)
+			}
+			if snap.Status != aix.SnapshotStatusPending {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
+	return agent.GetSnapshot(ctx, snapshotID)
+}
+```
+
+The channel closes when the subscription context is cancelled, so cancel it when you stop reading. Leaving the loop without cancelling leaves the producer running. If the snapshot does not exist when you subscribe, the channel closes without yielding a value.
+
+Every store that supports detach implements `aix.SnapshotSubscriber`, since that subscription is how an abort reaches the background work. The comma-ok branch above therefore only matters for code that also runs against a non-detaching store. Polling `agent.GetSnapshot` until `Status` leaves `pending` is still valid, and is the simpler option when you do not want a subscription goroutine.
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. Only a completed snapshot is resumable. `Status` is the persistence lifecycle, not the outcome: a turn that ended on an interrupt is `completed` and resumable, and you tell it apart by reading `snap.FinishReason == aix.AgentFinishReasonInterrupted`.
+
+The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives this from its CLI: `/detach` leaves a turn running, and returning to the agent later waits on the pending snapshot.
+
+## Lifetime and restarts
+
+Detached work runs in the process that started it. It is not durable execution: a restart, crash, or scale-in orphans every pending snapshot, and no other instance can adopt one.
+
+A running detached turn refreshes its pending snapshot's heartbeat every 30 seconds. A pending snapshot whose heartbeat has not advanced for 60 seconds is reported as `expired` on the next read. `expired` is terminal and not resumable, so treat expiry as a lost run and restart the work from the last completed snapshot.
+
+On `SIGTERM`, either wait for pending snapshots to reach a terminal status before exiting, or call `Agent.Abort` on them. Callers then see `aborted` immediately instead of waiting 60 seconds for expiry.
+
+Detach and durable streaming solve different problems. Detach keeps the work running and gives you a snapshot ID to poll, but it does not replay the stream. [Durable streaming](/docs/durable-streaming) replays the chunk transcript by `streamId`, but it does not keep work alive past the request. `genkitx.Route.Handler` accepts `genkit.HandlerOption`s, so you can apply both to the same agent route.
 
 ## Abort work
 
@@ -214,5 +281,192 @@ fmt.Println(status)
 ```
 
 `Abort` is a no-op for missing snapshots and for snapshots that already reached a terminal status. Client-managed agents return `FAILED_PRECONDITION` because there is no server snapshot to cancel.
+
+</Lang>
+
+<Lang lang="dart">
+
+## Server requirements
+
+Configure a store and expose companion endpoints when serving a remote agent:
+
+```dart
+final reportAgent = ai.defineAgent(
+  name: 'reportAgent',
+  system: 'Create detailed research reports.',
+  store: FileSessionStore('.sessions'),
+);
+
+void main() {
+  final router = Router();
+  router.post('/api/reportAgent', shelfHandler(reportAgent.action));
+  router.post('/api/reportAgent/getSnapshot', shelfHandler(reportAgent.getSnapshotDataAction));
+  router.post('/api/reportAgent/abort', shelfHandler(reportAgent.abortAgentAction));
+}
+```
+
+The runtime writes a `pending` snapshot and refreshes its heartbeat while the background thread processes the turn.
+
+## Detach from a turn
+
+Submit a background task from the client using `detach()` on the `AgentChat`:
+
+```dart
+final chat = reportAgent.chat(sessionId: 'report-123');
+final task = await chat.detach(text: 'Write the quarterly market report.');
+
+// Save snapshotId so you can poll or abort it later
+final snapshotId = task.snapshotId;
+```
+
+## Poll or wait
+
+Use `poll()` to yield status snapshots over a `Stream` until the task reaches a terminal status:
+
+```dart
+await for (final snapshot in task.poll(interval: Duration(milliseconds: 1500))) {
+  print('Current Status: ${snapshot.status?.value}');
+
+  if (snapshot.status?.value == 'completed') {
+    final report = snapshot.messages.last.content.first.text;
+    print(report);
+  }
+}
+```
+
+Use `wait()` to block execution as a `Future` until completion:
+
+```dart
+final finalSnapshot = await task.wait(interval: Duration(milliseconds: 1500));
+
+if (finalSnapshot.status?.value == 'failed') {
+  print('Task failed: ${finalSnapshot.error?.message}');
+}
+```
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+
+## Reconnect by snapshot ID
+
+To reconnect and inspect or resume a detached task from a different client process, read the stored snapshot ID and load it:
+
+```dart
+final snapshot = await reportAgent.getSnapshot(snapshotId: snapshotId);
+
+if (snapshot?.status?.value == 'completed') {
+  final chat = await reportAgent.loadChat(snapshotId: snapshotId);
+  final res = await chat.send(text: 'Summarize this report.');
+  print(res.text);
+}
+```
+
+Only completed snapshots can be resumed.
+
+## Abort work
+
+Cancel a pending task from the client using `task.abort()`:
+
+```dart
+await task.abort();
+```
+
+Or abort directly by snapshot ID from the `AgentApi` handle:
+
+```dart
+await reportAgent.abort(snapshotId);
+```
+
+Aborting shifts the pending snapshot status to `aborted`. The background worker observes this change and safely terminates the turn loop.
+
+</Lang>
+<Lang lang="python">
+
+## Server requirements
+
+Configure a store and expose companion endpoints when serving a remote agent:
+
+```python
+from fastapi import FastAPI
+from genkit.agent import FileSessionStore
+from genkit_fastapi import serve_agent
+
+report_agent = ai.define_agent(
+    name='reportAgent',
+    model='googleai/gemini-flash-latest',
+    system='Create detailed research reports.',
+    store=FileSessionStore('.sessions'),
+)
+
+app = FastAPI()
+app.include_router(serve_agent(report_agent), prefix='/api')
+```
+
+The runtime writes a `pending` snapshot and refreshes its heartbeat while the background work processes the turn.
+
+## Detach from a turn
+
+Submit a background task from the client using `detach()` on the `AgentChat`:
+
+```python
+chat = report_agent.chat(session_id='report-123')
+task = await chat.detach('Write the quarterly market report.')
+
+# Save snapshot_id so you can poll or abort it later
+snapshot_id = task.snapshot_id
+```
+
+## Poll or wait
+
+Use `poll()` to yield status snapshots until the task reaches a terminal status:
+
+```python
+from genkit.agent import SnapshotStatus
+
+async for snapshot in task.poll(interval=1.5):
+    print('Current status:', snapshot.status)
+    if snapshot.status == SnapshotStatus.COMPLETED:
+        print(snapshot.state)
+```
+
+Use `wait()` to block until completion:
+
+```python
+final_snapshot = await task.wait(interval=1.5)
+if final_snapshot.status == SnapshotStatus.FAILED:
+    print('Task failed:', final_snapshot.error.message if final_snapshot.error else None)
+```
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+
+## Reconnect by snapshot ID
+
+To reconnect and inspect or resume a detached task from a different client process, read the stored snapshot ID and load it:
+
+```python
+snapshot = await report_agent.get_snapshot(snapshot_id=snapshot_id)
+
+if snapshot and snapshot.status == SnapshotStatus.COMPLETED:
+    chat = await report_agent.load_chat(snapshot_id=snapshot_id)
+    res = await chat.send('Summarize this report.')
+    print(res.text)
+```
+
+Only completed snapshots can be resumed.
+
+## Abort work
+
+Cancel a pending task from the client using `task.abort()`:
+
+```python
+await task.abort()
+```
+
+Or abort directly by snapshot ID from the agent handle:
+
+```python
+await report_agent.abort(snapshot_id)
+```
+
+Aborting sets the pending snapshot status to `aborted`. The background worker stops the turn when it observes that change. Long-running tools should check `ctx.abort_signal.is_set()` on `ToolRunContext` so they can exit cleanly.
 
 </Lang>

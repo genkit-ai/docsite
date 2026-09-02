@@ -1,0 +1,174 @@
+---
+title: Kimi plugin
+description: Learn how to configure and use the Genkit Kimi plugin to access Moonshot AI's Kimi models.
+supportedLanguages:
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+<Lang lang="go">
+
+The `kimi` plugin gives Genkit access to [Moonshot AI](https://www.moonshot.ai/)'s Kimi models
+through Moonshot's OpenAI-compatible chat completions endpoint. Models are named under the `kimi/`
+provider prefix.
+
+## Installation
+
+```bash
+go get github.com/firebase/genkit/go
+```
+
+## Configuration
+
+Add `&kimi.Kimi{}` to your plugin list. The plugin reads the API key from `KIMI_API_KEY`, then from
+`MOONSHOT_API_KEY`.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
+)
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&kimi.Kimi{}),
+		genkit.WithDefaultModel("kimi/kimi-k3"),
+	)
+
+	text, err := genkit.GenerateText(ctx, g, ai.WithPrompt("Share a joke about bananas."))
+	if err != nil {
+		log.Fatalf("could not generate: %v", err)
+	}
+
+	fmt.Println(text)
+}
+```
+
+You must provide an API key from Moonshot AI. You can get one from the
+[Moonshot platform](https://platform.kimi.ai/docs). Set `KIMI_API_KEY` or `MOONSHOT_API_KEY`, or set
+the `APIKey` field. Extra OpenAI client request options ride in `Opts`, applied after the plugin
+defaults so they win on overlap; `option` is `github.com/openai/openai-go/option`.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&kimi.Kimi{
+	APIKey: os.Getenv("MY_KIMI_KEY"),
+	Opts: []option.RequestOption{
+		option.WithBaseURL("https://api.moonshot.ai/v1"),
+	},
+}))
+```
+
+`genkit.Init` panics when the `APIKey` field, `KIMI_API_KEY`, and `MOONSHOT_API_KEY` are all unset.
+The endpoint defaults to `https://api.moonshot.ai/v1`; override it with the `KIMI_BASE_URL` or
+`MOONSHOT_BASE_URL` environment variable, or with `option.WithBaseURL` in `Opts`.
+
+As always, avoid embedding API keys directly in your code.
+
+## Models
+
+The plugin registers these Kimi models when it initializes:
+
+- `kimi-k3`: the current generation, and the only one that advertises tool choice
+- `kimi-k2.5`: marked deprecated
+- `kimi-k2.6`
+- `kimi-k2.7-code`
+- `kimi-k2.7-code-highspeed`
+
+That list is a starting point rather than a limit. Any other Kimi model ID resolves on demand and is
+assumed to be K3-shaped, so a model Moonshot releases later works without a Genkit upgrade.
+
+Moonshot's chat API takes `response_format` in its `json_schema` form, so structured output is
+generated natively across the family rather than coaxed through prompt instructions.
+
+Only `kimi-k3` advertises tool choice. The K2 generation rejects a forced tool call as incompatible
+with thinking, which is on by default, so only the automatic default is dependable there. An app that
+always disables thinking can restore the claim through `Models`.
+
+## Usage
+
+`kimi.ModelRef` pairs a model ID with a typed `kimi.ChatConfig`, so the config is checked where you
+write it and validated against the model's schema before the request goes out.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(kimi.ModelRef("kimi-k3", &kimi.ChatConfig{
+		ReasoningEffort: kimi.ReasoningEffortHigh,
+		MaxOutputTokens: 1024,
+	})),
+	ai.WithPrompt("Explain constitutional AI in two sentences."),
+)
+if err != nil {
+	log.Fatalf("could not generate: %v", err)
+}
+
+fmt.Println(resp.Text())
+```
+
+The ID passed to `ModelRef` works bare or provider-prefixed. You can also name a model as a string
+with `ai.WithModelName("kimi/kimi-k3")` or `genkit.WithDefaultModel`, and pass the config separately
+with `ai.WithConfig(&kimi.ChatConfig{...})`. The
+[Kimi sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/kimi) runs this as
+a streaming flow you can call from the Dev UI.
+
+### Generation config
+
+`kimi.ChatConfig` carries the generation fields the K-series accepts plus Moonshot's own controls:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `MaxOutputTokens` | `int` | Sent as the API's `max_completion_tokens`; Moonshot deprecated `max_tokens`. The default and the ceiling vary by model. |
+| `StopSequences` | `[]string` | Up to five, each at most 32 bytes. |
+| `LogProbs` | `*bool` | Requests log probabilities for the output tokens. |
+| `TopLogProbs` | `*int` | 0 to 20. Requires `LogProbs`. |
+| `Thinking` | `*kimi.ThinkingConfig` | `Type` is `kimi.ThinkingTypeEnabled` or `kimi.ThinkingTypeDisabled`. `Keep` is `all` to preserve reasoning across turns, or unset for the default. |
+| `ReasoningEffort` | `kimi.ReasoningEffort` | `low`, `high`, or `max`, the default. It steers the Kimi K3 generation. |
+
+There is no temperature, no `topP`, and no penalty field. Moonshot documents those for the legacy
+`moonshot-v1` family only, so the K-series models this plugin serves do not take them.
+
+`ChatConfig` also embeds `compat_oai.RequestConfig`, which every plugin in the family shares: a
+per-request `APIKey`, a `Version` pin, and an `Extra` map whose keys ride to the wire verbatim under
+Moonshot's own names. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible/) page.
+
+### Correcting what the plugin knows about a model
+
+Every Kimi model works without an entry in `Models`. Supply one only to correct or extend the
+capabilities the plugin resolves, most often for a model released after your Genkit version. Keys are
+the model ID, bare or provider-prefixed, and fields left at their zero value keep what the plugin
+resolved.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&kimi.Kimi{
+	Models: map[string]ai.ModelOptions{
+		// This app always disables thinking, so forced tool choice works here.
+		"kimi-k2.6": {
+			Supports: &ai.ModelSupports{
+				Multiturn:  true,
+				Tools:      true,
+				ToolChoice: true,
+				SystemRole: true,
+				Media:      true,
+			},
+		},
+	},
+}))
+```
+
+## Response behavior
+
+Reasoning text, streamed token usage, cached prompt tokens, and mid-generation provider failures are
+handled the same way for every plugin in this family. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible/) page.
+
+</Lang>

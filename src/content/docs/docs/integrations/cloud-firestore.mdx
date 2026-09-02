@@ -350,21 +350,49 @@ firebasePlugin := &firebase.Firebase{
 The primary use case for the Firebase plugin is creating retrievers for RAG applications:
 
 ```go
-// Define a Firestore retriever
-retrieverOptions := firebase.RetrieverOptions{
-	Name:         "my-documents",
-	Collection:   "documents",
-	VectorField:  "embedding",
-	Embedder:     openaiPlugin.Embedder(g, "text-embedding-3-small"),
-	ContentField: "content",
-	Limit:        10,
-}
+package main
 
-retriever, err := firebase.DefineRetriever(ctx, g, retrieverOptions)
-if err != nil {
-	log.Fatal(err)
+import (
+	"context"
+	"log"
+	"os"
+
+	"cloud.google.com/go/firestore"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
+	"github.com/firebase/genkit/go/plugins/firebase"
+)
+
+func main() {
+	ctx := context.Background()
+
+	firebasePlugin := &firebase.Firebase{ProjectId: "your-firebase-project-id"}
+	openaiPlugin := &openai.OpenAI{APIKey: os.Getenv("OPENAI_API_KEY")}
+
+	g := genkit.Init(ctx, genkit.WithPlugins(firebasePlugin, openaiPlugin))
+
+	retriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
+		Name:            "my-documents",
+		Collection:      "documents",
+		VectorField:     "embedding",
+		ContentField:    "content",
+		MetadataFields:  []string{"title", "category"},
+		Embedder:        openaiPlugin.Embedder(g, "text-embedding-3-small"),
+		Limit:           10,
+		DistanceMeasure: firestore.DistanceMeasureCosine,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_ = retriever
 }
 ```
+
+`DistanceMeasure` is `firestore.DistanceMeasure` from `cloud.google.com/go/firestore`, not from
+`firebase.google.com/go/v4`. Set it explicitly: the plugin passes the field straight to Firestore
+without substituting a default, so leaving it at its zero value sends an unspecified measure. It must
+also match the measure the vector index was created with.
 
 ### Using Retrievers in RAG Workflows
 
@@ -427,11 +455,11 @@ func main() {
 
 	// Define retriever for knowledge base
 	retriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
-		Name:         "knowledge-base",
-		Collection:   "documents",
-		VectorField:  "embedding",
-		EmbedderName: "text-embedding-3-small",
-		TopK:         5,
+		Name:        "knowledge-base",
+		Collection:  "documents",
+		VectorField: "embedding",
+		Embedder:    openaiPlugin.Embedder(g, "text-embedding-3-small"),
+		Limit:       5,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -497,6 +525,30 @@ Your Firestore documents should follow this structure for optimal retrieval:
 }
 ```
 
+The `embedding` field must hold a Firestore **vector value**, not a plain array of numbers. In Go,
+write it with `firestore.Vector32(...)` from `cloud.google.com/go/firestore`.
+
+### Create the vector index
+
+The retriever runs a Firestore `FindNearest` query against `VectorField`. That query needs a KNN
+vector index on the field, and Firestore does not create one for you. Run this before you index any
+documents:
+
+```bash
+gcloud firestore indexes composite create \
+  --project=your-firebase-project-id \
+  --collection-group=documents \
+  --query-scope=COLLECTION \
+  --field-config=field-path=embedding,vector-config='{"dimension":"1536","flat":"{}"}'
+```
+
+`dimension` must equal the output size of the embedder you configure. `text-embedding-3-small`
+produces 1536 values; change the number if you use a different model. Create the index with the same
+distance measure you pass in `RetrieverOptions.DistanceMeasure`.
+
+If the index is missing, the first `genkit.Retrieve` call fails with a `FAILED_PRECONDITION` error
+from Firestore whose message contains a ready-to-run creation command.
+
 ### Indexing Documents
 
 To add documents to your Firestore collection with embeddings:
@@ -505,13 +557,18 @@ To add documents to your Firestore collection with embeddings:
 // Example of adding documents with embeddings
 embedder := openaiPlugin.Embedder(g, "text-embedding-3-small")
 
+firestoreClient, err := firebasePlugin.Firestore(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
 documents := []struct {
     Content  string
-    Metadata map[string]interface{}
+    Metadata map[string]any
 }{
     {
         Content: "Machine learning is a subset of artificial intelligence...",
-        Metadata: map[string]interface{}{
+        Metadata: map[string]any{
             "title":    "Introduction to ML",
             "category": "Technology",
         },
@@ -524,16 +581,17 @@ for _, doc := range documents {
     embeddingResp, err := genkit.Embed(ctx, g,
         ai.WithEmbedder(embedder),
         ai.WithTextDocs(doc.Content),
-  	)
+    )
     if err != nil {
         log.Fatal(err)
     }
 
-    // Store in Firestore
-    firestoreClient, _ := firebasePlugin.App.Firestore(ctx)
-    _, err = firestoreClient.Collection("documents").Doc().Set(ctx, map[string]interface{}{
+    // Store in Firestore. The embedding must be written as a Firestore vector
+    // value; a bare []float32 is stored as a plain array and FindNearest will
+    // never match it.
+    _, err = firestoreClient.Collection("documents").NewDoc().Set(ctx, map[string]any{
         "content":   doc.Content,
-        "embedding": embeddingResp.Embeddings[0].Embedding,
+        "embedding": firestore.Vector32(embeddingResp.Embeddings[0].Embedding),
         "metadata":  doc.Metadata,
     })
     if err != nil {
@@ -541,6 +599,8 @@ for _, doc := range documents {
     }
 }
 ```
+
+This snippet needs `cloud.google.com/go/firestore` in the import block shown above.
 
 ## Configuration Options
 
@@ -557,6 +617,10 @@ type Firebase struct {
     App *firebasev4.App
 }
 ```
+
+When you set `ProjectId`, the plugin builds the Firebase app during `genkit.Init` and stores it in
+`App`, so `App` is safe to read afterwards. Prefer `firebasePlugin.Firestore(ctx)` over
+`firebasePlugin.App.Firestore(ctx)`: it caches one client and shares it with the retrievers.
 
 ### RetrieverOptions
 
@@ -590,6 +654,11 @@ type RetrieverOptions struct {
 	DistanceMeasure firestore.DistanceMeasure
 }
 ```
+
+`firestore` here is `cloud.google.com/go/firestore`. The legal values are
+`firestore.DistanceMeasureEuclidean`, `firestore.DistanceMeasureCosine` and
+`firestore.DistanceMeasureDotProduct`. The plugin applies no default, so the zero value reaches
+`FindNearest` as an unspecified measure. Set the same measure the vector index was created with.
 
 ## Authentication
 
@@ -632,15 +701,27 @@ Or use the metadata server on Google Cloud Platform.
 
 ## Error Handling
 
-Handle Firebase-specific errors appropriately:
+Genkit classifies its own failures with the sentinels in
+`github.com/firebase/genkit/go/core/status` and you branch on them with `errors.Is`. Never branch on
+the text of `err.Error()`. See [Error types](/docs/error-types) for the full set.
 
 ```go
+import (
+	"errors"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/firebase"
+)
+
 retriever, err := firebase.DefineRetriever(ctx, g, options)
 if err != nil {
-    if strings.Contains(err.Error(), "plugin not found") {
-        log.Fatal("Firebase plugin not initialized. Make sure to include it in genkit.Init()")
-    }
-    log.Fatalf("Failed to create retriever: %v", err)
+    // The plugin returns unclassified errors here. The two setup mistakes it
+    // reports are "plugin not found" (the plugin never reached genkit.Init)
+    // and a Firestore client that could not be built from your credentials.
+    log.Fatalf("firebase.DefineRetriever: %v", err)
 }
 
 // Handle retrieval errors
@@ -649,17 +730,38 @@ results, err := genkit.Retrieve(ctx, g,
 	ai.WithTextDocs(query),
 )
 if err != nil {
+    if errors.Is(err, status.ErrInvalidArgument) {
+        log.Fatalf("bad retrieval request: %v", err)
+    }
     log.Printf("Retrieval failed: %v", err)
     // Implement fallback logic
 }
 ```
+
+:::caution
+The Firebase plugin's own failures are plain `fmt.Errorf` values that carry no status code, and the
+retrieval path formats its cause with `%v`, which flattens the Firestore error into a string.
+Neither a Genkit sentinel nor `status.FromError` from `google.golang.org/grpc/status` will classify
+them. Treat a failure from this plugin as opaque: log the message and fall back.
+:::
+
+The message still names the cause. The three you will hit:
+
+| Cause | What the message says | Retry? |
+| --- | --- | --- |
+| No vector index on `VectorField` | `FailedPrecondition`, with a `gcloud` command to create the index | No. Create the index. |
+| Credentials cannot read the collection | `PermissionDenied` | No. Fix IAM or the Firestore rules. |
+| Query vector length differs from the index dimension | `InvalidArgument` | No. Re-index with the embedder you query with. |
+
+Those three are configuration errors and fail the same way every time. `DeadlineExceeded` and
+`Unavailable` from Firestore are the transient ones, and are worth a bounded retry with backoff.
 
 ## Best Practices
 
 ### Performance Optimization
 
 - **Batch Operations**: Use Firestore batch writes when adding multiple documents
-- **Index Configuration**: Set up appropriate Firestore indexes for your queries
+- **Index Configuration**: Create a KNN vector index on every field you query. See [Create the vector index](#create-the-vector-index)
 - **Caching**: Implement caching for frequently accessed documents
 - **Pagination**: Use pagination for large result sets
 
@@ -682,21 +784,32 @@ if err != nil {
 ```go
 // Use different embedders for different types of content
 technicalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
-    Name:         "technical-docs",
-    Collection:   "technical_documents",
-    VectorField:  "embedding",
-    EmbedderName: "text-embedding-3-large", // More accurate for technical content
-    TopK:         5,
+    Name:        "technical-docs",
+    Collection:  "technical_documents",
+    VectorField: "embedding",
+    // More accurate for technical content
+    Embedder: openaiPlugin.Embedder(g, "text-embedding-3-large"),
+    Limit:    5,
 })
+if err != nil {
+    log.Fatal(err)
+}
 
 generalRetriever, err := firebase.DefineRetriever(ctx, g, firebase.RetrieverOptions{
-    Name:         "general-knowledge",
-    Collection:   "general_documents",
-    VectorField:  "embedding",
-    EmbedderName: "text-embedding-3-small", // Faster for general content
-    TopK:         10,
+    Name:        "general-knowledge",
+    Collection:  "general_documents",
+    VectorField: "embedding",
+    // Faster for general content
+    Embedder: openaiPlugin.Embedder(g, "text-embedding-3-small"),
+    Limit:    10,
 })
+if err != nil {
+    log.Fatal(err)
+}
 ```
+
+Each collection needs its own vector index, and the dimension of each index must match the embedder
+that writes to it: 3072 for `text-embedding-3-large`, 1536 for `text-embedding-3-small`.
 
 ### With Flows
 

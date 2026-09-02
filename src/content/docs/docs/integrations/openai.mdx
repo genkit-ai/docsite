@@ -272,7 +272,7 @@ const llmResponse = await ai.generate({
 
 <Lang lang="go">
 
-The OpenAI plugin provides access to [OpenAI models](https://platform.openai.com/docs/models).
+The OpenAI plugin provides access to [OpenAI models](https://platform.openai.com/docs/models). It is one of the [OpenAI-compatible plugins](/docs/integrations/openai-compatible), so it shares that family's model catalog behavior and response handling.
 
 ## Configuration
 
@@ -281,111 +281,118 @@ import "github.com/firebase/genkit/go/plugins/compat_oai/openai"
 ```
 
 ```go
-g := genkit.Init(context.Background(), genkit.WithPlugins(&openai.OpenAI{
-    APIKey: "YOUR_OPENAI_API_KEY", // or set OPENAI_API_KEY env var
+g := genkit.Init(context.Background(),
+    genkit.WithPlugins(&openai.OpenAI{
+        APIKey: "YOUR_OPENAI_API_KEY", // or set OPENAI_API_KEY
+    }),
+    genkit.WithDefaultModel("openai/gpt-5.4"),
+)
+```
+
+`genkit.Init` panics when neither the `APIKey` field nor `OPENAI_API_KEY` carries a key. There is no base URL environment variable; to reach a proxy or a compatible endpoint, pass `option.WithBaseURL` through `Opts`:
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{
+    Opts: []option.RequestOption{
+        option.WithBaseURL("https://your-proxy.example.com/v1"),
+    },
 }))
 ```
 
-## Supported Models
+The plugin also takes `Models map[string]ai.ModelOptions` and `Embedders map[string]ai.EmbedderOptions` to correct or extend what it knows about a model. See [model catalogs](/docs/integrations/openai-compatible#model-catalogs).
 
-### Latest Models
+## Supported models
 
-- **gpt-5.5** - Current flagship model for complex reasoning, coding, and agentic tasks, with adjustable reasoning effort
-- **gpt-5.5-pro** - Highest-capability variant for the hardest problems
-- **gpt-5** - Previous generation flagship, still available
+The plugin curates capabilities for these chat models. The list is a starting point, not a limit: any other OpenAI chat model resolves on demand under the `openai/` prefix and takes generic multimodal defaults.
 
-### Cost-Optimized Models
+- `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
+- `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1`
+- `gpt-5`, `gpt-5-mini`, `gpt-5-nano`
+- `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`
+- `gpt-4o`, `gpt-4o-mini`
+- `o3`, `o4-mini`, `o3-mini`, `o1`
+- `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`
 
-- **gpt-5.4-mini** - Faster, cost-effective model that balances quality and latency
-- **gpt-5.4-nano** - Most efficient model for high-volume, latency-sensitive tasks
+Dated snapshots are folded into their model's versions rather than curated separately, so ask for `gpt-4o` and pin the snapshot with the config's `Model` field when you need one.
 
-### Long-Context Models
+Curated embedders:
 
-- **gpt-4.1** - Cost-effective model with very large context window
-- **gpt-4.1-mini** - Faster, cost-effective GPT-4.1 variant
-- **gpt-4.1-nano** - Ultra-efficient GPT-4.1 variant
+- `text-embedding-3-large`, 3072 dimensions
+- `text-embedding-3-small`, 1536 dimensions
+- `text-embedding-ada-002`, 1536 dimensions
 
-## Embedding Models
+Image, audio, realtime, transcription, and moderation models are not chat models, so the plugin does not curate them.
 
-- **text-embedding-3-large** - Most capable embedding model
-- **text-embedding-3-small** - Fast and efficient embedding model
+## Model configuration
 
-## Usage Example
+OpenAI models take the OpenAI SDK's own request type, `*openai.ChatCompletionNewParams`, as their config, under OpenAI's wire names. There is no `openai.ChatConfig`. Genkit validates the config against the SDK schema before the request goes out, so a field the API does not have fails before it is billed.
+
+The schema hides the fields Genkit builds from the request itself, so a config that sets `messages`, `tools`, `tool_choice`, or `response_format` is refused with the name of the Genkit option to use instead. `n` is hidden too, since the response path serves the first choice only.
 
 ```go
 import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/compat_oai/openai"
-    "github.com/firebase/genkit/go/plugins/compat_oai"
+    openaiGo "github.com/openai/openai-go"
 )
 
-// Initialize Genkit with the OpenAI plugin
-g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{APIKey: "YOUR_API_KEY"}))
-
-// Use GPT-5.5 for general tasks
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("openai/gpt-5.5"),
+    ai.WithModel(openai.ModelRef("gpt-5.4", &openaiGo.ChatCompletionNewParams{
+        Temperature:         openaiGo.Float(0.2),
+        MaxCompletionTokens: openaiGo.Int(1024),
+    })),
     ai.WithPrompt("Explain quantum computing."),
 )
+```
 
-// Use embeddings
-embeds, err := genkit.Embed(ctx, g,
-    ai.WithEmbedderName("openai/text-embedding-3-large"),
+The [compat_oai/openai sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/openai) is this pattern as a runnable streaming flow.
+
+## Embeddings
+
+Embedders take `openai.TextEmbeddingConfig`, shared with the rest of the OpenAI-compatible family:
+
+```go
+resp, err := genkit.Embed(ctx, g,
+    ai.WithEmbedder(openai.NewEmbedderRef("text-embedding-3-small", &openai.TextEmbeddingConfig{
+        Dimensions: 256,
+    })),
     ai.WithTextDocs("Hello, world!"),
 )
 ```
 
-## Using a custom provider
+## Advanced features
 
-```go
-import (
-  "github.com/openai/openai-go"
-  oai "github.com/firebase/genkit/go/plugins/compat_oai"
-)
-
-  // custom provider plugin parameters
-  g := genkit.Init(ctx, genkit.WithPlugins(&oai.OpenAICompatible{
-    Provider: "custom-provider",
-    APIKey:   "api-key",
-    BaseURL:  "custom-url",
-  }),
-    genkit.WithDefaultModel("custom-provider/id"))
-
-  resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell me a joke"))
-```
-
-## Advanced Features
-
-### Tool Calling
+### Tool calling
 
 OpenAI models support tool calling:
 
 ```go
-// Define a tool
-weatherTool := genkit.DefineTool(g, "get_weather", "Get current weather",
-    func(ctx *ai.ToolContext, input struct{City string}) (string, error) {
-        return fmt.Sprintf("It's sunny in %s", input.City), nil
+weatherTool := genkit.DefineTool(g, "get_weather", "Get the current weather",
+    func(ctx *ai.ToolContext, input struct {
+        City string `json:"city"`
+    }) (string, error) {
+        return fmt.Sprintf("It is sunny in %s.", input.City), nil
     })
 
-// Use with GPT models
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("openai/gpt-5.5"),
-    ai.WithPrompt("What's the weather like in San Francisco?"),
+    ai.WithModel(openai.ModelRef("gpt-5.4", nil)),
+    ai.WithPrompt("What is the weather like in San Francisco?"),
     ai.WithTools(weatherTool),
 )
 ```
 
-### Multimodal Support
+### Multimodal input
 
-OpenAI models support vision capabilities:
+OpenAI models support vision:
 
 ```go
-// Works with GPT-5 models
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("openai/gpt-5.5"),
+    ai.WithModel(openai.ModelRef("gpt-5.4", nil)),
     ai.WithMessages(
         ai.NewUserMessage(
             ai.NewTextPart("What do you see in this image?"),
-            ai.NewMediaPart("image/jpeg", imageData),
+            ai.NewMediaPart("image/jpeg", imageDataURI),
         ),
     ),
 )
@@ -393,11 +400,11 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Streaming
 
-OpenAI models support streaming responses:
+OpenAI models support streaming responses, and streamed responses report token usage:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("openai/gpt-5.5"),
+    ai.WithModel(openai.ModelRef("gpt-5.4", nil)),
     ai.WithPrompt("Write a long explanation."),
     ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
         for _, content := range chunk.Content {
@@ -407,6 +414,10 @@ resp, err := genkit.Generate(ctx, g,
     }),
 )
 ```
+
+## Using a custom provider
+
+For a service with no plugin of its own, register the base `compat_oai.OpenAICompatible` plugin instead. See [custom provider](/docs/integrations/openai-compatible#custom-provider).
 
 </Lang>
 
@@ -592,12 +603,12 @@ final response = await ai.generate(
 
 <Lang lang="python">
 
-The `genkit-plugin-compat-oai` package includes a pre-configured plugin for official [OpenAI models](https://platform.openai.com/docs/models).
+The `genkit-openai` package includes a pre-configured plugin for official [OpenAI models](https://platform.openai.com/docs/models).
 
 ## Installation
 
 ```bash
-uv add genkit-plugin-compat-oai
+uv add genkit-openai
 ```
 
 ## Configuration
@@ -606,7 +617,7 @@ To use this plugin, import `OpenAI` and `openai_model` and specify it when you i
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 
 ai = Genkit(plugins=[OpenAI()], model=openai_model('gpt-5.5'))
 ```
@@ -637,7 +648,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 
 logger = structlog.get_logger(__name__)
 
@@ -676,7 +687,7 @@ You can use text embedding models to create vector embeddings from text.
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI
+from genkit_openai import OpenAI
 
 ai = Genkit(plugins=[OpenAI()])
 
@@ -688,14 +699,14 @@ async def embed_flow(text: str) -> list[float]:
         text: The text to embed.
 
     Returns:
-        The embedding vector.
+        The first embedding vector values.
     """
-    embedding = await ai.embed(
+    embeddings = await ai.embed(
         embedder='openai/text-embedding-3-small',
         content=text,
     )
 
-    return embedding
+    return embeddings[0].embedding
 ```
 
 ### Tool Calling
@@ -708,7 +719,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 
 ai = Genkit(plugins=[OpenAI()])
 
@@ -718,8 +729,8 @@ class WeatherRequest(BaseModel):
     latitude: Decimal
     longitude: Decimal
 
-@ai.tool(description='Get current temperature for provided coordinates in celsius')
-def get_weather_tool(coordinates: WeatherRequest) -> float:
+@ai.tool()
+async def get_weather_tool(coordinates: WeatherRequest) -> float:
     """Get the current temperature for provided coordinates in celsius.
 
     Args:
@@ -733,8 +744,8 @@ def get_weather_tool(coordinates: WeatherRequest) -> float:
         f'latitude={coordinates.latitude}&longitude={coordinates.longitude}'
         f'&current=temperature_2m'
     )
-    with httpx.Client() as client:
-        response = client.get(url)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
         data = response.json()
         return float(data['current']['temperature_2m'])
 
@@ -751,7 +762,7 @@ async def get_weather_flow(location: str) -> str:
     response = await ai.generate(
         model=openai_model('gpt-5.4-mini'),
         prompt=f"What's the weather like in {location} today?",
-        tools=['get_weather_tool'],
+        tools=[get_weather_tool],
     )
     # The response will contain the tool output if the model decided to call it.
     return response.text
@@ -772,14 +783,14 @@ async def say_hi_stream(name: str) -> str:
     Returns:
         The response from the OpenAI API.
     """
-    stream, _ = ai.generate_stream(
+    result = ai.generate_stream(
         model=openai_model('gpt-5.5'),
         prompt=f'hi {name}',
     )
-    result = ''
-    async for chunk in stream:
-        result += chunk.text
-    return result
+    text = ''
+    async for chunk in result.stream:
+        text += chunk.text
+    return text
 ```
 
 ## Advanced usage
@@ -790,7 +801,7 @@ You can pass configuration options that are not defined in the plugin's custom c
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 
 ai = Genkit(plugins=[OpenAI()])
 

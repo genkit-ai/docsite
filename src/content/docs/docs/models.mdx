@@ -676,6 +676,27 @@ responses, using a variety of strategies. Read more on the
 
 <Lang lang="go">
 
+### Set up a project
+
+The examples on this page assume a Go module with Genkit and the Google AI
+plugin installed:
+
+```bash
+go mod init example
+go get github.com/firebase/genkit/go
+go get github.com/firebase/genkit/go/plugins/googlegenai
+```
+
+`&googlegenai.GoogleAI{}` reads its credentials from the environment when its
+`APIKey` field is empty, consulting `GEMINI_API_KEY` and then `GOOGLE_API_KEY`:
+
+```bash
+export GEMINI_API_KEY=<your key>
+```
+
+The [Get started](/docs/get-started) guide covers picking a server framework and
+wiring Genkit into it.
+
 ### The `genkit.Generate()` function
 
 In Genkit, the primary interface through which you interact with generative AI
@@ -764,6 +785,12 @@ A model string identifier looks like `providerid/modelid`, where the provider ID
 (in this case, `googleai`) identifies the plugin, and the model ID is a
 plugin-specific string identifier for a specific version of a model.
 
+The Google AI and Vertex AI plugins register no models when Genkit starts. Every
+model ID is resolved the first time you name it, so any model the provider serves
+works, whether or not the plugin knows about it. The plugin's curated list
+decides what the Developer UI offers and what capabilities Genkit assumes for an
+ID it recognizes. It is a starting point, not a limit.
+
 These examples also illustrate an important point: when you use
 `genkit.Generate()` to make generative AI model calls, changing the model you
 want to use is a matter of passing a different value to the model
@@ -775,6 +802,47 @@ So far you have only seen examples of the simplest `genkit.Generate()` calls.
 However, `genkit.Generate()` also provides an interface for more advanced
 interactions with generative models, which you will see in the sections that
 follow.
+
+#### Passing options
+
+`genkit.Generate()` takes `...ai.GenerateOption`. `ai.CommonGenOption`
+(`ai.WithModel()`, `ai.WithModelName()`, `ai.WithTools()`, `ai.WithUse()`,
+`ai.WithMaxTurns()`, `ai.WithMessages()`, and the rest) and `ai.PromptingOption`
+(`ai.WithPrompt()`, `ai.WithSystem()`, and their `Parts` and `Fn` variants) both
+embed `ai.GenerateOption`, so options of any of these kinds collect into one
+`[]ai.GenerateOption` and spread into the call:
+
+```go
+opts := []ai.GenerateOption{
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithStepName("draft"),
+}
+
+resp, err := genkit.Generate(ctx, g, opts...)
+```
+
+`ai.WithStepName()`, `ai.WithToolResponses()`, and `ai.WithToolRestarts()` are
+the three that are `ai.GenerateOption` and nothing else: they mean nothing to a
+prompt definition, so `genkit.DefinePrompt()` does not accept them.
+
+#### How prompt text is treated
+
+`ai.WithPrompt(text string, args ...any)` sets the last user message, and
+`ai.WithSystem()` has the same shape. Two rules govern the text:
+
+- **With no args the text is used verbatim.** A `%` in user input is harmless.
+  Pass args and the text becomes a `fmt.Sprintf` format string, so
+  `ai.WithPrompt("Classify this review: %s", review)` is the way to interpolate.
+- **Handlebars templating applies only under `genkit.DefinePrompt()`.** There the
+  text is compiled as a Dotprompt template against the prompt's input, so
+  `{{field}}` resolves. On a plain `genkit.Generate()` call the braces are sent
+  literally. A `{{role}}` marker is always an error, because this slot is one
+  message; `ai.WithMessagesTemplate()`, which `genkit.DefinePrompt()` takes, is
+  where multi-turn templates belong.
+
+Do not concatenate untrusted text into `text`. Pass it as a `%s` argument, or use
+`ai.WithPromptFn()` or `ai.WithPromptParts()`, whose content is never templated.
 
 ### System prompts
 
@@ -796,21 +864,71 @@ resp, err := genkit.Generate(ctx, g,
 For models that don't support system prompts, `ai.WithSystem()` simulates it by
 modifying the request to appear _like_ a system prompt.
 
+### Multi-turn conversations with messages
+
+For multi-turn conversations, pass the history with `ai.WithMessages()`. It fills
+the slot between the system prompt and the user prompt, so it combines with
+`ai.WithSystem()` and `ai.WithPrompt()` rather than replacing them. Repeating the
+option appends.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithSystem("You are a helpful travel assistant."),
+	ai.WithMessages(
+		ai.NewUserTextMessage("Hello, can you help me plan a trip?"),
+		ai.NewModelTextMessage("Of course. Where are you thinking of going?"),
+	),
+	ai.WithPrompt("I want to visit Japan for two weeks in spring."),
+)
+```
+
+Message text passed this way is used verbatim and is never compiled as a
+template, so history containing literal braces passes through untouched.
+
+Every message carries an `ai.Role`, one of four constants:
+
+| Constant       | Wire value | Meaning                                            |
+| -------------- | ---------- | -------------------------------------------------- |
+| `ai.RoleSystem` | `system`   | User-independent instructions                       |
+| `ai.RoleUser`   | `user`     | A turn from the client                              |
+| `ai.RoleModel`  | `model`    | A turn from the model (Genkit's name for assistant) |
+| `ai.RoleTool`   | `tool`     | The result of a local tool call                     |
+
+The `ai.NewUserTextMessage()`, `ai.NewModelTextMessage()`, and
+`ai.NewSystemTextMessage()` constructors set the role for you.
+`ai.NewMessage(role, metadata, parts...)` is the general form when you need a
+different role, metadata, or non-text parts.
+
+For persistent chat sessions with automatic history management, use the
+[Chat API](/docs/chat) instead of managing the slice yourself.
+
 ### Model parameters
 
 The `genkit.Generate()` function takes a `ai.WithConfig()` option, through which
-you can specify optional settings that control how the model generates content:
+you can specify optional settings that control how the model generates content.
+
+The value you pass is the config type of the model's own provider SDK, not a
+Genkit type. For the Google AI and Vertex AI plugins that is
+`*genai.GenerateContentConfig` from Google's GenAI Go SDK, so the snippets below
+need one more import:
+
+```go
+import "google.golang.org/genai"
+```
+
+Anthropic, Ollama, and the OpenAI-compatible plugins each take their own config
+type; check the plugin's page for which one.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
 	ai.WithConfig(&genai.GenerateContentConfig{
-		MaxOutputTokens: genai.Ptr[int32](500),
+		MaxOutputTokens: 500,
 		StopSequences:   []string{"<end>", "<fin>"},
 		Temperature:     genai.Ptr[float32](0.5),
 		TopP:            genai.Ptr[float32](0.4),
-		TopK:            genai.Ptr[int32](50),
+		TopK:            genai.Ptr[float32](50),
 	}),
 )
 ```
@@ -874,8 +992,8 @@ Low temperature values&mdash;between 0.0 and 1.0&mdash;amplify the difference in
 likelihoods between tokens, with the result that the model will be even less
 likely to produce a token it already evaluated to be unlikely. This is often
 perceived as output that is less creative. Although 0.0 is technically not a
-valid value, many models treat it as indicating that the model should behave
-deterministically, and to only consider the single most likely token.
+valid value, many models treat it as a request for greedy decoding: always take
+the single most likely next token.
 
 High temperature values&mdash;those greater than 1.0&mdash;compress the
 differences in likelihoods between tokens, with the result that the model
@@ -896,8 +1014,37 @@ token (but still take into account the probability of each token). A value of
 
 _Top-k_ is an integer value that also controls the number of possible tokens you
 want the model to consider, but this time by explicitly specifying the maximum
-number of tokens. Specifying a value of 1 means that the model should behave
-deterministically.
+number of tokens. A value of 1 leaves the model only its most likely token,
+which is greedy decoding again.
+
+:::caution[Greedy decoding is not reproducibility]
+Neither `Temperature: 0` nor `TopK: 1` makes output reproducible. Providers
+batch, shard, and update their serving stacks, so the same request at
+temperature 0 can still come back with different text tomorrow, or on a
+different replica today. Treat these as controls on style, not as a way to pin
+an answer.
+:::
+
+#### Seeds
+
+Genkit has no seed option of its own: `ai.GenerationCommonConfig`, the
+provider-neutral config struct, covers only API key, max output tokens, stop
+sequences, temperature, top-k, top-p, and version. A seed is always set through
+the provider's config. For the Google plugins:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithConfig(&genai.GenerateContentConfig{
+		Temperature: genai.Ptr[float32](0),
+		Seed:        genai.Ptr[int32](42),
+	}),
+)
+```
+
+The Ollama, xAI, DashScope, and OpenRouter configs each carry their own `Seed`
+field. Not every provider exposes one. In every case a seed is best effort: it
+improves the odds that two identical requests agree, and it guarantees nothing.
 
 #### Experiment with model parameters
 
@@ -919,12 +1066,12 @@ To pair a model with its config, you can create a model reference that you can
 pass into the generate call instead:
 
 ```go
-model := googlegenai.GoogleAIModelRef("gemini-flash-latest", &genai.GenerateContentConfig{
-	MaxOutputTokens: genai.Ptr[int32](500),
+model := googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	MaxOutputTokens: 500,
 	StopSequences:   []string{"<end>", "<fin>"},
 	Temperature:     genai.Ptr[float32](0.5),
 	TopP:            genai.Ptr[float32](0.4),
-	TopK:            genai.Ptr[int32](50),
+	TopK:            genai.Ptr[float32](50),
 })
 
 resp, err := genkit.Generate(ctx, g,
@@ -938,6 +1085,21 @@ if err != nil {
 
 The constructor for the model reference will enforce that the correct config
 type is provided which may reduce mismatches.
+
+#### Model versions and aliases
+
+Model aliases like `gemini-flash-latest` point to the current release of a model. While aliases are convenient during development and prototyping, model providers periodically update which snapshot an alias references, which can affect latency, cost, and output consistency.
+
+For production workloads where consistent behavior is desired, you can specify a dated or specific model version snapshot:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-3.8-flash"),
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+)
+```
+
+Because plugins like Google AI and Vertex AI resolve model IDs dynamically, specific model versions work directly without requiring updates to the plugin definition. When updating model versions in production, consider testing changes against an evaluation dataset before deploying.
 
 ### Structured output
 
@@ -1007,6 +1169,11 @@ item, resp, err := genkit.GenerateData[MenuItem](ctx, g,
 if err != nil {
 	log.Fatal(err)
 }
+if item == nil {
+	// The response carried no text to parse. resp says why.
+	log.Fatalf("no menu item: finish reason %q, %d interrupts, %d tool requests",
+		resp.FinishReason, len(resp.Interrupts()), len(resp.ToolRequests()))
+}
 
 log.Printf("%s (%d calories, %d allergens): %s\n",
 	item.Name, item.Calories, len(item.Allergens), item.Description)
@@ -1016,15 +1183,28 @@ This function requires the output type parameter but automatically sets the
 `ai.WithOutputType()` option and calls `ModelResponse.Output()` before returning
 the value.
 
+Check the three results in order: the error, then the value, then the fields.
+`genkit.GenerateData()` returns a nil value with a live response and **no error**
+whenever the response carried no text to parse, which is what a turn holding a
+tool request, an interrupt, or media looks like. That is a legitimate answer, not
+a failure, so it is yours to interpret: read `resp.Interrupts()`,
+`resp.ToolRequests()`, and `resp.FinishReason`. A response with no content at all
+and an ordinary finish reason is an error instead, and `resp` is nil there, so
+never read it before checking `err`.
+
+The [basic-structured](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
+sample carries the whole pattern, including the streaming form.
+
 #### Using registered schemas
 
 For schemas that are shared across your application (such as those used in
-`.prompt` files), you can register them with `genkit.DefineSchemaFor[T]()` and
-reference them by name:
+`.prompt` files), you can register them with `genkit.DefineSchemasFor()` and
+reference them by name. Each value registers a schema under its Go type's name,
+so one call covers as many types as your app has:
 
 ```go
-// Register the schema once at startup
-genkit.DefineSchemaFor[MenuItem](g)
+// Register the schemas once at startup
+genkit.DefineSchemasFor(g, MenuItem{}, MenuRequest{})
 
 // Reference by name in generate calls
 resp, err := genkit.Generate(ctx, g,
@@ -1032,6 +1212,10 @@ resp, err := genkit.Generate(ctx, g,
 	ai.WithOutputSchemaName("MenuItem"),
 )
 ```
+
+`genkit.DefineSchemaFor[T](g)` is the single-type form of the same thing, and
+`genkit.DefineSchema(g, name, schema)` registers a schema you wrote by hand under
+a name of your choosing. All three live in package `genkit`.
 
 This is particularly useful when working with [Dotprompt](/docs/dotprompt), as
 you can define your types once in Go and reference them in `.prompt` files by
@@ -1055,10 +1239,317 @@ depend on your exact use case, but here are some general hints:
   nested types. Try using clear names, fewer fields, or a flattened structure
   if you are not able to reliably generate structured data.
 
-- **Retry the `genkit.Generate()` call**. If the model you've chosen only
-  rarely fails to generate conformant output, you can treat the error as you
-  would treat a network error, and retry the request using some kind of
-  incremental back-off strategy.
+- **Ask again with the error**. A model that produced almost-valid JSON usually
+  fixes it when told what was wrong, so a bounded repair loop beats a plain
+  retry.
+
+A schema failure arrives as `status.ErrInvalidOutput`, which you match with
+`errors.Is`. Feed the validation error back into the next attempt:
+
+```go
+import (
+	"errors"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/middleware"
+)
+```
+
+```go
+const task = "Invent a menu item for a pirate themed restaurant."
+
+opts := []ai.GenerateOption{ai.WithPrompt(task)}
+
+var item *MenuItem
+var err error
+
+for attempt := 0; attempt < 3; attempt++ {
+	item, _, err = genkit.GenerateData[MenuItem](ctx, g, opts...)
+	if err == nil {
+		break
+	}
+	if !errors.Is(err, status.ErrInvalidOutput) {
+		return err // something other than a schema failure
+	}
+	// Tell the model what was wrong with its last attempt and ask again.
+	opts = append(opts, ai.WithPrompt(
+		task+" Your previous reply did not match the required schema: %v. "+
+			"Reply with valid JSON only, no prose and no code fence.", err))
+}
+if err != nil {
+	return fmt.Errorf("no conforming output after 3 attempts: %w", err)
+}
+```
+
+Only one prompt survives: `ai.WithPrompt()` shares a single slot with the other
+prompt options, and the last one set wins, so each pass replaces the instruction
+rather than stacking another.
+
+Note the discarded response. On a schema failure the parse happens before
+`genkit.Generate()` returns, so it hands back a nil `*ai.ModelResponse` along
+with the error. The offending text is not available to you; the validation
+error, which names the field that failed, is what you have to work with.
+
+:::caution[Retry middleware does not cover this]
+`middleware.Retry` hooks the Model stage only: it retries individual model API
+calls. Output-schema validation runs in the action layer above it, so the
+`ErrInvalidOutput` never reaches the hook, and re-issuing the identical request
+with no feedback would not fix it anyway. Use the loop above for
+nonconformance, and the middleware for transport failures
+(`UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`,
+`INTERNAL`):
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+	ai.WithUse(&middleware.Retry{MaxRetries: 2}),
+)
+```
+
+See [Middleware](/docs/middleware), which also covers `middleware.Fallback`.
+:::
+
+#### Blocked and interrupted responses
+
+When the model stops for a reason other than finishing its answer, holding it to
+the schema would report the wrong problem: you would see a parse failure where
+the real news is that a safety filter fired or a tool paused the turn. So Genkit
+skips the parsing step that rewrites the message whenever the finish reason is
+`blocked`, `aborted`, `interrupted`, or the catch-all `other`. The finish reason
+survives to you instead. `unknown` is deliberately not in that set, because
+plugins map any provider reason they do not recognize to it.
+
+What that means at the call site:
+
+- `genkit.GenerateData()` gives you a nil value, the response, and no error when
+  such a response carried no text. Read `resp.FinishReason` and
+  `resp.FinishMessage` for a block, and `resp.Interrupts()` for a pause.
+- `genkit.GenerateDataStream()` ends with a final value whose `Output` is the
+  zero value of your type, again with no error, so check `val.Response` there
+  rather than the output.
+- A response that stopped early but still carries conforming text parses as
+  usual, so the skip costs you nothing in the common case.
+
+### Output formats
+
+The output format decides two things: how the model is asked to write its answer,
+and how that answer is parsed back into Go values. Genkit registers exactly five,
+and any of them can be selected explicitly:
+
+| Format  | Select with                                 | You get back                       |
+| ------- | ------------------------------------------- | ---------------------------------- |
+| `text`  | the default when you set no output type     | the raw text, unparsed             |
+| `json`  | the default when you set an output type     | one value matching the schema      |
+| `jsonl` | `ai.WithOutputFormat(ai.OutputFormatJSONL)` | a slice, written one item per line |
+| `array` | `ai.WithOutputFormat(ai.OutputFormatArray)` | a slice, written as one JSON array |
+| `enum`  | `ai.WithOutputEnums("yes", "no")`           | one string out of a fixed set      |
+
+`jsonl` and `array` need an array schema, so the output type has to be a slice.
+`ai.WithOutputEnums()` sets the schema and the format together, so it is the
+whole of what an enum output needs. Selecting a name that is not registered
+fails with `INVALID_ARGUMENT` before the model is ever called.
+
+A format does not replace your schema: the schema still comes from the output
+type, and only the way the model is asked to write it out changes.
+
+```go
+// One item per line instead of one JSON array.
+for val, err := range genkit.GenerateDataStream[[]MenuItem](ctx, g,
+	ai.WithOutputFormat(ai.OutputFormatJSONL),
+	ai.WithPrompt("Invent four menu items for a pirate themed restaurant."),
+) {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if val.Done {
+		log.Printf("%d items\n", len(val.Output))
+		break
+	}
+	for _, item := range val.Chunk {
+		log.Println(item.Name)
+	}
+}
+```
+
+The [basic-formats](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-formats)
+sample puts `json`, `jsonl`, and `enum` side by side over one story premise, a
+flow for each.
+
+#### Enum output
+
+`ai.WithOutputEnums()` is the whole of what a classification needs: it sets the
+format and the schema together, and the answer comes back as text.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Classify the sentiment of this review: %s", review),
+	ai.WithOutputEnums("positive", "negative", "neutral"),
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+sentiment := resp.Text()
+```
+
+The signature is `ai.WithOutputEnums[T ~string](values ...T)`, so your own string
+type works and keeps the labels in one place:
+
+```go
+type Sentiment string
+
+const (
+	Positive Sentiment = "positive"
+	Negative Sentiment = "negative"
+	Neutral  Sentiment = "neutral"
+)
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Classify the sentiment of this review: %s", review),
+	ai.WithOutputEnums(Positive, Negative, Neutral),
+)
+```
+
+A reply outside the set fails with a `status.ErrInvalidOutput` error reading
+`message <reply> not in list of valid enums: ...`, so the value you read is
+always one of the labels you supplied.
+
+#### What a chunk means, per format
+
+The format decides what one streamed chunk contains, which is the part that
+catches people out. Parsing a chunk with `chunk.Output()` or reading
+`val.Chunk` from `genkit.GenerateDataStream()` gives you:
+
+- **`text`**: everything accumulated so far. Use `chunk.Text()` instead if you
+  want only the text that just arrived.
+- **`json`**: the whole value so far, filling in field by field. Each chunk
+  supersedes the one before it, so replace what you are holding rather than
+  appending to it. Partial string values are normal mid-stream.
+- **`jsonl`**: the items that finished since the last chunk, plus the item still
+  being written. That trailing item arrives again, further along, on the next
+  chunk, so a consumer that wants only finished items has to spot the repeat.
+- **`array`**: only the items that became complete since the last chunk, and
+  never a half-written one. `items = append(items, val.Chunk...)` is correct, and
+  an empty first chunk is normal.
+- **`enum`**: the empty string until the whole value has arrived. There is
+  effectively nothing to stream, so do not put a progress indicator on it.
+
+The final response differs too. `json`, `jsonl`, and `enum` validate it against
+the schema, so a missing required field or a label outside the set is an error.
+`array` does not, so a missing field reaches you as a zero Go field rather than
+as a failure.
+
+#### Custom formats
+
+Register your own format with `genkit.DefineFormats()`, then select it by name.
+The name comes from the formatter's own `Name()` method.
+
+A format is two types. `ai.Formatter` is the registered one, and it is a factory:
+Genkit calls its `Handler()` once per request to get an `ai.FormatHandler` that
+owns that request's parsing state.
+
+```go
+import (
+	"strings"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+)
+```
+
+```go
+// csvFormatter asks the model for comma-separated values.
+type csvFormatter struct{}
+
+var _ ai.Formatter = csvFormatter{}
+
+func (csvFormatter) Name() string { return "csv" }
+
+// schema is the JSON Schema of the requested output type, or nil when the
+// request asked for no type. Echo it back in Config().Schema if the model
+// should see it.
+func (csvFormatter) Handler(schema map[string]any) (ai.FormatHandler, error) {
+	return &csvHandler{}, nil
+}
+
+type csvHandler struct {
+	text   string // text accumulated for the turn being parsed
+	index  int    // the index of that turn
+	cursor int    // how much of text has already been handed over
+}
+
+func (h *csvHandler) Instructions() string {
+	return "Output ONLY comma-separated values on a single line. No prose, no code fences."
+}
+
+func (h *csvHandler) Config() ai.ModelOutputConfig {
+	return ai.ModelOutputConfig{Format: "csv", ContentType: "text/csv"}
+}
+
+// ParseMessage is a passthrough: parsing belongs in ParseOutput.
+func (h *csvHandler) ParseMessage(m *ai.Message) (*ai.Message, error) { return m, nil }
+
+// ParseOutput parses the final message: every field, in order.
+func (h *csvHandler) ParseOutput(m *ai.Message) (any, error) {
+	return strings.Split(m.Text(), ","), nil
+}
+
+// ParseChunk returns only the fields completed since the previous chunk. The
+// handler is reused across turns, so it resets when chunk.Index changes.
+func (h *csvHandler) ParseChunk(chunk *ai.ModelResponseChunk) (any, error) {
+	if chunk.Index != h.index {
+		h.text, h.index, h.cursor = "", chunk.Index, 0
+	}
+	for _, p := range chunk.Content {
+		if p.IsText() {
+			h.text += p.Text
+		}
+	}
+	done := strings.LastIndex(h.text, ",") // a field is complete once its comma arrives
+	if done < h.cursor {
+		return []string{}, nil
+	}
+	fresh := strings.Split(h.text[h.cursor:done], ",")
+	h.cursor = done + 1
+	return fresh, nil
+}
+```
+
+```go
+genkit.DefineFormats(g, csvFormatter{})
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("List three colors."),
+	ai.WithOutputFormat("csv"),
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+var colors []string
+if err := resp.Output(&colors); err != nil {
+	log.Fatal(err)
+}
+```
+
+`Instructions()`, `Config()`, and `ParseMessage()` make up `ai.FormatHandler`,
+the minimum. `ParseOutput()` and `ParseChunk()` add `ai.StreamingFormatHandler`,
+and without them both `resp.Output()` and `chunk.Output()` fail. A name can be
+claimed only once: registering one that is already taken panics, and that
+includes the five built-ins, so they cannot be replaced.
+
+The `ai.ModelOutputConfig` your handler returns from `Config()` has four fields.
+`Format` and `ContentType` are what the CSV handler above sets. The other two
+decide how the model learns the shape of the answer: `Schema` is the JSON Schema
+to send, normally the map handed to `Handler()`, and `Constrained` says the
+schema can be enforced natively rather than described in prose. `Constrained`
+is a request, not a switch. Genkit keeps it only when the caller asked for
+constrained output, a schema exists, and the model declares support; otherwise it
+clears the flag, drops `Schema`, and injects your `Instructions()` into the
+prompt instead.
 
 ### Streaming
 
@@ -1069,11 +1560,15 @@ can read the model's response to their message as it's being generated, which
 improves the perceived responsiveness of the application and enhances the
 illusion of chatting with an intelligent counterpart.
 
+There are two shapes, and the question that picks between them is whether your
+code has anything to do with the chunks. If you are only passing them on to your
+own caller, hand your callback to `ai.WithStreaming()` and let the chunks travel
+untouched. If you have to look at them, range over `genkit.GenerateStream()`.
+
 #### Iterator-based streaming
 
-The recommended way to stream output in Go is using `genkit.GenerateStream()`,
-which returns an iterator that you can range over. This approach uses Go's
-native iterator pattern, making the code more idiomatic and easier to follow:
+Use `genkit.GenerateStream()` when the caller has to act on chunks as they
+arrive. It returns an iterator you can range over:
 
 ```go
 stream := genkit.GenerateStream(ctx, g,
@@ -1089,7 +1584,7 @@ for result, err := range stream {
 		log.Println("Complete response:", result.Response.Text())
 		break
 	}
-	// Process each chunk as it arrives
+	// Just the text that arrived with this chunk
 	log.Println(result.Chunk.Text())
 }
 ```
@@ -1099,6 +1594,15 @@ The iterator yields `*ai.ModelStreamValue` values, where:
 - `result.Chunk` contains the streamed chunk data
 - `result.Done` indicates whether this is the final result
 - `result.Response` contains the complete response (only available when `Done` is true)
+
+:::note[Text is a delta, Output is a running total]
+`chunk.Text()` is only the text that arrived with that chunk, so printing it in a
+loop reproduces the message once. Parsing the chunk is the opposite:
+`chunk.Output(&v)` gives you everything accumulated so far, so printing that
+reprints the message from the start on every chunk. Exactly what "so far" means
+depends on the output format, covered under
+[what a chunk means, per format](#what-a-chunk-means-per-format).
+:::
 
 #### Streaming structured output
 
@@ -1123,7 +1627,8 @@ for result, err := range stream {
 		log.Printf("Final: %s - %s\n", result.Output.Name, result.Output.Description)
 		break
 	}
-	// result.Chunk is also strongly typed as MenuItem (partial data)
+	// result.Chunk is also strongly typed as MenuItem, holding everything
+	// parsed so far
 	if result.Chunk.Name != "" {
 		log.Printf("Got name: %s\n", result.Chunk.Name)
 	}
@@ -1133,11 +1638,45 @@ for result, err := range stream {
 With `GenerateDataStream[T]`, both the streamed chunks and the final output are
 strongly typed, making your code safer and more predictable.
 
+Ask for the value type, `GenerateDataStream[MenuItem]`, rather than the pointer
+type. The two behave differently on chunks that parse to nothing, which is what a
+code fence or a line of prose ahead of the JSON looks like: those chunks are
+dropped only when the type parameter can be nil, so `[*MenuItem]` filters them
+while `[MenuItem]` delivers a zero-value struct. Reading a half-filled value the
+same way as one whose fields have not arrived yet is the simpler contract, and it
+is what
+[basic-structured](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
+uses. Guard on a field you care about, as above, rather than assuming every chunk
+carries something new.
+
 #### Callback-based streaming
 
-Alternatively, you can stream output using the `ai.WithStreaming()` callback
-option with `genkit.Generate()`. This approach is useful when you want to
-process chunks inline or integrate with existing callback-based code:
+When your code is only handing the chunks onward, pass the callback to
+`ai.WithStreaming()` and let `genkit.Generate()` return the finished response as
+usual. Inside a streaming flow this is the whole job, because the flow's own
+`sendChunk` is already the callback the option wants:
+
+```go
+genkit.DefineStreamingFlow(g, "menuFlow",
+	func(ctx context.Context, topic string, sendChunk ai.ModelStreamCallback) (string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("Suggest a complete menu for a %s themed restaurant.", topic),
+			ai.WithStreaming(sendChunk),
+		)
+		if err != nil {
+			return "", err
+		}
+		return resp.Text(), nil
+	},
+)
+```
+
+The [basic](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic)
+sample puts that flow next to a non-streaming one, so the pair shows what
+streaming does and does not change.
+
+The callback is an ordinary function, so use it anywhere you want to process
+chunks inline or feed callback-based code you already have:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -1167,19 +1706,18 @@ The ability to accept media input and the types of media you can use are
 completely dependent on the model and its API. For example, the Gemini 2.5
 series of models can accept images, video, and audio as prompts.
 
-To provide a media prompt to a model that supports it, instead of passing a
-simple text prompt to `genkit.Generate()`, pass an array consisting of a media
-part and a text part. This example specifies an image using a
-publicly-accessible HTTPS URL.
+To provide a media prompt to a model that supports it, use
+`ai.WithPromptParts()` instead of `ai.WithPrompt()`. It fills the same user
+prompt slot but takes parts rather than text, so a picture and a question travel
+together as one turn. This example specifies an image using a publicly
+accessible HTTPS URL.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("googleai/gemini-flash-latest"),
-	ai.WithMessages(
-		ai.NewUserMessage(
-			ai.NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
-			ai.NewTextPart("Compose a poem about this image."),
-		),
+	ai.WithPromptParts(
+		ai.NewTextPart("Compose a poem about this image."),
+		ai.NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
 	),
 )
 ```
@@ -1195,11 +1733,9 @@ if err != nil {
 
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("googleai/gemini-flash-latest"),
-	ai.WithMessages(
-		ai.NewUserMessage(
-			ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(image)),
-			ai.NewTextPart("Compose a poem about this image."),
-		),
+	ai.WithPromptParts(
+		ai.NewTextPart("Compose a poem about this image."),
+		ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(image)),
 	),
 )
 ```
@@ -1207,6 +1743,327 @@ resp, err := genkit.Generate(ctx, g,
 All models that support media input support both data URLs and HTTPS URLs. Some
 model plugins add support for other media sources. For example, the Vertex AI
 plugin also lets you use Cloud Storage (`gs://`) URLs.
+
+`ai.WithMessages()` is still how you supply the turns leading up to the prompt,
+and those messages can carry media parts of their own. The two options fill
+different slots, so a request can use both:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithMessages(history...),
+	ai.WithPromptParts(
+		ai.NewTextPart("Compose a poem about this image."),
+		ai.NewMediaPart("image/jpeg", "https://example.com/photo.jpg"),
+	),
+)
+```
+
+The [basic-media](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-media)
+sample covers both ways to attach a picture, and goes on to editing, generating,
+and animating one.
+
+#### What a media part holds
+
+`ai.NewMediaPart(mimeType, contents)` builds a `*ai.Part` with two fields set:
+`ContentType` holds the MIME type, and `Text` holds the URL, whether that is an
+`https:` URL or a `data:` URI. There is no separate URL field. Read one back with
+the `IsMedia()` predicate:
+
+```go
+for _, p := range resp.Message.Content {
+	if p.IsMedia() {
+		log.Printf("%s at %s", p.ContentType, p.Text)
+	}
+}
+```
+
+`IsImage()`, `IsAudio()`, and `IsVideo()` narrow by MIME type prefix. On a
+response, `resp.MediaParts()` returns every media part directly, and
+`resp.Media()` returns the URL of the first one as a string, discarding its
+content type.
+
+### Generating media
+
+Image, video, and speech models answer with media parts rather than text, so the
+same `genkit.Generate()` call covers them. This example generates an image and
+writes it to disk:
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("googleai/imagen-4.0-generate-001"),
+		ai.WithPrompt("An illustration of a dog wearing a space suit, photorealistic."),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	parts := resp.MediaParts()
+	if len(parts) == 0 {
+		log.Fatalf("no image returned: finish reason %q", resp.FinishReason)
+	}
+
+	data, err := mediaBytes(parts[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile("dog.png", data, 0o644); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// mediaBytes decodes a media part's payload. Generated media normally arrives
+// as a "data:" URI, but a provider that stores the result returns an "https:"
+// file URI instead, so branch on the prefix.
+func mediaBytes(p *ai.Part) ([]byte, error) {
+	if !strings.HasPrefix(p.Text, "data:") {
+		return nil, fmt.Errorf("media is hosted at %s; fetch it over HTTP", p.Text)
+	}
+	_, encoded, ok := strings.Cut(p.Text, ",")
+	if !ok {
+		return nil, fmt.Errorf("malformed data URI")
+	}
+	return base64.StdEncoding.DecodeString(encoded)
+}
+```
+
+Text-to-speech works the same way. The difference is the config: a TTS model
+needs the audio modality and a voice, which are provider settings rather than
+Genkit ones.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-2.5-flash-preview-tts"),
+	ai.WithConfig(&genai.GenerateContentConfig{
+		ResponseModalities: []string{"AUDIO"},
+		SpeechConfig: &genai.SpeechConfig{
+			VoiceConfig: &genai.VoiceConfig{
+				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Algenib"},
+			},
+		},
+	}),
+	ai.WithPrompt("Say that Genkit is an amazing AI framework."),
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+parts := resp.MediaParts()
+if len(parts) == 0 {
+	log.Fatalf("no audio returned: finish reason %q", resp.FinishReason)
+}
+data, err := mediaBytes(parts[0])
+if err != nil {
+	log.Fatal(err)
+}
+if err := os.WriteFile("output.wav", data, 0o644); err != nil {
+	log.Fatal(err)
+}
+```
+
+See the [Google GenAI plugin](/docs/integrations/google-genai) page for the
+Imagen, Veo, and TTS model IDs each backend serves.
+
+### Reasoning
+
+Models that expose their intermediate thinking return it as reasoning parts,
+separate from the answer. `resp.Reasoning()` concatenates them:
+
+```go
+if thinking := resp.Reasoning(); thinking != "" {
+	log.Printf("model reasoning:\n%s", thinking)
+}
+```
+
+`p.IsReasoning()` identifies one part at a time, and
+`ai.NewReasoningPart(text, signature)` builds one. The signature is the opaque
+blob some providers attach to prove the reasoning is theirs; pass `nil` when
+there is none. If you replay history yourself rather than using
+`resp.History()`, carry the signature back unchanged on the next turn, or the
+provider may reject the request.
+
+Reasoning tokens are billed and are reported separately in
+`resp.Usage.ThoughtsTokens`.
+
+### Resources
+
+A resource is content addressed by URI that a prompt can reference by name
+instead of embedding inline. Define one with `genkit.DefineResource()`:
+
+```go
+genkit.DefineResource(g, "company-docs", &ai.ResourceOptions{
+	URI:         "file:///docs/handbook.pdf",
+	Description: "Company handbook",
+}, func(ctx context.Context, in *ai.ResourceInput) (*ai.ResourceOutput, error) {
+	content, err := os.ReadFile("/docs/handbook.pdf")
+	if err != nil {
+		return nil, err
+	}
+	return &ai.ResourceOutput{
+		Content: []*ai.Part{ai.NewTextPart(string(content))},
+	}, nil
+})
+```
+
+`ai.ResourceOptions.URI` and `ai.ResourceOptions.Template` are mutually
+exclusive. `URI` matches one exact address. `Template` is a URI template that
+matches a family of them, and the captured segments arrive as
+`ai.ResourceInput.Variables`, a `map[string]string`, alongside the full
+`ai.ResourceInput.URI`:
+
+```go
+genkit.DefineResource(g, "user-profile", &ai.ResourceOptions{
+	Template:    "profile://users/{userID}",
+	Description: "A user's profile",
+}, func(ctx context.Context, in *ai.ResourceInput) (*ai.ResourceOutput, error) {
+	profile, err := loadProfile(ctx, in.Variables["userID"])
+	if err != nil {
+		return nil, err
+	}
+	return &ai.ResourceOutput{
+		Content: []*ai.Part{ai.NewTextPart(profile)},
+	}, nil
+})
+```
+
+The handler always returns `ai.ResourceOutput.Content` as `[]*ai.Part`, so a
+resource can serve media as easily as text.
+
+Reference a resource from a request with `ai.NewResourcePart(uri)`. For a
+resource you do not want in the registry, build it with `ai.NewResource()` and
+attach it to a single call with `ai.WithResources()`, which appends when
+repeated:
+
+```go
+scratch := ai.NewResource("scratch", &ai.ResourceOptions{
+	URI: "mem:///scratch",
+}, func(ctx context.Context, in *ai.ResourceInput) (*ai.ResourceOutput, error) {
+	return &ai.ResourceOutput{Content: []*ai.Part{ai.NewTextPart(notes)}}, nil
+})
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithResources(scratch),
+	ai.WithPromptParts(
+		ai.NewTextPart("Summarize these notes."),
+		ai.NewResourcePart("mem:///scratch"),
+	),
+)
+```
+
+Resources attached this way live in a temporary registry for the duration of the
+request and are discarded afterward.
+
+### Token usage and cost
+
+`resp.Usage` reports what the request consumed. It is a `*ai.GenerationUsage`
+and can be nil, because a provider that reports nothing leaves it unset:
+
+```go
+if u := resp.Usage; u != nil {
+	log.Printf("in=%d out=%d total=%d thoughts=%d cached=%d",
+		u.InputTokens, u.OutputTokens, u.TotalTokens,
+		u.ThoughtsTokens, u.CachedContentTokens)
+}
+```
+
+| Field                                                                       | Type                 | What it counts                              |
+| --------------------------------------------------------------------------- | -------------------- | ------------------------------------------- |
+| `InputTokens`, `OutputTokens`, `TotalTokens`                                | `int`                | The usual billing counters                   |
+| `ThoughtsTokens`                                                            | `int`                | Reasoning tokens, billed but not returned    |
+| `CachedContentTokens`                                                       | `int`                | Input tokens served from the provider's cache |
+| `InputCharacters`, `InputImages`, `InputVideos`, `InputAudioFiles`          | `int`                | Non-token input units some providers bill on |
+| `OutputCharacters`, `OutputImages`, `OutputVideos`, `OutputAudioFiles`      | `int`                | The output twins of those                    |
+| `Custom`                                                                    | `map[string]float64` | Provider-specific metrics                    |
+
+Every field is `omitempty`, so a zero means "not reported" as often as it means
+zero. Read `Custom` with the two-value map form rather than trusting a zero.
+
+:::caution[A tool loop reports its last turn only]
+The `*ai.ModelResponse` you get back carries the usage of the final model call.
+Genkit does not accumulate usage across the turns of a tool loop, so billing a
+whole loop means summing the turns yourself. Attach middleware to see each model
+call, as in the metering example on the [Middleware](/docs/middleware) page.
+:::
+
+#### Caching
+
+Providers discount input tokens they have already processed. A hit shows up as a
+nonzero `resp.Usage.CachedContentTokens`, which is the only reliable way to
+confirm caching is working.
+
+| Plugin                                                        | Caching in Go                                                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Google AI and Vertex AI](/docs/integrations/google-genai)     | Explicit. Call `WithCacheTTL()` on the last message you want cached.                                                                                     |
+| [OpenAI-compatible](/docs/integrations/openai-compatible)      | Implicit, decided by the provider. [xAI](/docs/integrations/xai) adds a `PromptCacheKey` config field that routes matching prefixes to the same backend. |
+| [Anthropic](/docs/integrations/anthropic)                      | Not available. The plugin reports `CachedContentTokens` on a hit but has no way to place a cache breakpoint.                                             |
+
+For the Google plugins, mark the boundary on the message:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithMessages(
+		ai.NewUserTextMessage(handbook).WithCacheTTL(300), // cache everything up to here for 5 minutes
+	),
+	ai.WithPrompt("What is the parental leave policy?"),
+)
+```
+
+Context caching there is exclusive with tools and with system prompts: a request
+that marks a message for caching and also carries either one is rejected with
+`INVALID_ARGUMENT`. Not every Gemini model version supports it, so check the
+provider's documentation before you rely on it.
+
+### Timeouts and cancellation
+
+Genkit has no per-generation timeout option. The context you pass to
+`genkit.Generate()` is the mechanism, and it reaches the provider's HTTP
+request:
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+defer cancel()
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Invent a menu item for a pirate themed restaurant."),
+)
+```
+
+Cancelling the context aborts the in-flight provider call and ends the tool loop.
+An expired deadline classifies as `status.DeadlineExceeded`; an explicit cancel
+classifies as `status.Cancelled`. See [Error types](/docs/error-types).
+
+:::caution[Put the deadline outside Retry, not under it]
+`status.DeadlineExceeded` is on `middleware.Retry`'s default status list, so a
+deadline that fires inside a retried call looks retryable: the middleware waits
+out its backoff and tries again against a context that is already dead, until
+`MaxRetries` is exhausted. `status.Cancelled` is not on that list, so an explicit
+cancel stops immediately. Either derive the deadline in the caller, above the
+`genkit.Generate()` that carries `ai.WithUse(&middleware.Retry{...})`, or drop
+`status.DeadlineExceeded` from `Retry.Statuses`.
+:::
+
+[Concurrency, cancellation, and lifecycle](/docs/concurrency) covers how
+deadlines propagate through flows, tools, and streams.
 
 ### Next steps
 
@@ -1439,7 +2296,7 @@ prompt:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -1537,9 +2394,11 @@ result = await ai.generate(
 )
 ```
 
-You can also pass a per-request API key, provider-specific options, and middleware on a single call. The `config` object allows extra fields for provider-specific parameters, and the `use` parameter accepts middleware to attach to that generation (for example logging or custom behavior):
+You can also pass a per-request API key, provider-specific options, and middleware on a single call. The `config` object allows extra fields for provider-specific parameters, and `use` takes middleware instances (see [middleware](/docs/middleware)):
 
 ```python
+from genkit_middleware import Retry
+
 result = await ai.generate(
     model='googleai/gemini-flash-latest',
     prompt='Hello',
@@ -1548,7 +2407,7 @@ result = await ai.generate(
         'temperature': 0.5,
         'provider_specific_option': 'value',
     },
-    use=[{'name': 'my-middleware', 'config': {'option': True}}],
+    use=[Retry()],
 )
 ```
 
@@ -1695,12 +2554,11 @@ object's `output` property:
 output = result.output
 ```
 
-For multimodal responses, iterate `result.message.media` (each item is a `Media` value):
+For multimodal responses, iterate `result.media` (each item is a `Media` value):
 
 ```python
-if result.message:
-    for media in result.message.media:
-        print(media.content_type)
+for media in result.media:
+    print(media.content_type)
 ```
 
 #### Handling errors

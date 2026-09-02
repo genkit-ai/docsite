@@ -408,10 +408,10 @@ Genkit registry. The registry serves as a lookup service for named actions at
 runtime, and powers Genkit's local UI for running and inspecting models,
 prompts, and more.
 
-## Creating a Plugin
+## Creating a plugin
 
-In Go, a Genkit plugin is a package that adheres to a small set of
-conventions. A single module can contain several plugins.
+In Go, a Genkit plugin is a type that implements the `api.Plugin` interface. A
+single module can contain several plugins.
 
 ### Provider ID
 
@@ -422,8 +422,9 @@ your plugin defines, to prevent naming conflicts with other plugins.
 For example, if your plugin has an ID `yourplugin` and provides a model called
 `text-generator`, the full model identifier will be `yourplugin/text-generator`.
 
-This provider ID needs to be exported and you should define it once for your
-plugin and use it consistently when required by a Genkit function.
+Define the provider ID once and use it consistently. It can stay unexported: if
+your plugin exports a `ModelRef` helper, as the example below does, callers
+never spell the raw string.
 
 ```go
 package yourplugin
@@ -431,66 +432,250 @@ package yourplugin
 const providerID = "yourplugin"
 ```
 
-### Standard Exports
+Every Genkit constructor takes the action name as a plain `string`.
+`api.NewName(provider, id)` returns `provider + "/" + id`, so
+`api.NewName(providerID, "text-generator")` and the literal
+`"yourplugin/text-generator"` are the same value. This page uses `api.NewName`
+in plugin code and literals in the application-facing asides.
 
-Every plugin should define and export the following symbols to conform to the
-`genkit.Plugin` interface:
+### Standard exports
 
-- A struct type that encapsulates all of the configuration options accepted by
-  the plugin.
+Every plugin exports a struct type that encapsulates all of the configuration
+options accepted by the plugin, and implements `Name()` and `Init()` on it.
 
-  For any plugin options that are secret values, such as API keys, you should
-  offer both a config option and a default environment variable to configure
-  it. This lets your plugin take advantage of the secret-management features
-  offered by many hosting providers (such as Cloud Secret Manager, which you
-  can use with Cloud Run). For example:
+For any plugin options that are secret values, such as API keys, you should
+offer both a config option and a default environment variable to configure it.
+This lets your plugin take advantage of the secret-management features offered
+by many hosting providers, such as Cloud Secret Manager, which you can use with
+Cloud Run.
 
 ```go
+package myplugin
+
+import (
+    "context"
+    "os"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/api"
+)
+
+const providerID = "myprovider"
+
+// MyPlugin holds every option the plugin accepts.
 type MyPlugin struct {
+    // APIKey is the credential. If empty, MYPROVIDER_API_KEY is consulted.
     APIKey string
-    // Other options you may allow to configure...
+
+    // Models overrides what the plugin knows about a model, keyed by model ID.
+    // Fields left at their zero value keep what the plugin resolved.
+    Models map[string]ai.ModelOptions
+
+    client *apiClient
 }
+
+// Name returns the provider ID.
+func (p *MyPlugin) Name() string { return providerID }
+
+// Init creates shared resources and returns the actions to register.
+func (p *MyPlugin) Init(ctx context.Context) []api.Action {
+    apiKey := p.APIKey
+    if apiKey == "" {
+        apiKey = os.Getenv("MYPROVIDER_API_KEY")
+    }
+    if apiKey == "" {
+        panic("myprovider requires setting APIKey on the plugin or MYPROVIDER_API_KEY in the environment")
+    }
+    p.client = newAPIClient(apiKey)
+
+    return []api.Action{
+        p.newModel("my-model"),
+    }
+}
+
+var _ api.Plugin = (*MyPlugin)(nil)
 ```
 
-- A `Name()` method on the struct that returns the provider ID.
-
-- An `Init()` method on the struct with a declaration like the following:
-
-```go
-func (m *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error
-```
-
-In this function, perform any setup steps required by your plugin. For
-example:
+`Init` is called automatically during `genkit.Init()` when the user passes the
+plugin into the `WithPlugins()` option. In it:
 
 - Confirm that any required configuration values are specified and assign
   default values to any unspecified optional settings.
 - Verify that the given configuration options are valid together.
 - Create any shared resources required by the rest of your plugin. For
   example, create clients for any services your plugin accesses.
+- Construct your actions and return them. The framework registers whatever
+  `Init` returns, so a plugin never reaches into the registry itself.
 
 To the extent possible, the resources provided by your plugin shouldn't
 assume that any other plugins have been installed before this one.
 
-This method will be called automatically during `genkit.Init()` when the
-user passes the plugin into the `WithPlugins()` option.
+### Reporting an initialization failure
 
-## Building Plugin Features
+`Init` returns no error. Genkit treats a plugin that cannot be configured as a
+startup failure, so panic. `genkit.Init` does not recover the panic: it
+propagates to the caller's `main`, which is the intended behavior, because a
+misconfigured plugin cannot serve traffic. There is no degraded-start mode.
+
+Name the provider, what is missing, and how to supply it. The in-tree plugins
+set the pattern:
+
+```go
+panic("Google AI requires setting GEMINI_API_KEY or GOOGLE_API_KEY in the environment. You can get an API key at https://ai.google.dev")
+```
+
+### Resolving actions on demand
+
+A provider that serves more models than are worth registering up front can also
+implement `api.DynamicPlugin`, which adds two methods. `ListActions` advertises
+everything the plugin could serve, so the Developer UI can list it, and
+`ResolveAction` builds one on demand when a name is looked up and nothing is
+registered under it.
+
+```go
+// ListActions advertises every model the plugin could serve.
+func (p *MyPlugin) ListActions(ctx context.Context) []api.ActionDesc {
+    var descs []api.ActionDesc
+    for _, id := range p.client.listModels(ctx) {
+        descs = append(descs, p.newModel(id).Desc())
+    }
+    return descs
+}
+
+// ResolveAction builds a model on demand. id arrives bare: the registry has
+// already matched the provider prefix to this plugin.
+func (p *MyPlugin) ResolveAction(atype api.ActionType, id string) api.Action {
+    if atype != api.ActionTypeModel {
+        return nil
+    }
+    return p.newModel(id)
+}
+```
+
+Because an unknown ID still resolves, a curated catalog is a source of
+capability metadata rather than an allowlist.
+
+### Lifecycle and concurrency
+
+`api.Plugin` is two methods, `Name()` and `Init(ctx)`. There is no teardown
+hook. That shapes what your plugin may hold:
+
+- `Init` runs exactly once per `genkit.Init` call, before any action can run,
+  so the fields it writes need no synchronization.
+- A plugin value must not be passed to two `genkit.Init` calls. Guard it with a
+  flag and panic with `"plugin already initialized"`, as `googlegenai` does.
+- After `Init`, the same plugin pointer serves `ListActions`, `ResolveAction`,
+  and every action call, from many goroutines at once. Anything written after
+  `Init` has to be goroutine-safe.
+- Because there is no shutdown hook, a plugin that owns a flushable resource
+  has to arrange its own flush. See
+  [Shutting down cleanly](#shutting-down-cleanly).
+
+### A minimal plugin end to end
+
+Everything above fits in one file. This one serves a model that echoes the last
+user message, so you can run it without a provider account and then swap the
+generation function for a real API call.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/api"
+    "github.com/firebase/genkit/go/genkit"
+)
+
+const provider = "myprovider"
+
+// EchoConfig is the model's typed config. Its JSON schema is inferred from it
+// and validated on every request.
+type EchoConfig struct {
+    Prefix string `json:"prefix,omitempty"`
+}
+
+// EchoPlugin serves one model.
+type EchoPlugin struct{}
+
+func (p *EchoPlugin) Name() string { return provider }
+
+func (p *EchoPlugin) Init(ctx context.Context) []api.Action {
+    return []api.Action{
+        ai.NewModelAction(api.NewName(provider, "echo-001"),
+            &ai.ModelOptions{
+                Label:    "Echo",
+                Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+            },
+            func(ctx context.Context, req *ai.ModelRequest, cfg *EchoConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+                var text string
+                if n := len(req.Messages); n > 0 {
+                    text = req.Messages[n-1].Text()
+                }
+                if cfg != nil {
+                    text = cfg.Prefix + text
+                }
+
+                if cb != nil {
+                    chunk := &ai.ModelResponseChunk{
+                        Role:    ai.RoleModel,
+                        Content: []*ai.Part{ai.NewTextPart(text)},
+                    }
+                    if err := cb(ctx, chunk); err != nil {
+                        return nil, err
+                    }
+                }
+
+                return &ai.ModelResponse{
+                    Message:      ai.NewModelTextMessage(text),
+                    FinishReason: ai.FinishReasonStop,
+                    Usage:        &ai.GenerationUsage{OutputTokens: len(text)},
+                }, nil
+            }),
+    }
+}
+
+var _ api.Plugin = (*EchoPlugin)(nil)
+
+func main() {
+    ctx := context.Background()
+    g := genkit.Init(ctx, genkit.WithPlugins(&EchoPlugin{}))
+
+    out, err := genkit.GenerateText(ctx, g,
+        ai.WithModelName("myprovider/echo-001"),
+        ai.WithPrompt("hello, plugin"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(out)
+}
+```
+
+Running it prints:
+
+```
+hello, plugin
+```
+
+Run it under `genkit start -- go run .` and the model shows up in the Developer
+UI, config sidebar included, with no further work.
+
+## Building plugin features
 
 A single plugin can activate many new things within Genkit. For example, the
 Vertex AI plugin activates several new models as well as an embedder. Here's how to build some common plugin types.
 
-### Model Plugins
+### Model plugins
 
 Genkit model plugins add one or more generative AI models to the Genkit
 registry. A model represents any generative model that is capable of receiving a
 prompt as input and generating text, media, or data as output.
 
 #### Model definitions
-
-Generally, a model plugin will make one or more `genkit.DefineModel()` calls in
-its `Init` function—once for each model the plugin is providing an
-interface to.
 
 A model definition consists of three components:
 
@@ -499,138 +684,358 @@ A model definition consists of three components:
 3.  A generation function that accepts an `ai.ModelRequest` and returns an
     `ai.ModelResponse`, presumably using an AI model to generate the latter.
 
-At a high level, here's what it looks like in code:
+`ai.NewModelAction` binds all three. Its `Config` type parameter is inferred
+from the generation function, so the signature you write is the contract:
 
 ```go
-package myplugin
-
-import (
-    "context"
-    "fmt"
-
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
-)
-
-const providerID = "myProvider" // Unique ID for your plugin provider
-
-// MyModelConfig defines the configuration options for your model.
-// Embed ai.GenerationCommonConfig for common options.
+// MyModelConfig defines the configuration options for your model. Its JSON
+// schema is inferred from this type and enforced on every request.
 type MyModelConfig struct {
-    ai.GenerationCommonConfig
-    AnotherCustomOption string `json:"anotherCustomOption,omitempty"`
-    CustomOption        int    `json:"customOption,omitempty"`
+    Temperature *float64 `json:"temperature,omitempty" jsonschema:"minimum=0,maximum=2"`
+    MaxTokens   int      `json:"maxTokens,omitempty" jsonschema:"minimum=1"`
 }
 
-// DefineModel registers your custom model with Genkit.
-func DefineMyModel(g *genkit.Genkit) {
-    genkit.DefineModel(g, providerID+"/my-model",
-        &ai.ModelOptions{
-            Label: "My Model", // User-friendly label
-            Supports: &ai.ModelSupports{
-                Multiturn:  true,  // Does the model support multi-turn chats?
-                SystemRole: true,  // Does the model support system messages?
-                Media:      false, // Can the model accept media input?
-                Tools:      false, // Does the model support function calling (tools)?
-            },
-            Versions: []string{"my-model-001"}, // List supported versions/aliases
+func (p *MyPlugin) newModel(id string) *ai.ModelAction {
+    opts := ai.ModelOptions{
+        Label: "My Model", // User-friendly label
+        Supports: &ai.ModelSupports{
+            Multiturn:  true,  // Does the model support multi-turn chats?
+            SystemRole: true,  // Does the model support system messages?
+            Media:      false, // Can the model accept media input?
+            Tools:      false, // Does the model support function calling (tools)?
         },
-        // The generation function
-        func(ctx context.Context, mr *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-            // Verify that the request includes a configuration that conforms to your schema.
-            var cfg MyModelConfig
-            if mr.Config != nil {
-                // Attempt to cast the config; handle potential type mismatch
-                if typedCfg, ok := mr.Config.(*MyModelConfig); ok {
-                    cfg = *typedCfg
-                } else {
-                    // Handle incorrect config type if necessary, or rely on default values
-                    // For simplicity, this example proceeds with default cfg if cast fails
-                }
-            }
-            // Now 'cfg' holds the configuration, either from the request or default.
+        Versions: []string{"my-model-001"}, // List supported versions/aliases
+    }
+    // An application entry corrects or extends what the plugin resolved.
+    opts = opts.Overlay(p.Models[id])
 
-            // Use your custom logic to convert Genkit's ai.ModelRequest into a form
-            // usable by the model's native API.
-            apiRequest, err := apiRequestFromGenkitRequest(mr, cfg) // Pass config too
+    return ai.NewModelAction(api.NewName(providerID, id), &opts,
+        func(ctx context.Context, req *ai.ModelRequest, cfg *MyModelConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+            // cfg arrives deserialized and validated. It is nil when the caller
+            // sent no config, because Config here is a pointer type.
+            if cfg == nil {
+                cfg = &MyModelConfig{}
+            }
+
+            // Use your custom logic to convert Genkit's ai.ModelRequest into a
+            // form usable by the model's native API.
+            apiReq, err := apiRequestFromGenkitRequest(req, cfg)
             if err != nil {
-                return nil, fmt.Errorf("failed to create API request: %w", err)
+                return nil, err
             }
 
-            // Send the request to the model API, using your own code or the model
-            // API's client library.
-            apiResponse, err := callModelAPI(ctx, apiRequest) // Pass context if needed
+            // Send the request to the model API, using your own code or the
+            // model API's client library.
+            apiResp, err := p.client.generate(ctx, apiReq)
             if err != nil {
-                return nil, fmt.Errorf("model API call failed: %w", err)
+                return nil, wrapAPIError(err)
             }
 
-            // Use your custom logic to convert the model's response to Genkit's ai.ModelResponse.
-            response, err := genResponseFromAPIResponse(apiResponse)
-            if err != nil {
-                return nil, fmt.Errorf("failed to convert API response: %w", err)
-            }
-
-            return response, nil
-        },
-    )
+            // Convert the model's response to Genkit's ai.ModelResponse.
+            return genkitResponseFromAPIResponse(req, apiResp)
+        })
 }
-
-// Placeholder for the function that converts Genkit request to your API's format
-func apiRequestFromGenkitRequest(mr *ai.ModelRequest, cfg MyModelConfig) (interface{}, error) {
-    // Implementation depends on your specific model API
-    fmt.Printf("Converting Genkit request with config: %+v\n", cfg)
-    // ... conversion logic ...
-    return "your-api-request-format", nil // Replace with actual request object
-}
-
-// Placeholder for the function that calls your model's API
-func callModelAPI(ctx context.Context, apiRequest interface{}) (interface{}, error) {
-    // Implementation depends on your specific model API client library
-    // ... API call logic ...
-    return "your-api-response-format", nil // Replace with actual response object
-}
-
-// Placeholder for the function that converts your API's response to Genkit's format
-func genResponseFromAPIResponse(apiResponse interface{}) (*ai.ModelResponse, error) {
-    // Implementation depends on your specific model API response format
-    // ... conversion logic ...
-    return &ai.ModelResponse{
-        Candidates: []*ai.Candidate{
-            {
-                Message: &ai.Message{
-                    Content: []*ai.Part{ai.NewTextPart("Generated response text")},
-                    Role:    ai.RoleModel,
-                },
-                FinishReason: ai.FinishReasonStop,
-            },
-        },
-    }, nil // Replace with actual response conversion
-}
-
-// Example Plugin implementation
-type MyPlugin struct{}
-
-func (p *MyPlugin) Name() string {
-    return providerID
-}
-
-func (p *MyPlugin) Init(ctx context.Context, g *genkit.Genkit) error {
-    DefineMyModel(g)
-    // Define other models or resources here
-    return nil
-}
-
-// Ensure MyPlugin implements genkit.Plugin
-var _ genkit.Plugin = &MyPlugin{}
 ```
+
+`ai.NewModelAction` returns an unregistered `*ai.ModelAction` that satisfies
+both `ai.Model` and `api.Action`, so `Init` can return it in an `[]api.Action`
+without a type assertion. `ai.ModelOptions.Overlay` returns the receiver with
+every field set in the override replacing it, which is how an application
+corrects one capability without restating the label and the versions.
+
+#### Request and response shapes
+
+The generation function receives an `*ai.ModelRequest` and returns an
+`*ai.ModelResponse`. The request carries no model name: the plugin already knows
+which model it registered.
+
+| `ai.ModelRequest` field | Type | Meaning |
+| --- | --- | --- |
+| `Messages` | `[]*ai.Message` | The conversation history. |
+| `Config` | `any` | The raw config. The framework has already decoded it into your typed `cfg` parameter, so read `cfg` instead. |
+| `Tools` | `[]*ai.ToolDefinition` | Tools the model may ask the caller to run. |
+| `ToolChoice` | `ai.ToolChoice` | `ai.ToolChoiceAuto`, `ai.ToolChoiceRequired`, or `ai.ToolChoiceNone`. |
+| `Output` | `*ai.ModelOutputConfig` | The requested response format. |
+| `Docs` | `[]*ai.Document` | Context documents. See [Retrieval-augmented generation](/docs/rag). |
+
+The response is split between the two sides:
+
+| `ai.ModelResponse` field | Type | Who sets it |
+| --- | --- | --- |
+| `Message` | `*ai.Message` | Plugin. Required, with `Role: ai.RoleModel`. |
+| `FinishReason` | `ai.FinishReason` | Plugin. Required. |
+| `FinishMessage` | `string` | Plugin, when the provider explains why it stopped. |
+| `Usage` | `*ai.GenerationUsage` | Plugin. Strongly recommended: cost and token accounting read it. |
+| `Raw` | `any` | Plugin. The unprocessed provider payload. |
+| `Operation` | `*ai.Operation` | Plugin, for long-running background models only. |
+| `Request` | `*ai.ModelRequest` | Framework. Leave it nil. |
+| `LatencyMs` | `float64` | Framework. Leave it zero. |
+| `Custom` | `any` | Deprecated. Use `Raw`. |
+
+`ai.FinishReason` has seven values:
+
+| Constant | Meaning |
+| --- | --- |
+| `ai.FinishReasonStop` | The model finished normally. |
+| `ai.FinishReasonLength` | Generation hit the token cap. |
+| `ai.FinishReasonBlocked` | A safety or policy filter stopped it. |
+| `ai.FinishReasonOther` | The provider gave a reason none of the others cover. |
+| `ai.FinishReasonUnknown` | The provider gave no reason. |
+| `ai.FinishReasonAborted` | The request was cancelled before it completed. |
+| `ai.FinishReasonInterrupted` | A tool raised an interrupt. The framework sets this in its tool loop, never a plugin. |
+
+Map your provider's reasons onto the first five. Do not invent a value: the
+field is a string type, and Genkit treats every reason except `stop`, `length`,
+and `unknown` as an abnormal finish that skips output parsing.
+
+Fill `Usage` with what the provider billed. Besides `InputTokens`,
+`OutputTokens`, and `TotalTokens`, `ai.GenerationUsage` carries
+`CachedContentTokens`, `ThoughtsTokens`, per-modality counts such as
+`InputImages` and `OutputAudioFiles`, and `Custom map[string]float64` for
+provider metrics such as cost. See [Generating content](/docs/models) for the
+read side.
+
+A text-only conversion, end to end:
+
+```go
+func genkitResponseFromAPIResponse(req *ai.ModelRequest, apiResp *apiResponse) (*ai.ModelResponse, error) {
+    reason := ai.FinishReasonUnknown
+    switch apiResp.StopReason {
+    case "end_turn":
+        reason = ai.FinishReasonStop
+    case "max_tokens":
+        reason = ai.FinishReasonLength
+    case "safety":
+        reason = ai.FinishReasonBlocked
+    }
+
+    return &ai.ModelResponse{
+        Message:      ai.NewModelTextMessage(apiResp.Text),
+        FinishReason: reason,
+        Usage: &ai.GenerationUsage{
+            InputTokens:  apiResp.PromptTokens,
+            OutputTokens: apiResp.CompletionTokens,
+            TotalTokens:  apiResp.TotalTokens,
+        },
+        Raw: apiResp,
+    }, nil
+}
+```
+
+#### Streaming
+
+The fourth parameter of the generation function is an `ai.ModelStreamCallback`,
+an alias for `func(context.Context, *ai.ModelResponseChunk) error`.
+
+The framework passes nil when the caller did not ask for streaming. It never
+passes a no-op, so branch on `cb == nil` to pick your non-streaming transport,
+as the `googlegenai` plugin does:
+
+```go
+func (p *MyPlugin) generate(ctx context.Context, req *ai.ModelRequest, cfg *MyModelConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+    apiReq, err := apiRequestFromGenkitRequest(req, cfg)
+    if err != nil {
+        return nil, err
+    }
+
+    if cb == nil {
+        apiResp, err := p.client.generate(ctx, apiReq)
+        if err != nil {
+            return nil, wrapAPIError(err)
+        }
+        return genkitResponseFromAPIResponse(req, apiResp)
+    }
+
+    stream, err := p.client.generateStream(ctx, apiReq)
+    if err != nil {
+        return nil, wrapAPIError(err)
+    }
+    defer stream.Close()
+
+    for {
+        delta, err := stream.Recv()
+        if errors.Is(err, io.EOF) {
+            break
+        }
+        if err != nil {
+            return nil, wrapAPIError(err)
+        }
+        chunk := &ai.ModelResponseChunk{
+            Role:    ai.RoleModel,
+            Content: []*ai.Part{ai.NewTextPart(delta.Text)},
+        }
+        // Stop reading the provider stream if the consumer went away.
+        if err := cb(ctx, chunk); err != nil {
+            return nil, err
+        }
+    }
+
+    return genkitResponseFromAPIResponse(req, stream.Final())
+}
+```
+
+The chunk contract:
+
+- Chunks are incremental deltas. Put only the new parts in `Content` and leave
+  `Aggregated` false. Set `Aggregated` true only if every chunk repeats
+  everything sent so far.
+- `Index` is the index of the message the chunk belongs to, which is the turn
+  index inside a tool loop, not a candidate index. Use 0 for a single-turn call.
+- `Role` is `ai.RoleModel`.
+- No terminating chunk is required.
+- `cb` is not safe for concurrent use. Call it from one goroutine at a time.
+- The framework does not aggregate chunks. The `*ai.ModelResponse` you return is
+  authoritative, so build it from the provider's final frame, not from what you
+  streamed.
+
+#### Structured output
+
+`req.Output` tells you what shape the caller wants back.
+
+| `ai.ModelOutputConfig` field | Type | Meaning |
+| --- | --- | --- |
+| `Format` | `string` | The requested format, such as `"json"` or `"text"`. |
+| `ContentType` | `string` | The MIME type of the output. |
+| `Schema` | `map[string]any` | A JSON Schema describing the desired response. |
+| `Constrained` | `bool` | Whether the provider must enforce `Schema` natively. |
+
+The contract turns on `Constrained`:
+
+- When it is true, pass `Schema` to your provider's native constrained-output
+  mechanism. Genkit is relying on the provider to enforce it.
+- When it is false, Genkit has already injected format instructions into the
+  prompt. Send the request unchanged.
+
+Genkit sets `Constrained` only when the caller asked for a schema and
+`ModelSupports.Constrained` says the model can serve it. Claim
+`ai.ConstrainedSupportAll` only once you actually wire `Schema` through:
+a false claim turns off the prompt-instruction fallback and nothing enforces
+the schema.
+
+```go
+if req.Output != nil && req.Output.Constrained && req.Output.Schema != nil {
+    apiReq.ResponseFormat = &apiResponseFormat{
+        Type:   "json_schema",
+        Schema: req.Output.Schema,
+    }
+}
+```
+
+#### Tool calling
+
+`req.Tools` holds the tools the caller made available. Translate them into your
+provider's function-declaration type.
+
+| `ai.ToolDefinition` field | Type | Meaning |
+| --- | --- | --- |
+| `Name` | `string` | The tool name the model must echo back. |
+| `Description` | `string` | What the tool does and when to use it. |
+| `InputSchema` | `map[string]any` | JSON Schema for the tool's input. |
+| `OutputSchema` | `map[string]any` | JSON Schema for the tool's output. |
+| `Metadata` | `map[string]any` | Flags Genkit attaches, such as `multipart` and `strict`. |
+| `Key` | `string` | Part of the cross-runtime schema. Go tools leave it empty. |
+
+```go
+for _, t := range req.Tools {
+    apiReq.Functions = append(apiReq.Functions, apiFunction{
+        Name:        t.Name,
+        Description: t.Description,
+        Parameters:  t.InputSchema,
+    })
+}
+```
+
+On the way back, a tool call becomes a part built with `ai.NewToolRequestPart`:
+
+```go
+var parts []*ai.Part
+for _, call := range apiResp.FunctionCalls {
+    parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
+        Name:  call.Name,
+        Ref:   call.ID,       // echoed back on the matching ToolResponse
+        Input: call.Arguments, // any; typically map[string]any
+    }))
+}
+resp := &ai.ModelResponse{
+    Message:      ai.NewModelMessage(parts...),
+    FinishReason: ai.FinishReasonStop,
+}
+```
+
+`ToolRequest.Input` is `any`, not a map type, so decoded JSON arguments go in
+as-is. Set `Partial` to true on a tool-call part emitted as a streaming chunk
+whose arguments are not complete yet.
+
+#### Per-request credentials
+
+Nothing in `ai.ModelRequest` carries a credential. A generation function reads
+request-scoped values from its `ctx`, so an application that needs a different
+key per caller puts it there. See [Passing information through context](/docs/context).
+On the OpenAI-compatible transport there is a ready-made path,
+`compat_oai.RequestConfig.APIKey`: it is code-only, never serializes into the
+schema or the trace, and routes that one request through a client built with it.
+
+#### Defining your model's config schema
+
+To specify the generation options a model supports, define and export a
+configuration type and use it as the `Config` type parameter. `jsonschema`
+struct tags become the constraints, and `jsonschema_description` tags become the
+field documentation the Developer UI renders in its config sidebar. Genkit has
+an `ai.GenerationCommonConfig` type that contains options frequently supported
+by generative AI model services, which you can embed if your provider matches
+it.
+
+The framework infers the config JSON schema from `Config` and validates every
+request against it before your generation function runs, so the function never
+needs a type check. Config sent as the exact type, as a pointer to it, or as a
+`map[string]any` from a JSON caller such as the Developer UI is converted to the
+typed value; anything else fails with `INVALID_ARGUMENT`. When `Config` is a
+pointer type, a request that carries no config hands your function a nil
+pointer, so nil-check it. When `Config` is a value type, you get the zero value.
+
+:::caution[A declared config schema is enforced]
+Set `ModelOptions.ConfigSchema` only when reflection over your `Config` type
+does not match how that type marshals to JSON, which happens with SDK wrapper
+generics. Because the declared schema is checked on every call, a curated schema
+narrower than what callers actually send rejects those requests rather than
+ignoring the extra fields.
+:::
 
 #### Declaring model capabilities
 
-Every model definition must contain, as part of its metadata, an `ai.ModelInfo`
-value that declares which features the model supports. Genkit uses this
-information to determine certain behaviors, such as verifying whether certain
-inputs are valid for the model. For example, if the model doesn't support
-multi-turn interactions, then it's an error to pass it a message history.
+Every model definition must contain, as part of its metadata, an
+`ai.ModelSupports` value that declares which features the model supports. Genkit
+uses this information to determine certain behaviors, such as verifying whether
+certain inputs are valid for the model. For example, if the model doesn't
+support multi-turn interactions, then it's an error to pass it a message
+history.
+
+The type has ten fields. A nil `Supports` claims nothing at all.
+
+| Field | Type | Declares | Enforced by rejecting |
+| --- | --- | --- | --- |
+| `Multiturn` | `bool` | The model accepts a message history. | A request with more than one message. |
+| `SystemRole` | `bool` | The model accepts messages with role `system`. | A request containing a system message. |
+| `Media` | `bool` | The model accepts media in the prompt. | Media parts in the request. |
+| `Tools` | `bool` | The model can call tools. | A request that carries tools. |
+| `ToolChoice` | `bool` | The caller may force or forbid tool use. | A `ToolChoice` other than `auto`. |
+| `Context` | `bool` | The model grounds on documents natively. | Nothing. When false, Genkit inlines `Docs` into the last user message instead of leaving them in `req.Docs`. |
+| `LongRunning` | `bool` | The model returns an `ai.Operation` to poll. | Nothing; it is advertised metadata. |
+| `ContentType` | `[]string` | The MIME types the model can emit. | Nothing; it is advertised metadata. |
+| `Output` | `[]string` | The output kinds the model can produce, such as `"text"` or `"json"`. | Nothing; it is advertised metadata. |
+| `Constrained` | `ai.ConstrainedSupport` | Whether the provider enforces an output schema natively. | A direct model call with `Output.Constrained` set, when the model claims none. |
+
+`Constrained` is an enum, not a bool:
+
+- `ai.ConstrainedSupportNone`, which is also the zero value, means the provider
+  cannot enforce a schema.
+- `ai.ConstrainedSupportAll` means it always can.
+- `ai.ConstrainedSupportNoTools` means it can, except when the request also
+  carries tools.
+
+Whenever the declaration does not cover the request, `ai.Generate` leaves
+`req.Output.Constrained` false and injects format instructions into the prompt
+instead, so your model function still receives a request it can serve.
 
 Note that these declarations refer to the capabilities of the model as provided
 by your plugin, and do not necessarily map one-to-one to the capabilities of the
@@ -639,15 +1044,10 @@ provide a specific way to define system messages, your plugin might still
 declare support for the system role, and implement it as special logic that
 inserts system messages into the user prompt.
 
-#### Defining your model's config schema
-
-To specify the generation options a model supports, define and export a
-configuration type. Genkit has an `ai.GenerationCommonConfig` type that contains
-options frequently supported by generative AI model services, which you can
-embed or use outright.
-
-Your generation function should verify that the request contains the correct
-options type.
+The two ways to be wrong are not symmetric. Declaring too narrowly is refused by
+Genkit before the request leaves the process, blocking a model that would have
+worked, while an over-wide claim reaches the provider and comes back with the
+real reason.
 
 #### Transforming requests and responses
 
@@ -661,49 +1061,326 @@ limitations. For example, if your model does not natively support a `system`
 message, you may need to transform a prompt's system message into a user-model
 message pair.
 
+#### Classifying provider errors
+
+Retry and fallback middleware branch on the status an error carries, so classify
+your SDK's errors at the boundary rather than returning them raw.
+
+```go
+import (
+    "errors"
+
+    "github.com/firebase/genkit/go/core/status"
+)
+
+// providerSDKError stands in for your SDK's error type; substitute the
+// concrete type your client returns.
+type providerSDKError struct {
+    StatusCode int
+}
+
+func (e *providerSDKError) Error() string { return "provider error" }
+
+// wrapAPIError classifies an SDK error so status-aware middleware can tell a
+// rate limit from a request the provider rejected.
+func wrapAPIError(err error) error {
+    var apiErr *providerSDKError
+    if !errors.As(err, &apiErr) {
+        return err
+    }
+    return status.Errorf(status.Base(status.FromHTTPCode(apiErr.StatusCode)), "%w", err)
+}
+```
+
+`status.FromHTTPCode` maps an HTTP status code to a canonical status name, and
+`status.Base` turns that name into the sentinel `status.Errorf` classifies with.
+Recording the cause with `%w` keeps the original error reachable through
+`errors.Is` and `errors.As`. See [Error types](/docs/error-types) for the full
+status vocabulary and the sentinels Genkit defines.
+
+Leave anything that is not an API error unclassified. The retry middleware
+retries an unclassified error unconditionally, which is the right answer for a
+dial timeout, and the fallback middleware leaves it alone, because failing over
+to a different billed model is worth requiring an explicit classification for. A
+classified error is retried only when its status is on the middleware's list, so
+classifying a 401 as `UNAUTHENTICATED` is what stops it being reissued until the
+attempts run out. [Middleware](/docs/middleware) covers both from the
+application side, and the [retry and fallback sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/retry-fallback)
+is the worked example.
+
+Wrap with `%w`, never `%v`. Flattening the error destroys the classification,
+which silently turns a non-retryable `INVALID_ARGUMENT` into an unclassified
+error that is always retried.
+
 #### Exports
 
 In addition to the resources that all plugins must export, a model plugin should
 also export the following:
 
-- A generation config type, as discussed [earlier](https://www.google.com/search?q=%23defining-your-models-config-schema).
-
-- A `Model()` function, which returns references to your plugin's defined
-  models. Often, this can be:
-
-```go
-func Model(g *genkit.Genkit, name string) *ai.Model {
-    return genkit.LookupModel(g, providerID, name)
-}
-```
+- A generation config type, as discussed [earlier](#defining-your-models-config-schema).
 
 - A `ModelRef` function, which creates a model reference paired with its
-  config that can validate the type and be passed around together:
+  config so the two travel together and the config is typed at the call site:
 
 ```go
-func ModelRef(name string, config *MyModelConfig) *ai.ModelRef {
-    return ai.NewModelRef(name, config)
+func ModelRef(id string, config *MyModelConfig) ai.ModelRef {
+    return ai.NewModelRef(api.NewName(providerID, id), config)
 }
 ```
 
-- **Optional**: A `DefineModel()` function, which lets users define models
-  that your plugin can provide, but that you do not automatically define.
-  There are two main reasons why you might want to provide such a function:
+  Callers then write
+  `ai.WithModel(myplugin.ModelRef("my-model", &myplugin.MyModelConfig{...}))`.
+  `ai.NewRetrieverRef` and `ai.NewEmbedderRef` are the siblings for the other
+  primitives, with the same `(name string, config any)` signature.
 
-  - Your plugin provides access to too many models to practically register
-    each one. For example, the Ollama plugin can provide access to dozens of
-    different models, with more added frequently. For this reason, it
-    doesn't automatically define any models, and instead requires the user
-    to call `DefineModel()` for each model they want to use.
+- A `Models map[string]ai.ModelOptions` field on the plugin struct, so an
+  application can correct a capability your catalog got wrong, or describe a
+  model released after your plugin was. Route every path that describes a model
+  through one method that applies the overlay, so an entry is authoritative
+  whether `Init`, `ListActions`, or `ResolveAction` reaches the model first.
 
-  - To give your users the ability to use newly-released models that you
-    have not yet added to your plugin.
+  Prefer this to an exported `DefineModel` function. Correction is data rather
+  than API surface, and a model that `Init` has already registered cannot be
+  re-registered.
 
-  A plugin's `DefineModel()` function is typically a frontend to
-  `genkit.DefineModel()` that defines a generation function, but lets the user
-  specify the model name and model capabilities.
+### Retrievers, embedders, and evaluators
 
-### Telemetry Plugins
+The other primitives follow the same shape as models: `ai.NewRetrieverAction`,
+`ai.NewEmbedderAction`, `ai.NewEvaluatorAction`, `ai.NewBatchEvaluatorAction`,
+and `ai.NewBackgroundModelAction`, each with its own options struct and its own
+typed `Config` type parameter, validated the same way. `ai.NewBatchEvaluatorAction`
+shares `ai.EvaluatorOptions` with `ai.NewEvaluatorAction`; there is no separate
+batch options type.
+
+The two you are most likely to write are generic over the config type:
+
+```go
+func NewRetrieverAction[Config any](name string, opts *RetrieverOptions, fn RetrieverActionFunc[Config]) *RetrieverAction
+func NewEmbedderAction[Config any](name string, opts *EmbedderOptions, fn EmbedderActionFunc[Config]) *EmbedderAction
+```
+
+`Config` is inferred from `fn`, and its JSON schema is inferred from `Config`
+unless the options struct's `ConfigSchema` overrides it. Both return an
+unregistered action, so build them as methods and return them from `Init`:
+
+```go
+type MyRetrieverConfig struct {
+    K int `json:"k,omitempty" jsonschema:"minimum=1"`
+}
+
+type MyEmbedderConfig struct {
+    Dimensions int `json:"dimensions,omitempty" jsonschema:"minimum=1"`
+}
+
+// retrieve searches the index. req.Query is an *ai.Document.
+func (p *MyPlugin) retrieve(ctx context.Context, req *ai.RetrieverRequest, cfg *MyRetrieverConfig) (*ai.RetrieverResponse, error) {
+    k := 10
+    if cfg != nil && cfg.K > 0 {
+        k = cfg.K
+    }
+    docs, err := p.client.search(ctx, req.Query, k)
+    if err != nil {
+        return nil, wrapAPIError(err)
+    }
+    return &ai.RetrieverResponse{Documents: docs}, nil
+}
+
+// embed returns one *ai.Embedding per input document, in the same order.
+func (p *MyPlugin) embed(ctx context.Context, req *ai.EmbedRequest, cfg *MyEmbedderConfig) (*ai.EmbedResponse, error) {
+    out := make([]*ai.Embedding, 0, len(req.Input))
+    for _, d := range req.Input {
+        var text string
+        for _, part := range d.Content {
+            if part.IsText() {
+                text += part.Text
+            }
+        }
+        v, err := p.client.embed(ctx, text) // v is []float32
+        if err != nil {
+            return nil, wrapAPIError(err)
+        }
+        out = append(out, &ai.Embedding{Embedding: v})
+    }
+    return &ai.EmbedResponse{Embeddings: out}, nil
+}
+
+// Init returns both alongside whatever models the plugin serves.
+func (p *MyPlugin) Init(ctx context.Context) []api.Action {
+    return []api.Action{
+        ai.NewRetrieverAction[*MyRetrieverConfig](api.NewName(providerID, "docs"),
+            &ai.RetrieverOptions{Label: "My Docs"}, p.retrieve),
+        ai.NewEmbedderAction[*MyEmbedderConfig](api.NewName(providerID, "embed-001"),
+            &ai.EmbedderOptions{Label: "My Embedder", Dimensions: 768}, p.embed),
+    }
+}
+```
+
+`ai.EmbedRequest.Input` is `[]*ai.Document`, the same document type
+[Retrieval-augmented generation](/docs/rag) describes, and its `Options` field carries the
+raw config that the framework decoded into `cfg`. `ai.EmbedResponse.Embeddings`
+is `[]*ai.Embedding`, where `Embedding.Embedding` is a `[]float32` and the
+optional `Embedding.Metadata` identifies which part of a document the vector
+covers.
+
+#### From an application
+
+An application does not build unregistered actions. It calls the
+`genkit.Define*Action` wrappers, which take the same options struct and register
+immediately:
+
+```go
+func defineLocalRetriever(g *genkit.Genkit) {
+    genkit.DefineRetrieverAction(g, "myprovider/docs",
+        &ai.RetrieverOptions{Label: "My Docs"},
+        func(ctx context.Context, req *ai.RetrieverRequest, cfg *MyRetrieverConfig) (*ai.RetrieverResponse, error) {
+            return &ai.RetrieverResponse{Documents: search(ctx, req.Query)}, nil
+        })
+}
+```
+
+### Registering JSON schemas
+
+Schema registration lives in package `genkit` only. Register a schema when a
+`.prompt` file, `ai.WithOutputSchemaName`, or `ai.WithInputSchemaName` refers to
+one by name. The call must run before the prompt is rendered.
+
+```go
+// Register several Go types at once, each under its type's name.
+genkit.DefineSchemasFor(g, JokeRequest{}, Joke{})
+
+// The single-type form.
+genkit.DefineSchemaFor[Recipe](g)
+
+// A raw JSON schema needs an explicit name.
+genkit.DefineSchema(g, "Rating", map[string]any{
+    "type": "integer", "minimum": 1, "maximum": 5,
+})
+```
+
+Each name may be registered once per Genkit instance. A second registration of
+the same name panics, so call these helpers once at startup. `DefineSchemasFor`
+and `DefineSchemaFor` take Go types, and panic on a map, a nil value, or an
+unnamed type, pointing you at `DefineSchema` for a raw schema.
+
+Package `core` keeps the schema utilities that do not register anything.
+`core.InferSchemaMap` turns a Go type into a schema map, which is how a plugin
+fills an options struct's `ConfigSchema`:
+
+```go
+opts := ai.ModelOptions{ConfigSchema: core.InferSchemaMap(MyModelConfig{})}
+```
+
+### Lower-level actions
+
+For anything that is not one of the AI primitives, package `core` has the
+generic constructors: `core.NewActionOf`, `core.NewStreamingActionOf`,
+`core.NewBidiActionOf`, and `core.NewBackgroundActionOf`. Each takes the action
+type first, then the name, then an options struct, then the implementation.
+
+```go
+action := core.NewActionOf(api.ActionTypeCustom, "myAction",
+    &core.ActionOptions{
+        Description: "Processes a string",
+        Metadata:    map[string]any{"team": "search"},
+        // InputSchema, OutputSchema and StreamSchema left nil are inferred
+        // from the type parameters.
+    },
+    func(ctx context.Context, input string) (string, error) {
+        return "processed: " + input, nil
+    })
+```
+
+Return the action from your plugin's `Init`, as in the `Init` example above.
+The framework registers whatever `Init` returns.
+
+A nil options value is legal and infers every schema.
+`core.NewBackgroundActionOf` takes a `core.BackgroundActionOptions[In, Out]`,
+whose `Check` field is required and whose `Cancel` field is optional: omitting
+`Cancel` means the action does not support cancellation.
+
+### Building on the OpenAI-compatible core
+
+If your provider speaks the OpenAI chat-completions API, build on
+`plugins/compat_oai` rather than writing a client from scratch. Point the base
+plugin at the endpoint and every model resolves by name, taking the OpenAI SDK's
+own request type as its config:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/compat_oai"
+    "github.com/openai/openai-go"
+)
+
+g := genkit.Init(ctx, genkit.WithPlugins(&compat_oai.OpenAICompatible{
+    Provider: "myprovider",
+    APIKey:   apiKey,
+    BaseURL:  "https://api.example.com/v1",
+}))
+
+model := ai.NewModelRef("myprovider/some-model", &openai.ChatCompletionNewParams{
+    Temperature: openai.Float(0.7),
+})
+```
+
+The [custom provider sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/custom)
+is the worked example.
+
+To give your provider a config of its own, and a home for the extensions the SDK
+request type has no room for, embed `compat_oai.OpenAICompatible` in your plugin
+struct, declare a config that embeds `compat_oai.RequestConfig`, implement
+`ApplyToChatCompletion`, and build models with `compat_oai.NewChatModel[Config]`:
+
+```go
+type MyPlugin struct {
+    APIKey string
+
+    openAICompatible compat_oai.OpenAICompatible
+}
+
+type ChatConfig struct {
+    compat_oai.RequestConfig
+
+    Temperature  *float64 `json:"temperature,omitempty" jsonschema:"minimum=0,maximum=2"`
+    EnableSearch *bool    `json:"enableSearch,omitempty"`
+}
+
+func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams) {
+    c.ApplyVersion(params)
+    if c.Temperature != nil {
+        params.Temperature = openai.Float(*c.Temperature)
+    }
+    if c.EnableSearch != nil {
+        compat_oai.AddExtraFields(params, map[string]any{"enable_search": *c.EnableSearch})
+    }
+}
+
+func (p *MyPlugin) newChatModel(id string, opts ai.ModelOptions) *ai.ModelAction {
+    return compat_oai.NewChatModel[ChatConfig](&p.openAICompatible, id, opts)
+}
+```
+
+`Init` must populate `p.openAICompatible.Provider`, `APIKey` or `Opts`, and
+`BaseURL` before it builds any model. The `Config` type parameter has to satisfy
+`compat_oai.ChatConfig`, which embedding `compat_oai.RequestConfig` plus your own
+`ApplyToChatCompletion` provides. See
+[OpenAI-compatible APIs](/docs/integrations/openai-compatible) for `openai.Float`,
+`openai.ChatCompletionNewParams`, and `RequestConfig.ApplyVersion`.
+
+Embedding `RequestConfig` gives every config three shared settings: a code-only
+`APIKey` for a per-request credential, `Version` to pin an exact model version,
+and `Extra` for undeclared body fields sent verbatim under the provider's wire
+names. `compat_oai.ListChatActions` and `compat_oai.ResolveChatAction` are the
+matching `DynamicPlugin` methods, and `compat_oai.ModelOptionsFor` applies a
+caller's `Models` entry over what your catalog resolved.
+
+On this path you do not classify SDK errors yourself: the shared request path
+runs `compat_oai.WrapAPIError`, which wraps an error the OpenAI SDK returned for
+an HTTP response in a `status.Error` carrying the status the server reported,
+and passes everything else through untouched.
+
+### Telemetry plugins
 
 The Genkit libraries are instrumented with [OpenTelemetry](http://opentelemetry.io)
 to support collecting traces, metrics, and logs. Genkit users can export this
@@ -714,8 +1391,10 @@ to export to a particular OpenTelemetry-capable system.
 Genkit includes a plugin that configures OpenTelemetry to export data to
 [Google Cloud Monitoring and Cloud Logging](/docs/integrations/google-cloud). To support
 other monitoring systems, you can extend Genkit by writing a telemetry plugin.
+The [telemetry sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/telemetry-test)
+exercises one end to end.
 
-#### Exporters and Loggers
+#### Exporters and loggers
 
 The primary job of a telemetry plugin is to configure
 OpenTelemetry to export data to a particular service. To do so, you need the following:
@@ -751,96 +1430,114 @@ and the page [A Guide to Writing `slog` Handlers](https://github.com/golang/exam
 
 #### Building the plugin
 
-##### Dependencies
-
-Every telemetry plugin needs to import the Genkit core library and several
-OpenTelemetry libraries:
-
-```go
-// Import the Genkit core library.
-
-"github.com/firebase/genkit/go/genkit"
-
-// Import the OpenTelemetry libraries.
-"go.opentelemetry.io/otel"
-"go.opentelemetry.io/otel/sdk/metric"
-"go.opentelemetry.io/otel/sdk/trace"
-```
-
-If you are building a plugin around an existing OpenTelemetry or `slog`
-integration, you will also need to import them.
-
-##### `Config`
-
-A telemetry plugin should, at a minimum, support the following configuration
-options:
+A telemetry plugin is an ordinary `api.Plugin` that registers no actions. Keep
+its configuration as fields on the plugin struct so `Init` has it in scope, and
+keep the providers it creates so it can flush them later.
 
 ```go
+package mytelemetry
+
+import (
+    "context"
+    "errors"
+    "log/slog"
+    "os"
+    "time"
+
+    "github.com/firebase/genkit/go/core/api"
+    "github.com/firebase/genkit/go/core/tracing"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/sdk/metric"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+// Config holds the settings every telemetry plugin should accept. Most plugins
+// add settings for the service they export to, such as an API key or a project.
 type Config struct {
-    // Export even in the dev environment.
+    // ForceExport exports even in the dev environment.
     ForceExport bool
 
-    // The interval for exporting metric data.
-    // The default is 60 seconds.
+    // MetricInterval is how often metric data is exported. Genkit's own
+    // exporters use 5s in dev and 5min in production; pick what suits your
+    // backend rather than copying a number from here.
     MetricInterval time.Duration
 
-    // The minimum level at which logs will be written.
-    // Defaults to [slog.LevelInfo].
+    // LogLevel is the minimum level at which logs are written.
+    // Defaults to slog.LevelInfo.
     LogLevel slog.Leveler
 }
-```
 
-Most plugins will also include configuration settings for the service it's
-exporting to (API key, project name, and so on).
+// Plugin exports Genkit telemetry to your service.
+type Plugin struct {
+    Config
 
-##### `Init()`
+    meterProvider *metric.MeterProvider
+}
 
-The `Init()` function of a telemetry plugin should do all of the following:
+// Name returns the provider ID.
+func (p *Plugin) Name() string { return "mytelemetry" }
 
-- Return early if Genkit is running in a development environment (such as when
-  running with with `genkit start`) and the `Config.ForceExport` option isn't
-  set:
+// Init configures the OpenTelemetry SDK. It registers no actions.
+func (p *Plugin) Init(ctx context.Context) []api.Action {
+    // Stay quiet in the dev environment, such as under `genkit start`, unless
+    // the application asked otherwise.
+    if !p.ForceExport && os.Getenv("GENKIT_ENV") == "dev" {
+        return nil
+    }
 
-```go
-shouldExport := cfg.ForceExport || os.Getenv("GENKIT_ENV") != "dev"
-if !shouldExport {
-  return nil
+    // Traces: register a span processor on Genkit's tracer provider.
+    exporter := &redactingSpanExporter{SpanExporter: newSpanExporter()}
+    tracing.TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exporter))
+
+    // Metrics: a periodic reader on the configured interval.
+    interval := p.MetricInterval
+    if interval == 0 {
+        interval = time.Minute
+    }
+    reader := metric.NewPeriodicReader(newMetricExporter(), metric.WithInterval(interval))
+    p.meterProvider = metric.NewMeterProvider(metric.WithReader(reader))
+    otel.SetMeterProvider(p.meterProvider)
+
+    // Logs: your slog handler, honoring the configured minimum level.
+    level := p.LogLevel
+    if level == nil {
+        level = slog.LevelInfo
+    }
+    slog.SetDefault(slog.New(newLogHandler(&slog.HandlerOptions{Level: level})))
+
+    return nil
 }
 ```
 
-- Initialize your trace span exporter and register it with Genkit:
+`newSpanExporter`, `newMetricExporter`, and `newLogHandler` stand in for your
+service's implementations of `sdktrace.SpanExporter`, `metric.Exporter`, and
+`slog.Handler`.
+
+#### Shutting down cleanly
+
+`api.Plugin` has no teardown hook, and both a batch span processor and a
+periodic reader buffer. A process that exits without flushing loses whatever is
+in those buffers. Expose a `Shutdown` the application defers:
 
 ```go
-spanProcessor := trace.NewBatchSpanProcessor(YourCustomSpanExporter{})
-genkit.RegisterSpanProcessor(g, spanProcessor)
+// Shutdown flushes and stops both pipelines. Call it before the process exits:
+//
+//	tel := &mytelemetry.Plugin{}
+//	g := genkit.Init(ctx, genkit.WithPlugins(tel))
+//	defer tel.Shutdown(context.Background())
+func (p *Plugin) Shutdown(ctx context.Context) error {
+    var errs error
+    if p.meterProvider != nil {
+        errs = errors.Join(errs, p.meterProvider.Shutdown(ctx))
+    }
+    return errors.Join(errs, tracing.TracerProvider().Shutdown(ctx))
+}
 ```
 
-- Initialize your metric exporter and register it with the OpenTelemetry
-  library:
-
-```go
-r := metric.NewPeriodicReader(
-  YourCustomMetricExporter{},
-  metric.WithInterval(cfg.MetricInterval),
-)
-mp := metric.NewMeterProvider(metric.WithReader(r))
-otel.SetMeterProvider(mp)
-```
-
-Use the user-configured collection interval (`Config.MetricInterval`) when
-initializing the `PeriodicReader`.
-
-- Register your `slog` handler as the default logger:
-
-```go
-logger := slog.New(YourCustomHandler{
-  Options: &slog.HandlerOptions{Level: cfg.LogLevel},
-})
-slog.SetDefault(logger)
-```
-
-You should configure your handler to honor the user-specified minimum log
-level (`Config.LogLevel`).
+The in-tree `googlecloud` plugin takes the other route and installs its own
+`SIGINT` and `SIGTERM` handler that flushes and then exits. That works for a
+server, but it takes the exit path away from the application, so prefer the
+explicit `Shutdown` unless you have a reason not to.
 
 #### PII redaction
 
@@ -859,12 +1556,19 @@ task. For example, the `googlecloud` plugin removes the `genkit:input` and
 similar to the following:
 
 ```go
+import (
+    "context"
+
+    "go.opentelemetry.io/otel/attribute"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
 type redactingSpanExporter struct {
-    trace.SpanExporter
+    sdktrace.SpanExporter
 }
 
-func (e *redactingSpanExporter) ExportSpans(ctx context.Context, spanData []trace.ReadOnlySpan) error {
-    var redacted []trace.ReadOnlySpan
+func (e *redactingSpanExporter) ExportSpans(ctx context.Context, spanData []sdktrace.ReadOnlySpan) error {
+    redacted := make([]sdktrace.ReadOnlySpan, 0, len(spanData))
     for _, s := range spanData {
         redacted = append(redacted, redactedSpan{s})
     }
@@ -876,7 +1580,7 @@ func (e *redactingSpanExporter) Shutdown(ctx context.Context) error {
 }
 
 type redactedSpan struct {
-    trace.ReadOnlySpan
+    sdktrace.ReadOnlySpan
 }
 
 func (s redactedSpan) Attributes() []attribute.KeyValue {
@@ -892,13 +1596,71 @@ func (s redactedSpan) Attributes() []attribute.KeyValue {
 }
 ```
 
+The attribute keys are `genkit:input` and `genkit:output`, with a colon. Genkit
+writes them in `core/tracing`, so a wrapper that filters on any other spelling
+redacts nothing.
+
 #### Troubleshooting
 
-If you're having trouble getting data to show up where you expect, OpenTelemetry
-provides a useful [diagnostic tool](https://opentelemetry.io/docs/languages/js/getting-started/nodejs/#troubleshooting)
-that helps locate the source of the problem.
+If you're having trouble getting data to show up where you expect, the
+[OpenTelemetry Go documentation](https://opentelemetry.io/docs/languages/go/)
+covers SDK diagnostics that help locate the source of the problem.
 
-## Publishing a Plugin
+## Finding the constructor to call
+
+Every `Define*` helper that took an `api.Registry` as its first argument is
+gone. A registry is unobtainable outside the framework, so those helpers had no
+reachable callers; the replacement is to construct the action and return it from
+`Plugin.Init`, which is what the framework registers. Every plugin-side
+replacement below is a constructor, so return its result from `Plugin.Init`.
+Applications keep reaching the same primitives through the `genkit.Define*`
+functions, which construct and register in one call.
+
+| Removed | Plugin-side replacement | App-side equivalent |
+| --- | --- | --- |
+| `core.DefineAction` | `core.NewActionOf` | None |
+| `core.DefineStreamingAction` | `core.NewStreamingActionOf` | None |
+| `core.DefineBidiAction` | `core.NewBidiActionOf` | None |
+| `core.DefineBackgroundAction` | `core.NewBackgroundActionOf` | None |
+| `core.DefineFlow` | `core.NewFlow` | `genkit.DefineFlow` |
+| `core.DefineStreamingFlow` | `core.NewStreamingFlow` | `genkit.DefineStreamingFlow` |
+| `core.DefineSchema` | None | `genkit.DefineSchema` |
+| `core.DefineSchemaFor` | None | `genkit.DefineSchemaFor` / `genkit.DefineSchemasFor` |
+| `ai.DefineModel` | `ai.NewModelAction` | `genkit.DefineModelAction` |
+| `ai.DefineBackgroundModel` | `ai.NewBackgroundModelAction` | `genkit.DefineBackgroundModelAction` |
+| `ai.DefineRetriever` | `ai.NewRetrieverAction` | `genkit.DefineRetrieverAction` |
+| `ai.DefineEmbedder` | `ai.NewEmbedderAction` | `genkit.DefineEmbedderAction` |
+| `ai.DefineEvaluator` | `ai.NewEvaluatorAction` | `genkit.DefineEvaluatorAction` |
+| `ai.DefineBatchEvaluator` | `ai.NewBatchEvaluatorAction` | `genkit.DefineBatchEvaluatorAction` |
+| `ai.DefineTool` | `ai.NewTool` | `genkit.DefineTool` |
+| `ai.DefineToolWithInputSchema` | `ai.NewTool` with `ai.WithInputSchema` | `genkit.DefineTool` with `ai.WithInputSchema` |
+| `ai.DefineMultipartTool` | `ai.NewMultipartTool` | `genkit.DefineMultipartTool` |
+| `ai.DefineResource` | `ai.NewResource` | `genkit.DefineResource` |
+| `ai.DefineMiddleware` | `ai.NewMiddleware` | `genkit.DefineMiddleware` |
+| `ai.DefineFormat` | `ai.DefineFormats`, which takes the name from each `Formatter` | `genkit.DefineFormats` |
+| `ai/exp.DefineTool` | `ai/exp.NewTool` | `genkit/exp.DefineTool` |
+| `ai/exp.DefineInterruptibleTool` | `ai/exp.NewInterruptibleTool` | `genkit/exp.DefineInterruptibleTool` |
+
+`ai.DefinePrompt`, `ai.DefineDataPrompt`, `ai.DefineFormats`, and
+`ai.DefineGenerateAction` still take a registry: there the registry is a
+structural input rather than a registration target.
+
+Package `core`'s own error envelope went with them. `core.ReflectionError`,
+`core.ToReflectionError`, and `core.SchemaValidationError` were deleted with no
+exported replacement, and `core.NewSchemaValidationError` gave way to
+`status.Errorf` with a sentinel from `core/status`.
+
+The flat `core.NewAction`, `NewStreamingAction`, `NewBidiAction`, and
+`NewBackgroundAction` constructors still work and are deprecated in favor of
+their `Of` counterparts. They take `name` before `atype`, so swapping the first
+two arguments is the likeliest mistake when moving a call across. The untyped
+`ai.NewModel`, `NewRetriever`, `NewEmbedder`, `NewEvaluator`,
+`NewBatchEvaluator`, and `NewBackgroundModel` constructors, and the matching
+`genkit.Define*` names, are likewise deprecated in favor of the typed-config
+family: they resolve `Config` to `any`, which infers no schema and passes the
+raw config through untouched.
+
+## Publishing a plugin
 
 Genkit plugins can be published as normal Go packages. To increase
 discoverability, your package should have `genkit` somewhere in its name so it
@@ -908,6 +1670,19 @@ good choices:
 
 - `github.com/yourorg/genkit-plugins/servicename`
 - `github.com/yourorg/your-repo/genkit/servicename`
+
+## Next steps
+
+- Run your plugin under the [Developer UI](/docs/devtools) to check that its
+  models, capability metadata, and config schema look the way you meant.
+- Read [Error types](/docs/error-types) before you classify your provider's
+  errors, and [Middleware](/docs/middleware) to see what that classification
+  buys the application.
+- Read two in-tree plugins as references:
+  [`googlegenai`](https://github.com/genkit-ai/genkit/tree/main/go/plugins/googlegenai)
+  for a native SDK, and
+  [`compat_oai`](https://github.com/genkit-ai/genkit/tree/main/go/plugins/compat_oai)
+  for the OpenAI-compatible path.
 
 </Lang>
 
@@ -1049,7 +1824,7 @@ evaluators, and more (the exact action kinds vary by language SDK). You've alrea
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -1125,7 +1900,7 @@ class MyPlugin(Plugin):
             List of ActionMetadata describing available actions.
         """
         return [
-            ActionMetadata(kind=ActionKind.MODEL, name='my-plugin/my-model'),
+            ActionMetadata(action_type=ActionKind.MODEL, name='my-plugin/my-model'),
         ]
 
     def _create_model_action(self, name: str) -> Action:
@@ -1296,13 +2071,13 @@ The `supports` dict declares what features the model supports:
 
 ## Publishing a Plugin
 
-Genkit plugins can be published as normal Python packages on PyPI. To increase
-discoverability, your package should be named `genkit-plugin-{name}` to indicate
-it is a Genkit plugin. Include relevant keywords in your `pyproject.toml`:
+Genkit plugins can be published as normal Python packages on PyPI. Official
+plugins use the `genkit-{name}` package name (import as `genkit_{name}`). Include
+relevant keywords in your `pyproject.toml`:
 
 ```toml
 [project]
-name = "genkit-plugin-my-service"
+name = "genkit-my-service"
 description = "Genkit plugin for My Service"
 keywords = [
     "genkit",
@@ -1312,7 +2087,7 @@ keywords = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourorg/genkit-plugin-my-service"
+Homepage = "https://github.com/yourorg/genkit-my-service"
 ```
 
 ### Recommended Keywords

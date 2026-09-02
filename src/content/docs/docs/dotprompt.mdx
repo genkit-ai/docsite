@@ -151,6 +151,29 @@ your-project/
 g := genkit.Init(context.Background(), genkit.WithPromptDir("./llm_prompts"))
 ```
 
+#### Embedding prompts in the binary
+
+If you would rather ship one file than a directory of prompts beside it, compile
+the prompt directory into the binary with `go:embed` and hand the resulting
+`fs.FS` to `genkit.WithPromptFS()`. Lookups are unchanged: prompts are still
+found by file name, and `genkit.WithPromptDir()` still names the directory
+within the embedded filesystem (`prompts` by default).
+
+```go
+import "embed"
+
+//go:embed prompts/*
+var promptsFS embed.FS
+
+func main() {
+	g := genkit.Init(context.Background(), genkit.WithPromptFS(promptsFS))
+	// ...
+}
+```
+
+A prompt file that fails to parse is logged during `genkit.Init()`; a file that
+parses but defines an invalid prompt panics.
+
 </Lang>
 
 <Lang lang="python">
@@ -270,15 +293,13 @@ package main
 
 import (
 	"context"
-	"log"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
 func main() {
-	g := genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	genkit.Init(context.Background(), genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	// Blocks end of program execution to use the developer UI.
 	select {}
@@ -297,7 +318,7 @@ genkit start -- go run .
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -430,12 +451,25 @@ helloPrompt := genkit.LookupPrompt(g, "hello")
     section about [specifying input schemas](#input-and-output-schemas)), configuration, and more:
 
 ```go
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"google.golang.org/genai"
+)
+
 resp, err := helloPrompt.Execute(context.Background(),
 	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithInput(map[string]any{"name": "John"}),
-	ai.WithConfig(&genai.GenerateContentConfig{Temperature: genai.Ptr[float32](0.5)})
+	ai.WithConfig(&genai.GenerateContentConfig{Temperature: genai.Ptr[float32](0.5)}),
 )
 ```
+
+The value passed to `ai.WithConfig` is provider-specific and comes from the
+model plugin's own SDK, not from Genkit. For `googlegenai` that is
+`*genai.GenerateContentConfig` from `google.golang.org/genai`, the Google Gen AI
+Go SDK the plugin wraps. Other plugins take their own config type.
 
     #### Streaming prompt execution
 
@@ -454,6 +488,25 @@ for result, err := range stream {
 	}
 	// Process each chunk
 	fmt.Print(result.Chunk.Text())
+}
+```
+
+`ExecuteStream` yields the same `*ai.ModelStreamValue` as `genkit.GenerateStream`:
+`result.Chunk` is an `*ai.ModelResponseChunk` and `result.Done` marks the final
+value, whose `Response` holds the `*ai.ModelResponse`. So a chunk carries tool
+requests and tool responses the same way, and the same part-kind switch works on
+both paths:
+
+```go
+for _, part := range result.Chunk.Content {
+	switch {
+	case part.IsToolRequest():
+		fmt.Println("tool request:", part.ToolRequest.Name)
+	case part.IsToolResponse():
+		fmt.Println("tool response:", part.ToolResponse.Name)
+	case part.IsText():
+		fmt.Print(part.Text)
+	}
 }
 ```
 
@@ -525,6 +578,11 @@ specified in the prompt file.
 
 See [Generate content with AI models](/docs/models) for descriptions of the available
 options.
+
+The [basic-prompts sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-prompts)
+defines every one of its prompts twice, once inline in code and once as a
+`.prompt` file looked up by name, so the pair shows exactly what moves out of
+code.
 
 </Lang>
 
@@ -747,12 +805,16 @@ const response3 = await helloPrompt(
 resp, err := helloPrompt.Execute(context.Background(),
     ai.WithConfig(&genai.GenerateContentConfig{
         Temperature:     genai.Ptr[float32](1.4),
-        TopK:            genai.Ptr[int32](50),
+        TopK:            genai.Ptr[float32](50),
         TopP:            genai.Ptr[float32](0.4),
-        MaxOutputTokens: genai.Ptr[int32](400),
+        MaxOutputTokens: 400,
         StopSequences:   []string{"<end>", "<fin>"},
     }))
 ```
+
+Two field types in `google.golang.org/genai` catch people out: `TopK` is a
+`*float32` even though top-k is conceptually an integer, and `MaxOutputTokens`
+is a plain `int32` rather than a pointer.
 
 </Lang>
 
@@ -794,6 +856,151 @@ final response = await helloPrompt(
 
 See [Generate content with AI models](/docs/models) for descriptions of the available
 options.
+
+## Tool loops and middleware
+
+Beyond model configuration, the front matter can set several execution-level
+fields that control how a prompt runs its model and tool loop:
+
+- **`maxTurns`** caps how many model/tool iterations a single prompt run may
+  perform before stopping. This applies to tool-calling prompts, where the model
+  may call tools across several turns. It defaults to `5`.
+- **`returnToolRequests`** returns the model's tool-call requests instead of
+  automatically executing the tools and continuing the loop. Use it when you want
+  to inspect, gate, or manually handle tool calls before running them. It defaults
+  to `false`.
+- **`use`** attaches middleware to the prompt's model loop by name, with optional
+  config. Each entry is either a bare middleware name or a map with a `name` and
+  a `config`. The code equivalent passes the middleware and its configuration
+  directly instead of naming it, so nothing has to be registered first.
+
+```dotprompt
+---
+model: googleai/gemini-flash-latest
+tools:
+  - getAttractions
+  - getFlightInfo
+maxTurns: 10
+returnToolRequests: false
+use:
+  - skills # bare middleware name
+  - name: retry # name plus config map
+    config:
+      maxRetries: 3
+---
+Plan a trip using the available tools.
+```
+
+The middleware referenced by `use` must be registered so the name resolves at
+runtime. Register each middleware when you configure Genkit, and see the
+[Middleware](/docs/middleware) page for the available middleware and their
+configuration.
+
+<Lang lang="js">
+
+Register the middleware plugins from `@genkit-ai/middleware` with `.plugin()`:
+
+```ts
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+import { retry, skills } from '@genkit-ai/middleware';
+
+const ai = genkit({
+  plugins: [googleAI(), retry.plugin(), skills.plugin()],
+});
+```
+
+</Lang>
+
+<Lang lang="go">
+
+Register the `middleware` plugin so the names in `use` resolve at runtime:
+
+```go
+import (
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/middleware"
+)
+
+g := genkit.Init(context.Background(),
+	genkit.WithPlugins(
+		&googlegenai.GoogleAI{},
+		&middleware.Middleware{},
+	),
+)
+```
+
+In Go, a `use:` entry must name the middleware in full, provider prefix
+included. An unregistered name is not skipped: the run fails with a `NOT_FOUND`
+error, `ai: middleware "<name>" not registered (is the providing plugin
+installed?)`, raised when the prompt executes rather than at `genkit.Init`.
+
+The built-in middleware are registered under the plugin's provider prefix, so a
+Go `.prompt` file names them `genkit-middleware/retry`,
+`genkit-middleware/fallback`, `genkit-middleware/filesystem`,
+`genkit-middleware/skills`, and `genkit-middleware/toolApproval`. The keys in
+each `config` map are the JSON field names of the middleware's config struct,
+which do not always match the Go field names:
+
+```dotprompt
+---
+model: googleai/gemini-flash-latest
+use:
+  - name: genkit-middleware/retry
+    config:
+      maxRetries: 2
+  - name: genkit-middleware/skills
+    config:
+      skillPaths:
+        - ./skills
+---
+{{query}}
+```
+
+The equivalent in code is `ai.WithUse`, which takes the middleware config
+structs directly and needs no registration, since it calls them on a local fast
+path rather than looking them up by name:
+
+```go
+assistantPrompt := genkit.DefinePrompt(g, "assistant",
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithPrompt("{{query}}"),
+	ai.WithUse(
+		&middleware.Retry{MaxRetries: 2},
+		&middleware.Skills{SkillPaths: []string{"./skills"}},
+	),
+)
+```
+
+Registering the plugin is still worth doing when you use `ai.WithUse` alone,
+because that is what makes the middleware visible in the Dev UI. To write your
+own middleware and address it by name from a `.prompt` file, register it with
+`genkit.DefineMiddleware()`; the name comes from the type's `Name()` method.
+
+The [basic-prompts sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-prompts)
+attaches the same four middleware both ways, in code and in frontmatter, on a
+matching pair of prompts.
+
+</Lang>
+
+<Lang lang="dart">
+
+Register the middleware plugins so the `use` references resolve at runtime.
+`RetryPlugin` ships in the core `genkit` package; the other middleware plugins
+come from `genkit_middleware`:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+import 'package:genkit_middleware/skills.dart';
+
+final ai = Genkit(
+  plugins: [googleAI(), RetryPlugin(), SkillsPlugin()],
+);
+```
+
+</Lang>
 
 ## Input and output schemas
 
@@ -1195,6 +1402,13 @@ if err != nil {
 log.Printf("Dish: %s, Calories: %d", item.Dishname, item.Calories)
 ```
 
+To register several types in one call, pass zero values to
+`genkit.DefineSchemasFor()`:
+
+```go
+genkit.DefineSchemasFor(g, MenuRequest{}, MenuItem{})
+```
+
 You can also reference registered schemas programmatically using `ai.WithOutputSchemaName()`:
 
 ```go
@@ -1208,7 +1422,7 @@ resp, err := genkit.Generate(ctx, g,
 
     :::tip[Avoiding duplicate definitions]
     Registering schemas with `DefineSchemaFor` solves the common pain point of
-    defining schemas twice—once in your `.prompt` file and again in your Go code
+    defining schemas twice, once in your `.prompt` file and again in your Go code
     for type safety. Define your types once in Go, register them, and reference
     them by name in your prompts.
     :::
@@ -1374,13 +1588,23 @@ myPrompt({inputArgs: 'go here'}, {tools: [myTool]})
 <Lang lang="go">
 
 ```go
-// outside runtime code
-var myTool = genkit.DefineTool(g, ...)
-var myPrompt = genkit.LookupPrompt("my_prompt")
+myPrompt := genkit.LookupPrompt(g, "my_prompt")
 
-// within runtime code
-resp, err := myPrompt.Execute(ctx, ai.WithInput(...), ai.WithTools(myTool))
+resp, err := myPrompt.Execute(ctx,
+	ai.WithInput(map[string]any{"destination": "Lisbon"}),
+	ai.WithTools(searchFlights, searchHotels),
+)
 ```
+
+Tools passed at execution replace the ones the prompt was defined with rather
+than adding to them, so list every tool this run should have.
+
+Tool names in the front matter resolve when the prompt runs, not when it is
+loaded, so defining tools with `genkit.DefineTool` after `genkit.Init` is the
+normal and supported ordering. An unknown name fails the `Execute` call with
+`ai.ErrToolNotFound` (`NOT_FOUND`), never at startup. The panic `genkit.Init`
+can raise applies only to prompt files that fail to parse or that define an
+invalid prompt; it never looks up tool names.
 
 </Lang>
 
@@ -1392,7 +1616,7 @@ def my_tool(...):
     ...
 
 my_prompt = ai.prompt('my_prompt')
-response = await my_prompt({"input_args": "go here"}, tools=["my_tool"])
+response = await my_prompt({"input_args": "go here"}, tools=[my_tool])
 ```
 
 </Lang>
@@ -1538,6 +1762,56 @@ food items into all of your conversations.
 ```
 
 Note that your final prompt must contain at least one `user` role.
+
+<Lang lang="go">
+
+#### Placing an ongoing conversation
+
+The body of a `.prompt` file is the prompt's whole conversation, so a file that
+uses `{{role}}` blocks decides where an ongoing conversation goes. Mark the
+spot with `{{history}}`:
+
+```dotprompt
+---
+model: googleai/gemini-flash-latest
+input:
+  schema:
+    question: string
+---
+{{role "system"}}
+You are a helpful AI assistant named Walt. Keep replies to a few sentences.
+
+{{role "user"}}
+Who are you?
+
+{{role "model"}}
+I am Walt. Ask me anything.
+
+{{history}}
+
+{{role "user"}}
+{{question}}
+```
+
+The messages passed to `Execute` with `ai.WithMessages()` land at
+`{{history}}`. A template with no `{{history}}` marker still receives them:
+Dotprompt inserts them immediately before the template's final `user` message.
+
+```go
+resp, err := chatPrompt.Execute(ctx,
+	ai.WithInput(map[string]any{"question": "What did I just ask you?"}),
+	ai.WithMessages(history...),
+)
+```
+
+Message text passed this way is used verbatim and is never compiled, so a user
+turn containing `{{` reaches the model as the user wrote it.
+
+A prompt defined in code declares its conversation differently, and that changes
+where the caller's messages go. See
+[Where the conversation lands](#where-the-conversation-lands) for the full rule.
+
+</Lang>
 
 ### Multi-modal prompts
 
@@ -1697,7 +1971,9 @@ Code-defined partials are available in all prompts.
 genkit.DefinePartial(g, "personality", "Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.")
 ```
 
-Code-defined partials are available in all prompts.
+Code-defined partials are available in all prompts. Templates are compiled when
+a prompt runs, so a partial only has to be registered before the first
+execution, not before the prompt is defined.
 
 </Lang>
 
@@ -1754,6 +2030,13 @@ genkit.DefineHelper(g, "shout", func(input string) string {
     return strings.ToUpper(input)
 })
 ```
+
+A helper receives the value at the Go type the input arrived as, so prefer
+scalar parameters: a slice field arrives as `[]string` when the input was a
+struct but as `[]any` when it was a `map[string]any`. Helpers are also
+registered on the Genkit instance and, like partials, only have to be
+registered before the prompt first runs. A partial may call a helper, which is
+a convenient way to share one voice across a family of prompts.
 
 Once a helper is defined you can use it in any prompt:
 
@@ -1941,7 +2224,7 @@ type CountryList struct {
 
 geographyPrompt := genkit.DefineDataPrompt[GeoQuery, *CountryList](
     g, "GeographyPrompt",
-    ai.WithModel(googlegenai.GoogleAIModelRef("gemini-flash-latest", nil)),
+    ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", nil)),
     ai.WithSystem("You are a geography teacher. Respond only when the user asks about geography."),
     ai.WithPrompt("Give me the {{countryCount}} biggest countries in the world by inhabitants."),
 )
@@ -2004,6 +2287,298 @@ if err := resp.Output(&list); err != nil {
 log.Printf("Countries: %v", list.Countries)
 ```
 
+    #### Content slots
+
+    A prompt has four content slots, and it renders them in a fixed order: the
+    system message, then the conversation, then the user prompt. Context
+    documents ride alongside as the request's retrieved context rather than as a
+    message.
+
+    Each slot can be filled from a template string or from a function over the
+    prompt's input:
+
+| Slot              | Template form             | Function form                             |
+| ----------------- | ------------------------- | ----------------------------------------- |
+| System            | `ai.WithSystem`           | `ai.WithSystemFn`, `ai.WithSystemPartsFn` |
+| Conversation      | `ai.WithMessagesTemplate` | `ai.WithMessagesFn`                       |
+| User prompt       | `ai.WithPrompt`           | `ai.WithPromptFn`, `ai.WithPromptPartsFn` |
+| Context documents | none                      | `ai.WithDocsFn`                           |
+
+    The static forms `ai.WithSystemParts`, `ai.WithPromptParts`, `ai.WithMessages`,
+    `ai.WithDocs`, and `ai.WithTextDocs` take values you already have, so they are
+    neither templated nor computed.
+
+```go
+func WithSystem(text string, args ...any) PromptingOption
+func WithSystemFn[In any](fn func(context.Context, In) (string, error)) PromptingOption
+func WithSystemParts(parts ...*Part) PromptingOption
+func WithSystemPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption
+
+func WithMessagesTemplate(text string, args ...any) PromptOption
+func WithMessages(messages ...*Message) CommonGenOption
+func WithMessagesFn[In any](fn func(context.Context, In) ([]*Message, error)) CommonGenOption
+
+func WithPrompt(text string, args ...any) PromptingOption
+func WithPromptFn[In any](fn func(context.Context, In) (string, error)) PromptingOption
+func WithPromptParts(parts ...*Part) PromptingOption
+func WithPromptPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption
+
+func WithTextDocs(text ...string) DocumentOption
+func WithDocs(docs ...*Document) DocumentOption
+func WithDocsFn[In any](fn func(context.Context, In) ([]*Document, error)) PromptOption
+```
+
+    The four return types are not interchangeable. Each one names the set of
+    calls that accepts the option:
+
+| Return type           | Accepted by                                                                   |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `PromptOption`        | `genkit.DefinePrompt` and `genkit.DefineDataPrompt` only                       |
+| `PromptingOption`     | `genkit.DefinePrompt`, `genkit.DefineDataPrompt`, and `genkit.Generate`        |
+| `CommonGenOption`     | all of the above plus `Prompt.Execute` and `ExecuteStream`                     |
+| `DocumentOption`      | all of the above plus `genkit.Embed` and `genkit.Retrieve`                     |
+
+    So `ai.WithMessagesTemplate` is definition-time only, while `ai.WithMessages`
+    can also be passed at execute time. `ai.WithInput` is the mirror case: it is
+    a `PromptExecuteOption`, accepted only by `Prompt.Execute` and
+    `ExecuteStream`. `DocumentOption` values construct the documents a call
+    carries; `ai.WithDocsFn` is a `PromptOption` instead, because it is a
+    definition-time hook rather than a document.
+
+    The rule that decides between the two forms: **template text is yours, so it
+    is compiled; what a function returns is content you already produced, so it is
+    sent verbatim**. Use a template when the wording is fixed and only values
+    vary, and a function when the content itself depends on the data, such as
+    branching on a field, attaching an image, or querying a retriever. Because a
+    function's result is never compiled, it can safely carry user-supplied text
+    with literal handlebars braces in it.
+
+    Every content function declares its own Go input type. Genkit converts
+    whatever input arrived into that type before calling: a value passed to
+    `ai.WithInput()`, the default recorded by `ai.WithInputType()`, and the
+    `map[string]any` the Dev UI and the HTTP reflection API deliver all reach the
+    function as `In`. When the value cannot be converted, the function is not
+    called and the error wraps `ai.ErrInputTypeMismatch`, naming the option that
+    rejected it.
+
+    Both examples below work from one input type:
+
+```go
+type SupportRequest struct {
+	Area           string `json:"area"`
+	Tier           string `json:"tier"`
+	Question       string `json:"question"`
+	Screenshot     string `json:"screenshot,omitempty"`
+	ScreenshotType string `json:"screenshotType,omitempty"`
+}
+```
+
+    Here is the template form, filling three slots from that input:
+
+```go
+triagePrompt := genkit.DefineDataPrompt[SupportRequest, Triage](g, "triage",
+	ai.WithModelName("googleai/gemini-flash-latest"),
+
+	// System and user text are compiled against the input, so they can
+	// reference its fields.
+	ai.WithSystem("You are a support triage assistant. Classify the {{area}} question from this {{tier}} customer."),
+
+	// Each {{role}} block starts a new message, so one string carries a
+	// worked example ahead of the real conversation.
+	ai.WithMessagesTemplate(`{{role "user"}}My deploys started failing with a 401 right after I rotated keys.
+{{role "model"}}{"category": "bug", "urgency": "high", "summary": "Deploys fail with a 401 after a key rotation."}
+{{history}}`),
+
+	// An interpolated value is substituted, not compiled, so a question
+	// containing {{#if}} reaches the model as the customer wrote it.
+	ai.WithPrompt("{{question}}"),
+
+	ai.WithTextDocs("Invoices are issued on the first of the month."),
+)
+```
+
+    And the same four slots in the function form:
+
+```go
+supportPrompt := genkit.DefinePrompt(g, "support",
+	ai.WithModelName("googleai/gemini-flash-latest"),
+
+	// WithInputType fixes the type every content function receives, and its
+	// values are the defaults when the caller supplies none.
+	ai.WithInputType(SupportRequest{Area: "api", Tier: "free"}),
+
+	// System slot: the instruction branches on the data, so a function fits.
+	ai.WithSystemFn(func(ctx context.Context, in SupportRequest) (string, error) {
+		var b strings.Builder
+		b.WriteString("You are a support agent. Answer from the reference material you were given.")
+		if in.Tier == "enterprise" {
+			b.WriteString(" Be thorough, and offer to escalate to an engineer.")
+		}
+		return b.String(), nil
+	}),
+
+	// Conversation slot: declaring it means owning it, so read the caller's
+	// messages here and decide what to keep.
+	ai.WithMessagesFn(func(ctx context.Context, in SupportRequest) ([]*ai.Message, error) {
+		history := ai.HistoryFromContext(ctx)
+		if len(history) > maxHistoryMessages {
+			history = history[len(history)-maxHistoryMessages:]
+		}
+		return history, nil
+	}),
+
+	// User prompt slot: parts reach non-text content, which a string
+	// function cannot.
+	ai.WithPromptPartsFn(func(ctx context.Context, in SupportRequest) ([]*ai.Part, error) {
+		parts := []*ai.Part{ai.NewTextPart(in.Question)}
+		if in.Screenshot != "" {
+			parts = append(parts, ai.NewMediaPart(in.ScreenshotType, in.Screenshot))
+		}
+		return parts, nil
+	}),
+
+	// Context documents slot: retrieval driven by the input.
+	ai.WithDocsFn(func(ctx context.Context, in SupportRequest) ([]*ai.Document, error) {
+		return retrieve(ctx, in.Area)
+	}),
+)
+```
+
+    The [basic-prompt-content sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-prompt-content)
+    runs both of these side by side against the same input, so a trace shows what
+    each form produced.
+
+    :::note[The system and user slots hold exactly one message]
+    `ai.WithSystem()` and `ai.WithPrompt()` each fill a single message whose role
+    is fixed by the slot. A `{{role}}` marker in either one is an error naming
+    `ai.WithMessagesTemplate()`, which is where multi-turn templates belong.
+    :::
+
+    #### Where the conversation lands
+
+    Messages passed to `Prompt.Execute()` with `ai.WithMessages()` are placed by
+    exactly one of three rules, decided by what the prompt itself declared:
+
+1.  **The prompt declares no conversation.** The caller's messages are used as
+    the conversation directly, between the system message and the user prompt.
+    This is the common case and needs nothing from you.
+2.  **The prompt declares `ai.WithMessages()` or `ai.WithMessagesFn()`.** The
+    prompt owns the slot, so the caller's messages are not spliced in on top of
+    it. A function reads them with `ai.HistoryFromContext(ctx)` and returns them
+    wherever it wants them.
+3.  **The prompt declares `ai.WithMessagesTemplate()`.** The caller's messages go
+    where the template puts `{{history}}`, or, if the template has no
+    `{{history}}` marker, immediately before its final `user` message.
+
+    Rule 2 is the one worth remembering. A prompt that prepends few-shot examples
+    with `ai.WithMessages()` silently stops receiving the caller's conversation,
+    because only the prompt knows where its examples end and the real conversation
+    begins. Read the conversation back and place it yourself:
+
+```go
+ai.WithMessagesFn(func(ctx context.Context, in SupportRequest) ([]*ai.Message, error) {
+	examples := []*ai.Message{
+		ai.NewUserTextMessage("Example: my deploys fail with a 401."),
+		ai.NewModelTextMessage("That is usually a rotated key."),
+	}
+	return append(examples, ai.HistoryFromContext(ctx)...), nil
+})
+```
+
+    Reading the conversation is also what makes summarizing or truncating it
+    possible, which is why the function-form prompt above keeps only the last
+    few messages.
+
+    `ai.HistoryFromContext()` returns the caller's own slice, so treat it as
+    read-only; `Render` clones whatever it places into the request. Its writing
+    counterpart, `ai.NewHistoryContext()`, attaches a conversation for the next
+    `Render` call to place. `Prompt.Execute()` calls it for you, so you only need
+    it when you drive `Render` and `genkit.GenerateWithRequest()` by hand. Scope
+    it to the `Render` call alone, never to the generate call, or the conversation
+    rides into every tool handler and nested prompt inside the generate loop.
+
+    #### Untyped content functions
+
+    The typed signature is the recommended one, but an untyped content function
+    compiles too. The options are generic in `In`, so a function taking
+    `input any` infers `In` as `any` and receives the value untouched. The
+    aliases `ai.PromptFn`, `ai.MessagesFn`, `ai.PartsFn`, and `ai.DocsFn` are all
+    still there.
+
+```go
+var systemFn ai.PromptFn = func(ctx context.Context, input any) (string, error) {
+	in, ok := input.(SupportRequest)
+	if !ok {
+		return "You are a support agent.", nil
+	}
+	return "You are a support agent for the " + in.Area + " area.", nil
+}
+
+genkit.DefinePrompt(g, "support",
+	ai.WithInputType(SupportRequest{}),
+	ai.WithSystemFn(systemFn),
+)
+```
+
+    Declaring the concrete type is worth the one-line change, because it removes
+    that type assertion. An assertion like the one above holds when the prompt is
+    called in process with a `SupportRequest` and fails when the same prompt is
+    run from the Dev UI or over HTTP, where the input arrives as a
+    `map[string]any`. The typed form converts for you, so both paths land on the
+    same value.
+
+    #### How options merge
+
+    Options are ordinary functional options: pass as many as you like, in any
+    order, and they merge left to right under two rules.
+
+    **Collections accumulate.** Repeating an option, or mixing its variants,
+    appends in the order the options are passed: `ai.WithMessages` and
+    `ai.WithMessagesFn`; `ai.WithTools`; `ai.WithResources`; `ai.WithUse`;
+    `ai.WithDocs`, `ai.WithTextDocs`, and `ai.WithDocsFn` (fixed documents first,
+    then computed ones).
+
+    **Single slots take the last one set.** The system slot, the user prompt
+    slot, `ai.WithMessagesTemplate`, `ai.WithModel` and `ai.WithModelName`,
+    `ai.WithConfig`, the output schema and format options, `ai.WithToolChoice`,
+    `ai.WithMaxTurns`, and the input configuration (`ai.WithInputType`,
+    `ai.WithInputSchema`, `ai.WithInputSchemaName`, which replace schema and
+    default input together). A zero value never fills a slot, so
+    `ai.WithMaxTurns(0)` and `ai.WithConfig(nil)` are no-ops and cannot unset an
+    earlier value. Within a slot the loser is cleared rather than merged:
+    `ai.WithSystem()` followed by `ai.WithSystemParts()` means the parts win
+    outright and the text is not prepended to them.
+
+```go
+opts := []ai.PromptOption{
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithSystem("You are a helpful assistant."),
+	ai.WithTools(searchTool),
+}
+opts = append(opts, ai.WithTools(adminTools...)) // accumulates onto searchTool
+opts = append(opts, ai.WithSystem("Be terse."))  // same slot, so this wins
+
+myPrompt := genkit.DefinePrompt(g, "assistant", opts...)
+```
+
+    One combination is refused outright: passing `ai.WithMessagesTemplate()` in
+    the same `DefinePrompt()` or `DefineDataPrompt()` call as `ai.WithMessages()`
+    or `ai.WithMessagesFn()` panics at definition. A template lays the whole
+    conversation out, down to where `{{history}}` goes, so separately supplied
+    messages have no position relative to it. Write them as `{{role}}` blocks in
+    the template, or drop the template and build the conversation from
+    `ai.WithMessages()` and `ai.WithMessagesFn()`.
+
+    At execution time the rules are different: options passed to
+    `Prompt.Execute()` override what the prompt was defined with rather than
+    adding to it. That applies to the model, the config, the tools, and the
+    context documents. Documents are the one to watch, because passing
+    `ai.WithDocs()` or `ai.WithTextDocs()` to `Execute` skips the prompt's
+    `ai.WithDocsFn()` entirely rather than resolving it and discarding the
+    result. That is deliberate, so a caller who already has the documents does
+    not pay for a retriever query, but it does mean a prompt author who sees
+    their retriever never run should look at the call site first.
+
     #### Rendering prompts
 
     Prompts may also be rendered into a `GenerateActionOptions` which may then be
@@ -2021,9 +2596,24 @@ actionOpts.Config = &genai.GenerateContentConfig{Temperature: genai.Ptr[float32]
 resp, err := genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil) // No middleware or streaming
 ```
 
-    Note that all prompt options carry over to `GenerateActionOptions` with the
-    exception of `WithMiddleware()`, which must be passed separately if using
-    `Prompt.Render()` instead of `Prompt.Execute()`.
+    Prompt options carry over to `GenerateActionOptions`, including middleware
+    attached with `ai.WithUse()`, which travels as a name and config reference.
+    The exception is the deprecated `ai.WithMiddleware()`: those values are
+    ignored by `Prompt.Render()` and must be passed to
+    `genkit.GenerateWithRequest()` as its `mw` argument instead.
+
+    `Prompt.Render()` is also where `ai.NewHistoryContext()` comes in. Scope it to
+    the render call so the prompt can place the conversation, and run the
+    generation on the original context:
+
+```go
+actionOpts, err := chatPrompt.Render(ai.NewHistoryContext(ctx, history), input)
+if err != nil {
+	return nil, err
+}
+
+return genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil)
+```
 
 </Lang>
 

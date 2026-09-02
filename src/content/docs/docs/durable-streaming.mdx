@@ -20,8 +20,8 @@ Report issues and feedback on [Github](https://github.com/genkit-ai/genkit/issue
 
 <Lang lang="go">
 
-:::note[Experimental]
-Durable streaming for Go is an experimental feature hosted in "x" packages (`core/x/streaming` and `plugins/firebase/x`). This means the API may receive breaking changes in a minor release, or may be elevated to stable and moved to the root package in the future.
+:::caution[Preview]
+Durable streaming for Go is in preview, hosted in the `core/x/streaming` and `plugins/firebase/exp` packages. It can take breaking changes in a minor release, or be promoted to stable and moved to the root package. See [API stability channels](/docs/api-stability).
 
 Report issues and feedback on [Github](https://github.com/genkit-ai/genkit/issues)
 :::
@@ -122,7 +122,7 @@ The `firebase` plugin provides `FirestoreStreamManager` for durable stream stora
 import (
     "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/firebase"
-    firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+    firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
 )
 
 // Initialize Genkit with the Firebase plugin
@@ -206,6 +206,7 @@ package main
 
 import (
     "context"
+    "fmt"
     "log"
     "net/http"
     "time"
@@ -243,6 +244,8 @@ func main() {
 }
 ```
 
+The [basic-durable-streaming-exp sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-durable-streaming-exp) is this program in runnable form, with a countdown slow enough to reconnect to while it is still running.
+
 ### Firestore-backed durable streaming
 
 For production deployments with persistence across restarts:
@@ -258,7 +261,7 @@ import (
 
     "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/firebase"
-    firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+    firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
     "github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -351,6 +354,46 @@ The subscription will:
 - Replay any buffered chunks that were already sent
 - Continue with live updates if the stream is still in progress
 - Return all chunks plus the final result if the stream has already completed
+
+**The request body is ignored on resume.** When `X-Genkit-Stream-Id` is present and a `StreamManager` is configured, the handler subscribes to the existing record and returns. The flow is never re-executed and never re-billed. The body still has to be valid JSON, so send `-d '{}'` if you have nothing to send.
+
+The flow also keeps running after the original client disconnects: it executes on a detached context, so the remaining chunks and the final result still reach durable storage. Several clients may subscribe to the same ID at once, and each receives the buffered chunks followed by the live ones.
+
+### Resume outcomes
+
+| Stream ID | Response |
+| :-------- | :------- |
+| Valid, run in progress or completed | `200` with `Content-Type: text/event-stream`, replaying buffered chunks and then the final `data: {"result": ...}` |
+| Unknown or TTL-expired | `204 No Content`, empty body. This is not an error, so check the status code rather than waiting for events. |
+| Valid, but the run failed | `200` with the chunks emitted before the failure, then a terminal error event |
+
+### Failed runs
+
+If the flow fails, the terminal error is written to the stream record, not just to the first client. Later subscribers get the chunks emitted before the failure, then the same `data: {"error": {...}}` frame described in [Errors on a streaming request](/docs/error-types#errors-on-a-streaming-request). The redaction rules are identical: only a message built with `status.PublicErrorf` reaches the wire, and the real error is logged server-side as `streaming flow failed`. The failed record is retained for the manager's TTL like any other.
+
+### Security
+
+:::caution[Stream IDs are bearer capabilities]
+`genkit.Handler` performs no authorization on resume. Any caller presenting a valid stream ID receives the full replay: every chunk, the final result, and any error frame. The IDs are random UUIDv4 values generated server-side, so they are not guessable, but nothing binds a stream to the caller who started it.
+
+To scope a stream to its owner, authenticate the request with [`genkit.WithContextProviders`](/docs/context) and record the owner for each ID you hand out, then reject an `X-Genkit-Stream-Id` the caller does not own in your own HTTP middleware before the Genkit handler runs.
+:::
+
+### Stream errors
+
+If you call a `StreamManager` yourself rather than through `genkit.Handler`, match its failures with `errors.Is` against the sentinels in `core/x/streaming`: `ErrStreamNotFound`, `ErrStreamAlreadyExists`, `ErrStreamWriterClosed`, `ErrStreamCompleted`, and `ErrStreamTimeout`. Every implementation returns errors that satisfy them, so the same check works for the in-memory manager, the Firestore one, and any manager you write:
+
+```go
+events, unsubscribe, err := sm.Subscribe(ctx, streamID)
+if errors.Is(err, streaming.ErrStreamNotFound) {
+    // Nothing to resume: the stream expired or never existed.
+    return startFreshRun(ctx)
+}
+if err != nil {
+    return err
+}
+defer unsubscribe()
+```
 
 </Lang>
 

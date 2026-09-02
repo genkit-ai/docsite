@@ -54,99 +54,107 @@ function getDocsSidebar(): SidebarItem[] {
   return sidebar.filter(item => item.label !== "Introduction");
 }
 
+// Thematic bundles, defined against the section labels in src/sidebar.ts.
+//
+// `sections` are matched against sidebar section labels exactly. A theme that
+// names a section which no longer exists is a build error rather than a silently
+// empty bundle: an empty bundle still gets advertised in llms.txt, so the failure
+// mode is a 404 or a near-empty file for whoever fetches it.
+const THEMES: Array<{
+  label: string;
+  description: string;
+  sections?: string[];
+  slugs?: string[];
+}> = [
+  {
+    label: "Building AI Workflows",
+    description:
+      "Generating content, flows, tools, prompts, RAG, and the rest of the core Genkit API.",
+    sections: ["Get started", "Core concepts"],
+  },
+  {
+    label: "Full-Stack Agents",
+    description:
+      "Defining agents, running and streaming them, sessions and state, interrupts, background execution, and delegation.",
+    sections: ["Full-stack agents"],
+  },
+  {
+    label: "Deploying AI Workflows",
+    description:
+      "Serving flows from a web framework, connecting a frontend, and deploying to Cloud Run or any other platform.",
+    sections: ["Backend frameworks", "App frameworks", "Deployment", "Authorization"],
+  },
+  {
+    label: "Observing AI Workflows",
+    description: "Tracing, metrics, logging, and production monitoring.",
+    sections: ["Observability and monitoring"],
+  },
+  {
+    label: "Writing Plugins",
+    description: "Authoring Genkit plugins: models, retrievers, embedders, and evaluators.",
+    sections: ["Writing plugins"],
+  },
+  {
+    label: "AI Providers",
+    description: "Provider-specific setup and configuration for every supported model provider.",
+    sections: ["Model providers"],
+  },
+  {
+    label: "Vector Databases",
+    description: "Vector store and retriever integrations.",
+    sections: ["Database providers"],
+  },
+  {
+    label: "Developer Tools",
+    description: "The Genkit CLI, the Developer UI, the Genkit MCP server, and AI-assisted development.",
+    sections: ["Build with AI"],
+    slugs: ["docs/devtools"],
+  },
+];
+
 // Create language sets based on sidebar structure
 function createLanguageSetsFromSidebar(): LanguageSet[] {
   const docsSidebar = getDocsSidebar();
-  const languageSets: LanguageSet[] = [];
+  const known = new Set(docsSidebar.map((item) => item.label));
 
-  // Find specific sections in the sidebar and map them to language sets
-  const sectionMappings = [
-    {
-      sidebarLabel: "Building AI workflows",
-      setLabel: "Building AI Workflows",
-      description: "Guidance on how to generate content and interact with LLM and image models using Genkit.",
-      includeToplevel: ["docs/get-started"] // Include top-level items
-    },
-    {
-      sidebarLabel: "Deployment",
-      setLabel: "Deploying AI Workflows",
-      description: "Guidance on how to deploy Genkit code to various environments including Firebase and Cloud Run or use within a Next.js app.",
-      additionalSections: ["Web Framework Integrations"] // Include related sections
-    },
-    {
-      sidebarLabel: "Observability and Monitoring",
-      setLabel: "Observing AI Workflows",
-      description: "Guidance about Genkit's various observability features and how to use them."
-    },
-    {
-      sidebarLabel: "Writing Plugins",
-      setLabel: "Writing Plugins",
-      description: "Guidance about how to author plugins for Genkit."
-    },
-    {
-      sidebarLabel: "AI Providers",
-      setLabel: "AI Providers",
-      description: "Provider-specific documentation for AI model providers and integrations."
-    },
-    {
-      sidebarLabel: "Vector Databases",
-      setLabel: "Vector Databases",
-      description: "Documentation for vector database integrations and retrieval systems."
-    }
-  ];
+  return THEMES.map((theme) => {
+    const paths: string[] = [...(theme.slugs ?? [])];
 
-  for (const mapping of sectionMappings) {
-    const paths: string[] = [];
-    
-    // Add top-level items if specified
-    if (mapping.includeToplevel) {
-      paths.push(...mapping.includeToplevel);
-    }
-    
-    // Find the main section
-    const section = docsSidebar.find(item => item.label === mapping.sidebarLabel);
-    if (section?.items) {
-      paths.push(...extractPathsFromSidebar(section.items));
-    }
-    
-    // Add additional sections if specified
-    if (mapping.additionalSections) {
-      for (const additionalLabel of mapping.additionalSections) {
-        const additionalSection = docsSidebar.find(item => item.label === additionalLabel);
-        if (additionalSection?.items) {
-          paths.push(...extractPathsFromSidebar(additionalSection.items));
-        }
+    for (const label of theme.sections ?? []) {
+      if (!known.has(label)) {
+        throw new Error(
+          `generate-llms-direct: theme "${theme.label}" references sidebar section "${label}", ` +
+            `which does not exist. Known sections: ${[...known].join(", ")}. ` +
+            `Update THEMES in src/generate-llms-direct.ts when the sidebar is reorganized.`,
+        );
+      }
+      const section = docsSidebar.find((item) => item.label === label);
+      if (section?.items) {
+        paths.push(...extractPathsFromSidebar(section.items));
       }
     }
-    
-    if (paths.length > 0) {
-      languageSets.push({
-        label: mapping.setLabel,
-        description: mapping.description,
-        paths
-      });
-    }
-  }
 
-  // Add Developer Tools as a special case (top-level items)
-  const devToolsPaths = docsSidebar
-    .filter(item => ["Developer tools", "MCP Server"].includes(item.label))
-    .map(item => item.slug)
-    .filter((slug): slug is string => !!slug);
-    
-  if (devToolsPaths.length > 0) {
-    languageSets.push({
-      label: "Developer Tools",
-      description: "Documentation for development tools, MCP server, and local development.",
-      paths: devToolsPaths
-    });
-  }
-
-  return languageSets;
+    return {
+      label: theme.label,
+      description: theme.description,
+      paths: [...new Set(paths)],
+    };
+  });
 }
 
 // Generate language sets from sidebar
 const LANGUAGE_SETS = createLanguageSetsFromSidebar();
+
+// Every page in the sidebar, in sidebar order. The per-language bundles are
+// built from this, not from the thematic sets, so a page that no theme happens
+// to cover still reaches an agent that fetches llms-<lang>.txt.
+const ALL_SIDEBAR_PATHS: string[] = [
+  ...new Set(extractPathsFromSidebar(getDocsSidebar() as SidebarItem[])),
+];
+
+function setFilename(label: string, lang: Language): string {
+  return `${label.toLowerCase().replace(/\s+/g, '-')}-${lang}.txt`;
+}
 
 type Language = 'js' | 'go' | 'dart' | 'python';
 
@@ -160,10 +168,11 @@ function generateLanguageSpecificContent(docs: ProcessedDocument[], language: La
 
   let content = `# Genkit Documentation - ${languageNames[language]}\n\n`;
   content += `> Open-source GenAI toolkit for ${languageNames[language]}.\n\n`;
+  content += `> This file is every ${languageNames[language]} documentation page, in sidebar order.\n\n`;
 
-  // Get all unique paths from all language sets
-  const allPaths = [...new Set(LANGUAGE_SETS.flatMap(set => set.paths))];
-  
+  // Every page that supports this language, in sidebar order.
+  const allPaths = ALL_SIDEBAR_PATHS;
+
   for (const docPath of allPaths) {
     const doc = docs.find(d => d.slug === docPath);
     if (doc && doc.content[language] && doc.supportedLanguages.includes(language)) {
@@ -208,9 +217,8 @@ function generateFullDocumentation(docs: ProcessedDocument[]): string {
   content += `> Open-source GenAI toolkit for JS, Go, Dart, and Python.\n`;
   content += `> This is the complete unfiltered documentation (primarily for internal use).\n\n`;
 
-  // Get all unique paths from all language sets and sort them
-  const allPaths = [...new Set(LANGUAGE_SETS.flatMap(set => set.paths))].sort();
-  
+  const allPaths = [...ALL_SIDEBAR_PATHS].sort();
+
   for (const docPath of allPaths) {
     const doc = docs.find(d => d.slug === docPath);
     if (doc) {
@@ -232,56 +240,73 @@ function generateFullDocumentation(docs: ProcessedDocument[]): string {
   return content;
 }
 
-function generateMainLlmsTxt(): string {
-  const content = `# Genkit
+const LANGUAGE_NAMES: Record<Language, string> = {
+  js: 'JavaScript/TypeScript',
+  go: 'Go',
+  dart: 'Dart',
+  python: 'Python',
+};
+
+/**
+ * Builds llms.txt from the bundles that were actually written, so the index can
+ * never advertise a file that does not exist. `written` maps each language to
+ * the thematic sets that produced content for it.
+ */
+function generateMainLlmsTxt(written: Map<Language, LanguageSet[]>): string {
+  const languages: Language[] = ['js', 'go', 'dart', 'python'];
+
+  let content = `# Genkit
 
 > Open-source GenAI toolkit for JS, Go, Dart, and Python.
 
 ## Documentation Sets
 
-- [JavaScript documentation](https://genkit.dev/llms-js.txt): Genkit documentation focused on JavaScript/TypeScript
-- [Go documentation](https://genkit.dev/llms-go.txt): Genkit documentation focused on Go
-- [Python documentation](https://genkit.dev/llms-python.txt): Genkit documentation focused on Python
-- [Dart documentation](https://genkit.dev/llms-dart.txt): Genkit documentation focused on Dart
+Each of these is the complete documentation for one language, in sidebar order.
+
+`;
+
+  for (const lang of languages) {
+    content += `- [${LANGUAGE_NAMES[lang]} documentation](https://genkit.dev/llms-${lang}.txt): every Genkit ${LANGUAGE_NAMES[lang]} page in one file\n`;
+  }
+
+  content += `
+## Single Pages
+
+Every documentation page is also served as markdown. Append \`.md\` to any docs
+URL to fetch just that page:
+
+- \`https://genkit.dev/docs/go/flows.md\` — the Go rendering of the Flows page
+- \`https://genkit.dev/docs/js/flows.md\` — the JavaScript rendering of the same page
+
+Use these when you know which page you need; use the language bundles above when
+you do not.
+
+## API Rules For Coding Agents
+
+Condensed, opinionated rules for writing Genkit code, suitable for dropping into
+an agent's system prompt or rules file:
+
+- [Genkit Go API rules](https://genkit.dev/GENKIT.go.md)
+- [Genkit JavaScript API rules](https://genkit.dev/GENKIT.js.md)
 
 ### Language-Specific Thematic Sets
 
-#### JavaScript
-- [Building AI Workflows - JS](https://genkit.dev/_llms-txt/building-ai-workflows-js.txt): Guidance on how to generate content and interact with LLM and image models using Genkit in JavaScript.
-- [Deploying AI Workflows - JS](https://genkit.dev/_llms-txt/deploying-ai-workflows-js.txt): Guidance on how to deploy Genkit code to various environments using JavaScript.
-- [Observing AI Workflows - JS](https://genkit.dev/_llms-txt/observing-ai-workflows-js.txt): Guidance about Genkit's various observability features in JavaScript.
-- [Writing Plugins - JS](https://genkit.dev/_llms-txt/writing-plugins-js.txt): Guidance about how to author plugins for Genkit in JavaScript.
-- [AI Providers - JS](https://genkit.dev/_llms-txt/ai-providers-js.txt): Provider-specific documentation for AI model providers in JavaScript.
-- [Vector Databases - JS](https://genkit.dev/_llms-txt/vector-databases-js.txt): Documentation for vector database integrations in JavaScript.
+Smaller bundles for one topic in one language. Only the combinations that have
+content are listed.
 
-#### Go
-- [Building AI Workflows - Go](https://genkit.dev/_llms-txt/building-ai-workflows-go.txt): Guidance on how to generate content and interact with LLM and image models using Genkit in Go.
-- [Deploying AI Workflows - Go](https://genkit.dev/_llms-txt/deploying-ai-workflows-go.txt): Guidance on how to deploy Genkit code to various environments using Go.
-- [Observing AI Workflows - Go](https://genkit.dev/_llms-txt/observing-ai-workflows-go.txt): Guidance about Genkit's various observability features in Go.
-- [Writing Plugins - Go](https://genkit.dev/_llms-txt/writing-plugins-go.txt): Guidance about how to author plugins for Genkit in Go.
-- [AI Providers - Go](https://genkit.dev/_llms-txt/ai-providers-go.txt): Provider-specific documentation for AI model providers in Go.
-- [Vector Databases - Go](https://genkit.dev/_llms-txt/vector-databases-go.txt): Documentation for vector database integrations in Go.
+`;
 
-#### Python
-- [Building AI Workflows - Python](https://genkit.dev/_llms-txt/building-ai-workflows-python.txt): Guidance on how to generate content and interact with LLM and image models using Genkit in Python.
-- [Deploying AI Workflows - Python](https://genkit.dev/_llms-txt/deploying-ai-workflows-python.txt): Guidance on how to deploy Genkit code to various environments using Python.
-- [Observing AI Workflows - Python](https://genkit.dev/_llms-txt/observing-ai-workflows-python.txt): Guidance about Genkit's various observability features in Python.
-- [Writing Plugins - Python](https://genkit.dev/_llms-txt/writing-plugins-python.txt): Guidance about how to author plugins for Genkit in Python.
-- [AI Providers - Python](https://genkit.dev/_llms-txt/ai-providers-python.txt): Provider-specific documentation for AI model providers in Python.
-- [Vector Databases - Python](https://genkit.dev/_llms-txt/vector-databases-python.txt): Documentation for vector database integrations in Python.
+  for (const lang of languages) {
+    const sets = written.get(lang) ?? [];
+    if (sets.length === 0) continue;
+    content += `#### ${LANGUAGE_NAMES[lang]}\n`;
+    for (const set of sets) {
+      content += `- [${set.label} - ${LANGUAGE_NAMES[lang]}](https://genkit.dev/_llms-txt/${setFilename(set.label, lang)}): ${set.description}\n`;
+    }
+    content += `\n`;
+  }
 
-#### Dart
-- [Building AI Workflows - Dart](https://genkit.dev/_llms-txt/building-ai-workflows-dart.txt): Guidance on how to generate content and interact with LLM and image models using Genkit in Dart.
-- [Deploying AI Workflows - Dart](https://genkit.dev/_llms-txt/deploying-ai-workflows-dart.txt): Guidance on how to deploy Genkit code to various environments using Dart.
-- [Observing AI Workflows - Dart](https://genkit.dev/_llms-txt/observing-ai-workflows-dart.txt): Guidance about Genkit's various observability features in Dart.
-- [Writing Plugins - Dart](https://genkit.dev/_llms-txt/writing-plugins-dart.txt): Guidance about how to author plugins for Genkit in Dart.
-- [AI Providers - Dart](https://genkit.dev/_llms-txt/ai-providers-dart.txt): Provider-specific documentation for AI model providers in Dart.
-- [Vector Databases - Dart](https://genkit.dev/_llms-txt/vector-databases-dart.txt): Documentation for vector database integrations in Dart.
-
-### Developer Tools
-- [Developer Tools](https://genkit.dev/_llms-txt/devtools.txt): Documentation for development tools, MCP server, and local development.
-
-## Notes
+  content += `## Notes
 
 - Language-specific versions filter content to show only relevant examples and instructions for that language
 - The content is automatically generated from the same source as the official documentation
@@ -305,11 +330,6 @@ export async function generateLlmsDirectly(): Promise<void> {
   const docs = await getAllProcessedDocuments();
   console.log(`Processed ${docs.length} documents`);
   
-  // Generate main llms.txt
-  const mainContent = generateMainLlmsTxt();
-  await writeFile(path.join(outputDir, 'llms.txt'), mainContent);
-  console.log('Generated main llms.txt');
-  
   // Generate complete unfiltered documentation (llms-full.txt)
   console.log('Generating complete unfiltered documentation...');
   const fullContent = generateFullDocumentation(docs);
@@ -326,26 +346,33 @@ export async function generateLlmsDirectly(): Promise<void> {
     console.log(`Generated llms-${lang}.txt`);
   }
   
-  // Generate language-specific thematic sets
+  // Generate language-specific thematic sets. A set with no pages for a language
+  // is skipped rather than written empty, and only the sets actually written are
+  // advertised in llms.txt.
+  const written = new Map<Language, LanguageSet[]>();
   for (const lang of languages) {
-    console.log(`Generating thematic sets for ${lang}...`);
+    const producedForLang: LanguageSet[] = [];
     for (const set of LANGUAGE_SETS) {
+      const pageCount = set.paths.filter((p) => {
+        const doc = docs.find((d) => d.slug === p);
+        return !!doc && !!doc.content[lang] && doc.supportedLanguages.includes(lang);
+      }).length;
+      if (pageCount === 0) {
+        console.log(`  skipping ${setFilename(set.label, lang)} (no ${lang} pages)`);
+        continue;
+      }
       const content = generateLanguageSpecificSet(docs, set, lang);
-      const filename = `${set.label.toLowerCase().replace(/\s+/g, '-')}-${lang}.txt`;
-      await writeFile(path.join(llmsTxtDir, filename), content);
+      await writeFile(path.join(llmsTxtDir, setFilename(set.label, lang)), content);
+      producedForLang.push(set);
     }
-    console.log(`Generated thematic sets for ${lang}`);
+    written.set(lang, producedForLang);
+    console.log(`Generated ${producedForLang.length} thematic sets for ${lang}`);
   }
-  
-  // Generate developer tools (language-agnostic, use js as base)
-  const devToolsSet = LANGUAGE_SETS.find(s => s.label === 'Developer Tools');
-  if (devToolsSet) {
-    console.log('Generating developer tools documentation...');
-    const content = generateLanguageSpecificSet(docs, devToolsSet, 'js');
-    await writeFile(path.join(llmsTxtDir, 'devtools.txt'), content);
-    console.log('Generated devtools.txt');
-  }
-  
+
+  // llms.txt is written last so it can list exactly what exists.
+  await writeFile(path.join(outputDir, 'llms.txt'), generateMainLlmsTxt(written));
+  console.log('Generated main llms.txt');
+
   console.log('LLMs.txt generation from source files complete!');
 }
 

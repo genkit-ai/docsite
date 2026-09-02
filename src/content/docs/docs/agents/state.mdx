@@ -4,6 +4,8 @@ description: Choose where Genkit agent state lives and learn how conversations r
 supportedLanguages:
   - js
   - go
+  - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -231,12 +233,17 @@ Genkit agents keep continuity in one of two ownership models.
 
 Server-managed state is the default recommendation for user-facing conversational apps. Client-managed state is useful when you need tighter control over where state is stored and how it moves between services.
 
+[`go/samples/basic-agents-server`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) serves both models side by side: a `chat` agent with a store, which answers with a session ID to send back, and a `statelessChat` agent without one, which answers with the whole state for the client to hold.
+
 ## Understand session state
 
 Session state contains messages, typed custom state, artifacts, and the framework-owned session ID:
 
 ```go
-import aix "github.com/firebase/genkit/go/ai/exp"
+import (
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+)
 ```
 
 ```go
@@ -263,7 +270,7 @@ Do not put large generated documents into `Custom` just because they serialize t
 
 ## Modify custom state
 
-Prompt-backed tools and custom agents can update typed custom state through the active session. In a custom agent, call `sess.UpdateCustom`:
+Tools and custom agents update typed custom state through the active session. In a custom agent, call `sess.UpdateCustom`:
 
 ```go
 sess.UpdateCustom(func(state TravelState) TravelState {
@@ -272,6 +279,69 @@ sess.UpdateCustom(func(state TravelState) TravelState {
 	return state
 })
 ```
+
+A tool reaches the same session through its context with `aix.SessionFromContext[State]`. The updater takes and returns the state as its own Go type, so a mistyped field is a compile error rather than a lost key.
+
+`SessionFromContext[State]` returns nil in two cases: there is no session in context, and the active session's state type is not `State`. A tool shared between agents with different state types therefore gets nil from the mismatching agent, with no error. Fail closed on nil. Return a `status.ErrFailedPrecondition` (or `status.ErrPermissionDenied` when the state carries scoping) rather than treating nil as an empty identity, or the tool silently drops whatever it derived from state.
+
+```go
+import (
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+// OrderState is the agent's custom state type.
+type OrderState struct {
+	Drinks []string `json:"drinks,omitempty"`
+}
+```
+
+```go
+addToOrder := genkitx.DefineTool(g, "addToOrder",
+	"Records one drink the customer ordered.",
+	func(ctx context.Context, in struct {
+		Drink string `json:"drink"`
+	}) (string, error) {
+		sess := aix.SessionFromContext[OrderState](ctx)
+		if sess == nil {
+			return "", status.Errorf(status.ErrFailedPrecondition,
+				"addToOrder must be called inside a session")
+		}
+		sess.UpdateCustom(func(order OrderState) OrderState {
+			order.Drinks = append(order.Drinks, in.Drink)
+			return order
+		})
+		return "Added " + in.Drink + " to the order.", nil
+	})
+```
+
+What a tool writes is visible to the next turn's prompt render, so an agent can turn its own state back into instructions. `ai.WithSystemFn` runs once per turn and its result is used verbatim, which is what lets the wording branch on the state:
+
+```go
+barista := genkitx.DefineAgent(g, "barista",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithTools(addToOrder),
+		ai.WithSystemFn(func(ctx context.Context, _ any) (string, error) {
+			sess := aix.SessionFromContext[OrderState](ctx)
+			if sess == nil {
+				return "", status.Errorf(status.ErrFailedPrecondition,
+					"barista prompt rendered outside a session")
+			}
+			order := sess.Custom()
+			if len(order.Drinks) == 0 {
+				return "You are a brisk barista. Take the order one drink at a time.", nil
+			}
+			return fmt.Sprintf("You are a brisk barista. Ordered so far: %s.",
+				strings.Join(order.Drinks, ", ")), nil
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The `barista.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) runs this pair end to end. Note the `omitempty` on the state's slice field: a nil Go slice marshals to `null`, which does not satisfy the array schema inferred from the type.
 
 The runtime streams custom patches as state changes. `AgentConnection.Receive` applies those patches, and `AgentConnection.Custom()` returns the current custom state observed by the connection.
 
@@ -329,6 +399,15 @@ These methods apply `WithStateTransform` and read-time shaping. Reading `agent.S
 
 Synchronous turns write `completed` snapshots. A failed turn does not make its partial state the normal continuation point. The output reports the last-good state or snapshot ID.
 
+`Status` is the persistence lifecycle, not the outcome. A turn that ends on an interrupt still writes `completed`, because it is resumable. To detect an interrupt, read `snap.FinishReason`, which is a separate field:
+
+```go
+paused := snap.Status == aix.SnapshotStatusCompleted &&
+	snap.FinishReason == aix.AgentFinishReasonInterrupted
+```
+
+`FinishReason` carries the semantic outcome of the turn or invocation the snapshot captured: `aix.AgentFinishReasonStop`, `AgentFinishReasonInterrupted`, `AgentFinishReasonFailed`, `AgentFinishReasonAborted`, and the other values on `aix.AgentFinishReason`. See [Agent interrupts](/docs/agents/interrupts) for what a paused turn allows next.
+
 ## Invocation options
 
 Use `WithSessionID` when the caller tracks a conversation:
@@ -357,6 +436,18 @@ out, err := agent.RunText(ctx, "Add buy milk.",
 
 An empty session ID is rejected. `WithState` cannot be combined with snapshot or session options.
 
+You may also choose the session ID yourself. If `aix.WithSessionID(id)` resolves no existing snapshot, the runtime starts a fresh conversation under that ID and stamps it on every snapshot it persists, so a client can mint a UUID up front instead of waiting for a server-issued ID. `SessionID` is framework-owned only in the sense that the framework mints one when you supply none, and that for server-managed agents the snapshot row's ID is canonical.
+
+## Changing your state type
+
+Custom state is persisted as plain JSON and decoded with `encoding/json`. That gives three rules:
+
+- **Adding a field is safe.** Old snapshots load it as the Go zero value.
+- **Removing or renaming a field is safe to load, but drops the old data silently.** Nothing rejects the unknown key.
+- **Changing a field's JSON type is not safe.** The decode fails, the store read returns an error, and the resume fails with it.
+
+Keep changes additive. Keep an old field readable with its original `json` tag through a migration window, and carry your own version field inside `Custom` when you need to branch on shape. There is no schema version on the snapshot envelope.
+
 ## State and stream transforms
 
 `WithStateTransform` redacts or reshapes session state on the way out to clients. It applies to snapshot reads and client-managed output, not to persisted raw state or the agent function's internal view.
@@ -374,14 +465,425 @@ agent := genkitx.DefineAgent(g, "support",
 )
 ```
 
-`WithStreamTransform[State]` runs on every streamed `AgentStreamChunk` at the wire boundary. Return `nil` to drop a chunk. Return an error to fail closed, which prevents unshaped data from reaching the client.
+`aix.WithStreamTransform[State](fn)` runs on every streamed chunk at the wire boundary. It takes a `func(ctx context.Context, chunk *aix.AgentStreamChunk) (*aix.AgentStreamChunk, error)`. A chunk carries no state type, so `State` cannot be inferred and must be written out.
 
-Prefer `WithStateTransform` for custom state redaction because the runtime diffs transformed state before emitting custom patches.
+```go
+aix.WithStreamTransform[SupportState](func(ctx context.Context, chunk *aix.AgentStreamChunk) (*aix.AgentStreamChunk, error) {
+	if chunk.Artifact != nil && chunk.Artifact.Name == "internal-notes" {
+		// Drop the chunk from the wire; the session still records the artifact.
+		return nil, nil
+	}
+	return chunk, nil
+})
+```
+
+`AgentStreamChunk` has four fields, and more than one can be set on a single chunk:
+
+| Field         | Type                       | Contents                                              |
+| ------------- | -------------------------- | ----------------------------------------------------- |
+| `ModelChunk`  | `*ai.ModelResponseChunk`   | Generation tokens from the model.                     |
+| `Artifact`    | `*aix.Artifact`            | A newly produced artifact.                            |
+| `CustomPatch` | `aix.JSONPatch`            | An RFC 6902 delta to custom state.                    |
+| `TurnEnd`     | `*aix.TurnEnd`             | The turn-end signal, including the new snapshot ID.   |
+
+The chunk is a fresh deep copy the transform owns, so mutating it in place is safe. Returning `nil` drops the chunk from the wire only: side effects and the final `AgentOutput` keep the data. Never drop a chunk whose `TurnEnd` is set, because clients pace the conversation on that signal; reshape it instead. Returning an error fails the whole invocation, which is the fail-closed behavior you want when a chunk cannot be shaped safely.
+
+Prefer `WithStateTransform` for custom state redaction. The runtime applies it before diffing, so the patch stream stays consistent; rewriting `CustomPatch` in a stream transform desyncs clients that rebuild custom state from the patch sequence.
 
 ## Custom state and artifacts
 
 Prompt-backed and custom agents can update state through the active session. Custom patches are streamed automatically when custom state changes. `AgentConnection.Receive` applies those patches and `AgentConnection.Custom()` returns the live custom state observed so far.
 
-Artifacts are named collections of parts. `Responder.SendArtifact` both streams the artifact and records it in the session, so the artifact is available in the final output or snapshot.
+An artifact is a named collection of parts:
+
+```go
+type Artifact struct {
+	Metadata map[string]any `json:"metadata,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Parts    []*ai.Part     `json:"parts"`
+}
+```
+
+`Responder.SendArtifact` takes a pointer. It both streams the artifact and records it in the session, so the artifact is available in the final output or snapshot:
+
+```go
+resp.SendArtifact(&aix.Artifact{
+	Name:     "meal-plan",
+	Parts:    []*ai.Part{ai.NewTextPart(draft)},
+	Metadata: map[string]any{"contentType": "text/markdown"},
+})
+```
+
+Read them back from `out.Artifacts` on an `*aix.AgentOutput[State]`, from `snap.State.Artifacts` on a snapshot, or from `sess.Artifacts()` inside a run. `SendArtifact` appends and does not deduplicate names, so two sends with the same `Name` produce two entries. Call `sess.UpdateArtifacts` when you want to replace one instead.
+
+## Next steps
+
+- [Session stores](/docs/agents/session-stores) covers the built-in stores and the `SessionStore` interface a custom store implements.
+- [Background execution](/docs/agents/background) covers detached turns and pending snapshots.
+
+</Lang>
+
+<Lang lang="dart">
+
+## State strategies
+
+Genkit Dart agents can maintain conversation continuity using one of two strategies:
+
+**Server-managed state** means the agent has a `store` (e.g. `FileSessionStore` or `InMemorySessionStore`). The server persists messages, custom state, and artifacts between turns. Clients continue the chat by sending a `sessionId` (loads latest state) or `snapshotId` (loads exact state). Use this for long-running chat applications, multi-turn generators, background detached tasks, or any workflow where client payload size should remain small.
+
+**Client-managed state** means the agent has no `store`. The server returns the full `SessionState` at the end of each turn, and the client must echo that state back on the next turn using `chat(state: ...)`. Use this when your client app or another system already owns persistence, when you need stateless server deployments, or when you want to encrypt conversation data outside Genkit.
+
+In both modes, the high-level `AgentChat` tracks continuity for you. Under the hood, server-managed chats carry forward a `sessionId`/`snapshotId`, while client-managed chats carry forward the full `SessionState`.
+
+## Understand session state
+
+The `SessionState` contains three main fields:
+
+- **`custom`** is your application-specific data. Use it for lightweight status variables, preferences, selected options, or list state (e.g. `{ 'tasks': [] }`) that tools or the model needs to inspect across turns. Keep this payload small as it is serialized in every snapshot and client payload.
+- **`messages`** is the accumulated message history (`List<Message>`). The runtime appends user prompts and model completions automatically.
+- **`artifacts`** is a list of structured, versioned outputs generated by the agent or tools. Use artifacts for larger outputs that the user might download or inspect independently (e.g. files, reports, itineraries).
+
+### Custom state vs. artifacts
+
+- Use **custom state** for lightweight control parameters and variables that direct the agent's next model call or UI rendering. Keep it small.
+- Use **artifacts** for files, patches, or comprehensive reports that the agent produces. Do not store large documents directly in custom state.
+
+## Modify custom state
+
+Tools and custom agents can update custom state using the functional `session.updateCustom()` API. Custom state is fully typed: `ai.currentSession<State>()` and the `updateCustom` callback receive a typed `State?` value, where `State` comes from the agent's `stateSchema`. Genkit automatically diffs the result and streams RFC 6902 JSON Patches to the client mid-stream.
+
+```dart
+@Schema()
+abstract class $TaskItem {
+  int get id;
+  String get title;
+  bool get done;
+}
+
+@Schema()
+abstract class $TaskState {
+  List<$TaskItem> get tasks;
+  int get nextId;
+}
+
+final session = ai.currentSession<TaskState>()!;
+
+session.updateCustom((state) {
+  final nextId = state?.nextId ?? 1;
+  return TaskState(
+    tasks: [
+      ...?state?.tasks,
+      TaskItem(id: nextId, title: 'Buy milk', done: false),
+    ],
+    nextId: nextId + 1,
+  );
+});
+```
+
+Keep custom state serializable, and provide the matching `stateSchema` when defining your agent (e.g. `stateSchema: TaskState.$schema`) so the typed state is validated at load time. When state is a loose JSON map rather than a typed class, use a map schema such as `SchemanticType.map(SchemanticType.string(), SchemanticType.dynamicSchema())`; the updater then receives a typed `Map<String, dynamic>?`.
+
+## Server-managed stores
+
+Add a store when defining your agent to enable server-managed persistence:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+
+final store = FileSessionStore('.sessions');
+
+final weatherAgent = ai.defineAgent(
+  name: 'weatherAgent',
+  system: 'You are a helpful weather assistant.',
+  store: store,
+);
+```
+
+On every successful turn, the store saves a `completed` snapshot capturing the conversation's exact state. If a turn fails, the state is rolled back to the last successful turn to prevent partial corruption.
+
+For store choices, see [Session stores](/docs/agents/session-stores).
+
+## Snapshots
+
+Read a snapshot directly by ID or fetch the latest snapshot in a session using the agent's snapshot methods:
+
+```dart
+// Read a specific snapshot point:
+final snapshot = await weatherAgent.getSnapshot(snapshotId: 'snapshot-123');
+
+// Read the latest point in a conversation:
+final latest = await weatherAgent.getSnapshot(sessionId: 'session-123');
+```
+
+### Snapshot lifecycle
+
+| Status      | Meaning                                                                             |
+| ----------- | ----------------------------------------------------------------------------------- |
+| `pending`   | A detached background invocation is still running.                                  |
+| `completed` | The snapshot captures a settled, resumable state.                                   |
+| `failed`    | The invocation failed. Error details are stored on the snapshot.                    |
+| `aborted`   | The detached invocation was canceled.                                               |
+| `expired`   | A pending snapshot heartbeat went stale, so the background worker is presumed dead. |
+
+Only `completed` snapshots are valid resume points. Other statuses are useful for UI progress indicators and background tracking.
+
+## Resume by session or snapshot
+
+To continue a server-managed conversation from the latest leaf, pass the `sessionId`:
+
+```dart
+final chat = weatherAgent.chat(sessionId: 'user-session-123');
+await chat.send(text: 'What is the weather in Tokyo?');
+```
+
+To branch or fork a conversation from a specific historical point, pass the `snapshotId`:
+
+```dart
+final branch = weatherAgent.chat(snapshotId: 'snapshot-abc-456');
+await branch.send(text: 'Assume the user changed their mind.');
+```
+
+## Client-managed state
+
+If your agent does not use a server store, pass the full state blob back on each subsequent turn:
+
+```dart
+final chat = weatherAgent.chat(
+  state: SessionState(
+    custom: {'tasks': []},
+    messages: [],
+    artifacts: [],
+  ),
+);
+
+final res = await chat.send(text: 'Add a task.');
+// Store the full session state on the client (e.g., local storage or a
+// database). `res.state` is only the typed custom state; `res.raw.state` is the
+// complete SessionState with messages, custom state, and artifacts.
+saveStateOnClient(res.raw.state);
+```
+
+## Live custom state
+
+When custom state changes during a turn, the runtime streams incremental RFC 6902 JSON Patch chunks. `AgentChat` applies them automatically, yielding the updated state on `chunk.custom` and `chat.state`.
+
+```dart
+final turn = taskAgent.chat().sendStream(text: 'Add buy milk to my list.');
+
+await for (final chunk in turn.stream) {
+  if (chunk.custom != null) {
+    updateTodoListUi(chunk.custom!);
+  }
+}
+```
+
+The first patch emitted in a turn is a whole-document replace that aligns the client's state baseline with the server's.
+
+## Artifacts
+
+Record independent artifacts (such as plans, diffs, or images) from tools or custom agents using the active session:
+
+```dart
+final session = ai.currentSession()!;
+
+session.addArtifacts([
+  Artifact(
+    name: 'report.md',
+    parts: [TextPart(text: '# Research Report\nThis is the content.')],
+    metadata: {'contentType': 'text/markdown'},
+  ),
+]);
+```
+
+Artifacts with identical names overwrite earlier ones, while unnamed artifacts are appended to the session.
+
+</Lang>
+
+<Lang lang="python">
+
+## State strategies
+
+Genkit agents can keep conversation continuity in one of two ways:
+
+**Server-managed state** means the agent has a `store` (for example `FileSessionStore` or `InMemorySessionStore`). The server persists messages, custom state, and artifacts between turns. Clients continue the chat by sending a `session_id` (loads latest state) or `snapshot_id` (loads exact state). Use this for long-running chat applications, multi-turn generators, background detached tasks, or any workflow where client payload size should remain small.
+
+**Client-managed state** means the agent has no `store`. The server returns the full session at the end of each turn, and the client must echo that state back on the next turn using `chat(messages=..., state=..., artifacts=...)`. Use this when your client app or another system already owns persistence, when you need stateless server deployments, or when you want to encrypt conversation data outside Genkit.
+
+In both modes, `AgentChat` tracks continuity for you. Server-managed chats carry forward a `session_id` / `snapshot_id`. Client-managed chats carry forward messages, custom state, and artifacts.
+
+## Understand session state
+
+Session state has three main fields:
+
+- **`custom`** is your application-specific data. Use it for lightweight status variables, preferences, selected options, or list state that tools or the model needs across turns. Keep this payload small as it is serialized in every snapshot and client payload.
+- **`messages`** is the accumulated message history. The runtime appends user prompts and model completions automatically.
+- **`artifacts`** is a list of structured, versioned outputs generated by the agent or tools. Use artifacts for larger outputs that the user might download or inspect independently.
+
+### Custom state vs. artifacts
+
+- Use **custom state** for lightweight control parameters and variables that direct the agent's next model call or UI rendering. Keep it small.
+- Use **artifacts** for files, patches, or comprehensive reports that the agent produces. Do not store large documents directly in custom state.
+
+## Modify custom state
+
+Tools and custom agents can update custom state using `session.update_custom()`. With a `state_schema`, `chat.state`, `response.state`, and streamed `chunk.custom` come back as that Pydantic model. Genkit automatically diffs the result and streams RFC 6902 JSON Patches to the client mid-stream.
+
+```python
+from pydantic import BaseModel
+
+
+class TaskItem(BaseModel):
+    id: int
+    title: str
+    done: bool = False
+
+
+class TaskState(BaseModel):
+    tasks: list[TaskItem] = []
+    next_id: int = 1
+
+
+sess = ai.current_session()
+assert sess is not None
+
+
+def mutate(custom: TaskState | None) -> TaskState:
+    state = custom or TaskState()
+    next_id = state.next_id
+    new_task = TaskItem(id=next_id, title='Buy milk')
+    return TaskState(tasks=[*state.tasks, new_task], next_id=next_id + 1)
+
+
+await sess.update_custom(mutate)
+```
+
+Keep custom state serializable, and provide the matching `state_schema` when defining your agent so the typed state is validated at load time.
+
+## Server-managed stores
+
+Add a store when defining your agent to enable server-managed persistence:
+
+```python
+from genkit.agent import FileSessionStore
+
+store = FileSessionStore('.sessions')
+
+weather_agent = ai.define_agent(
+    name='weatherAgent',
+    model='googleai/gemini-flash-latest',
+    system='You are a helpful weather assistant.',
+    store=store,
+)
+```
+
+On every successful turn, the store saves a `completed` snapshot capturing the conversation's exact state. If a turn fails, the resume handle stays on the last successful snapshot so the next turn does not continue from a broken partial state.
+
+For store choices, see [Session stores](/docs/agents/session-stores).
+
+## Snapshots
+
+Read a snapshot directly by ID or fetch the latest snapshot in a session:
+
+```python
+snapshot = await weather_agent.get_snapshot(snapshot_id='snapshot-123')
+latest = await weather_agent.get_snapshot(session_id='session-123')
+```
+
+### Snapshot lifecycle
+
+| Status      | Meaning                                                                             |
+| ----------- | ----------------------------------------------------------------------------------- |
+| `pending`   | A detached background invocation is still running.                                  |
+| `completed` | The snapshot captures a settled, resumable state.                                   |
+| `failed`    | The invocation failed. Error details are stored on the snapshot.                    |
+| `aborted`   | The detached invocation was canceled.                                               |
+| `expired`   | A pending snapshot heartbeat went stale, so the background worker is presumed dead. |
+
+Only `completed` snapshots are valid resume points. Other statuses are useful for UI progress indicators and background tracking.
+
+## Resume by session or snapshot
+
+To continue a server-managed conversation from the latest leaf, pass the `session_id`:
+
+```python
+chat = weather_agent.chat(session_id='user-session-123')
+await chat.send('What is the weather in Tokyo?')
+```
+
+To branch from a specific historical point, pass the `snapshot_id` (or use `load_chat(snapshot_id=...)`):
+
+```python
+branch = await weather_agent.load_chat(snapshot_id='snapshot-abc-456')
+await branch.send('Assume the user changed their mind.')
+```
+
+## Client-managed state
+
+If your agent does not use a server store, capture messages, custom state, and artifacts yourself, then pass them back:
+
+```python
+chat = weather_agent.chat()
+res = await chat.send('My name is Ada. Remember it.')
+
+messages, state, artifacts = chat.messages, chat.state, chat.artifacts
+
+resumed = weather_agent.chat(messages=messages, state=state, artifacts=artifacts)
+await resumed.send('What is my name?')
+```
+
+## Live custom state
+
+When custom state changes during a turn, the runtime streams incremental RFC 6902 JSON Patch chunks. `AgentChat` applies them automatically, yielding the updated state on `chunk.custom` and `chat.state`.
+
+```python
+turn = task_agent.chat().send_stream('Add buy milk to my list.')
+
+async for chunk in turn.stream:
+    if chunk.custom is not None:
+        update_todo_list_ui(chunk.custom)
+```
+
+## Artifacts
+
+Record independent artifacts from tools or custom agents using the active session:
+
+```python
+from genkit import Part, TextPart
+from genkit.agent import Artifact
+
+sess = ai.current_session()
+assert sess is not None
+
+await sess.add_artifacts([
+    Artifact(
+        name='report.md',
+        parts=[Part(root=TextPart(text='# Research Report\nThis is the content.'))],
+    )
+])
+```
+
+
+Artifacts with identical names overwrite earlier ones, while unnamed artifacts are appended to the session.
+
+## Client transforms
+
+Use `state_transform` and `chunk_transform` to redact or reshape what leaves the server before it reaches a client:
+
+```python
+from genkit.agent import SessionState
+
+
+def redact_state(state: SessionState) -> SessionState:
+    # Drop secrets before the client sees them.
+    return state
+
+
+agent = ai.define_agent(
+    name='supportAgent',
+    model='googleai/gemini-flash-latest',
+    system='Help customers.',
+    state_transform=redact_state,
+)
+```
 
 </Lang>

@@ -110,155 +110,202 @@ specification to work.
 
 <Lang lang="go">
 
-The OpenAI-compatible plugin (`compat_oai`) can be configured to access [xAI (Grok)](https://x.ai/) models.
-This provides access to the `grok` family of models, including `grok-image` for image generation.
+The `xai` plugin gives Genkit access to [xAI](https://x.ai/)'s Grok models through xAI's
+OpenAI-compatible chat completions endpoint. Models are named under the `xai/` provider prefix.
 
 ## Configuration
 
-To use this plugin, import `compat_oai` and specify it when you initialize Genkit.
-
-```go
-import (
-  "context"
-
-  "github.com/firebase/genkit/go/genkit"
-  "github.com/firebase/genkit/go/plugins/compat_oai"
-)
-
-func main() {
-  ctx := context.Background()
-
-  g := genkit.Init(ctx,
-    genkit.WithPlugins(&compat_oai.OpenAICompatible{
-        Provider: "xai",
-        APIKey:   "YOUR_XAI_API_KEY",
-        BaseURL:  "https://api.x.ai/v1",
-    }),
-    genkit.WithDefaultModel("xai/grok-4.3"),
-  )
-}
-```
-
-You must provide an API key from xAI. You can get an API key from your [xAI account settings](https://console.x.ai/).
-
-Configure the plugin to use your API key by doing one of the following:
-
-- Set the `XAI_API_KEY` environment variable to your API key.
-- Specify the API key when you initialize the plugin:
-
-```go
-import (
-    "context"
-    "github.com/openai/openai-go/option"
-)
-
-ctx := context.Background()
-
-x := &compat_oai.OpenAICompatible{
-    Provider: "xai",
-    BaseURL:  "https://api.x.ai/v1",
-    Opts: []option.RequestOption{
-        option.WithAPIKey("your-api-key"),
-    },
-}
-
-g := genkit.Init(ctx,
-  genkit.WithPlugins(x),
-  genkit.WithDefaultModel("xai/grok-4.3"),
-)
-```
-
-As always, avoid embedding API keys directly in your code.
-
-## Usage
+Add `&xai.XAI{}` to your plugin list. The plugin reads the API key from the `XAI_API_KEY`
+environment variable.
 
 ```go
 package main
 
 import (
-  "context"
-  "fmt"
-  "log"
-  "os"
+	"context"
 
-  "github.com/firebase/genkit/go/ai"
-  "github.com/firebase/genkit/go/genkit"
-  "github.com/firebase/genkit/go/plugins/compat_oai"
-  "github.com/openai/openai-go/option"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
 )
 
 func main() {
-  apiKey := os.Getenv("XAI_API_KEY")
-  if apiKey == "" {
-    log.Fatal("XAI_API_KEY not provided")
-  }
+	ctx := context.Background()
 
-  ctx := context.Background()
-
-  x := &compat_oai.OpenAICompatible{
-    Provider: "xai",
-    BaseURL:  "https://api.x.ai/v1",
-    Opts: []option.RequestOption{
-      option.WithAPIKey(apiKey),
-    },
-  }
-
-  g := genkit.Init(ctx,
-    genkit.WithPlugins(x),
-    genkit.WithDefaultModel("xai/grok-4.3"),
-  )
-
-  resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell me a fact about Firebase Genkit"))
-  if err != nil {
-    log.Fatalf("failed to generate response: %v", err)
-  }
-
-  fmt.Print(resp.Text())
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&xai.XAI{}),
+		genkit.WithDefaultModel("xai/grok-4.6"),
+	)
 }
 ```
+
+You must provide an API key from xAI. You can get an API key from your
+[xAI account settings](https://console.x.ai/). Set `XAI_API_KEY`, or set the `APIKey` field.
+Extra OpenAI client request options ride in `Opts`, applied after the plugin defaults so they win
+on overlap.
+
+```go
+import (
+	"context"
+	"os"
+
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
+	"github.com/openai/openai-go/option"
+)
+
+func main() {
+	ctx := context.Background()
+
+	g := genkit.Init(ctx, genkit.WithPlugins(&xai.XAI{
+		APIKey: os.Getenv("MY_XAI_KEY"),
+		Opts: []option.RequestOption{
+			option.WithBaseURL("https://api.x.ai/v1"),
+		},
+	}))
+}
+```
+
+`genkit.Init` panics when neither the `APIKey` field nor `XAI_API_KEY` is set. The endpoint
+defaults to `https://api.x.ai/v1`; override it with the `XAI_BASE_URL` environment variable or
+with `option.WithBaseURL` in `Opts`.
+
+As always, avoid embedding API keys directly in your code.
+
+## Models
+
+The plugin registers these Grok models when it initializes:
+
+- `grok-4.6`: the flagship, and the only model xAI documents `xhigh` reasoning effort for
+- `grok-4.5`
+- `grok-4.3`: the long-context model
+- `grok-4.20-0309-reasoning`
+- `grok-4.20-0309-non-reasoning`
+- `grok-build-0.1`: the agentic coding model, also served as `grok-code-fast-1`
+
+That list is a starting point rather than a limit. Any other Grok model ID resolves on demand and
+takes the plugin's defaults, so a model xAI releases later works without a Genkit upgrade.
+`grok-4.20-multi-agent-0309` is the exception: xAI serves it only through the Responses API, and
+chat completions rejects it.
+
+Structured output combined with tools is a Grok 4 family capability. `grok-build-0.1` and any
+dynamically resolved model advertise structured output without tools, so a request that carries
+both falls back to schema instructions in the prompt.
+
+## Usage
+
+`xai.ModelRef` pairs a model ID with a typed `xai.ChatConfig`, so the config is checked where you
+write it and validated against the model's schema before the request goes out.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(xai.ModelRef("grok-4.6", &xai.ChatConfig{
+		ReasoningEffort: xai.ReasoningEffortLow,
+		MaxOutputTokens: 1024,
+	})),
+	ai.WithPrompt("Explain reinforcement learning in two sentences."),
+)
+if err != nil {
+	log.Fatalf("could not generate: %v", err)
+}
+
+fmt.Println(resp.Text())
+```
+
+The ID passed to `ModelRef` works bare or provider-prefixed. You can also name a model as a string
+with `ai.WithModelName("xai/grok-4.6")` or `genkit.WithDefaultModel`, and pass the config
+separately with `ai.WithConfig(&xai.ChatConfig{...})`. The
+[xAI sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/xai) runs this as
+a streaming flow you can call from the Dev UI.
+
+### Generation config
+
+`xai.ChatConfig` carries the generation fields xAI accepts plus its own request controls:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `Temperature` | `*float64` | Randomness of token selection, 0 to 2. |
+| `TopP` | `*float64` | Nucleus sampling threshold. xAI documents no range for it. |
+| `MaxOutputTokens` | `int` | Sent as the API's `max_completion_tokens`; xAI deprecated `max_tokens`. |
+| `StopSequences` | `[]string` | Up to four. Reasoning models do not support them. |
+| `FrequencyPenalty` | `*float64` | -2 to 2. Reasoning models do not support it. |
+| `PresencePenalty` | `*float64` | -2 to 2. Reasoning models do not support it. |
+| `LogProbs` | `*bool` | Requests log probabilities for the output tokens. |
+| `TopLogProbs` | `*int` | 0 to 8. Requires `LogProbs`. |
+| `Seed` | `*int` | Makes generation reproducible on a best-effort basis. |
+| `ReasoningEffort` | `xai.ReasoningEffort` | `none`, `low`, `medium`, `high`, or `xhigh`. Which levels a model takes is the model's to decide. |
+| `ParallelToolCalls` | `*bool` | `false` caps the model at one tool call per response. |
+| `User` | `string` | Identifies the end user a request is made for, which xAI uses to detect abuse. |
+| `PromptCacheKey` | `string` | Routes requests sharing a prompt prefix to the same backend. Hits come back as `resp.Usage.CachedContentTokens`. |
+| `ServiceTier` | `xai.ServiceTier` | `default`, or `priority` for faster scheduling at a higher rate. |
+
+Pointer fields separate unset from a deliberate zero. `n` and `deferred` are deliberately absent:
+Genkit reads only the first completion choice, and a deferred request answers with an ID to poll
+rather than a completion.
+
+`ChatConfig` also embeds `compat_oai.RequestConfig`, which every plugin in the family shares: a
+per-request `APIKey`, a `Version` pin, and an `Extra` map whose keys ride to the wire verbatim
+under xAI's own names. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible) page.
+
+### Correcting what the plugin knows about a model
+
+Every Grok model works without an entry in `Models`. Supply one only to correct or extend the
+capabilities the plugin resolves, most often for a model released after your Genkit version.
+Fields left at their zero value keep what the plugin resolved.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&xai.XAI{
+	Models: map[string]ai.ModelOptions{
+		"grok-4.5": {
+			Supports: &ai.ModelSupports{
+				Multiturn:  true,
+				Tools:      true,
+				SystemRole: true,
+				Media:      true,
+			},
+		},
+	},
+}))
+```
+
+## Response behavior
+
+Reasoning text, streamed token usage, cached prompt tokens, and mid-generation provider failures
+are handled the same way for every plugin in this family. See the
+[OpenAI-compatible plugin](/docs/integrations/openai-compatible) page.
 
 </Lang>
 
 <Lang lang="python">
 
-The `genkit-plugin-compat-oai` package manages integration for [xAI (Grok)](https://x.ai/) models. The `OpenAI` compatible plugin provides access to the `grok` family of models, including vision models.
-
-:::note
-The xAI plugin is built on top of the OpenAI-compatible plugin architecture. It is pre-configured for xAI's API endpoints.
-:::
+xAI (Grok) is available through the OpenAI-compatible plugin in `genkit-openai`, including vision models.
 
 ## Installation
 
 ```bash
-uv add genkit-plugin-compat-oai
+uv add genkit-openai
 ```
 
 ## Configuration
 
-To use this plugin, import `OpenAI` and specify it when you initialize Genkit:
+Point `OpenAI` at xAI's API:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI
+from genkit_openai import OpenAI
 import os
 
 ai = Genkit(
-    plugins=[OpenAI(base_url='https://api.x.ai/v1', api_key=os.getenv('XAI_API_KEY'))],
+    plugins=[
+        OpenAI(
+            base_url='https://api.x.ai/v1',
+            api_key=os.getenv('XAI_API_KEY'),
+        ),
+    ],
 )
 ```
 
-You must provide an API key from xAI. You can get an API key from your [xAI account settings](https://console.x.ai/).
-
-Configure the plugin to use your API key by doing one of the following:
-
-- Set the `XAI_API_KEY` environment variable to your API key.
-- Specify the API key when you initialize the plugin:
-
-```python
-OpenAI(base_url='https://api.x.ai/v1', api_key='YOUR_API_KEY')
-```
-
-As always, avoid embedding API keys directly in your code.
+Get an API key from your [xAI account settings](https://console.x.ai/) and pass it as `api_key=` when you initialize the plugin—for example from the `XAI_API_KEY` environment variable. Don't embed API keys directly in code.
 
 ## Usage
 
@@ -266,7 +313,7 @@ Use the `openai_model()` helper to reference a Grok model.
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 import os
 
 ai = Genkit(
@@ -312,8 +359,8 @@ class WeatherInput(BaseModel):
     """Input for weather tool."""
     location: str = Field(description='City name')
 
-@ai.tool(description='Get current weather for a location')
-def get_weather(input: WeatherInput) -> str:
+@ai.tool()
+async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
     # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
@@ -321,7 +368,7 @@ def get_weather(input: WeatherInput) -> str:
 response = await ai.generate(
     model=openai_model('grok-4.3'),
     prompt="What's the weather like in Austin?",
-    tools=['get_weather'],
+    tools=[get_weather],
 )
 ```
 
@@ -333,14 +380,15 @@ The plugin supports streaming responses for real-time output:
 from genkit import ActionRunContext
 
 @ai.flow()
-async def streaming_story(name: str, ctx: ActionRunContext | None = None) -> str:
+async def streaming_story(name: str, ctx: ActionRunContext) -> str:
     """Generate a story with streaming output."""
-    response = await ai.generate(
+    stream_response = ai.generate_stream(
         model=openai_model('grok-4.3'),
         prompt=f'Write a short story about {name}',
-        on_chunk=ctx.send_chunk if ctx else None,
     )
-    return response.text
+    async for chunk in stream_response.stream:
+        ctx.send_chunk(chunk.text)
+    return (await stream_response.response).text
 ```
 
 **Vision Capabilities:**
@@ -349,6 +397,8 @@ Use the Grok Vision model to analyze images:
 
 ```python
 from genkit import Part, TextPart, MediaPart, Media
+
+image_url = 'https://example.com/photo.jpg'
 
 response = await ai.generate(
     model=openai_model('grok-4.3'),
@@ -365,7 +415,6 @@ Generate structured data using Pydantic models:
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Output
 
 class MovieRecommendation(BaseModel):
     """A movie recommendation."""
@@ -374,10 +423,12 @@ class MovieRecommendation(BaseModel):
     genre: str = Field(description='Primary genre')
     reason: str = Field(description='Why this movie is recommended')
 
+preferences = 'sci-fi and heist movies'
+
 response = await ai.generate(
     model=openai_model('grok-4.3'),
     prompt=f'Recommend a movie for someone who likes: {preferences}',
-    output=Output(schema=MovieRecommendation),
+    output_schema=MovieRecommendation,
 )
 movie = response.output  # Typed as MovieRecommendation
 ```
@@ -388,7 +439,7 @@ You can pass configuration options that are not defined in the plugin's custom c
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 import os
 
 ai = Genkit(

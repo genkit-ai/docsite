@@ -125,89 +125,193 @@ const llmResponse = await ai.generate({
 
 <Lang lang="go">
 
-The OpenAI-Compatible API package (`compat_oai`) provides a unified interface for accessing multiple AI providers that implement OpenAI's API specification. This includes OpenAI, Anthropic, and other compatible services.
+The `compat_oai` package is the foundation for every Genkit plugin that speaks OpenAI's chat completions API. Each provider in the family ships as a plugin of its own with a typed per-request config, and the base `OpenAICompatible` plugin covers any service that has no dedicated plugin.
 
-## Overview
+## Provider plugins
 
-The `compat_oai` package serves as a foundation for building plugins that work with OpenAI-compatible APIs. It includes:
+Every plugin below lives under `github.com/firebase/genkit/go/plugins/compat_oai/`:
 
-- **Base Implementation**: Common functionality for OpenAI-compatible APIs
-- [**OpenAI Plugin**](/docs/integrations/openai): Direct access to OpenAI's models and embeddings
-- [**Anthropic Plugin**](/docs/integrations/anthropic): Access to Claude models through OpenAI-compatible endpoints
-- **Extensible Framework**: Build custom plugins for other compatible providers
+- [`openai`](/docs/integrations/openai): OpenAI's own GPT and o-series chat models, plus the text embedders.
+- [`anthropic`](/docs/integrations/anthropic): Claude through Anthropic's OpenAI-compatible endpoint.
+- [`dashscope`](/docs/integrations/dashscope): Alibaba Cloud's Qwen models through DashScope's compatible mode.
+- [`deepseek`](/docs/integrations/deepseek): DeepSeek's chat and reasoning models.
+- [`kimi`](/docs/integrations/kimi): Moonshot AI's Kimi models.
+- [`openrouter`](/docs/integrations/openrouter): the OpenRouter gateway, which fronts models from many vendors and adds routing, fallback, and reasoning controls.
+- [`xai`](/docs/integrations/xai): xAI's Grok models.
+- [`zai`](/docs/integrations/zai): Z.ai's GLM models.
 
-## Prerequisites
+Each one is a struct you register with `genkit.WithPlugins`, and each takes an `APIKey` field that wins over its environment variable, plus `Opts []option.RequestOption` for anything else the OpenAI SDK client accepts, such as `option.WithBaseURL` or an extra header.
 
-Depending on which provider you use, you'll need:
+| Plugin                  | Model ID prefix | API key                                 | Base URL                                  | Model config                      |
+| ----------------------- | --------------- | --------------------------------------- | ----------------------------------------- | --------------------------------- |
+| `openai.OpenAI`         | `openai/`       | `OPENAI_API_KEY`                        | no variable, use `Opts`                   | `*openai.ChatCompletionNewParams` |
+| `anthropic.Anthropic`   | `anthropic/`    | `ANTHROPIC_API_KEY`                     | `ANTHROPIC_BASE_URL`                      | `*anthropic.ChatConfig`           |
+| `dashscope.DashScope`   | `dashscope/`    | `DASHSCOPE_API_KEY`                     | `DASHSCOPE_BASE_URL`                      | `*dashscope.ChatConfig`           |
+| `deepseek.DeepSeek`     | `deepseek/`     | `DEEPSEEK_API_KEY`                      | `DEEPSEEK_BASE_URL`                       | `*deepseek.ChatConfig`            |
+| `kimi.Kimi`             | `kimi/`         | `KIMI_API_KEY`, then `MOONSHOT_API_KEY` | `KIMI_BASE_URL`, then `MOONSHOT_BASE_URL` | `*kimi.ChatConfig`                |
+| `openrouter.OpenRouter` | `openrouter/`   | `OPENROUTER_API_KEY`                    | `OPENROUTER_BASE_URL`                     | `*openrouter.ChatConfig`          |
+| `xai.XAI`               | `xai/`          | `XAI_API_KEY`                           | `XAI_BASE_URL`                            | `*xai.ChatConfig`                 |
+| `zai.ZAI`               | `zai/`          | `ZAI_API_KEY`                           | `ZAI_BASE_URL`                            | `*zai.ChatConfig`                 |
 
-- **OpenAI**: API key from [OpenAI API Keys page](https://platform.openai.com/api-keys)
-- **Anthropic**: API key from [Anthropic Console](https://console.anthropic.com/)
-- **Other providers**: API keys from the respective services
+`genkit.Init` panics when a plugin finds no API key in either its field or its environment variable. The `anthropic` plugin is the exception: it registers its models anyway, and the missing key surfaces when you send a request.
 
-## Configuration
+:::note[Two Anthropic plugins]
+`plugins/compat_oai/anthropic` and the native [`plugins/anthropic`](/docs/integrations/anthropic) both claim the provider name `anthropic`, so `genkit.Init` panics if you register both. Pick one per app. The native plugin is the one to use for production Claude work, since it returns thinking as Genkit reasoning parts with their signatures preserved; Anthropic positions the compatible endpoint for testing and comparison, and it keeps thinking content server-side.
+:::
 
-### Use with Compatible Providers
+## Typed configuration
+
+Each plugin declares its own `ChatConfig` type rather than sharing one, because providers disagree about which sampling fields exist, what they are called, and what they accept: DeepSeek takes neither penalty, the Kimi K-series drops temperature too, and Z.ai caps temperature at 1 where OpenAI allows 2. Pass the config through the plugin's `ModelRef`, or through `ai.WithConfig`. Genkit validates it against the schema inferred from the type before the request goes out, so a misspelled field or an out-of-range value fails before it is billed, and the Dev UI renders a documented form for it.
 
 ```go
 import (
     "context"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
+)
+
+ctx := context.Background()
+g := genkit.Init(ctx, genkit.WithPlugins(&deepseek.DeepSeek{})) // reads DEEPSEEK_API_KEY
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
+        MaxOutputTokens: 1024,
+        Thinking:        &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled},
+    })),
+    ai.WithPrompt("Share a joke about bananas."),
+)
+```
+
+The provider samples are this program with nothing but the plugin and its config changed, so the [DeepSeek one](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/deepseek) and the [OpenRouter one](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/openrouter) read as the same flow twice.
+
+Every `ChatConfig` in the family embeds `compat_oai.RequestConfig`, which carries the three settings Genkit owns rather than the provider:
+
+- `APIKey` serves this one request with a different credential. It never serializes, so it stays out of the config schema, out of recorded traces, and out of the request body, and it can only be set from Go code.
+- `Version` pins the exact model version the request is served by, overriding the model ID.
+- `Extra` sends request body fields the config does not declare. Keys are the provider's wire names, usually snake_case, not the camelCase names the declared fields use, and a colliding key wins over the declared field. The fields Genkit builds from the request itself, such as `messages`, `tools`, `tool_choice`, and `response_format`, are rejected rather than forwarded.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(dashscope.ModelRef("qwen3.7-max", &dashscope.ChatConfig{
+        RequestConfig: compat_oai.RequestConfig{
+            Version: "qwen3.7-max-2026-06-08",
+            Extra:   map[string]any{"enable_search": true},
+        },
+        MaxOutputTokens: 1024,
+    })),
+    ai.WithPrompt("Share a joke about bananas."),
+)
+```
+
+## Model catalogs
+
+Each plugin registers a curated catalog of models when it initializes, and resolves any other ID on demand. The curated entries are capability metadata, a label, the known versions, and what the model supports, not an allowlist: a model released after the plugin was written still works, described with generic defaults. The `openrouter` plugin curates nothing at all, since the gateway fronts hundreds of models from dozens of vendors, so every ID there resolves on demand and the Dev UI lists no catalog for it.
+
+To correct or extend what a plugin knows about a model, add an entry to its `Models` map, keyed by bare or prefixed model ID. Entries overlay what the plugin resolved, so a field left at its zero value keeps the resolved value, and they apply to curated models as well as dynamic ones.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{
+    Models: map[string]ai.ModelOptions{
+        "gpt-4o": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+    },
+}))
+```
+
+## Response fields
+
+Every plugin in the family fills in three response fields that are easy to miss.
+
+**Reasoning.** Providers send reasoning text under two non-standard fields: `reasoning_content` (DeepSeek, Kimi) and `reasoning` (OpenRouter's normalized field). Both are read, in that order, and the first non-empty one becomes a single Genkit reasoning part. A response carrying both is read once, not concatenated. Reach it with `resp.Reasoning()`.
+
+**Cost.** A gateway that prices the request reports it as `resp.Usage.Custom["cost"]`, in whatever currency the gateway bills in. Presence of the key decides, not its value: a free-tier request is priced at an explicit zero, which is an answer. Read it with the two-value map form rather than testing for a value above zero. Provider endpoints that do not price requests leave the key absent.
+
+**Provider failure.** A gateway whose upstream provider fails part-way through a generation reports it differently depending on the transport, so the two cases reach you differently.
+
+On a non-streaming request the gateway answers with HTTP 200, the text produced so far, and an error object, so nothing about the transport says the request went wrong. Genkit maps that to `ai.FinishReasonOther`, puts the provider's message in `resp.FinishMessage`, and puts the whole error object on `resp.Raw` under the `error` key, which carries the status code and the name of the provider that failed. The partial text is still in `resp.Text()`.
+
+On a streaming request the failure arrives at the top level of a chunk, which ends the stream. Whatever was generated before it has already reached your streaming callback, but `Generate` returns a classified error rather than an aggregate response, so a caller and any middleware around it are told the generation failed instead of being handed a short answer that reads as a complete one. The status is recovered from the failure's own code where the gateway sends one, so retry and fallback middleware can tell a rate limit from a request the provider will refuse again.
+
+```go
+if cost, ok := resp.Usage.Custom["cost"]; ok {
+    fmt.Printf("this request cost %v\n", cost)
+}
+
+// Non-streaming: the failure rides on the response.
+if resp.FinishReason == ai.FinishReasonOther {
+    fmt.Printf("the provider failed: %s\n", resp.FinishMessage)
+    if raw, ok := resp.Raw.(map[string]any); ok {
+        fmt.Printf("error detail: %v\n", raw["error"])
+    }
+    fmt.Printf("partial text: %s\n", resp.Text())
+}
+
+// Streaming: the failure comes back as a classified error instead.
+if _, err := genkit.Generate(ctx, g, ai.WithStreaming(onChunk)); err != nil {
+    if errors.Is(err, status.ErrResourceExhausted) {
+        // Rate limited part-way through. Worth retrying.
+    }
+}
+```
+
+`resp.Custom` carries the same map as `resp.Raw` for older code, but it is deprecated; prefer `resp.Raw`.
+
+## Custom provider
+
+For a service with no dedicated plugin, register `compat_oai.OpenAICompatible` itself. Give it a `Provider` name, which becomes both the plugin's name and the prefix its model IDs carry, plus `APIKey`, `BaseURL`, and any `Opts` the client needs. If the service's models endpoint does not speak OpenAI's pagination, supply a `ListModels` function that returns every model it serves.
+
+The base plugin knows nothing about the service it points at, so it ships no typed config and no `ModelRef` helper. Models take the OpenAI SDK's own `openai.ChatCompletionNewParams` as their config, and you name them with `ai.NewModelRef` under the provider prefix; the advertised schema is the SDK's minus the fields Genkit builds from the request, which are rejected by name rather than silently dropped.
+
+```go
+import (
+    "context"
+
+    "github.com/firebase/genkit/go/ai"
     "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/compat_oai"
+    "github.com/openai/openai-go"
     "github.com/openai/openai-go/option"
 )
 
 ctx := context.Background()
 
-// Initialize Genkit with the OpenAICompatible plugin
-g := genkit.Init(ctx,
-    genkit.WithPlugins(&compat_oai.OpenAICompatible{
-        Provider: "myprovider",
-        APIKey:   "YOUR_API_KEY",
-        BaseURL:  "https://your-custom-endpoint.com/v1",
-        Opts: []option.RequestOption{
-            option.WithOrganization("your-org-id"),
-            option.WithHeader("Custom-Header", "value"),
-        },
-    }),
-)
-```
+g := genkit.Init(ctx, genkit.WithPlugins(&compat_oai.OpenAICompatible{
+    Provider: "myprovider",
+    APIKey:   "YOUR_API_KEY",
+    BaseURL:  "https://your-custom-endpoint.com/v1",
+    Opts: []option.RequestOption{
+        option.WithHeader("Custom-Header", "value"),
+    },
+}))
 
-### Common Configuration
-
-OpenAI-compatible configuration options are supported:
-
-```go
-import (
-    "context"
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
-    "github.com/openai/openai-go"
-)
-
-ctx := context.Background()
-
-config := &openai.ChatCompletionNewParams{
-  Temperature:         openai.Float(0.7),
-  MaxCompletionTokens: openai.Int(1000),
-  TopP:                openai.Float(0.9),
-}
+// The base plugin ships no ModelRef helper, so name the model yourself.
+model := ai.NewModelRef("myprovider/model-name", &openai.ChatCompletionNewParams{
+    Temperature:         openai.Float(0.7),
+    MaxCompletionTokens: openai.Int(1024),
+})
 
 resp, err := genkit.Generate(ctx, g,
-  ai.WithModelName("myprovider/model-name"),
-  ai.WithPrompt("Your prompt here"),
-  ai.WithConfig(config),
+    ai.WithModel(model),
+    ai.WithPrompt("Share a joke about bananas."),
 )
 ```
+
+The [compat_oai/custom sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/custom) is this shape end to end. Prefer a dedicated plugin whenever one exists: the SDK request type has no home for provider extensions such as routing, thinking, or reasoning budgets, and its schema rejects them.
+
+:::caution
+`OpenAICompatible.DefineModel` is still the untyped path, and it is deprecated. It builds a model whose config is validated against nothing, so an unknown key is accepted and forwarded to the provider instead of being refused at the action boundary. Use `OpenAICompatible.NewModel`, which takes the provider from the plugin rather than as an argument, for a model the framework validates.
+:::
 
 </Lang>
 
 <Lang lang="python">
 
-The OpenAI-Compatible API package (`genkit-plugin-compat-oai`) provides a unified interface for accessing multiple AI providers that implement OpenAI's API specification. This includes OpenAI and other compatible services.
+The OpenAI-Compatible API package (`genkit-openai`) provides a unified interface for accessing multiple AI providers that implement OpenAI's API specification. This includes OpenAI and other compatible services.
 
 ## Overview
 
-The `compat_oai` package serves as a foundation for building plugins that work with OpenAI-compatible APIs. It includes:
+The `genkit-openai` package serves as a foundation for building plugins that work with OpenAI-compatible APIs. It includes:
 
 - **Base Implementation**: Common functionality for OpenAI-compatible APIs
 - [**OpenAI Plugin**](/docs/integrations/openai): Direct access to OpenAI's models and embeddings
@@ -223,7 +327,7 @@ Depending on which provider you use, you'll need:
 ## Installation
 
 ```bash
-uv add genkit-plugin-compat-oai
+uv add genkit-openai
 ```
 
 ## Configuration
@@ -232,7 +336,7 @@ uv add genkit-plugin-compat-oai
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI
+from genkit_openai import OpenAI
 
 # Custom base URL for OpenAI-compatible services
 ai = Genkit(
@@ -253,7 +357,7 @@ OpenAI-compatible configuration options are supported:
 
 ```python
 from genkit import Genkit
-from genkit.plugins.compat_oai import OpenAI, openai_model
+from genkit_openai import OpenAI, openai_model
 
 ai = Genkit(plugins=[OpenAI()])
 

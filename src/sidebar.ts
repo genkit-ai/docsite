@@ -124,6 +124,10 @@ const DOCS_SIDEBAR = [
       { label: "Tool calling", slug: "docs/tool-calling" },
       { label: "Prompt templating", slug: "docs/dotprompt" },
       { label: "Runtime context", slug: "docs/context" },
+      {
+        label: "Concurrency and lifecycle",
+        slug: "docs/concurrency",
+      },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Agentic patterns", slug: "docs/agentic-patterns" },
       { label: "Interrupts", slug: "docs/interrupts" },
@@ -136,6 +140,7 @@ const DOCS_SIDEBAR = [
       },
       { label: "Durable streaming", slug: "docs/durable-streaming" },
       { label: "Frontend integration", slug: "docs/client" },
+      { label: "Testing", slug: "docs/testing" },
       { label: "Evaluation", slug: "docs/evaluation" },
       { label: "Error types", slug: "docs/error-types" },
       {
@@ -219,6 +224,10 @@ const DOCS_SIDEBAR = [
       { label: "Azure AI Foundry", slug: "docs/integrations/azure-foundry" },
       { label: "xAI (Grok)", slug: "docs/integrations/xai" },
       { label: "DeepSeek", slug: "docs/integrations/deepseek" },
+      { label: "OpenRouter", slug: "docs/integrations/openrouter" },
+      { label: "Kimi", slug: "docs/integrations/kimi" },
+      { label: "Z.ai", slug: "docs/integrations/zai" },
+      { label: "DashScope (Qwen)", slug: "docs/integrations/dashscope" },
       { label: "Ollama", slug: "docs/integrations/ollama" },
     ],
   },
@@ -309,6 +318,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "API references", slug: "docs/api-references" },
       { label: "API stability", slug: "docs/api-stability" },
+      { label: "Roadmap", slug: "docs/roadmap" },
       { label: "Feedback", slug: "docs/feedback" },
     ],
   },

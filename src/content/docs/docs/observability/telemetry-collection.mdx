@@ -42,6 +42,15 @@ tiers. Specific pricing can be found at the following links:
 The Firebase telemetry plugin collects a number of different metrics to support
 the various Genkit action types detailed in the following sections.
 
+<Lang lang="go">
+
+:::note
+The Go SDK hard-codes the `source` dimension to `go` on every metric and every
+log payload. You can filter or group on it, but you cannot change it.
+:::
+
+</Lang>
+
 ### Feature metrics
 
 Features are the top-level entry-point to your Genkit code. In most cases, this
@@ -72,7 +81,7 @@ Each feature metric contains the following dimensions:
 | name          | The name of the feature. In most cases, this is the top-level Genkit flow        |
 | status        | 'success' or 'failure' depending on whether or not the feature request succeeded |
 | error         | Only set when `status=failure`. Contains the error type that caused the failure  |
-| source        | The Genkit source language. Eg. 'ts'                                             |
+| source        | The Genkit SDK language that emitted the telemetry                               |
 | sourceVersion | The Genkit framework version                                                     |
 
 ### Action and Path metrics
@@ -176,7 +185,7 @@ Each generate metric contains the following dimensions:
 | latencyMs     | The response time taken by the model                                                                 |
 | status        | 'success' or 'failure' depending on whether or not the feature request succeeded                     |
 | error         | Only set when `status=failure`. Contains the error type that caused the failure                      |
-| source        | The Genkit source language. Eg. 'ts'                                                                 |
+| source        | The Genkit SDK language that emitted the telemetry                                                   |
 | sourceVersion | The Genkit framework version                                                                         |
 
 ## Traces
@@ -395,7 +404,7 @@ Metadata:
 | model         | Model name.                                                                                                                                                     |
 | path          | The execution path that generated this log of the format `step1 > step2 > step3                                                                                 |
 | qualifiedPath | The execution path that generated this log, including type information of the format: `/{flow1,t:flow}/{generate,t:util}/{modelProvider/model,t:action,s:model` |
-| source        | The Genkit library language used. This will always be set to 'ts' as it is the only supported language.                                                         |
+| source        | The Genkit SDK language that emitted the log.                                                                                                                   |
 | sourceVersion | The Genkit library version.                                                                                                                                     |
 | temperature   | Model temperature used.                                                                                                                                         |
 
@@ -414,3 +423,38 @@ Metadata:
 | ---------- | ---------------------------------------------------------------- |
 | flowName   | The name of the Genkit flow, action, tool, util, or helper.      |
 | paths      | An array containing all execution paths for the collected spans. |
+
+<Lang lang="go">
+
+## Sensitive data
+
+Read the two halves of this page together before you deploy anything that
+handles regulated or personal data.
+
+- **Traces carry no content.** The `genkit/input` and `genkit/output` span
+  attributes are always `<redacted>`. That is a consequence of Cloud Trace's
+  256-byte attribute value limit, not a privacy feature, and it is true whatever
+  you configure.
+- **Logs carry everything.** The Input, Output, and Config log payloads above
+  contain the full prompt text, the full model response, and the model
+  configuration. Those go to Cloud Logging.
+
+`DisableLoggingInputAndOutput: true` on `firebase.FirebaseTelemetryOptions` (or
+`googlecloud.GoogleCloudTelemetryOptions`) suppresses that content. It is the
+only built-in control and it is all or nothing: there is no per-field, per-flow,
+or per-key redaction option.
+
+:::caution
+Middleware that scrubs the `ModelRequest` does not help here. The log payloads
+are built from the span, not from the request your middleware rewrote, so the
+original text still reaches Cloud Logging.
+:::
+
+For selective redaction, wrap the span exporter and rewrite attributes on the
+way out. The `redactingSpanExporter` pattern in
+[Writing Genkit plugins](/docs/plugin-authoring/overview#pii-redaction) is the
+supported way to do it, and applications may use it, not just plugins. See
+[Advanced configuration](/docs/observability/advanced-configuration) for the
+option reference.
+
+</Lang>
