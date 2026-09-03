@@ -1411,7 +1411,7 @@ class LoggerMiddleware extends GenerateMiddleware {
 
 ### 3. Define the middleware and plugin
 
-Use `defineMiddleware` to link your schema and implementation, and expose it via a `GenkitPlugin`.
+Use `defineMiddleware` to link your schema and implementation, and expose it via a `GenkitPlugin`. The `create` callback receives the resolved `config` and a `GenerateMiddlewareContext` (`ctx`).
 
 ```dart
 class LoggerPlugin extends GenkitPlugin {
@@ -1419,14 +1419,59 @@ class LoggerPlugin extends GenkitPlugin {
   String get name => 'logger';
 
   @override
-  List middleware() => [
-    defineMiddleware(
+  List<GenerateMiddlewareDef> middleware() => [
+    defineMiddleware<LoggerOptions>(
       name: 'logger',
-      configSchema: LoggerOptions.schema,
-      create: ([LoggerOptions? config]) => LoggerMiddleware(
+      configSchema: LoggerOptions.$schema,
+      create: (config, ctx) => LoggerMiddleware(
         enableColor: config?.enableColor ?? false,
         maxLogLength: config?.maxLogLength ?? 1000,
       ),
+    ),
+  ];
+}
+```
+
+The `ctx` argument carries an ephemeral `GenkitAI` instance (`ctx.ai`) backed by the active registry. This lets a middleware run its own AI operations (`generate`, `generateStream`, `embed`) and resolve other registered actions at request time, which is useful for building guardrails, classifiers, or routers. For example, a safety middleware can screen a request with the model before letting it proceed:
+
+```dart
+class SafetyMiddleware extends GenerateMiddleware {
+  final GenkitAI ai;
+
+  SafetyMiddleware(this.ai);
+
+  @override
+  Future<GenerateResponseHelper> generate(
+    GenerateTurnState envelope,
+    ActionFnArg<ModelResponseChunk, GenerateActionOptions, void> ctx,
+    Future<GenerateResponseHelper> Function(
+      GenerateTurnState envelope,
+      ActionFnArg<ModelResponseChunk, GenerateActionOptions, void> ctx,
+    ) next,
+  ) async {
+    // Use the ephemeral GenkitAI to classify the request before proceeding.
+    final verdict = await ai.generate(
+      prompt: 'Reply "block" if this request is unsafe, otherwise "allow": '
+          '${envelope.request.messages.last.text}',
+    );
+    if (verdict.text.trim().toLowerCase().startsWith('block')) {
+      throw GenkitException('Request blocked by safety middleware.');
+    }
+    return next(envelope, ctx);
+  }
+}
+
+class SafetyPlugin extends GenkitPlugin {
+  @override
+  String get name => 'safety';
+
+  @override
+  List<GenerateMiddlewareDef> middleware() => [
+    defineMiddleware(
+      name: 'safety',
+      // `ctx.ai` is an ephemeral GenkitAI the middleware can use for its own
+      // generate/embed calls at request time.
+      create: (config, ctx) => SafetyMiddleware(ctx.ai),
     ),
   ];
 }
