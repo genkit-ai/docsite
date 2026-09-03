@@ -1,29 +1,152 @@
 ---
-title: Interactive UI with A2UI
-description: Let a Genkit agent stream interactive UI surfaces that a browser renders, using the A2UI protocol.
+title: Generative UI (A2UI)
+description: Stream interactive UI surfaces from Genkit agents to web clients and Flutter apps using the A2UI protocol.
 supportedLanguages:
+  - js
   - go
+  - dart
 ---
 
 import Lang from '../../../../components/Lang.astro';
+import PackageManagerTabs from '../../../../components/PackageManagerTabs.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 :::caution[Preview]
-The A2UI plugin is in **preview** and may introduce breaking changes in minor releases.
+The Agents API and A2UI plugin are in **preview** and may introduce breaking changes in minor releases.
 :::
 
-<Lang lang="go">
+[A2UI](https://a2ui.org/) ("Agent to UI") is an open, transport-agnostic, JSON-based streaming UI protocol designed for agentic applications.
 
-[A2UI](https://a2ui.org/) ("Agent to UI") is a transport-agnostic, JSON-based streaming UI protocol. An agent that speaks it streams not only prose but **surfaces**: declarative UI that a client renders incrementally and the user can act on, with the action returning to the agent as its next turn. The `github.com/firebase/genkit/go/plugins/a2ui` package adds that to a Genkit agent, or to a plain generate call, as one middleware.
+In standard conversational AI, agents communicate with users strictly through text or Markdown prose. With A2UI, an agent can stream rich, interactive **UI surfaces**—such as cards, lists, input forms, and buttons—that client applications render incrementally in real time as the model generates them.
 
 ## How a surface travels
 
-A surface rides on its own part channel. The middleware emits a Genkit data part carrying the MIME type `application/a2ui+json` (`a2ui.A2UIMimeType`) whose `data` is an object `{"envelopes": [...]}` wrapping an array of A2UI envelope messages, such as `createSurface`, `updateComponents`, and `updateDataModel`. That is the A2A binding of the A2UI spec, so the envelopes are byte-compatible with the JavaScript and Dart plugins and with the `@a2ui/*` renderers. A Go agent served over HTTP therefore works unchanged with a browser frontend written against a JavaScript backend.
+A surface rides on its own data part channel within the Genkit streaming response:
 
-## Add the middleware
+- The server middleware emits Genkit data parts carrying the MIME type `application/a2ui+json`.
+- The part's `data` payload is an object `{"envelopes": [...]}` wrapping an array of A2UI envelope messages, such as `createSurface`, `updateComponents`, and `updateDataModel`.
+- This follows the A2A binding of the A2UI specification, so emitted envelopes are byte-compatible across the JavaScript, Go, and Dart plugins, and can be consumed by standard `@a2ui/*` web renderers or Flutter [`genui`](https://pub.dev/packages/genui).
 
-`a2ui.Surfaces` is the whole server-side integration. Attach it with `ai.WithUse` to a generate call, or to an agent's inline prompt:
+Because the wire protocol is completely decoupled from the server language, an agent written in Go, JavaScript/TypeScript, or Dart can stream to a web frontend or Flutter client without compatibility hurdles.
+
+## Server: Add the middleware
+
+To give an agent generative UI capabilities, attach the A2UI middleware to your agent or model pipeline. The middleware injects the active catalog's capabilities into the prompt, intercepts streamed model outputs, extracts `a2ui` fenced code blocks, validates them against the catalog, and rewrites them into canonical A2UI data parts. Outside these blocks, standard prose passes through untouched.
+
+<Lang lang="js">
+
+### Install the server plugin
+
+Install `@genkit-ai/a2ui` along with your core Genkit packages:
+
+<PackageManagerTabs
+  command={`
+npm install @genkit-ai/a2ui genkit @genkit-ai/google-genai @genkit-ai/express
+`}
+/>
+
+### Configure the agent
+
+Pass `a2ui()` in the agent's `use` array. When configured without options, the agent defaults to the bundled **basic catalog**, exposing 12 core layout, content, and interactive components.
+
+```ts
+import { genkit, z, InMemorySessionStore } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+import { a2ui } from '@genkit-ai/a2ui';
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+// A sample tool the model can call to fetch data before generating UI
+const getWeather = ai.defineTool(
+  {
+    name: 'getWeather',
+    description: 'Gets current weather conditions for a city.',
+    inputSchema: z.object({ city: z.string() }),
+    outputSchema: z.object({
+      city: z.string(),
+      tempC: z.number(),
+      condition: z.string(),
+      humidity: z.number(),
+    }),
+  },
+  async ({ city }) => {
+    return {
+      city,
+      tempC: 22,
+      condition: 'Partly cloudy',
+      humidity: 55,
+    };
+  },
+);
+
+export const uiAgent = ai.defineAgent({
+  name: 'uiAgent',
+  model: googleAI.model('gemini-flash-latest'),
+  system: `You are an interactive assistant that can render rich UI surfaces.
+Prefer rendering an A2UI surface whenever a visual display is clearer than plain prose,
+such as weather forecasts, comparisons, lists, forms, or interactive cards. Keep prose
+brief and place the primary information in the UI components.`,
+  tools: [getWeather],
+  use: [a2ui()],
+  store: new InMemorySessionStore(),
+});
+
+// Serve the agent over HTTP
+const app = express();
+app.use(express.json());
+app.post('/api/uiAgent', expressHandler(uiAgent));
+app.listen(8080, () => {
+  console.log('Server running on http://localhost:8080');
+});
+```
+
+The middleware also works with one-shot `ai.generate()` calls:
+
+```ts
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Show me the current weather in Tokyo',
+  use: [a2ui()],
+});
+```
+
+### Options
+
+The `a2ui()` middleware accepts the following options:
+
+| Option         | Default     | Description                                                                                                                                                       |
+| -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog`      | `'basic'`   | Catalog ID resolved from the Genkit registry.                                                                                                                     |
+| `instructions` | `'system'`  | Where to inject catalog capabilities. Set to `'system'` to append to the system prompt, or `'none'` to omit.                                                      |
+| `validate`     | `'warn'`    | Envelope validation strategy. `'warn'` logs invalid envelopes and drops them; `'strict'` throws errors on validation failure; `'off'` disables envelope checking. |
+| `surfaceId`    | `undefined` | Surface ID assignment policy. Defaults to generating a fresh UUID per surface. Provide a fixed string to reuse a single surface.                                  |
+| `version`      | `'v0.9'`    | The A2UI protocol version stamped on emitted envelopes.                                                                                                           |
+
+</Lang>
+
+<Lang lang="go">
+
+### Install the Go package
+
+Add the A2UI plugin to your Go module:
+
+```bash
+go get github.com/firebase/genkit/go/plugins/a2ui
+```
+
+### Configure the agent
+
+Attach `&a2ui.Surfaces{}` with `ai.WithUse` to an agent's prompt or a generate call. When called without options, it defaults to the bundled **basic catalog**.
+
+The [`basic-middleware/a2ui`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/a2ui) sample serves an agent configured with the middleware:
 
 ```go
+package main
+
 import (
 	"context"
 	"log"
@@ -38,14 +161,70 @@ import (
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/middleware"
 )
+
+func main() {
+	ctx := context.Background()
+	g, err := genkit.Init(ctx,
+		genkit.WithExperimental(),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	type WeatherInput struct {
+		City string `json:"city"`
+	}
+
+	type WeatherOutput struct {
+		City      string  `json:"city"`
+		TempC     float64 `json:"tempC"`
+		Condition string  `json:"condition"`
+		Humidity  int     `json:"humidity"`
+	}
+
+	getWeather := genkitx.DefineTool(g, "getWeather",
+		"Gets current weather conditions for a city.",
+		func(ctx context.Context, in WeatherInput) (WeatherOutput, error) {
+			return WeatherOutput{
+				City:      in.City,
+				TempC:     22,
+				Condition: "Partly cloudy",
+				Humidity:  55,
+			}, nil
+		},
+	)
+
+	uiAgent := genkitx.DefineAgent(g, "uiAgent",
+		aix.InlinePrompt{
+			ai.WithModelName("googleai/gemini-flash-latest"),
+			ai.WithSystem("You are a helpful assistant that can render rich UI. Prefer a surface whenever a result is clearer shown than told."),
+			ai.WithTools(getWeather),
+			ai.WithUse(&middleware.Retry{MaxRetries: 5}, &a2ui.Surfaces{}),
+		},
+		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/uiAgent", genkit.Handler(uiAgent))
+	mux.Handle("/api/uiAgent/getSnapshot", genkit.Handler(uiAgent.GetSnapshotAction()))
+	mux.Handle("/api/uiAgent/abort", genkit.Handler(uiAgent.AbortAction()))
+
+	log.Println("Server running on http://localhost:8080")
+	http.ListenAndServe(":8080", mux)
+}
 ```
+
+`POST /api/uiAgent` is the standard endpoint expected by client applications, with `getSnapshot` and `abort` at the sub-paths derived by the client. See [Serve agents over HTTP](/docs/agents/http) for endpoint routing and CORS setup.
+
+You can also attach the middleware to a standalone `genkit.Generate` call:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithSystem("You help users. Render UI when it is clearer than prose."),
 	ai.WithPrompt("Show me the weather in Tokyo."),
-	ai.WithUse(&a2ui.Surfaces{}), // defaults to the bundled basic catalog
+	ai.WithUse(&a2ui.Surfaces{}),
 )
 if err != nil {
 	return err
@@ -56,83 +235,26 @@ for _, envelope := range a2ui.EnvelopesFromParts(resp.Message.Content) {
 }
 ```
 
-Each turn, the middleware injects the catalog's capabilities into the system prompt, then intercepts the model's output, streamed chunks and the final message alike: it extracts `a2ui` fenced blocks, validates them against the catalog, and rewrites them into a2ui data parts. Prose outside the blocks passes through untouched. `a2ui.EnvelopesFromParts` reads the envelopes back off any message, chunk, or response content, and `a2ui.IsPart` reports whether one part is an a2ui part.
+The middleware maintains streaming turn state. When pairing with middleware that re-invokes the model (such as `Retry` or `Fallback`), place them outside `Surfaces`: `ai.WithUse(&middleware.Retry{}, &a2ui.Surfaces{})` ensures each retry attempt gets a fresh A2UI turn.
 
-The middleware keeps streaming state for the turn it wraps, so place any middleware that re-invokes the model, such as `Retry` or `Fallback`, outside it. `ai.WithUse(&middleware.Retry{}, &a2ui.Surfaces{})` is that order, since the first listed middleware is the outermost, and each attempt then gets a fresh A2UI turn.
+`a2ui.EnvelopesFromParts` extracts envelopes from any message or chunk content, while `a2ui.IsPart` reports whether a given part carries A2UI data.
 
 ### Options
 
 Every field of `a2ui.Surfaces` is per-call configuration:
 
-| Field          | Default      | Description                                                                                                                                                                    |
-| -------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Catalog`      | nil          | An inline catalog for code-defined use. It is not serialized, so a JSON-dispatched call ignores it; prefer `CatalogID`. Overrides `CatalogID` when set.                          |
-| `CatalogID`    | `"basic"`    | The ID of a catalog registered with `LoadCatalog`, resolved from the registry on each call.                                                                                    |
-| `Instructions` | `"system"`   | Where the catalog's capabilities are injected. `"none"` injects nothing, for a prompt that carries its own instructions.                                                       |
-| `Validate`     | `"warn"`     | How malformed envelopes are handled. `"warn"` logs and drops the block, `"strict"` fails the call, `"off"` passes everything through. See [The trust boundary](#the-trust-boundary). |
-| `SurfaceID`    | a fresh UUID | A fixed surface ID to reuse for every surface, for a client that keeps one surface live.                                                                                       |
-| `Version`      | `"v0.9"`     | The protocol version stamped on envelopes. Must be one of `a2ui.SupportedVersions`; a typo is rejected by `New`.                                                               |
+| Field          | Default      | Description                                                                                                                                                                            |
+| -------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Catalog`      | `nil`        | An inline catalog for code-defined use. Overrides `CatalogID` when set. Not serialized for JSON-dispatched calls; prefer `CatalogID`.                                                 |
+| `CatalogID`    | `"basic"`    | The ID of a catalog registered with `LoadCatalog`, resolved from the registry on each call.                                                                                           |
+| `Instructions` | `"system"`   | Where the catalog's capabilities are injected. Set to `"none"` to omit prompt injection when managing instructions manually.                                                           |
+| `Validate`     | `"warn"`     | How malformed envelopes are handled: `"warn"` logs and drops the block; `"strict"` fails the call; `"off"` passes everything through. See [The trust boundary and security](#the-trust-boundary-and-security). |
+| `SurfaceID`    | a fresh UUID | A fixed surface ID to reuse for every surface, for a client that maintains a single live surface.                                                                                      |
+| `Version`      | `"v0.9"`     | The protocol version stamped on envelopes. Must be one of `a2ui.SupportedVersions`.                                                                                                    |
 
-## Serve an agent to a browser
+### Register as a plugin
 
-The [basic-middleware/a2ui](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/a2ui) sample serves an agent whose only A2UI wiring is the middleware in its inline prompt:
-
-```go
-uiAgent := genkitx.DefineAgent(g, "uiAgent",
-	aix.InlinePrompt{
-		ai.WithModelName("googleai/gemini-flash-latest"),
-		ai.WithSystem("You are a helpful assistant that can render rich UI. Prefer a surface whenever a result is clearer shown than told."),
-		ai.WithTools(getWeather),
-		ai.WithUse(&middleware.Retry{MaxRetries: 5}, &a2ui.Surfaces{}),
-	},
-	aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
-)
-
-mux := http.NewServeMux()
-mux.Handle("/api/uiAgent", genkit.Handler(uiAgent))
-mux.Handle("/api/uiAgent/getSnapshot", genkit.Handler(uiAgent.GetSnapshotAction()))
-mux.Handle("/api/uiAgent/abort", genkit.Handler(uiAgent.AbortAction()))
-```
-
-`POST /api/uiAgent` is the endpoint the JavaScript `remoteAgent` client expects, with `getSnapshot` and `abort` at the paths it derives from the base URL, so the browser frontend in the repository's `js/testapps/a2ui/web` talks to the Go backend without a change. Its `@a2ui/lit` renderer draws the streamed surface, and a button on it round-trips an action back to the agent. See [Serve agents over HTTP](/docs/agents/http) for the wire protocol and the CORS wrapper a cross-origin frontend needs.
-
-## Send user actions back
-
-When the user interacts with a surface, the client renderer emits an action. Send it back as the next turn: the action's name as the user message text, with the full action attached as an a2ui data part. The middleware sanitizes inbound a2ui parts into a short text summary the model can reason about, so the agent learns what the user did without reading the raw envelope.
-
-## Catalogs
-
-A catalog pins the set of components a surface may use. The middleware uses it twice: to tell the model what it may render, and to check that emitted envelopes reference only known components. The client registers a matching `@a2ui/*` catalog under the same ID.
-
-The bundled `a2ui.BasicCatalog()` mirrors the A2UI basic catalog (`a2ui.BasicCatalogID`) and is what `Surfaces` uses when neither `Catalog` nor `CatalogID` is set. Register your own with `LoadCatalog`, or from a JSON file with `LoadCatalogFile`, and reference it by ID:
-
-```go
-myCatalog := &a2ui.Catalog{
-	ID: "https://my-app.org/catalogs/custom.json",
-	Components: []a2ui.CatalogComponent{
-		{Name: "Banner", Description: "A prominent alert banner.", Props: "title: string (required); severity?: info|warning|error."},
-	},
-}
-if err := a2ui.LoadCatalog(g, myCatalog); err != nil {
-	return err
-}
-
-resp, err := genkit.Generate(ctx, g,
-	ai.WithModelName("googleai/gemini-flash-latest"),
-	ai.WithPrompt("Warn the user that the deploy is paused."),
-	ai.WithUse(&a2ui.Surfaces{CatalogID: myCatalog.ID}),
-)
-```
-
-A catalog file has the same shape as the struct: an `id` string and a `components` array whose entries carry `name`, `description`, and `props`. `Props` is model-facing prose rather than a JSON Schema, which keeps the injected prompt compact.
-
-Registered catalogs live in the Genkit registry under the value type `a2ui-catalog`, so tooling can list them, and `a2ui.RegisterBasicCatalog(g)` adds the bundled one so it appears there too. Re-registering the same ID is idempotent, and a different catalog under an existing ID keeps the original and logs a warning. The middleware resolves the catalog for each turn in this order: the inline `Catalog`, then `CatalogID` from the registry, then the bundled basic catalog.
-
-The wire representation of a catalog and its envelopes is identical across the JavaScript, Go, and Dart plugins. The registry key differs: Go keys by the catalog's own `ID`, while the JavaScript plugin keys by a caller-chosen lookup ID and names its config field `catalog`. Tooling that matches catalogs across runtimes should match on the catalog's `id` value.
-
-## Register as a plugin
-
-Passing `&a2ui.Surfaces{}` to `ai.WithUse` needs no plugin. Register `&a2ui.A2UI{}` to make the middleware appear in the Developer UI and resolvable by name, for example from a `.prompt` file's `use:` list, where it is `a2ui`:
+Passing `&a2ui.Surfaces{}` directly to `ai.WithUse` does not require registering a plugin. However, registering `&a2ui.A2UI{}` makes the middleware discoverable by name in the Developer UI and in `.prompt` files (`use: [a2ui]`):
 
 ```go
 g := genkit.Init(ctx,
@@ -141,16 +263,689 @@ g := genkit.Init(ctx,
 )
 ```
 
-The plugin carries no settings of its own. Every option lives on the per-call `Surfaces`, so a middleware configured in code and one dispatched by name from the Developer UI cannot disagree with each other.
+</Lang>
 
-## The trust boundary
+<Lang lang="dart">
 
-`Validate` checks structure and component type names against the catalog. It is a well-formedness check, not a sanitizer, even in `"strict"` mode. Model-controlled values pass through untouched: an `Image`'s `url`, a `Text`'s content, which may carry inline Markdown a renderer turns into HTML, and every other prop. Treat rendered surfaces as untrusted output driven by the model. Prop sanitization belongs to the renderer and the catalog, which should escape or constrain what each component accepts, and hosts should restrict image and other remote sources with a content security policy so a model-controlled URL cannot load hostile content or exfiltrate data. The boundary is the same one the JavaScript plugin draws.
+### Install the server package
+
+Add `genkit_a2ui` alongside your core Genkit packages:
+
+```bash
+dart pub add genkit genkit_a2ui genkit_google_genai genkit_shelf shelf_router
+```
+
+### Configure the agent
+
+In Genkit Dart, middleware is resolved from the registry, so you must register `A2uiPlugin()` in `Genkit(plugins: [...])` before referencing `a2ui()`. Add `a2ui()` to the agent's `use` list to enable generative UI with the default **basic catalog**:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_a2ui/a2ui.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf_router/shelf_router.dart';
+
+// Register A2uiPlugin so `use: [a2ui()]` resolves from the registry
+final ai = Genkit(plugins: [googleAI(), A2uiPlugin()]);
+
+final uiAgent = ai.defineAgent(
+  name: 'uiAgent',
+  model: googleAI.gemini('gemini-flash-latest'),
+  system:
+      'You help users. Render an A2UI surface whenever a result is clearer '
+      'shown than told. Keep prose brief; put the primary substance in the UI.',
+  use: [a2ui()], // defaults to the bundled 'basic' catalog
+  store: InMemorySessionStore(),
+);
+
+// Serve the agent over HTTP using shelf
+final app = Router();
+app.post('/api/uiAgent', shelfHandler(uiAgent.action));
+app.post(
+  '/api/uiAgent/getSnapshot',
+  shelfHandler(uiAgent.getSnapshotDataAction),
+);
+app.post('/api/uiAgent/abort', shelfHandler(uiAgent.abortAgentAction));
+```
+
+The middleware also works with one-shot `ai.generate()` calls:
+
+```dart
+final res = await ai.generate(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'Show me the weather in Tokyo',
+  use: [a2ui()],
+);
+```
+
+### Options
+
+Pass configuration options to `a2ui(...)`:
+
+| Option         | Default      | Description                                                                                                                                                                            |
+| -------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog`      | `'basic'`    | Catalog ID resolved from the Genkit registry.                                                                                                                                          |
+| `instructions` | `'system'`   | Where to inject catalog capabilities. Set to `'system'` to append to the system prompt, or `'none'` to omit.                                                                           |
+| `validate`     | `'warn'`     | Envelope validation strategy. `'warn'` logs invalid envelopes and drops them; `'strict'` throws errors on validation failure; `'off'` passes everything through. See [The trust boundary and security](#the-trust-boundary-and-security). |
+| `surfaceId`    | a fresh UUID | Surface ID assignment policy. Defaults to a new UUID per surface; pass a fixed string to reuse a single surface.                                                                       |
+| `version`      | `'v0.9'`     | The A2UI protocol version stamped on emitted envelopes.                                                                                                                                |
+
+</Lang>
+
+## Client: Render surfaces
+
+Because A2UI emits standardized JSON envelopes over HTTP, client-side rendering is completely decoupled from your backend language. A web frontend or Flutter client can interact seamlessly with a backend written in TypeScript, Go, or Dart.
+
+<Tabs syncKey="client-lang">
+
+<TabItem label="Web (JavaScript / Lit)">
+
+Web clients use `@a2ui/web_core` and an A2UI renderer. A2UI provides official renderers for Web Components/Lit ([`@a2ui/lit`](https://www.npmjs.com/package/@a2ui/lit)), React ([`@a2ui/react`](https://www.npmjs.com/package/@a2ui/react)), and Angular ([`@a2ui/angular`](https://www.npmjs.com/package/@a2ui/angular)).
+
+The examples below use the Lit renderer.
+
+#### 1. Install client packages
+
+Install the client dependencies along with the `@genkit-ai/a2ui` client helper:
+
+<PackageManagerTabs
+  command={`
+npm install @a2ui/lit @a2ui/web_core @a2ui/markdown-it lit @lit/context @genkit-ai/a2ui genkit
+`}
+/>
+
+#### 2. Add client font styles
+
+The basic catalog's `Icon` component renders icon names as ligatures using the **Material Symbols Outlined** font. Include the stylesheet in your web app's HTML `<head>` so icons render visually:
+
+```html
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0..1,0"
+/>
+```
+
+#### 3. Initialize client styles and markdown rendering
+
+Initialize `@a2ui/web_core` styles and provide the Markdown renderer context on the document body so all `<a2ui-surface>` elements inherit formatting:
+
+```ts
+import { Context, basicCatalog } from '@a2ui/lit/v0_9';
+import '@a2ui/lit/v0_9'; // Registers <a2ui-surface> and basic catalog custom elements
+import { renderMarkdown } from '@a2ui/markdown-it';
+import { MessageProcessor } from '@a2ui/web_core/v0_9';
+import { injectBasicCatalogStyles } from '@a2ui/web_core/v0_9/basic_catalog';
+import { ContextProvider } from '@lit/context';
+
+// Inject catalog styling
+injectBasicCatalogStyles();
+
+// Provide the markdown renderer to surface elements
+new ContextProvider(document.body as any, {
+  context: Context.markdown,
+  initialValue: renderMarkdown,
+});
+```
+
+#### 4. Stream and process agent turns
+
+Connect to your backend endpoint using `remoteAgent()` from `genkit/beta/client`. Iterate over `turn.stream`, appending prose deltas to your chat view and feeding extracted A2UI envelopes into the `MessageProcessor`:
+
+```ts
+import { MessageProcessor } from '@a2ui/web_core/v0_9';
+import { basicCatalog } from '@a2ui/lit/v0_9';
+import { remoteAgent } from 'genkit/beta/client';
+import {
+  a2uiEnvelopesFromParts,
+  actionToMessage,
+  type A2uiClientAction,
+} from '@genkit-ai/a2ui/client';
+
+const agent = remoteAgent({ url: '/api/uiAgent' });
+const chat = agent.chat();
+
+// Set up the message processor with the basic catalog
+const processor = new MessageProcessor([basicCatalog], (action) => {
+  handleAction(action as unknown as A2uiClientAction);
+});
+
+// Mount new surfaces when created
+processor.onSurfaceCreated((surface) => {
+  const container = document.getElementById('chat-log')!;
+  const surfaceEl = document.createElement('a2ui-surface') as any;
+  surfaceEl.surface = surface;
+  container.appendChild(surfaceEl);
+});
+
+// Stream a user message
+async function sendMessage(text: string) {
+  const turn = chat.sendStream(text);
+
+  for await (const chunk of turn.stream) {
+    // 1. Render prose text deltas
+    if (chunk.text) {
+      appendProseText(chunk.text);
+    }
+
+    // 2. Extract and process A2UI envelopes from raw data parts
+    const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
+    if (envelopes.length > 0) {
+      processor.processMessages(envelopes);
+    }
+  }
+
+  await turn.response;
+}
+```
+
+#### Stream using the lightweight helper
+
+If you do not require full session management with `remoteAgent`, `@genkit-ai/a2ui/client` also provides the `streamA2uiAgent` async generator:
+
+```ts
+import { streamA2uiAgent } from '@genkit-ai/a2ui/client';
+
+for await (const event of streamA2uiAgent({
+  url: '/api/uiAgent',
+  message: 'What is the weather in Tokyo?',
+})) {
+  if (event.type === 'text') {
+    appendProseText(event.text);
+  } else if (event.type === 'envelopes') {
+    processor.processMessages(event.envelopes);
+  }
+}
+```
+
+`streamA2uiAgent` accepts `sessionId`, `headers`, and `abortSignal` in its configuration object.
+
+</TabItem>
+
+<TabItem label="Flutter (Dart / genui)">
+
+Flutter applications render A2UI surfaces using [`genui`](https://pub.dev/packages/genui). Client components use `package:genkit/client.dart`, `package:genkit_a2ui/client.dart`, and `package:a2ui_core/a2ui_core.dart`.
+
+#### 1. Install client packages
+
+Add the client packages to your Flutter app:
+
+```bash
+flutter pub add genkit genkit_a2ui genui a2ui_core
+```
+
+#### 2. Set up the SurfaceController and remoteAgent
+
+`package:genkit_a2ui/client.dart` is browser- and Flutter-safe (no `dart:io`). Initialize `remoteAgent`, construct a `SurfaceController` with the basic catalog, and stream agent turns:
+
+```dart
+import 'package:a2ui_core/a2ui_core.dart' as core;
+import 'package:flutter/material.dart';
+import 'package:genkit/client.dart';
+import 'package:genkit_a2ui/client.dart';
+import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
+
+// remoteAgent connects to your backend endpoint
+final agent = remoteAgent(
+  url: 'http://localhost:8080/api/uiAgent',
+  getSnapshotUrl: 'http://localhost:8080/api/uiAgent/getSnapshot',
+  abortUrl: 'http://localhost:8080/api/uiAgent/abort',
+);
+final chat = agent.chat();
+
+// Re-tag genui's basic catalog with the plugin's advertised basicCatalogId
+final catalog = BasicCatalogItems.asCatalog().copyWith(
+  catalogId: basicCatalogId,
+);
+final surfaceController = SurfaceController(catalogs: [catalog]);
+```
+
+:::note[Symbol conflicts]
+Importing both `package:genkit/client.dart` and `package:genui/genui.dart` causes collisions on `basicCatalogId` and `DataPart`. Hide them when importing `genui`: `import 'package:genui/genui.dart' hide basicCatalogId, DataPart;`.
+:::
+
+#### 3. Stream and process agent turns
+
+Iterate over `turn.stream`, parsing A2UI envelopes from the chunk's content using `a2uiEnvelopesFromParts`, and pass each envelope as an `A2uiMessage` to `surfaceController.handleMessage`:
+
+```dart
+final turn = chat.sendStream(text: 'What is the weather in Tokyo?');
+
+await for (final chunk in turn.stream) {
+  // 1. Append prose text
+  if (chunk.text.isNotEmpty) {
+    appendProse(chunk.text);
+  }
+
+  // 2. Extract and handle A2UI envelopes
+  for (final envelope in a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content)) {
+    surfaceController.handleMessage(core.A2uiMessage.fromJson(envelope));
+  }
+}
+
+await turn.response;
+```
+
+#### 4. Mount the Surface widget
+
+Listen to `surfaceController.surfaceUpdates` to detect new surfaces, and render `Surface(surfaceContext: surfaceController.contextFor(surfaceId))` in your UI:
+
+```dart
+surfaceController.surfaceUpdates.listen((update) {
+  if (update is SurfaceAdded) {
+    setState(() {
+      entries.add(update.surfaceId);
+    });
+  }
+});
+
+// Inside your build method or ListView:
+Widget buildSurface(String surfaceId) {
+  return IntrinsicHeight(
+    child: Surface(
+      surfaceContext: surfaceController.contextFor(surfaceId),
+    ),
+  );
+}
+```
+
+Wrap `Surface` in `IntrinsicHeight` when placed inside scrollable views such as `ListView` to provide bounded constraints for components that stretch vertically.
+
+</TabItem>
+
+</Tabs>
+
+## Handle user actions and forms
+
+When users interact with components (such as clicking a `Button`), the surface triggers an action that is sent back to the agent as the next conversational turn.
+
+<Tabs syncKey="client-lang">
+
+<TabItem label="Web (JavaScript / Lit)">
+
+Use `actionToMessage()` to wrap the client action into an `AgentInput` message and send it as the next conversational turn:
+
+```ts
+import {
+  actionToMessage,
+  a2uiEnvelopesFromParts,
+  type A2uiClientAction,
+} from '@genkit-ai/a2ui/client';
+
+async function handleAction(action: A2uiClientAction) {
+  // Send the action payload as the next turn in the conversation
+  const turn = chat.sendStream({
+    message: actionToMessage(action),
+  });
+
+  for await (const chunk of turn.stream) {
+    if (chunk.text) appendProseText(chunk.text);
+    const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
+    if (envelopes.length > 0) processor.processMessages(envelopes);
+  }
+
+  await turn.response;
+}
+```
+
+`actionToMessage` puts the action's `name` in the user message text so models without custom prompt handling understand the action, and attaches the complete structured action data (including bound form context) as an A2UI data part. The server middleware sanitizes inbound action parts into concise text summaries for the model.
+
+</TabItem>
+
+<TabItem label="Flutter (Dart / genui)">
+
+In Flutter, listen to `surfaceController.onSubmit`. Genui emits a `ChatMessage` containing a `UiInteractionPart`, which you decode into an `A2uiClientAction` and convert with `actionToMessage`:
+
+```dart
+import 'dart:convert';
+import 'package:genkit_a2ui/client.dart';
+import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
+
+surfaceController.onSubmit.listen((ChatMessage message) {
+  final action = _actionFromSubmit(message);
+  if (action == null || busy) return;
+
+  final turn = chat.sendStream(message: actionToMessage(action));
+  // Stream prose and envelopes as usual...
+});
+
+A2uiClientAction? _actionFromSubmit(ChatMessage message) {
+  for (final part in message.parts) {
+    final interaction = part.asUiInteractionPart?.interaction;
+    if (interaction == null) continue;
+    final decoded = jsonDecode(interaction);
+    final action = decoded is Map ? decoded['action'] : null;
+    if (action is Map) {
+      final m = action.cast<String, dynamic>();
+      return A2uiClientAction(
+        name: (m['name'] as String?) ?? 'action',
+        surfaceId: (m['surfaceId'] as String?) ?? '',
+        sourceComponentId: (m['widgetId'] as String?) ?? '',
+        timestamp: DateTime.now().toUtc().toIso8601String(),
+        context: (m['context'] as Map?)?.cast<String, dynamic>() ?? const {},
+      );
+    }
+  }
+  return null;
+}
+```
+
+</TabItem>
+
+</Tabs>
+
+### Form inputs and data binding
+
+Input components (`TextField`, `CheckBox`, and `Slider`) do not broadcast values on every keystroke. To capture input upon submission:
+
+1. The input component binds its `value` to a data-model path (for example, `{ "path": "/email" }`).
+2. The submit `Button` specifies those same data-model paths in its `action.event.context`.
+
+The instructions injected by the A2UI middleware guide the model to configure these bindings. When the user clicks submit, the client renderer resolves the bound paths from the surface data model and passes the values in `action.context`.
+
+## The basic component catalog
+
+The built-in basic catalog provides 12 core components across layout, content, and interactive categories:
+
+### Layout components
+
+- **`Row`**: Lays out child components horizontally.
+  - Props: `children: string[]` (required IDs), `justify?: start|center|end|spaceAround|spaceBetween|spaceEvenly|stretch`, `align?: start|center|end|stretch`.
+- **`Column`**: Lays out child components vertically.
+  - Props: `children: string[]` (required IDs), `justify?: start|center|end|spaceBetween|spaceAround|spaceEvenly|stretch`, `align?: start|center|end|stretch`.
+- **`List`**: Displays a scrollable or sequential list of items.
+  - Props: `children: string[]` (required IDs), `direction?: vertical|horizontal`, `listStyle?: ordered|unordered|none`.
+- **`Card`**: A styled card container with elevation and borders wrapping a single child.
+  - Props: `child: string` (required ID of the child component; use a `Column` or `Row` to group multiple elements).
+- **`Divider`**: A visual separator line.
+  - Props: `axis?: horizontal|vertical`.
+
+### Content components
+
+- **`Text`**: Displays plain text or inline Markdown.
+  - Props: `text: string` (required), `variant?: h1|h2|h3|h4|h5|caption|body`.
+- **`Image`**: Displays a remote image.
+  - Props: `url: string` (required), `description?: string`, `fit?: contain|cover|fill|none|scaleDown`, `variant?: icon|avatar|smallFeature|mediumFeature|largeFeature|header`.
+- **`Icon`**: Displays a standard Material symbol ligature.
+  - Props: `name: string` (required). Must be one of the supported names, such as `check`, `close`, `refresh`, `star`, `info`, `warning`, `error`, `search`, `home`, or `favorite`.
+
+### Interactive components
+
+- **`Button`**: A clickable button that fires an action back to the agent.
+  - Props: `child: string` (required child ID, typically a `Text`), `variant?: default|primary|borderless`, `action: { event: { name: string, context?: object } }` (required).
+- **`TextField`**: A single- or multi-line text input field.
+  - Props: `label: string` (required), `value?: string or { path } binding`, `variant?: shortText|longText|number|obscured`.
+- **`CheckBox`**: A toggleable checkbox.
+  - Props: `label: string` (required), `value: boolean or { path } binding` (required).
+- **`Slider`**: A numeric range slider.
+  - Props: `max: number` (required), `value: number or { path } binding` (required), `min?: number`, `step?: number`, `label?: string`.
+
+## Custom catalogs
+
+When you want agents to render custom UI widgets or components tailored to your design system, you can register a custom catalog. A catalog defines:
+
+- `id`: A globally unique URI for the catalog (matching the client-side renderer).
+- `components`: An array of component definitions with `name`, `description`, and compact `props` documentation. `props` is model-facing guidance rather than strict JSON Schema, keeping injected prompt tokens minimal.
+
+### Catalog JSON definition
+
+Define your catalog in a JSON file (such as `./catalogs/dashboard.json`):
+
+```json
+{
+  "id": "https://example.com/catalogs/dashboard.json",
+  "components": [
+    {
+      "name": "MetricCard",
+      "description": "Displays a key metric with a title, numeric value, and change indicator.",
+      "props": "title: string (required); value: string|number (required); trend?: up|down|neutral; percentage?: number."
+    },
+    {
+      "name": "Text",
+      "description": "Displays plain or inline-markdown text.",
+      "props": "text: string (required); variant?: body|caption."
+    }
+  ]
+}
+```
+
+### Register the catalog on the server
+
+<Lang lang="js">
+
+Load the catalog file using `loadCatalog`:
+
+```ts
+import { loadCatalog } from '@genkit-ai/a2ui';
+
+await loadCatalog(ai, {
+  id: 'dashboard',
+  file: './catalogs/dashboard.json',
+});
+```
+
+You can also define catalogs directly in memory, extending `basicCatalog`:
+
+```ts
+import { loadCatalog, basicCatalog, type A2uiCatalog } from '@genkit-ai/a2ui';
+
+const dashboardCatalog: A2uiCatalog = {
+  id: 'https://example.com/catalogs/dashboard.json',
+  components: [
+    ...basicCatalog.components,
+    {
+      name: 'MetricCard',
+      description: 'Displays a key metric with a title, numeric value, and trend indicator.',
+      props: 'title: string (required); value: string|number (required); trend?: up|down|neutral.',
+    },
+  ],
+};
+
+await loadCatalog(ai, {
+  id: 'dashboard',
+  catalog: dashboardCatalog,
+});
+```
+
+To use it, pass the registered catalog ID to `a2ui()`:
+
+```ts
+export const dashboardAgent = ai.defineAgent({
+  name: 'dashboardAgent',
+  model: googleAI.model('gemini-flash-latest'),
+  system: 'You generate executive dashboards using MetricCards and structured layouts.',
+  use: [
+    a2ui({
+      catalog: 'dashboard',
+      validate: 'strict',
+    }),
+  ],
+});
+```
+
+</Lang>
+
+<Lang lang="go">
+
+Load a catalog from a JSON file with `LoadCatalogFile`, or construct a `Catalog` struct in memory and register it with `LoadCatalog`:
+
+```go
+myCatalog := &a2ui.Catalog{
+	ID: "https://example.com/catalogs/dashboard.json",
+	Components: []a2ui.CatalogComponent{
+		{
+			Name:        "MetricCard",
+			Description: "Displays a key metric with a title, numeric value, and trend indicator.",
+			Props:       "title: string (required); value: string|number (required); trend?: up|down|neutral.",
+		},
+	},
+}
+if err := a2ui.LoadCatalog(g, myCatalog); err != nil {
+	return err
+}
+```
+
+Or from a file:
+
+```go
+if err := a2ui.LoadCatalogFile(g, "./catalogs/dashboard.json"); err != nil {
+	return err
+}
+```
+
+Reference the registered catalog by ID in `a2ui.Surfaces`:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithPrompt("Show dashboard metrics."),
+	ai.WithUse(&a2ui.Surfaces{CatalogID: "https://example.com/catalogs/dashboard.json"}),
+)
+```
+
+Catalogs live in the Genkit registry under `a2ui-catalog`. The Go plugin keys registrations by the catalog's own `ID`, while JavaScript keys by a user-specified lookup key. The underlying wire protocol and catalog JSON schemas are identical.
+
+</Lang>
+
+<Lang lang="dart">
+
+Load a catalog from a JSON file with `loadCatalog(ai, id: ..., file: ...)` or construct an `A2uiCatalog` in memory:
+
+```dart
+import 'package:genkit_a2ui/a2ui.dart';
+
+const dashboardCatalogId = 'https://example.com/catalogs/dashboard.json';
+
+final dashboardCatalog = A2uiCatalog(
+  id: dashboardCatalogId,
+  components: [
+    ...basicCatalog.components,
+    const A2uiCatalogComponent(
+      name: 'MetricCard',
+      description: 'Displays a key metric with a title, numeric value, and trend indicator.',
+      props: 'title: string (required); value: string|number (required); trend?: up|down|neutral.',
+    ),
+  ],
+);
+
+// Register at startup before handling turns
+await loadCatalog(ai, id: dashboardCatalogId, catalog: dashboardCatalog);
+```
+
+Then configure your agent with `catalog: dashboardCatalogId`:
+
+```dart
+final dashboardAgent = ai.defineAgent(
+  name: 'dashboardAgent',
+  model: googleAI.gemini('gemini-flash-latest'),
+  use: [a2ui(catalog: dashboardCatalogId, validate: 'strict')],
+  store: InMemorySessionStore(),
+);
+```
+
+</Lang>
+
+### Register matching widgets on the client
+
+The client application must register a matching catalog renderer under the exact same catalog ID and support the corresponding component names:
+
+<Tabs syncKey="client-lang">
+
+<TabItem label="Web (JavaScript / Lit)">
+
+Create a custom component renderer and supply it alongside `basicCatalog` to the `MessageProcessor`:
+
+```ts
+import { MessageProcessor } from '@a2ui/web_core/v0_9';
+import { basicCatalog } from '@a2ui/lit/v0_9';
+
+const customCatalog = {
+  id: 'https://example.com/catalogs/dashboard.json',
+  components: {
+    // Custom web component renderers mapped to component names
+    MetricCard: metricCardRenderer,
+  },
+};
+
+const processor = new MessageProcessor([basicCatalog, customCatalog], (action) => {
+  handleAction(action);
+});
+```
+
+</TabItem>
+
+<TabItem label="Flutter (Dart / genui)">
+
+In Flutter, implement the component as a genui `CatalogItem` and add it to the catalog with `copyWith`:
+
+```dart
+import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
+
+final metricCardItem = CatalogItem(
+  name: 'MetricCard', // Must match the server component name
+  dataSchema: metricCardSchema,
+  widgetBuilder: (itemContext) {
+    return MetricCardWidget(context: itemContext);
+  },
+);
+
+final customCatalog = BasicCatalogItems.asCatalog().copyWith(
+  newItems: [metricCardItem],
+  catalogId: 'https://example.com/catalogs/dashboard.json', // Must match server ID
+);
+
+final surfaceController = SurfaceController(catalogs: [customCatalog]);
+```
+
+</TabItem>
+
+</Tabs>
+
+## The trust boundary and security
+
+Because generative UI renders model-generated structures in the client DOM or Flutter widget tree, treat every emitted surface as **untrusted output**:
+
+- **Validation checks structure, not values:** The `validate` option (`strict` or `warn`) verifies envelope structure and component names against the active catalog. It does not sanitize property values (such as `Image.url` or Markdown text within `Text`).
+- **Sanitize in the client renderer:** The client renderer is responsible for sanitizing property values before mounting them into the DOM or widget tree. Markdown parsers must escape raw HTML tags unless intentionally permitted and sanitized.
+- **Enforce Content Security Policy (CSP):** For web applications, configure a strong CSP restricting `img-src` and fetch destinations to trusted domains to prevent remote code execution or data exfiltration.
+- **Protect secrets:** Do not place confidential tokens or sensitive IDs in the surface data model, as any bound data may be returned to the server in user action payloads.
+
+## Under the hood
+
+A2UI operates as a specialized data channel within the Genkit runtime:
+
+1. **Prompt capability injection:** The middleware augments the system prompt with the active catalog's components and prop descriptions.
+2. **Stream interception:** As the model generates text, the middleware intercepts and parses `a2ui` fenced code blocks.
+3. **Envelope translation:** Emitted envelopes are validated against the catalog and packaged into Genkit `data` parts with MIME type `application/a2ui+json`.
+4. **Action translation:** Inbound user actions sent via `actionToMessage()` are converted into concise summaries for the model while preserving full structured payloads in conversation history.
 
 ## Next steps
 
-- [Serve agents over HTTP](/docs/agents/http) covers the routes and the browser client.
-- [Middleware](/docs/middleware) covers composition order and the built-in middleware to pair with `Surfaces`.
-- [Run and stream agents](/docs/agents/run) covers reading a turn's chunks, where a2ui data parts arrive alongside text.
+<Lang lang="js">
+
+- [Serve agents over HTTP](/docs/agents/http/) covers Express setup and client connectivity in detail.
+- [Sessions and state](/docs/agents/state/) explains session stores, history, and client state.
+- [Define agents](/docs/agents/define/) covers agent definitions, tools, and configurations.
+- Explore the [`a2ui` testapp](https://github.com/genkit-ai/genkit/tree/main/js/testapps/a2ui) for a complete runnable sample with Express and Lit.
 
 </Lang>
+
+<Lang lang="go">
+
+- [Serve agents over HTTP](/docs/agents/http/) covers endpoint routing and the browser client.
+- [Middleware](/docs/middleware/) covers composition order and built-in middleware to pair with `Surfaces`.
+- [Run and stream agents](/docs/agents/run/) covers reading a turn's chunks, where A2UI data parts arrive alongside text.
+- Explore the [`basic-middleware/a2ui`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/a2ui) sample for a complete Go backend.
+
+</Lang>
+
+<Lang lang="dart">
+
+- [Deploying agents with Shelf](/docs/agents/http/) covers server endpoints and client connectivity.
+- [Sessions and state](/docs/agents/state/) covers Dart session stores and history.
+- [Define agents](/docs/agents/define/) covers agent definitions and tools in Dart.
+- Explore the [`a2ui` testapp](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/a2ui) for a complete runnable Flutter + Shelf sample.
+
+</Lang>
+
+- [A2UI specification](https://a2ui.org/) provides the full protocol and catalog specification.

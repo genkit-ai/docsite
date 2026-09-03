@@ -156,7 +156,7 @@ const DOCS_SIDEBAR = [
       { label: "Define agents", slug: "docs/agents/define" },
       { label: "Run and stream", slug: "docs/agents/run" },
       { label: "Serve over HTTP", slug: "docs/agents/http" },
-      { label: "Interactive UI (A2UI)", slug: "docs/agents/a2ui" },
+      { label: "Generative UI (A2UI)", slug: "docs/agents/a2ui" },
       { label: "Sessions and state", slug: "docs/agents/state" },
       { label: "Session stores", slug: "docs/agents/session-stores" },
       { label: "Interrupts", slug: "docs/agents/interrupts" },
