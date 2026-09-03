@@ -1188,9 +1188,11 @@ Check the three results in order: the error, then the value, then the fields.
 whenever the response carried no text to parse, which is what a turn holding a
 tool request, an interrupt, or media looks like. That is a legitimate answer, not
 a failure, so it is yours to interpret: read `resp.Interrupts()`,
-`resp.ToolRequests()`, and `resp.FinishReason`. A response with no content at all
-and an ordinary finish reason is an error instead, and `resp` is nil there, so
-never read it before checking `err`.
+`resp.ToolRequests()`, and `resp.FinishReason`. A refusal is the exception: a
+`blocked` finish returns `ai.ErrGenerationBlocked` with the response beside it,
+since a nil value with no error would read as success. Check `err` first either
+way. `resp` is nil only when the request failed before the model was called,
+such as for an unknown model.
 
 The [basic-structured](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-structured)
 sample carries the whole pattern, including the streaming form.
@@ -1288,10 +1290,12 @@ Only one prompt survives: `ai.WithPrompt()` shares a single slot with the other
 prompt options, and the last one set wins, so each pass replaces the instruction
 rather than stacking another.
 
-Note the discarded response. On a schema failure the parse happens before
-`genkit.Generate()` returns, so it hands back a nil `*ai.ModelResponse` along
-with the error. The offending text is not available to you; the validation
-error, which names the field that failed, is what you have to work with.
+The response comes back beside the error. A schema failure happens after the
+model has finished, so `genkit.Generate()` hands back the response with its
+original message and finish reason, and `resp.Text()` holds the output that
+failed to parse. The loop above feeds the model only the validation error, which
+names the field that failed; showing it the text it produced is the other
+option.
 
 :::caution[Retry middleware does not cover this]
 `middleware.Retry` hooks the Model stage only: it retries individual model API
@@ -1324,12 +1328,21 @@ plugins map any provider reason they do not recognize to it.
 
 What that means at the call site:
 
-- `genkit.GenerateData()` gives you a nil value, the response, and no error when
-  such a response carried no text. Read `resp.FinishReason` and
-  `resp.FinishMessage` for a block, and `resp.Interrupts()` for a pause.
-- `genkit.GenerateDataStream()` ends with a final value whose `Output` is the
-  zero value of your type, again with no error, so check `val.Response` there
-  rather than the output.
+- A refusal is an error from the typed helpers. `genkit.GenerateData()`,
+  `genkit.GenerateDataStream()`, and the `DataPrompt` execute methods return
+  `ai.ErrGenerationBlocked` when the finish reason is `blocked`, carrying the
+  provider's explanation and with the response beside the error, because a zero
+  value with no error would read as success. `genkit.Generate()` still hands a
+  blocked response back as a value, so read `resp.FinishReason` there.
+- The other abnormal finishes are not failures. `genkit.GenerateData()` gives
+  you a nil value, the response, and no error when the response carried no text
+  to parse, which is also what a turn holding only tool requests or an interrupt
+  looks like; read `resp.Interrupts()` for a pause. `genkit.GenerateDataStream()`
+  ends with a final value whose `Output` is the zero value of your type, so
+  check `val.Response` there rather than the output.
+- Streamed chunks are provisional. They parse as they arrive, before any finish
+  reason exists, so a generation that streams half a value and then blocks has
+  already yielded a populated chunk. The final value settles it.
 - A response that stopped early but still carries conforming text parses as
   usual, so the skip costs you nothing in the common case.
 
@@ -2012,7 +2025,7 @@ confirm caching is working.
 
 | Plugin                                                        | Caching in Go                                                                                                                                          |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [Google AI and Vertex AI](/docs/integrations/google-genai)     | Explicit. Call `WithCacheTTL()` on the last message you want cached.                                                                                     |
+| [Google AI and Vertex AI](/docs/integrations/google-genai)     | Implicit on Gemini 2.5 and later, on by default with no storage charge. Explicit through `WithCacheTTL()` on the last message you want cached, which bills a cache resource for its lifetime in exchange for a guaranteed hit. |
 | [OpenAI-compatible](/docs/integrations/openai-compatible)      | Implicit, decided by the provider. [xAI](/docs/integrations/xai) adds a `PromptCacheKey` config field that routes matching prefixes to the same backend. |
 | [Anthropic](/docs/integrations/anthropic)                      | Not available. The plugin reports `CachedContentTokens` on a hit but has no way to place a cache breakpoint.                                             |
 
@@ -2028,10 +2041,56 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-Context caching there is exclusive with tools and with system prompts: a request
-that marks a message for caching and also carries either one is rejected with
-`INVALID_ARGUMENT`. Not every Gemini model version supports it, so check the
-provider's documentation before you rely on it.
+The marked prefix is uploaded once and referenced by name afterwards rather than
+resent, so the request carries only the messages after the marker, and a later
+request that replays the history reuses the same cache. Explicit caching is
+exclusive with tools and with system prompts: a request that marks a message for
+caching and also carries either one is rejected with `INVALID_ARGUMENT`. Not every
+Gemini model version supports it, so check the provider's documentation before
+you rely on it, and see [Context caching](/docs/integrations/google-genai#context-caching)
+for reusing a cache by name.
+
+### Failed and stopped generations
+
+Once the request has resolved, an error comes back beside a partial
+`*ai.ModelResponse` rather than a nil one, so the work the tool loop completed is
+not lost with the call that ended it:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Plan the trip."),
+	ai.WithTools(searchFlights, bookHotel),
+	ai.WithMaxTurns(3),
+)
+if err != nil && resp != nil {
+	transcript := resp.History() // The completed rounds. Send them again to retry.
+	cause := resp.Error          // The same failure, classified.
+	log.Printf("stopped after %d messages: %s", len(transcript), cause.Status)
+}
+```
+
+`FinishReason` says which kind of stop it was. `ai.FinishReasonFailed` means
+something broke, a model call or a tool. `ai.FinishReasonAborted` means the
+caller stopped the loop, through a cancelled context, an expired deadline, or a
+limit it set such as `ai.WithMaxTurns`. `FinishMessage` carries the cause as
+text and `resp.Error` carries it classified, so a response that travelled as
+data, in a trace or a persisted turn, still says why it stopped without anyone
+matching a string.
+
+`History()` ends at a turn seam: the completed rounds of a model message and
+the tool message answering it, and nothing from the turn that failed. A failed
+tool discards its whole round, the model message that requested it and the
+siblings that succeeded included, because no provider accepts a conversation
+that ends in an unanswered tool request; `Message` is nil on such a response.
+Send the history back with `ai.WithMessages()` to retry the failed step without
+repeating the tool calls that already succeeded. Text streamed before the
+failure reached your callback and the trace, but not the response.
+
+The stream helpers keep the same contract: `genkit.GenerateStream()` and
+`genkit.GenerateDataStream()` yield the error beside a final value that is
+`Done` and carries the partial in `Response`. Errors raised before the request
+was sent, such as an unknown model or an invalid option, still come with a nil
+response, so check `resp` before reading it.
 
 ### Timeouts and cancellation
 
@@ -2049,8 +2108,10 @@ resp, err := genkit.Generate(ctx, g,
 ```
 
 Cancelling the context aborts the in-flight provider call and ends the tool loop.
-An expired deadline classifies as `status.DeadlineExceeded`; an explicit cancel
-classifies as `status.Cancelled`. See [Error types](/docs/error-types).
+The response comes back beside the error, marked `ai.FinishReasonAborted` and
+holding the rounds that completed. An expired deadline classifies as
+`status.DeadlineExceeded`; an explicit cancel classifies as `status.Cancelled`.
+See [Error types](/docs/error-types).
 
 :::caution[Put the deadline outside Retry, not under it]
 `status.DeadlineExceeded` is on `middleware.Retry`'s default status list, so a

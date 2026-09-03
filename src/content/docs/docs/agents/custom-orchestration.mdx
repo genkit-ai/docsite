@@ -196,7 +196,7 @@ The three `Update*` callbacks run while the session lock is held. Do not call an
 
 `fn` returns `(*aix.TurnResult, error)`. `TurnResult` has one field, `FinishReason`. Returning `nil` reports no finish reason and the framework infers nothing.
 
-When `fn` returns an error, `Run` emits `TurnEnd` with `aix.AgentFinishReasonFailed`, takes no snapshot of the turn's partial state, stops looping, and returns the error. Return that error to resolve the invocation as failed with the last-good state, or call `Run` again to keep serving inputs on the same connection after a recoverable turn failure.
+When `fn` returns a bare error, `Run` discards the turn: it emits `TurnEnd` with `aix.AgentFinishReasonFailed`, writes no snapshot, stops looping, and returns the error, so the previous turn's snapshot stays the resume point. Return a non-nil `TurnResult` together with the error to commit the turn instead. The session as `fn` left it then persists as a `failed` snapshot carrying the error, which a caller can resume; do that only when the messages you added end at a turn seam, with every tool request answered, since that is what the next model call needs. A turn that ends because the invocation's context was cancelled lands as `aborted` on the same terms. Either way, return the error to resolve the invocation, or call `Run` again to keep serving inputs on the same connection.
 
 `aix.AgentResult`, the agent function's return value, has three fields: `Message`, `Artifacts`, and `FinishReason`. Leave `FinishReason` empty to accept the last turn's reason.
 
@@ -232,6 +232,8 @@ coder := genkitx.DefineCustomAgent(g, "coder",
 				ai.WithMessages(sess.Messages()...),
 			) {
 				if err != nil {
+					// A bare error discards the turn. Return a TurnResult with
+					// it to commit the messages added so far as a failed snapshot.
 					return nil, fmt.Errorf("stream model: %w", err)
 				}
 				if chunk.Done {
@@ -280,7 +282,7 @@ Use this when external resources need to line up with the snapshot that will lat
 
 ## Failure and detach behavior
 
-If the per-turn callback returns an error, the invocation resolves as a failed `AgentOutput` with structured error details and a last-good recovery point. A client can resume from the last-good state or snapshot. When a client detaches, chunks after detach are not forwarded, but session side effects such as artifacts still apply to the final snapshot.
+If the per-turn callback returns an error, the invocation resolves as a failed `AgentOutput` with structured error details and a resume point: the failed turn's own snapshot when the callback committed it, otherwise the previous turn's. When a client detaches, chunks after detach are not forwarded, but session side effects such as artifacts still apply to the final snapshot.
 
 ## Next steps
 

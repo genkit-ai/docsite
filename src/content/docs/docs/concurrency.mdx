@@ -52,7 +52,9 @@ the registry.
 ## Tool functions can run in parallel
 
 When a model asks for several tool calls in one turn, Genkit runs them
-**concurrently**, one goroutine per call, and waits for all of them.
+**concurrently**, one goroutine per call, and waits for all of them. A tool
+that fails ends the round as soon as its error arrives: the call returns while
+the siblings finish on their own, and their results are discarded with the round.
 
 That has a direct consequence: a tool function must be safe for concurrent use.
 Two invocations of the *same* tool can be in flight at once. Anything a tool
@@ -96,7 +98,13 @@ A few specifics:
 
 - **Cancellation reaches the provider.** When the context is done, the in-flight
   HTTP request to the model provider is cancelled and `Generate` returns
-  promptly rather than at the provider's own timeout.
+  promptly rather than at the provider's own timeout. It returns the partial
+  response beside the error, marked `ai.FinishReasonAborted` and holding the
+  tool rounds that completed, so a caller can pick up where the deadline hit.
+- **Detached agent work outlives the request.** An agent turn started with
+  `RunDetached` runs on a context the request does not own, and only an abort
+  or the process exiting cancels it. See
+  [Background execution](/docs/agents/background).
 - **`ai.WithMaxTurns` bounds iterations, not time.** A tool loop with a slow
   tool can run far longer than you expect within its turn budget. Use both.
 - **A cancelled request still emits its trace**, truncated at the point of
@@ -144,7 +152,10 @@ log.Fatal(server.Start(ctx, "0.0.0.0:"+os.Getenv("PORT"), mux))
 
 If you run your own `http.Server`, replicate that: `signal.NotifyContext` for
 `SIGTERM`, then `srv.Shutdown` with a fresh context, because the signal context
-is already cancelled by the time you get there.
+is already cancelled by the time you get there. A process running detached agent
+work should abort those tasks first and wait for them to settle, so their
+snapshots land as `aborted`, which resumes, rather than `expired`, which does
+not.
 
 There is no `genkit.Shutdown` or `Close`. The instance holds no resources that
 need releasing at exit; plugin clients are HTTP clients that the runtime

@@ -104,6 +104,8 @@ func main() {
 
 Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent. The fields on `Route` are exported, so a router other than `http.ServeMux` can mount the same layout: read `Method` and `Path`, and serve `Action` with `genkit.Handler`.
 
+A client-managed agent gets the turn route alone. A store-backed agent adds `getSnapshot` and `waitForSnapshot`, and `abort` when its store supports status subscriptions, which is what an abort needs to reach the running work.
+
 ### Handler options
 
 `Route.Handler` takes the same options as `genkit.Handler`:
@@ -209,6 +211,12 @@ Agent routes follow a consistent layout across backend frameworks:
 - **`POST /agents/{name}`** (or `/api/{name}`): Always exists. It handles one turn per request. Add `?stream=true` for server-sent events.
 - **`POST /agents/{name}/getSnapshot`** (or `/api/{name}/getSnapshot`): Exists when the agent has a session store. Use it to read by `snapshotId` or by latest `sessionId`.
 - **`POST /agents/{name}/abort`** (or `/api/{name}/abort`): Exists when the agent has a store that supports status subscriptions. Use it to cancel detached background work.
+
+<Lang lang="go">
+
+Go mounts one more companion, **`POST /agents/{name}/waitForSnapshot`**, on every store-backed agent. It takes the same body as `getSnapshot` and answers with the same shaped snapshot, but only once the row has settled, so a client follows a detached run in one request instead of a polling loop. Both read routes accept `"metadataOnly": true` in `data` to return the status, finish reason, parent, and timestamps without the conversation.
+
+</Lang>
 
 Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in the optional `init`. Omit `init` to start a fresh conversation, or include `sessionId`, `snapshotId`, or `state` to continue one.
 
@@ -364,6 +372,26 @@ curl -X POST http://localhost:8080/agents/chat/abort \
 ```
 
 Both take the `snapshotId` a previous turn returned at `result.snapshotId`. See [Background execution](/docs/agents/background).
+
+<Lang lang="go">
+
+Block until a detached run settles, or read where it stands without its conversation:
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/waitForSnapshot \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40"}}'
+```
+
+```sh
+curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+  -H 'content-type: application/json' \
+  -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40","metadataOnly":true}}'
+```
+
+An abort answers `aborting` for a run that was still going; the settled row is one `waitForSnapshot` away.
+
+</Lang>
 
 ## Failure tiers
 

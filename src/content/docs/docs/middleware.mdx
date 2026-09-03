@@ -270,7 +270,7 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-The built-in middleware implement `ai.Middleware` on pointer receivers, so they are passed as `&middleware.Retry{...}`. A custom type with value receivers is passed as a bare literal.
+The built-in middleware declare `Name` and `New` on value receivers, so a bare `middleware.Retry{...}` and a pointer `&middleware.Retry{...}` both satisfy `ai.Middleware`. These pages pass pointers.
 
 **Inline.** For a one-off that needs no named type or Dev UI entry, adapt a closure with `ai.MiddlewareFunc`. See [Inline middleware](#inline-middleware) below.
 
@@ -343,7 +343,7 @@ resp, err := genkit.Generate(ctx, g,
 **Configuration options:**
 
 - `MaxRetries` (optional): The number of retries after the first attempt (default: 3). `MaxRetries: 3` allows up to four model calls in total.
-- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`).
+- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`). The Developer UI offers the canonical set as a multi-select, and `status.Names()` returns the same list in code.
 - `InitialDelayMs` (optional): The initial delay between retries in milliseconds (default: 1000).
 - `MaxDelayMs` (optional): The upper bound on retry delay in milliseconds (default: 60000).
 - `BackoffFactor` (optional): The factor by which the delay increases after each retry (default: 2).
@@ -550,7 +550,7 @@ The [filesystem sample](https://github.com/genkit-ai/genkit/tree/main/go/samples
 
 ### The experimental middleware plugin
 
-A second, in-preview middleware plugin lives at `github.com/firebase/genkit/go/plugins/middleware/exp`. It provides `Agents` for sub-agent delegation and `Artifacts` for session artifact access, and is documented in [Multi-agent delegation](/docs/agents/multi-agent). It registers under the provider name `genkit-middleware-exp`, so its names do not collide with the stable plugin's and you can register both:
+A second, in-preview middleware plugin lives at `github.com/firebase/genkit/go/plugins/middleware/exp`. It provides `Agents` for sub-agent delegation, synchronous or in the background, and `Artifacts` for session artifact access; both are documented in [Multi-agent delegation](/docs/agents/multi-agent). It registers under the provider name `genkit-middleware-exp`, so its names do not collide with the stable plugin's and you can register both:
 
 ```go
 import (
@@ -566,6 +566,8 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 ```
 
 A `.prompt` reference such as `genkit-middleware/retry` resolves to the stable plugin; the experimental ones are named `genkit-middleware-exp/agents` and `genkit-middleware-exp/artifacts`. Being in preview, they may change in any minor release.
+
+A third package, `github.com/firebase/genkit/go/plugins/a2ui`, ships one middleware of its own: `a2ui.Surfaces` lets the model stream generative UI to a browser over the A2UI protocol, and `a2ui.A2UI` is the plugin that registers it by name. It is in preview too. See [Generative UI (A2UI)](/docs/agents/a2ui).
 
 ## Building your own custom middleware
 
@@ -596,7 +598,7 @@ type Hooks struct {
 }
 ```
 
-Implement only the hooks your middleware needs. A nil hook field is treated as a pass-through.
+Implement only the hooks your middleware needs. A nil hook field is treated as a pass-through. An error from `New` fails the generate call with the status it carries; an unclassified one reports `INVALID_ARGUMENT`, since a configuration the middleware rejects is the caller's mistake.
 
 The middleware in this section draw on these imports:
 
@@ -723,7 +725,7 @@ Here is a custom middleware that reports how long each model call takes, along w
 
 ```go
 type Timing struct {
-    Label string `json:"label,omitempty"`
+    Label string `json:"label,omitempty" jsonschema_description:"Label attached to each timing record."`
 }
 
 func (Timing) Name() string { return "mine/timing" }
@@ -752,7 +754,9 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-Note the receivers. `Timing` declares `Name` and `New` on value receivers, so a bare `Timing{...}` satisfies `ai.Middleware`. The built-in middleware declare theirs on pointer receivers, which is why they are always passed as `&middleware.Retry{...}`.
+Note the receivers. `Timing` declares `Name` and `New` on value receivers, so a bare `Timing{...}` satisfies `ai.Middleware`, and so does `&Timing{...}`. Prefer value receivers: a registered middleware is copied before each JSON-dispatched call decodes its config, so a pointer receiver buys nothing.
+
+The `jsonschema_description` tag is how a config field gets documented. Genkit infers the config schema from the struct without reading Go doc comments, and the Developer UI renders the tag's text as the field's tooltip. Keep constraints such as `enum=` in the separate `jsonschema` tag, whose comma-separated keyword list would otherwise cut a description off at its first comma.
 
 ### Sharing state across hooks
 
@@ -881,7 +885,9 @@ Middleware shipped as part of a plugin needs two things the simple cases above d
 1. A way to be **registered automatically** when the plugin is added to `genkit.Init`, so the Dev UI and cross-runtime callers can address it by name.
 2. A way to keep **plugin-level state** (an HTTP client, a logger, a database handle) that isn't part of the JSON-serializable config.
 
-Both are handled by implementing `ai.MiddlewarePlugin` on the plugin struct and putting plugin-level state on **unexported fields** of the config struct. The plugin's `Middlewares` method passes a prototype with those fields populated to `ai.NewMiddleware`, which captures the prototype in a build closure. JSON-dispatched calls (Dev UI or cross-runtime) recreate the config by value-copying that prototype, which preserves the unexported fields and overlays only the JSON config:
+Both are handled by implementing `ai.MiddlewarePlugin` on the plugin struct and putting plugin-level state on **unexported fields** of the config struct. The plugin's `Middlewares` method passes a prototype with those fields populated to `ai.NewMiddleware`, which captures it in a build closure. Every JSON-dispatched call, whether from the Dev UI, a `.prompt` file's `use:` entry, or a cross-runtime caller, copies the prototype and decodes its own config over the copy, so unexported state carries into each call and nothing one call sets leaks into the next.
+
+Three rules follow. Exported fields are per-call user config and stay zero on the prototype: a call that omits one gets the zero value, so defaults belong in `New`. State that must be shared across calls, such as a client or a cache, goes behind a pointer, which survives the copy pointing at the same object. And register by value, as below; a pointer prototype is copied through to its pointee, but gains nothing.
 
 ```go
 import (
@@ -895,7 +901,7 @@ import (
 )
 
 type Logger struct {
-    Prefix string    `json:"prefix,omitempty"`
+    Prefix string    `json:"prefix,omitempty" jsonschema_description:"Text written before each record."`
     out    io.Writer // unexported; preserved across JSON dispatch by value-copy
 }
 

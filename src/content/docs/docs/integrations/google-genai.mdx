@@ -1162,7 +1162,7 @@ in conjunction with a service like Cloud Secret Manager or similar.
 | `APIVersion` | `string` | `"v1"`, `"v1beta"`, or `"v1alpha"`. If empty, the genai SDK default (`v1beta`) is used. Overridable per request through `config.HTTPOptions.APIVersion`. |
 | `BaseURL` | `string` | Overrides the default endpoint (`https://generativelanguage.googleapis.com`), for example to point at a proxy or an API gateway. |
 | `Headers` | `http.Header` | Extra HTTP headers sent with every request. They are merged over the plugin's defaults, so a header set here wins on collision. |
-| `HTTPClient` | `*http.Client` | Used verbatim when set. The plugin does not install its default OpenTelemetry instrumented transport, so wrap your own transport with `otelhttp` if you want tracing. |
+| `HTTPClient` | `*http.Client` | Used verbatim when set; the default is `http.DefaultClient`. The plugin adds no instrumentation of its own, so wrap the transport with `otelhttp.NewTransport` to trace the provider's HTTP calls. |
 | `Models` | `map[string]ai.ModelOptions` | Corrects or extends what the plugin knows about a model, keyed by model ID. See [Describing a model or embedder](#describing-a-model-or-embedder). |
 | `Embedders` | `map[string]ai.EmbedderOptions` | The same, for embedders. |
 
@@ -1401,13 +1401,13 @@ if result := googlegenai.GetCodeExecutionResult(resp.Message); result != nil {
 
 #### Context caching
 
-`(*ai.Message).WithCacheTTL` marks a message as the end of the cached prefix. Everything up to and including that message is uploaded once and reused, so a long document costs its input tokens on the first request only:
+Gemini 2.5 and later cache repeated prompt prefixes on their own: it is on by default, there is no storage charge, and a hit shows up as `resp.Usage.CachedContentTokens`. Explicit caching is for when the hit has to be guaranteed. `(*ai.Message).WithCacheTTL` marks a message as the end of the cached prefix: everything up to and including it is uploaded to a cache resource once, and later requests reference the resource instead of resending the content, so the wire carries only the messages after the marker.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithMessages(
-		ai.NewUserMessage(ai.NewMediaPart("application/pdf", pdfDataURL)).WithCacheTTL(360),
+		ai.NewUserMessage(ai.NewMediaPart("application/pdf", pdfDataURL)).WithCacheTTL(3600),
 		ai.NewUserTextMessage("Summarize the document."),
 	),
 )
@@ -1418,7 +1418,17 @@ if err != nil {
 log.Println(resp.Usage.CachedContentTokens)
 ```
 
-The TTL is in whole seconds and must be positive. On the next turn, reuse the cache the service created rather than paying to build it again: the name it was given comes back under the `"name"` key of the `"cache"` entry in `resp.Message.Metadata`, and `(*ai.Message).WithCacheName` sends it. The cached content must hash identically to what the cache holds, otherwise the request is rejected.
+The TTL is in whole seconds and must be positive, and the resource is billed for that lifetime. The marker is inclusive, so keep the question in a separate message. A request that marks its last message has nothing left to send inline, and carries a minimal turn instead of failing.
+
+A later request reuses the cache rather than paying to build it again. Replaying `resp.History()` carries the cache's name back on the marked message's metadata, and rebuilding the same prefix by hand finds it too: the plugin names every cache by a hash of its contents and the model, and looks for a match before creating one. A cache that has expired or no longer matches is rebuilt rather than reported as an error. `(*ai.Message).WithCacheName` points a request at a cache whose name you kept yourself; if that cache is gone, the request still goes through, uncached.
+
+```go
+next, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithMessages(resp.History()...),
+	ai.WithPrompt("Now list the action items."),
+)
+```
 
 Two request shapes are refused before the request goes out, both with `INVALID_ARGUMENT`: a request that also carries tools, and one that carries a system message.
 
@@ -1555,6 +1565,8 @@ if resp.FinishReason == ai.FinishReasonBlocked {
 ```
 
 `FinishMessage` carries the service's explanation. `resp.Custom` is a `map[string]any`: the raw ratings are attached under its `"candidates"` key as `[]*genai.Candidate` and, when the prompt itself was blocked, under `"promptFeedback"` as a `*genai.GenerateContentResponsePromptFeedback`.
+
+The typed helpers report a refusal as an error instead. `genkit.GenerateData`, `genkit.GenerateDataStream`, and the `DataPrompt` execute methods return `ai.ErrGenerationBlocked`, carrying `FinishMessage` and with the response beside the error, because the value they promise cannot be produced. Match it with `errors.Is`.
 
 ### Rate limits
 

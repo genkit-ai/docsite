@@ -297,7 +297,7 @@ class MyDatabaseSessionStore implements SessionStore {
 - **Firestore store** for production apps on Google Cloud or Firebase that want a managed, multi-instance database without writing a store.
 - **Custom store** for production web apps that need a different database, cloud storage, centralized authorization, retention policies, or tenant-aware persistence that the built-in stores do not cover.
 
-Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, serves `Agent.GetSnapshot` and `Agent.GetLatestSnapshot`, starts detached work, or aborts an in-flight turn with `Agent.Abort`.
+Most applications only pass a store to `aix.WithSessionStore(store)`. The agent runtime calls the store when it creates a snapshot, resumes with `aix.WithSessionID` or `aix.WithSnapshotID`, serves `Agent.GetSnapshot`, `Agent.GetLatestSnapshot`, and `Agent.WaitForSnapshot`, starts detached work, or aborts an in-flight turn with `Agent.Abort`.
 
 ## The snapshot record
 
@@ -320,19 +320,19 @@ type SessionSnapshot[State any] struct {
 
 The runtime owns the meaning of `SnapshotID`, `SessionID`, `ParentID`, `State`, `Status`, `FinishReason`, `Error`, and `HeartbeatAt`. The store owns durable persistence: it must preserve `SessionID` across rewrites, and it must not advance `UpdatedAt` on a heartbeat-only refresh, so liveness stays distinct from state changes. `SessionState[State]` is described on [Sessions and state](/docs/agents/state).
 
-`Status` is an `aix.SnapshotStatus`, a string with five constants: `pending`, `completed`, `failed`, `aborted`, `expired`.
+`Status` is an `aix.SnapshotStatus`, a string with six constants: `pending`, `aborting`, `completed`, `failed`, `aborted`, `expired`. `Terminal()` reports whether a status is settled, which is every one except `pending` and `aborting`.
 
 Important implementation details:
 
 - The identifier field is `SnapshotID`.
-- `State` is a pointer and is nil on a `pending` snapshot, because a detached invocation has not committed its state yet. Check for nil before reading `snap.State.Messages`, `snap.State.Custom`, or `snap.State.Artifacts`.
-- An empty `Status` should be treated as `completed` for backwards compatibility. `SnapshotStatusExpired` is not directly persisted; it is computed on read from a stale `HeartbeatAt`, while the underlying record remains `pending`.
+- `State` is a pointer and is nil on a `pending` or `aborting` snapshot, because a detached invocation commits its state only when it settles. It is also nil on a metadata-only read. Check for nil before reading `snap.State.Messages`, `snap.State.Custom`, or `snap.State.Artifacts`.
+- An empty `Status` should be treated as `completed` for backwards compatibility. `SnapshotStatusExpired` is not directly persisted; it is computed on read from a stale `HeartbeatAt`, while the underlying record remains `pending` or `aborting`.
 
 Full field documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/firebase/genkit/go/ai/exp#SessionSnapshot).
 
 ## Use an in-memory store
 
-`localstore.NewInMemorySessionStore` keeps snapshots in process memory. It is fast, requires no setup, and implements `aix.SnapshotSubscriber`, which makes it useful for testing background execution and abort behavior locally.
+`localstore.NewInMemorySessionStore` keeps snapshots in process memory. It is fast, requires no setup, and implements `aix.SnapshotSubscriber` and `aix.SnapshotMetadataReader`, which makes it useful for testing background execution and abort behavior locally.
 
 ```go
 import (
@@ -395,7 +395,7 @@ Use `WithSnapshotPathPrefix` to scope reads and writes to a subdirectory. Return
 
 Use `WithPollInterval` to control how often the file store checks for status changes written by another process or store instance sharing the same directory. The default is one second. A value less than or equal to zero disables cross-process polling, so subscriptions observe only changes written through the same store instance.
 
-The file store is safe for concurrent use inside one process, writes snapshots atomically with temporary files and rename, and implements `aix.SnapshotSubscriber`. It is still a local filesystem store, so use a custom store when many app instances need to coordinate durable sessions.
+The file store is safe for concurrent use inside one process, writes snapshots atomically with temporary files and rename, and implements `aix.SnapshotSubscriber` and `aix.SnapshotMetadataReader`. It is still a local filesystem store, so use a custom store when many app instances need to coordinate durable sessions.
 
 ## Scope a store by tenant
 
@@ -505,7 +505,7 @@ All options are optional:
 
 The store picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable through the Firebase plugin, so the same code runs against the Firestore emulator for local testing.
 
-Because it implements `aix.SnapshotSubscriber` over Firestore's native real-time listeners, a status change such as an abort committed by one process is observed by the process running the detached turn even across instances, without polling. The store does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
+Because it implements `aix.SnapshotSubscriber` over Firestore's native real-time listeners, a status change such as an abort committed by one process is observed by the process running the detached turn even across instances, without polling. It also implements `aix.SnapshotMetadataReader`, so a read with `aix.WithMetadataOnly()` costs one document read where a full read reconstructs the state from its checkpoint shards and diff chain. The store does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
 
 ## Implement a production store
 
@@ -539,9 +539,22 @@ type SnapshotSubscriber interface {
 }
 ```
 
-The channel should yield the current status when a subscription starts, then yield later status changes until the context is canceled. The runtime uses this to notice when an abort flips a pending snapshot to `aborted`.
+The channel should yield the current status when a subscription starts, then yield later status changes until the context is canceled. The runtime uses this to notice when an abort flips a pending snapshot to `aborting`, and `WaitForSnapshot` uses it to return as soon as a row settles. Yield a status whenever a save changes it, including a save that edits the row in place.
 
 Stores that do not implement `SnapshotSubscriber` can still support server-managed state, snapshots, and `GetLatestSnapshot`. The runtime rejects detach attempts because it cannot signal background work to stop.
+
+An abort is two guarded writes through `SaveSnapshot`: the flip from `pending` to `aborting`, and the finalize from `aborting` to `aborted` with the state. Heartbeats refresh `HeartbeatAt` on both statuses and change nothing else. Because each mutator checks the status it starts from, a store that runs the callback inside a transaction gets these transitions right for free.
+
+A store may also implement `aix.SnapshotMetadataReader`, both methods or neither:
+
+```go
+type SnapshotMetadataReader[State any] interface {
+	GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[State], error)
+	GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*aix.SessionSnapshot[State], error)
+}
+```
+
+They serve reads made with `aix.WithMetadataOnly()`, which the runtime uses wherever it only needs to know where a row stands: waiting on a snapshot, deciding whether a background task can be continued. Return the row with `State` nil. Without the interface the runtime reads in full and drops the state, so the capability is a cost saving rather than a requirement.
 
 ## Production guidance
 

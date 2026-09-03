@@ -123,9 +123,9 @@ Abort flips a pending snapshot to `aborted`. The background worker observes the 
 
 ## Requirements
 
-Background execution requires a server-managed agent and a store that implements status subscriptions. `localstore.FileSessionStore` supports this.
+Background execution needs a server-managed agent whose store implements `aix.SnapshotSubscriber`, which is how an abort reaches the running work. The bundled in-memory and file stores and the Firestore store all do.
 
-Choose background execution when the caller should receive a pending snapshot immediately and let the agent continue on the server. For local command-line tools or services that can keep the connection open, a normal streaming `Connect` call is often simpler.
+Choose background execution when the caller should get a snapshot ID back at once and let the agent keep working on the server. A command-line tool or a service that can hold the connection open is usually simpler with a streaming `Connect` call.
 
 ```go
 import (
@@ -157,19 +157,31 @@ agent := genkitx.DefineAgent(g, "report",
 )
 ```
 
-The default HTTP abort route is `/agents/{name}/abort`. The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample walks the whole background lifecycle over plain HTTP with `curl`: detach, poll, and abort.
+The [basic-agents-server](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-server) sample walks the whole lifecycle over plain HTTP with `curl`: detach, wait, and abort.
 
-## Detach locally
+## Start a detached run
 
-Go has no handle type for a background task. A detached run is identified only by the pending snapshot ID on the output, which you poll with `Agent.GetSnapshot` or `Agent.GetLatestSnapshot` and cancel with `Agent.Abort`. Store that ID before the process that started the work goes away.
+`RunDetached` sends one input, returns once the server has accepted the background work, and hands back a `*aix.DetachedTask[State]`:
 
-With a local `AgentConnection`, send an input that has `Detach: true`.
+```go
+task, err := agent.RunDetached(ctx, &aix.AgentInput{
+	Message: ai.NewUserTextMessage("Write the quarterly report."),
+})
+if err != nil {
+	// The work never started: a rejected init, or a store that cannot detach.
+	return fmt.Errorf("start report: %w", err)
+}
+
+savePendingSnapshot(task.SnapshotID())
+```
+
+The task's only state is its snapshot ID, so store that ID before the process that started the work goes away. `agent.Task(snapshotID)` rebuilds the same handle in any process, at any later time.
+
+On a live `AgentConnection`, the same directive is an input with `Detach: true`, or `conn.Detach()` to leave a turn that is already under way:
 
 ```go
 conn, err := agent.Connect(ctx)
 if err != nil {
-	// Connect fails if the init payload is rejected, such as a sessionId on a
-	// client-managed agent.
 	return fmt.Errorf("connect to agent: %w", err)
 }
 
@@ -186,101 +198,115 @@ if err != nil {
 	return fmt.Errorf("read detached output: %w", err)
 }
 
-fmt.Println(out.FinishReason)
-fmt.Println(out.SnapshotID)
+task := agent.Task(out.SnapshotID) // out.FinishReason is aix.AgentFinishReasonDetached
 ```
 
-A detached output has `FinishReason` set to `aix.AgentFinishReasonDetached` and `SnapshotID` set to the pending snapshot.
-
-`conn.Detach()` sends the same directive with no message, for leaving a turn that is already under way:
-
-```go
-if err := conn.Detach(); err != nil {
-	return fmt.Errorf("detach: %w", err)
-}
-```
-
-A bare detach does not start an extra turn. To ride a final input on the detach, set `Message` alongside `Detach` as in the first example.
+A bare `conn.Detach()` starts no extra turn. To ride a final input on the detach, set `Message` alongside `Detach` as above.
 
 The client stream is suppressed the moment the detach directive is read, so nothing the background turn produces afterwards reaches `conn.Receive()`. Session-level side effects still apply: an artifact sent through `Responder.SendArtifact` still lands in the final snapshot's state, so agent code does not have to branch on detach.
 
-The invocation context outlives the transport connection. Before a detach lands, a client disconnect cancels the work. After it lands, the context stays live and the turn keeps running; only `Agent.Abort` or the process exiting cancels it.
+The invocation context outlives the transport connection. Before a detach lands, a client disconnect cancels the work. After it lands, the context stays live and the turn keeps running; only an abort or the process exiting cancels it.
 
-## Wait for completion
-
-Read a snapshot by ID with `agent.GetSnapshot`, or a session's most recent one with `agent.GetLatestSnapshot(ctx, sessionID)`.
+## Poll or wait
 
 ```go
-snap, err := agent.GetSnapshot(ctx, snapshotID)
+snap, err := task.Poll(ctx) // one read: where the run stands now
+snap, err = task.Wait(ctx)  // blocks until the run settles
+```
+
+`Wait` returns the settled snapshot whatever its outcome, `failed`, `aborted`, and `expired` included; a non-nil error means the wait itself could not proceed, such as an unknown snapshot or a cancelled context. Bound it with `context.WithTimeout` when the caller cannot block indefinitely:
+
+```go
+waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+defer cancel()
+
+snap, err := task.Wait(waitCtx)
 if err != nil {
-	return fmt.Errorf("read snapshot: %w", err)
+	return fmt.Errorf("wait for report: %w", err)
 }
-
-fmt.Println(snap.Status)
+if snap.Status == aix.SnapshotStatusCompleted {
+	renderMessages(snap.State.Messages)
+}
 ```
 
-Subscribe to status changes instead of polling when you want the terminal status as soon as it lands.
+The same reads exist on the agent for a bare snapshot ID: `agent.GetSnapshot(ctx, id)`, `agent.GetLatestSnapshot(ctx, sessionID)`, and `agent.WaitForSnapshot(ctx, id)`. The wait is push-driven where the store implements `aix.SnapshotSubscriber`, with a periodic re-read either way, because an expiry is not a write and no subscription can report one. Over HTTP it is one request, `POST /agents/{name}/waitForSnapshot`, that answers once the row settles, so a client in another language needs no polling loop either. See [Serve agents over HTTP](/docs/agents/http).
+
+A status check does not need the conversation. Pass `aix.WithMetadataOnly()` to `Poll`, `GetSnapshot`, or `GetLatestSnapshot` and the returned snapshot carries the status, finish reason, parent, timestamps, and error with `State` left nil. A store that implements the optional `aix.SnapshotMetadataReader`, as the bundled stores and the Firestore store do, answers without loading the state at all; any other store is read in full and the state dropped.
 
 ```go
-func waitForTerminal(ctx context.Context, agent *aix.Agent[ReportState], snapshotID string) (*aix.SessionSnapshot[ReportState], error) {
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+snap, err := task.Poll(ctx, aix.WithMetadataOnly())
+```
 
-	if subscriber, ok := agent.Store().(aix.SnapshotSubscriber); ok {
-		for status := range subscriber.OnSnapshotStatusChange(subCtx, snapshotID) {
-			if status != aix.SnapshotStatusPending {
-				break
-			}
-		}
-	} else {
-		for {
-			snap, err := agent.GetSnapshot(subCtx, snapshotID)
-			if err != nil {
-				return nil, fmt.Errorf("poll snapshot: %w", err)
-			}
-			if snap.Status != aix.SnapshotStatusPending {
-				break
-			}
-			time.Sleep(time.Second)
-		}
-	}
+### Statuses
 
-	return agent.GetSnapshot(ctx, snapshotID)
+| Status      | Meaning                                                                                         | Resume point |
+| ----------- | ----------------------------------------------------------------------------------------------- | ------------ |
+| `pending`   | The worker is running and refreshing the heartbeat.                                             | No           |
+| `aborting`  | An abort has stopped the work; the worker is saving what it finished.                           | Not yet      |
+| `completed` | The run settled. `State` holds the final state.                                                 | Yes          |
+| `failed`    | A turn broke. `Error` holds the failure, `State` holds the turns that completed before it.      | Yes          |
+| `aborted`   | The caller stopped the run. `State` holds the turns that finished.                              | Yes          |
+| `expired`   | The heartbeat went stale, so the worker is presumed dead. Computed on read, never written.      | No           |
+
+`snap.Status.Terminal()` reports whether a status is settled, which is every status except `pending` and `aborting`. `Status` is the persistence lifecycle, not the outcome: a turn that ended on an interrupt is `completed` and resumable, and you tell it apart by reading `snap.FinishReason == aix.AgentFinishReasonInterrupted`.
+
+The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives this from its CLI: `/detach` leaves a turn running, and returning to the agent later waits on the pending snapshot or stops it and resumes from the turns it finished.
+
+## Abort and resume
+
+```go
+status, err := task.Abort(ctx) // or agent.Abort(ctx, snapshotID)
+if err != nil {
+	// The abort could not be attempted. A snapshot that had already settled
+	// is not an error: Abort returns its status and changes nothing.
+	return fmt.Errorf("abort report: %w", err)
 }
 ```
 
-The channel closes when the subscription context is cancelled, so cancel it when you stop reading. Leaving the loop without cancelling leaves the producer running. If the snapshot does not exist when you subscribe, the channel closes without yielding a value.
+An abort takes two writes. The first flips the `pending` row to `aborting` and cancels the work context, so `Abort` answers `aborting` for a run that was still going. The worker keeps heartbeating while it unwinds, then lands the second write: an `aborted` snapshot holding every turn that finished before the stop. `Wait` rides that window and returns the settled row.
 
-Every store that supports detach implements `aix.SnapshotSubscriber`, since that subscription is how an abort reaches the background work. The comma-ok branch above therefore only matters for code that also runs against a non-detaching store. Polling `agent.GetSnapshot` until `Status` leaves `pending` is still valid, and is the simpler option when you do not want a subscription goroutine.
+An aborted snapshot is a resume point. The turn that was in flight is discarded whole, so the conversation ends at a turn seam: a tool that had already run inside it loses its response along with the rest of the round, and resuming calls it again. Send an input with no payload to run that turn again on the committed conversation, or a new message to change course:
 
-Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. Only a completed snapshot is resumable. `Status` is the persistence lifecycle, not the outcome: a turn that ended on an interrupt is `completed` and resumable, and you tell it apart by reading `snap.FinishReason == aix.AgentFinishReasonInterrupted`.
+```go
+snap, err := task.Wait(ctx)
+if err != nil {
+	return fmt.Errorf("wait for abort: %w", err)
+}
+if snap.Status == aix.SnapshotStatusAborted {
+	resumed, err := agent.Run(ctx, &aix.AgentInput{},
+		aix.WithSnapshotID[ReportState](snap.SnapshotID))
+	// ...
+}
+```
 
-The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives this from its CLI: `/detach` leaves a turn running, and returning to the agent later waits on the pending snapshot.
+A `failed` snapshot resumes the same way; see [Agent error handling](/docs/agents/errors). `Abort` is a no-op on a snapshot that has already settled and returns its status. Client-managed agents return `FAILED_PRECONDITION`, because there is no server snapshot to cancel.
 
 ## Lifetime and restarts
 
 Detached work runs in the process that started it. It is not durable execution: a restart, crash, or scale-in orphans every pending snapshot, and no other instance can adopt one.
 
-A running detached turn refreshes its pending snapshot's heartbeat every 30 seconds. A pending snapshot whose heartbeat has not advanced for 60 seconds is reported as `expired` on the next read. `expired` is terminal and not resumable, so treat expiry as a lost run and restart the work from the last completed snapshot.
+A running detached turn refreshes its snapshot's heartbeat every 30 seconds, and keeps doing so for up to five minutes while it winds down after an abort. A `pending` or `aborting` snapshot whose heartbeat has not advanced for 60 seconds is reported as `expired` on the next read. `expired` is terminal and not resumable. The row's `ParentID` names the last snapshot committed before the detach, so resume from that and send the work again.
 
-On `SIGTERM`, either wait for pending snapshots to reach a terminal status before exiting, or call `Agent.Abort` on them. Callers then see `aborted` immediately instead of waiting 60 seconds for expiry.
+On `SIGTERM`, abort the pending snapshots and wait for them to settle before exiting. Callers then find `aborted` rows they can resume, instead of waiting 60 seconds for expiry and losing the run.
 
-Detach and durable streaming solve different problems. Detach keeps the work running and gives you a snapshot ID to poll, but it does not replay the stream. [Durable streaming](/docs/durable-streaming) replays the chunk transcript by `streamId`, but it does not keep work alive past the request. `genkitx.Route.Handler` accepts `genkit.HandlerOption`s, so you can apply both to the same agent route.
+Detach and durable streaming solve different problems. Detach keeps the work running and gives you a snapshot ID to wait on, but it does not replay the stream. [Durable streaming](/docs/durable-streaming) replays the chunk transcript by `streamId`, but it does not keep work alive past the request. `genkitx.Route.Handler` accepts `genkit.HandlerOption`s, so you can apply both to the same agent route.
 
-## Abort work
+## Reconnect from another process
+
+`agent.Task(snapshotID)` rebuilds a task from a stored ID, and the result is equivalent to what `RunDetached` returned: the snapshot is the whole record.
+
+Code that knows the agent only by name, such as an orchestrator or a middleware, reaches it through an `aix.AgentHandle`, the untyped view of the same agent with custom state fixed to `json.RawMessage`:
 
 ```go
-status, err := agent.Abort(ctx, snapshotID)
-if err != nil {
-	// A non-nil error is an abort the store could not attempt, not a snapshot
-	// that was already terminal (that returns the terminal status, nil).
-	return fmt.Errorf("abort snapshot: %w", err)
+h := genkitx.LookupAgent(g, "report") // nil when no such agent is registered
+if h == nil {
+	return fmt.Errorf("agent %q is not registered", "report")
 }
 
-fmt.Println(status)
+snap, err := h.Task(snapshotID).Wait(ctx)
 ```
 
-`Abort` is a no-op for missing snapshots and for snapshots that already reached a terminal status. Client-managed agents return `FAILED_PRECONDITION` because there is no server snapshot to cancel.
+`agent.Handle()` returns the same view for an agent value you hold. A handle offers every call the typed agent does, with state as raw JSON, and every read through it is shaped exactly as it would be for a remote client: the agent's `WithStateTransform` applies, and a stale-heartbeat row reads as `expired`. See [Run and stream agents](/docs/agents/run) for the handle's full surface.
 
 </Lang>
 
