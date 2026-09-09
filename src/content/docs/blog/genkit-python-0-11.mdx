@@ -1,0 +1,180 @@
+---
+title: 'Genkit Python 0.11: Video generation, typed model options, and unified error handling'
+date: 2026-09-02
+authors: chris-gill
+description: Genkit Python 0.11 brings video generation, improved DX for model configuration, unified error handling across providers, and structured debug logs in the Developer UI.
+cover:
+  alt: Genkit Python 0.11
+  image: ./_assets/genkit-python-0-11/banner.png
+tags:
+  - python
+  - announcements
+  - releases
+---
+
+import veoVideo from './_assets/genkit-python-0-11/veo-model-runner.mp4';
+import devUiTraces from './_assets/genkit-python-0-11/devui-traces.png';
+import { Image } from 'astro:assets';
+
+[Genkit Python](https://genkit.dev/docs/python/overview/) 0.11 brings video generation, improved DX for model configuration, unified error handling across providers, and structured debug logs in the Developer UI. Video models now run as background operations you can poll or cancel, family constructors provide autocomplete for model options directly in your editor, and provider HTTP errors normalize into a single `GenkitError` with classified statuses. Calls to `generate` also preserve intermediate message history when a tool loop ends early, allowing you to resume execution without repeating completed tool calls.
+
+To install or update to the new version, run the following command in your terminal:
+
+```shell
+uv add genkit genkit-google-genai
+```
+
+## Generate video content
+
+Genkit Python now supports video generation with models like Veo. Because rendering high-resolution video takes time, generation runs as an asynchronous background operation using `generate_operation`, returning an `Operation` you can poll until the video is ready:
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+operation = await ai.generate_operation(
+    model=GoogleAI.veo_model('veo-3.1-fast-generate-preview'),
+    prompt='A paper airplane gliding through a bright classroom',
+)
+
+while not operation.done:
+    operation = await ai.check_operation(operation)
+
+print(operation.output.media[0].url)
+```
+
+You can also test video models interactively in the Developer UI. Submitting a prompt from the model runner tracks the background generation and plays the finished video directly in the browser:
+
+<video src={veoVideo} controls loop muted playsinline style="width: 100%; border-radius: 8px;"></video>
+
+## Configure models with strongly typed options
+
+Genkit Python now provides strongly typed model references. Family constructors like `GoogleAI.gemini_model`, `Anthropic.claude_model`, and `OpenAI.gpt_model` bind each model directly to its supported configuration schema:
+
+```python
+from genkit import Genkit
+from genkit_anthropic import Anthropic, AnthropicConfig
+from genkit_google_genai import GeminiConfigSchema, GoogleAI
+from genkit_openai import OpenAI, OpenAIConfig
+
+ai = Genkit(plugins=[GoogleAI(), Anthropic(), OpenAI()])
+
+# Pass typed model references and provider configs directly inline
+res1 = await ai.generate(
+    model=GoogleAI.gemini_model(
+        'gemini-flash-latest',
+        config=GeminiConfigSchema(temperature=0.2),
+    ),
+    prompt='Say hi in one word.',
+)
+
+res2 = await ai.generate(
+    model=Anthropic.claude_model(
+        'claude-sonnet-4-6',
+        config=AnthropicConfig(max_output_tokens=1024),
+    ),
+    prompt='Say hi in one word.',
+)
+
+res3 = await ai.generate(
+    model=OpenAI.gpt_model(
+        'gpt-5.2',
+        config=OpenAIConfig(temperature=0.2),
+    ),
+    prompt='Say hi in one word.',
+)
+```
+
+Typed references provide autocomplete, inline parameter hints, and type safety in your editor, helping you discover supported options and catch provider mismatches before running your code.
+
+## Unified error handling across model providers
+
+Genkit Python now normalizes provider exceptions into a unified `GenkitError`. A single error handling block gives you consistent status codes across Gemini, Anthropic, and OpenAI:
+
+```python
+from genkit import Genkit, GenkitError
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Retry
+
+ai = Genkit(plugins=[GoogleAI()])
+
+try:
+    response = await ai.generate(
+        model=GoogleAI.gemini_model('gemini-flash-latest'),
+        prompt='Draft a travel itinerary for a weekend in Kyoto.',
+        use=[Retry()],
+    )
+    print(response.text)
+except GenkitError as err:
+    # Unified exception type across Gemini, Claude, and GPT
+    print(err.status, err.original_message)
+    if err.status == 'RESOURCE_EXHAUSTED' and err.response_metadata:
+        print('Retry after', err.response_metadata.get('retry_after_ms'), 'ms')
+```
+
+Standardized status codes make it straightforward to inspect rate limits, configure retries, and build consistent error recovery across every provider.
+
+## Debug logs in the Developer UI
+
+When iterating on your AI application locally, calls to `generate` now stream structured debug logs directly into the Developer UI trace viewer.
+
+Execution spans capture lifecycle milestones like model calls, tool executions, and middleware behavior in the Logs panel. This gives you a detailed diagnostic trail right beside your trace spans while keeping your terminal output clean.
+
+<Image src={devUiTraces} alt="Debug logs in the Developer UI trace viewer" />
+
+## Resume incomplete generate calls
+
+When a multi-turn tool loop ends early due to errors or turn limits, `generate` now returns the intermediate state instead of raising an exception. This lets you inspect progress and resume from where you left off, without repeating completed tool calls:
+
+```python
+from pydantic import BaseModel
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
+)
+
+class TripQuery(BaseModel):
+    destination: str
+
+@ai.tool()
+async def search_flights(query: TripQuery) -> list[str]:
+    """Find available flights to a destination."""
+    return [f'Flight 101 to {query.destination}']
+
+@ai.tool()
+async def book_hotel(query: TripQuery) -> str:
+    """Reserve hotel accommodations in a destination."""
+    return f'Hotel in {query.destination} reserved'
+
+response = await ai.generate(
+    prompt='Search flights to Kyoto, then reserve a hotel.',
+    tools=[search_flights, book_hotel],
+)
+
+if response.finish_reason in ('failed', 'aborted'):
+    # Completed tool rounds are preserved in response.messages.
+    # Resume the turn without repeating earlier tool calls:
+    response = await ai.generate(
+        messages=response.messages,
+        tools=[search_flights, book_hotel],
+    )
+
+print(response.text)
+```
+
+The `messages` history preserves completed tool rounds and omits pending requests, so you can pass `messages` directly back into `generate` to resume execution without duplicate calls.
+
+## Also in this release
+
+* **OpenAI streaming token usage.** Streaming completions from OpenAI now request and populate token consumption metrics through `include_usage`.
+* **Whisper translation routing.** Whisper audio models now accept `config={'translate': True}`, routing requests to the translations endpoint.
+
+## Get started
+
+Upgrade to Genkit Python 0.11 today to take advantage of video generation, improved model configuration, and resumable generation. Explore the [Genkit Python documentation](https://genkit.dev/docs/python/overview/), experiment with the [Python samples](https://github.com/genkit-ai/genkit/tree/main/py/samples), or review the [complete v0.11.0 release notes](https://github.com/genkit-ai/genkit/pull/6281).
+

@@ -1,0 +1,164 @@
+---
+title: 'Genkit Go 1.13: Resumable generate and agent loops, async subagents, and A2UI'
+date: 2026-09-03
+authors: chris-gill
+description: Genkit Go 1.13 brings resumable agent control flow, background subagents, and streaming interactive UI with the new A2UI plugin.
+cover:
+  alt: Genkit Go 1.13
+  image: ./_assets/genkit-go-1-13/banner.png
+tags:
+  - go
+  - announcements
+  - releases
+---
+
+[Genkit Go](https://genkit.dev/docs/go/overview/) 1.13 brings resumable agent control flow, background subagents, and streaming interactive UI. Generate calls and agent turns now keep their progress when they fail or get cancelled, so you can resume them at any time. Subagents can run in the background while the orchestrator keeps working, and with the new [A2UI](https://a2ui.org/) (Agent-to-User Interface) plugin, an agent can stream interactive surfaces straight to the frontend.
+
+To start using this new version, run the following command in your terminal:
+
+```shell
+go get github.com/firebase/genkit/go@latest
+```
+
+## Keep progress across interrupted generate calls
+
+When you're in the middle of a multi-step tool loop, you don't want an error on step five to cause you to lose all of your progress.
+
+Now `Generate` returns what it finished alongside the error. Send it right back to retry the failed step without redoing the tool calls that already worked:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Plan the trip."),
+    ai.WithTools(searchFlights, bookHotel),
+)
+if err != nil && resp != nil {
+    // resp.FinishReason: Failed (error encountered) or Aborted (cancelled).
+    // resp.Error: the cause, classified.
+    // resp.History(): the tool rounds that finished, ready to send again.
+    resp, err = genkit.Generate(ctx, g,
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(searchFlights, bookHotel),
+    )
+}
+```
+
+`History()` stops at a clean turn boundary: the completed rounds, nothing half-done, so any provider accepts it. Streaming works the same way: `GenerateStream` yields the partial response next to its error.
+
+## Resume any agent turn, whether it succeeded, failed, or was aborted
+
+Genkit agents bring the same resumability to stateful sessions. A turn that fails saves the tool rounds it completed as a `failed` snapshot. Send an empty input to run the turn again on what was saved:
+
+```go
+out, err := agent.RunText(ctx, "Book the full itinerary.")
+if out.FinishReason == aix.AgentFinishReasonFailed {
+    // out.Error has the status. Transient? Run the turn again:
+    // no new message, no repeated tool calls.
+    out, err = agent.Run(ctx, &aix.AgentInput{},
+        aix.WithSessionID[any](out.SessionID))
+}
+```
+
+If you cancel the context, hit a deadline, or exhaust your turn limit, the agent saves an `aborted` snapshot with completed turns intact. `Run` returns this output alongside the error so you know exactly where execution stopped:
+
+```go
+out, err := chatAgent.Run(ctx, &aix.AgentInput{Message: msg}) // ctx cancelled
+if out.FinishReason == aix.AgentFinishReasonAborted {
+    out, err = chatAgent.Run(context.Background(), &aix.AgentInput{},
+        aix.WithSnapshotID[any](out.SnapshotID))
+}
+```
+
+Whether a failure is worth retrying is your call. The runtime saves the snapshot and the classified error and gets out of the way. Detached runs get a proper `aborting` status while they wind down, so a stop never leaves a row stuck in `pending`.
+
+## Subagents run in the background
+
+Setting `Async: true` on the `Agents` middleware enables background subagents. Each delegation tool gains a `background` flag that returns a task ID immediately, while three shared tools let the orchestrator check, wait for, or abort launched tasks:
+
+```go
+researcher := genkitx.DefineAgent(g, "researcher",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a thorough research assistant."),
+    },
+    aix.WithDescription[any]("Researches a topic and summarizes findings."),
+    // Background work is tracked by a snapshot, so the subagent needs a store.
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+
+orchestrator := genkitx.DefineAgent[any](g, "orchestrator",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("Delegate research and keep the user updated."),
+        ai.WithUse(&middlewarex.Agents{
+            Agents: []aix.AgentRef{researcher.Ref()},
+            Async:  true,
+        }),
+    },
+)
+```
+
+```
+delegate_to_researcher    {task, background: true}    -> taskId, right away
+check_background_tasks    {taskIds}                   -> where each one stands
+wait_for_background_tasks {taskIds, timeoutSeconds?}  -> results as they settle
+abort_background_tasks    {taskIds}                   -> stop, keep the progress
+continue_task             {taskId, instructions?}     -> pick up where it left off
+```
+
+There is no separate task registry to maintain. The task ID lives directly in the tool result within the conversation history, allowing an orchestrator to resume tracking even after a restart. `wait_for_background_tasks` also accepts a timeout, turning a slow subagent into an interim status update rather than a blocked turn.
+
+Every background delegation returns a `taskId` that you can pass to `continue_task`. An interrupted subagent picks up from its last saved progress, while a completed one accepts follow-up instructions in its existing session.
+
+## Background runs are tasks any process can pick up
+
+`RunDetached` starts an agent in the background and hands you a task. The task is just a snapshot ID, so store it anywhere and rehydrate it later:
+
+```go
+task, _ := agent.RunDetached(ctx, &aix.AgentInput{Message: msg})
+id := task.SnapshotID() // save it
+
+// Any process, any time later:
+snap, _ := agent.Task(id).Wait(ctx) // or Poll for one read, Abort to stop
+```
+
+For remote clients, `POST /agents/{name}/waitForSnapshot` provides the same blocking behavior over HTTP, resolving when the background task finishes instead of using a client-side polling loop. You can also use `AgentHandle` to invoke agents by name without declaring static type parameters:
+
+```go
+h := genkitx.LookupAgent(g, "researcher")
+out, _ := h.RunText(ctx, "Summarize the latest Go release.")
+```
+
+## Stream interactive UI with A2UI
+
+The new preview `a2ui` plugin brings A2UI support to Genkit Go. Your agent streams interactive surfaces, and the client renders them as they arrive. Giving your agent A2UI capabilities is as simple as adding a single middleware:
+
+```go
+import a2uix "github.com/firebase/genkit/go/plugins/a2ui/exp"
+
+resp, _ := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithSystem("Render UI when it is clearer than prose."),
+    ai.WithPrompt("show me the weather in Tokyo"),
+    ai.WithUse(&a2uix.Surfaces{}), // bundled basic catalog
+)
+
+// Envelopes ride as data parts. Hand them to any A2UI renderer.
+envelopes := a2uix.EnvelopesFromParts(resp.Message.Content)
+```
+
+The envelopes are byte-compatible with the JS and Dart plugins and the @a2ui/* renderers, so our [A2UI web demo](https://github.com/genkit-ai/genkit/tree/main/js/testapps/a2ui/web) works unchanged against a [Go backend sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/a2ui). Bring your own components with `LoadCatalog`.
+
+## Also in this release
+
+* **Provider blockage error handling.** `GenerateData` and other typed helpers return `ai.ErrGenerationBlocked` when a provider blocks a response, making policy refusals distinct from validation failures.
+* **Context cache composition.** Gemini explicit context caching no longer sends the cached prefix inline or creates a new cache on every request. `WithCacheTTL` and `WithCacheName` now compose.
+* **Developer UI enhancements.** The background-task panel works with Go background models, middleware config fields include descriptions, and each JSON-dispatched middleware call receives its own config.
+* **Trace fidelity.** Tool-loop turns record the messages they sent, reasoning parts render as one thought, and `googlegenai` uses a plain HTTP client by default.
+* **New agent samples.** The `basic-agents` sample adds an incident commander built on background delegation, and [`basic-middleware/a2ui`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/a2ui) serves the A2UI web demo.
+
+## Get started
+
+We can't wait to see what you build with Genkit Go 1.13. Check out the [Genkit Go docs](https://genkit.dev/docs/go/get-started/), run the [updated samples](https://github.com/genkit-ai/genkit/blob/main/go/samples/basic-agents/commander.go), or read the [full release notes](https://github.com/genkit-ai/genkit/releases/tag/go%2Fv1.13.0).
+
