@@ -317,6 +317,12 @@ snap, err := h.Task(snapshotID).Wait(ctx)
 Configure a store and expose companion endpoints when serving a remote agent:
 
 ```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
+import 'package:genkit/experimental_io.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf_router/shelf_router.dart';
+
 final reportAgent = ai.defineAgent(
   name: 'reportAgent',
   system: 'Create detailed research reports.',
@@ -360,6 +366,15 @@ await for (final snapshot in task.poll(interval: Duration(milliseconds: 1500))) 
 }
 ```
 
+Pass `metadataOnly: true` to `task.poll(...)` or `reportAgent.getSnapshot(...)` when you only need status, timestamps, or error info without transferring the full conversation state:
+
+```dart
+final statusSnap = await reportAgent.getSnapshot(
+  snapshotId: snapshotId,
+  metadataOnly: true,
+);
+```
+
 Use `wait()` to block execution as a `Future` until completion:
 
 ```dart
@@ -370,7 +385,7 @@ if (finalSnapshot.status?.value == 'failed') {
 }
 ```
 
-Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+Non-terminal statuses are `pending` and `aborting`. Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
 
 ## Reconnect by snapshot ID
 
@@ -383,10 +398,15 @@ if (snapshot?.status?.value == 'completed') {
   final chat = await reportAgent.loadChat(snapshotId: snapshotId);
   final res = await chat.send(text: 'Summarize this report.');
   print(res.text);
+} else if (snapshot?.status?.value == 'failed' ||
+    snapshot?.status?.value == 'aborted') {
+  // Failed and aborted snapshots preserve last-good progress and can be rerun:
+  final rerun = reportAgent.chat(snapshotId: snapshotId);
+  await rerun.send();
 }
 ```
 
-Only completed snapshots can be resumed.
+`completed`, `failed`, and `aborted` snapshots are valid resume points (`expired` is terminal and not resumable; resume from its `parentId` instead).
 
 ## Abort work
 
@@ -402,7 +422,7 @@ Or abort directly by snapshot ID from the `AgentApi` handle:
 await reportAgent.abort(snapshotId);
 ```
 
-Aborting shifts the pending snapshot status to `aborted`. The background worker observes this change and safely terminates the turn loop.
+Aborting transitions a running `pending` snapshot to `aborting` while the background worker unwinds and saves its completed turns, then commits an `aborted` snapshot holding the last-good state.
 
 </Lang>
 <Lang lang="python">
