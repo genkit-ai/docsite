@@ -435,4 +435,42 @@ When an exception includes a specific status code (e.g., `StatusCodes.invalidArg
 
 All other exceptions caught by the framework are automatically wrapped or treated as internal errors with `StatusCodes.internal` to prevent implementation details from leaking in production responses.
 
+## Errors from `generate()`
+
+`ai.generate()` and `ai.generateStream()` do not throw for model errors or a
+tool that throws. Instead they resolve to a response with
+`finishReason: FinishReason.failed`, carrying a structured `error` and the
+last-good conversation history in `messages`.
+
+```dart
+final res = await ai.generate(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'What is the weather in Baltimore?',
+  toolNames: ['getWeather'],
+);
+
+if (res.finishReason == FinishReason.failed) {
+  // res.error is a RuntimeError. A thrown GenkitException keeps its status;
+  // anything else maps to INTERNAL.
+  print(res.error?.status);
+  // res.cause holds the original thrown object (in-process only).
+  print(res.cause);
+
+  // res.messages holds the last-good state: the request messages plus any
+  // completed tool turns, stopping before the turn that failed. Feed it back
+  // into a fresh generate() to continue from that point.
+  final resumed = await ai.generate(
+    model: googleAI.gemini('gemini-flash-latest'),
+    messages: res.messages,
+    toolNames: ['getWeather'],
+  );
+}
+```
+
+Cancellation and hitting `maxTurns` resolve to `FinishReason.aborted` rather
+than throwing. These responses also carry the last-good state in `res.messages`,
+so you can continue execution from the abort point the same way. See
+[Generate content with AI models](/docs/models) for the full error, cancellation,
+and resume flow.
+
 </Lang>
