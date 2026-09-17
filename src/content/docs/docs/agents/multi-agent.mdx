@@ -348,8 +348,13 @@ Always provide a clear, descriptive `description` for sub-agents, as this metada
 ## Delegation options
 
 - **`agents`** is a list of sub-agent names available to the orchestrator.
+- **`toolPrefix`** controls generated tool names. It defaults to `delegate_to` (tools become `delegate_to_<agent>`); set it to an empty string to use bare agent names.
 - **`maxDelegations`** caps delegation calls in one orchestrator turn to prevent runaway loops (e.g., `5`).
-- **`historyLength`** sets how many recent conversation messages are forwarded to the sub-agents so they have context.
+- **`historyLength`** sets how many recent conversation messages are forwarded to the sub-agents so they have context. `0` or omitted forwards only the task description.
+- **`artifactStrategy`** controls how sub-agent artifacts surface: `inline` (default) includes artifact content in the delegation tool result and merges artifacts into the parent session; `session` merges into the parent session only, so the tool result names the artifacts without their content.
+- **`async`** enables background delegation. See [Delegate in the background](#delegate-in-the-background).
+
+History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
 
 ## Stream delegation progress
 
@@ -371,8 +376,66 @@ await for (final chunk in turn.stream) {
 }
 ```
 
+## Delegate in the background
+
+An orchestrator that delegates and waits is blocked for as long as the sub-agent runs. Set `async: true` to let it keep working instead. Each delegation tool then accepts a `background` flag that starts the sub-agent and returns a task ID at once, and three shared tools give the orchestrator one control per thing it can do with a launched task.
+
+| Tool                        | Purpose                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `check_background_tasks`    | Returns the current status of the given tasks without waiting.                                                             |
+| `wait_for_background_tasks` | Blocks until the given tasks settle. `timeoutSeconds` bounds the wait; `waitFor: "first"` returns as soon as one settles.  |
+| `abort_background_tasks`    | Stops tasks whose results are no longer needed.                                                                            |
+
+Background delegation requires **server-managed sub-agents**: the launched sub-agent needs a session store that supports detach, because background work is tracked by a pending snapshot. A sub-agent without one can only be delegated to synchronously, and the launch is refused with a hint to retry that way. The orchestrator itself needs no store for this.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
+import 'package:genkit_middleware/agents.dart';
+
+// Server-managed: the store is what makes background delegation possible.
+final researcher = ai.defineAgent(
+  name: 'researcher',
+  description: 'Researches a single, focused topic and returns a concise summary.',
+  system: 'You are a focused research assistant. Given one topic, return a tight summary.',
+  store: InMemorySessionStore(),
+  maxTurns: 4,
+);
+
+final orchestrator = ai.defineAgent(
+  name: 'asyncOrchestrator',
+  system: '''
+    When the user asks about several topics, delegate each one to "researcher"
+    in the background (set "background": true) so they run in parallel, keeping
+    the taskId each delegation returns. Once every task is launched, call
+    wait_for_background_tasks with all the taskIds to collect the results, then
+    synthesize a final answer.
+  ''',
+  use: [
+    agents(agents: ['researcher'], async: true, maxDelegations: 8),
+  ],
+  store: InMemorySessionStore(),
+);
+```
+
+The orchestrator launches with `{"task": "...", "background": true}`, calls other tools while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn: on timeout the current statuses are returned. An abort is safe on any task and never blocks: a task that already finished is left alone and reports its result, and a live one reports `aborting` while it saves progress, settling as a resumable `aborted`.
+
+Task IDs ride in the tool result, so the orchestrator's own conversation is the registry: task IDs from earlier tool results stay valid across turns, and re-delegating the same work is avoidable by checking them first. Because launching, collecting, and following up are separate tool rounds, raise `maxTurns` and `maxDelegations` so a background-collecting orchestrator has room to work.
+
+The middleware explains how background delegation works, but not when to use it, so tell the orchestrator which delegations to background and when to post interim updates. The [async agent sample](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/agents/bin/async_agent_sample.dart) is the worked example: an orchestrator that fans several research tasks out in the background and folds their answers in as they settle.
+
+## Continue a task
+
+Every delegation to a server-managed sub-agent leaves a continuable handle behind, named by the task's `taskId`. The `continue_task` tool spends it:
+
+- A **failed or aborted** task continues from its last saved progress. With no `instructions` the committed turn is re-attempted as it stood; with `instructions` the retry is steered by a fresh user message.
+- A **completed** task accepts follow-up `instructions` inside the sub-agent's own session, so pressing on never repeats finished work. It is refused without them.
+- A task that stopped on an **interrupt** is refused as a dead end, since continuing it would mean answering the interrupt.
+
+The tool registers only when a configured sub-agent may be server-managed, so an all-client-managed configuration gets no dead tool. With `async: true`, `continue_task` also accepts `background: true` and returns a fresh task ID in the same session.
+
 ## Interrupts and failures
 
-If a sub-agent fails or triggers an interrupt, the failure or pause is returned to the orchestrator as the delegation tool's output. It does not automatically bubble up as a top-level error to the client. You should instruct the orchestrator on how to handle failures—for example, by trying a different specialist, correcting input, or reporting the issue back to the user.
+If a sub-agent fails or triggers an interrupt, the failure or pause is returned to the orchestrator as the delegation tool's output. It does not automatically bubble up as a top-level error to the client. You should instruct the orchestrator on how to handle failures, for example by continuing the task with `continue_task`, trying a different specialist, correcting input, or reporting the issue back to the user.
 
 </Lang>

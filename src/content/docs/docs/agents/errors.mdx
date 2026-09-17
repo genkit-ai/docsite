@@ -270,10 +270,13 @@ State and stream transforms fail closed. If a transform returns an error, the re
 
 - **Init misuse** throws an immediate exception (e.g., `AgentInitError` or `GenkitException`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
 - **Failed turns** throw `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
-- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+- **Aborted turns** (a cancelled request or hitting `maxTurns`) also commit a rerunnable snapshot with the last-good state.
+- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and rerun from it.
 - **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
 ## Handle failed turns
+
+A failed or aborted turn commits a rerunnable snapshot: it carries the structured error plus the last-good history, ending before the turn that failed. Resume that snapshot with `chat(snapshotId: ...)`, then send an empty message to re-drive the same turn, or send new text to steer the retry.
 
 ```dart
 try {
@@ -283,12 +286,16 @@ try {
   print('Turn failed: ${err.status}');
   print('Error details: ${err.message}');
 
-  // Recover the conversation:
-  final recoveryChat = err.snapshotId != null
-      ? await agent.loadChat(snapshotId: err.snapshotId!)
-      : agent.chat(state: err.state);
-
-  await recoveryChat.send(text: 'Try again with order 456.');
+  if (err.snapshotId != null) {
+    // Rerun the failed/aborted snapshot. send() with no message re-drives the
+    // same turn; pass text to steer the retry.
+    final rerun = agent.chat(snapshotId: err.snapshotId);
+    await rerun.send(); // or: rerun.send(text: 'Try again with order 456.')
+  } else {
+    // Client-managed agent: recover from the last-good state instead.
+    final recoveryChat = agent.chat(state: err.state);
+    await recoveryChat.send(text: 'Try again with order 456.');
+  }
 }
 ```
 
