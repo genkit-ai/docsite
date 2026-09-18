@@ -1865,7 +1865,7 @@ Genkit ones.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-	ai.WithModelName("googleai/gemini-2.5-flash-preview-tts"),
+	ai.WithModelName("googleai/gemini-3.1-flash-tts-preview"),
 	ai.WithConfig(&genai.GenerateContentConfig{
 		ResponseModalities: []string{"AUDIO"},
 		SpeechConfig: &genai.SpeechConfig{
@@ -2287,6 +2287,74 @@ await for (final chunk in stream) {
 
 final response = await stream.onResult;
 print('Full text: ${response.text}');
+```
+
+### Handling errors and cancellation
+
+`ai.generate()` and `ai.generateStream()` do not throw for model errors, a tool
+that throws, cancellation, or hitting `maxTurns`. They resolve to a
+`GenerateResponse` whose `finishReason` tells you what happened and whose
+`messages` carry the last-good conversation state so you can resume.
+
+```dart
+final res = await ai.generate(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'What is the weather in Baltimore?',
+  toolNames: ['getWeather'],
+);
+
+if (res.finishReason == FinishReason.failed) {
+  // A model error or a tool that threw. res.error is a structured
+  // RuntimeError (a GenkitException keeps its status; anything else maps
+  // to INTERNAL). res.messages still holds the last-good history, so you
+  // can continue from before the failed turn.
+  print(res.error?.status);
+  // res.cause holds the original thrown object (in-process only).
+} else if (res.finishReason == FinishReason.aborted) {
+  // Cancelled or hit maxTurns. res.messages has the last-good history.
+} else {
+  print(res.text);
+}
+```
+
+To cancel a request, create a `CancellationController` and pass its token to the
+call. These types are stable and live on `package:genkit/genkit.dart`. Chunks
+emitted before the cancel still arrive, then the stream closes.
+
+```dart
+final controller = CancellationController();
+
+final stream = ai.generateStream(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'Write a long, detailed essay about the history of the internet.',
+  cancel: controller.token,
+);
+
+controller.cancel('user pressed stop');
+
+await for (final chunk in stream) {
+  stdout.write(chunk.text);
+}
+
+final res = await stream.onResult;
+if (res.finishReason == FinishReason.aborted) {
+  print('\nCancelled: ${res.finishMessage}');
+}
+```
+
+After an `aborted` or `failed` response, `res.messages` holds the last-good
+state: the request messages plus any completed tool turns, stopping before the
+turn that aborted or failed. Feed that back into a fresh `generate` (with a new,
+uncancelled token) to continue execution from that point.
+
+```dart
+if (res.finishReason == FinishReason.aborted ||
+    res.finishReason == FinishReason.failed) {
+  final resumed = await ai.generate(
+    model: googleAI.gemini('gemini-flash-latest'),
+    messages: res.messages, // last-good conversation state
+  );
+}
 ```
 
 ### Multimodal input

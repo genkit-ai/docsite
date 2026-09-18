@@ -510,21 +510,27 @@ Per-turn `context` is honored by the in-process transport, where you drive a loc
 
 ## Abort a foreground turn
 
-Cancel a foreground turn using the `abort()` method on the active `AgentTurn`.
+Cancel a foreground turn using `turn.abort()` on the active `AgentTurn`, or by passing a `CancellationToken` from a `CancellationController` to `chat.send()` or `chat.sendStream()`.
 
 ```dart
-final turn = chat.sendStream(text: 'Write a long report.');
+final controller = CancellationController();
+final turn = chat.sendStream(
+  text: 'Write a long report.',
+  cancel: controller.token,
+);
 
 // Later, abort the turn:
-turn.abort();
+controller.cancel('user cancelled'); // or: turn.abort();
 
 final res = await turn.response;
 print(res.finishReason.value); // 'aborted'
 ```
 
+An aborted turn does not throw `AgentError`; it resolves with `res.finishReason == AgentFinishReason.aborted`. For a server-managed agent, the aborted turn commits a rerunnable snapshot (`res.snapshotId`) holding the last-good history before the turn.
+
 ## Failed turns
 
-When a turn fails after the invocation starts, the client throws `AgentError`. The exception carries details of the failure along with the last-good state.
+When a turn fails after the invocation starts, the client throws `AgentError`. The exception carries details of the failure along with the last-good state (`err.response.raw.state` holds the full `SessionState`; `err.state` holds the typed custom state).
 
 ```dart
 try {
@@ -535,6 +541,8 @@ try {
   print(err.state);
 }
 ```
+
+For a server-managed agent, failed turns commit a rerunnable snapshot with the last-good state. Resume a failed snapshot with `agent.chat(snapshotId: err.snapshotId)` (or an aborted snapshot with `agent.chat(snapshotId: res.snapshotId)`) and send an empty message to re-drive the turn, or new text to steer the retry. See [Agent error handling](/docs/agents/errors) for the full recovery flow.
 
 Initialization misuse, such as sending `state` to a server-managed agent, is rejected before a turn starts.
 
