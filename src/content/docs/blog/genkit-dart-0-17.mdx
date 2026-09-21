@@ -1,0 +1,147 @@
+---
+title: 'Genkit Dart 0.17: Resumable generate and agent loops, async subagents, and pluggable telemetry'
+date: 2026-09-21
+authors: chris-gill
+description: Genkit Dart 0.17 brings resumable generate calls and agent snapshots, background async subagents, a pluggable telemetry system, and a curated OpenAI model catalog.
+cover:
+  alt: Genkit Dart 0.17
+  image: ./_assets/genkit-dart-0-17/banner.png
+tags:
+  - dart
+  - flutter
+  - announcements
+  - releases
+---
+
+[Genkit Dart](https://genkit.dev/docs/dart/overview/) 0.17 brings resumable generation and agent snapshots, background subagents, a pluggable telemetry architecture, and a curated OpenAI model catalog. Interrupted `generate` calls and agent turns now preserve completed tool rounds so you can inspect the failure and resume where execution stopped. Orchestrator agents can fan out subagents in the background, and a new instrumentation interface lets you plug in custom telemetry backends without an OpenTelemetry dependency.
+
+To start using this new version, run the following command in your terminal:
+
+```shell
+dart pub add genkit
+```
+
+## Keep progress across interrupted generate calls
+
+When a multi-step tool loop encounters a model error, a throwing tool, a `maxTurns` limit, or cooperative cancellation via `CancellationController`, `ai.generate` now resolves to a `GenerateResponse` instead of throwing an exception. The response reports `FinishReason.failed` or `FinishReason.aborted`, attaches the structured error on `res.error` (and the in-process exception on `res.cause`), and preserves the completed tool rounds in `res.messages`:
+
+```dart
+final controller = CancellationController();
+
+final res = await ai.generate(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'Plan the itinerary and book the flights.',
+  tools: [searchFlights, bookHotel],
+  cancel: controller.token,
+);
+
+switch (res.finishReason) {
+  case FinishReason.failed:
+    print('Failed with status: ${res.error?.status}');
+    // Pass res.messages back to retry from the last completed tool round:
+    final retry = await ai.generate(
+      model: googleAI.gemini('gemini-flash-latest'),
+      messages: res.messages,
+      tools: [searchFlights, bookHotel],
+    );
+  case FinishReason.aborted:
+    // Cancelled via controller.cancel() or reached maxTurns.
+    // res.messages holds the clean turn boundary ready to resume.
+  default:
+    print(res.text);
+}
+```
+
+Any partial output from the interrupted turn is dropped automatically, ensuring `res.messages` stops at a clean turn boundary that any model provider accepts on retry.
+
+## Resume failed or aborted agent snapshots
+
+Stateful agents (now imported via `package:genkit/experimental.dart`) build directly on this recovery model. When an agent turn fails or is cancelled, the runtime commits a `failed` or `aborted` snapshot to your `SessionStore` containing the user prompt, all completed tool rounds, and the structured error details.
+
+When `chat.send` encounters a failure, it throws an `AgentError` carrying the new `snapshotId` so you can inspect the status and rerun the turn from that saved state:
+
+```dart
+import 'package:genkit/experimental.dart';
+import 'package:genkit/genkit.dart';
+
+final chat = travelAgent.chat(sessionId: sessionId);
+
+try {
+  final res = await chat.send(text: 'Book the full itinerary.');
+  print(res.text);
+} on AgentError catch (e) {
+  // The runtime saved a 'failed' snapshot with the user turn and finished tool calls.
+  if (e.status == 'UNAVAILABLE' && e.snapshotId != null) {
+    final rerun = travelAgent.chat(snapshotId: e.snapshotId);
+    final recovered = await rerun.send();
+    print(recovered.text);
+  }
+}
+```
+
+Detached background runs also gain a transient `aborting` status while a cancelled turn winds down to its terminal `aborted` snapshot, and `getSnapshot` accepts `metadataOnly: true` when you want to poll task status without loading the full message history.
+
+## Delegate work to background subagents
+
+Setting `async: true` on the `agents` middleware in `package:genkit_middleware/agents.dart` lets an orchestrator launch server-managed subagents in the background. Each generated `delegate_to_<agent>` tool gains a `background` flag that detaches the subagent and returns a `taskId` immediately, alongside shared tools to check status, wait for completion, abort, or continue a task:
+
+```dart
+import 'package:genkit/experimental.dart';
+import 'package:genkit/genkit.dart';
+import 'package:genkit_middleware/agents.dart';
+
+final researcher = ai.defineAgent(
+  name: 'researcher',
+  description: 'Researches a single topic and returns a concise summary.',
+  system: 'Return a tight 3-4 sentence summary of the topic.',
+  store: InMemorySessionStore(),
+);
+
+final orchestrator = ai.defineAgent(
+  name: 'asyncOrchestrator',
+  system: 'Delegate each research topic in the background (background: true), '
+      'then call wait_for_background_tasks with the returned taskIds.',
+  use: [
+    agents(agents: ['researcher'], async: true, maxDelegations: 8),
+  ],
+  store: InMemorySessionStore(),
+);
+```
+
+Because each `taskId` is recorded directly in the conversation history, the orchestrator can pass it to `continue_task` to resume an interrupted subagent or send follow-up instructions to a completed one.
+
+## Configure pluggable telemetry and typed OpenAI models
+
+Genkit Dart 0.17 decouples core telemetry from OpenTelemetry through a pluggable `Instrumentation` interface in `package:genkit/telemetry.dart`. In local development, Genkit automatically injects a built-in HTTP telemetry provider whenever the Developer UI server is active. For production deployments, register your own provider with `configureInstrumentation` before initializing `Genkit`:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/telemetry.dart';
+import 'package:genkit_openai/genkit_openai.dart';
+
+void main() async {
+  configureInstrumentation(myCustomInstrumentation());
+
+  // Initializing openAI() performs no network I/O and requires no key at startup.
+  final ai = Genkit(plugins: [openAI()]);
+
+  final res = await ai.generate(
+    model: OpenAIModels.gpt54Mini,
+    prompt: 'Summarize recent telemetry spans.',
+  );
+  print(res.text);
+}
+```
+
+As shown above, `genkit_openai` now ships with `OpenAIModels` and `OpenAIEmbedders`, providing typed `ModelRef` and `EmbedderRef` constants across a curated catalog of 34 chat models and 3 embedding models with per-model capability presets.
+
+## Also in this release
+
+* **MCP plugin rebuilt on mcp_dart.** `genkit_mcp` now delegates protocol negotiation and Streamable HTTP transport handling to `mcp_dart`, supporting the stateless MCP 2026-07-28 specification with automatic fallback and default DNS-rebinding protection.
+* **Multi-turn thinking in Anthropic.** `genkit_anthropic` now rebuilds thinking and redacted-thinking blocks across multi-turn tool loops using the standardized `thoughtSignature` metadata key, and maps HTTP 529 overloaded responses to `UNAVAILABLE`.
+* **Gemma discovery and seed support in Google GenAI.** `genkit_google_genai` curates and discovers Gemma models, requires `generateContent` support during model discovery, and forwards `seed` in `GenerationConfig`.
+* **Dynamic Action Provider parity.** `defineDynamicActionProvider` and registry lookup signatures now match Genkit JS across traces, reflection, and shortened action names.
+
+## Get started
+
+We can't wait to see what you build with Genkit Dart 0.17. Check out the [Genkit Dart documentation](https://genkit.dev/docs/dart/get-started/), explore the [sample applications](https://github.com/genkit-ai/genkit-dart/tree/main/testapps), or read the [full release notes](https://github.com/genkit-ai/genkit-dart/releases/tag/genkit-v0.17.0).
