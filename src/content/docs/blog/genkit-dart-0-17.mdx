@@ -21,36 +21,32 @@ To start using this new version, run the following command in your terminal:
 dart pub add genkit
 ```
 
-## Keep progress across interrupted generate calls
+## Resume incomplete generate calls
 
-When a multi-step tool loop fails on step four because of a rate limit or transient tool error, throwing an exception means losing all the work and tokens spent on the first three steps. In Genkit Dart 0.17, `ai.generate` preserves every completed tool round in `res.messages` whenever a run fails or is cancelled, so you can inspect `res.finishReason` and retry right where execution left off without re-running finished tools:
+When a multi-turn tool loop ends early due to errors, turn limits, or cancellation, `ai.generate` now returns the intermediate state instead of throwing an exception. This lets you inspect progress and resume from where you left off, without repeating completed tool calls:
 
 ```dart
-final controller = CancellationController();
-
-final res = await ai.generate(
+var response = await ai.generate(
   model: googleAI.gemini('gemini-flash-latest'),
-  prompt: 'Plan the itinerary and book the flights.',
+  prompt: 'Search flights to Kyoto, then reserve a hotel.',
   tools: [searchFlights, bookHotel],
-  cancel: controller.token,
 );
 
-if (res.finishReason == FinishReason.failed) {
-  print('Failed with status: ${res.error?.status}');
-  // Pass res.messages back to retry from the last completed tool round:
-  final retry = await ai.generate(
+if (response.finishReason == FinishReason.failed ||
+    response.finishReason == FinishReason.aborted) {
+  // Completed tool rounds are preserved in response.messages.
+  // Resume the turn without repeating earlier tool calls:
+  response = await ai.generate(
     model: googleAI.gemini('gemini-flash-latest'),
-    messages: res.messages,
+    messages: response.messages,
     tools: [searchFlights, bookHotel],
   );
-  print(retry.text);
-} else if (res.finishReason == FinishReason.aborted) {
-  // Cancelled via controller.cancel() or reached maxTurns.
-  // res.messages holds the clean turn boundary ready to resume.
-} else {
-  print(res.text);
 }
+
+print(response.text);
 ```
+
+The `messages` history preserves completed tool rounds and omits pending requests, so you can pass `messages` directly back into `ai.generate` to resume execution without duplicate calls.
 
 ## Resume failed or aborted agent snapshots
 
