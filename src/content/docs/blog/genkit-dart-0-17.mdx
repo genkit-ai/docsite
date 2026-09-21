@@ -34,16 +34,13 @@ var response = await ai.generate(
 
 if (response.finishReason == FinishReason.failed ||
     response.finishReason == FinishReason.aborted) {
-  // Completed tool rounds are preserved in response.messages.
-  // Resume the turn without repeating earlier tool calls:
+  // Completed tool rounds are preserved in response.messages:
   response = await ai.generate(
     model: googleAI.gemini('gemini-flash-latest'),
     messages: response.messages,
     tools: [searchFlights, bookHotel],
   );
 }
-
-print(response.text);
 ```
 
 The `messages` history preserves completed tool rounds and omits pending requests, so you can pass `messages` directly back into `ai.generate` to resume execution without duplicate calls.
@@ -53,20 +50,15 @@ The `messages` history preserves completed tool rounds and omits pending request
 Stateful agents bring this same crash recovery to persistent chat sessions. When an agent turn fails or is cancelled mid-flight, Genkit automatically checkpoints the user prompt and any completed tool calls into a session snapshot before throwing `AgentError`. Pass `e.snapshotId` back to `agent.chat` to resume the turn from that checkpoint instead of asking the user to start over:
 
 ```dart
-import 'package:genkit/experimental.dart';
-import 'package:genkit/genkit.dart';
-
 final chat = travelAgent.chat(sessionId: sessionId);
 
 try {
-  final res = await chat.send(text: 'Book the full itinerary.');
-  print(res.text);
+  final response = await chat.send(text: 'Book the full itinerary.');
 } on AgentError catch (e) {
   // Resume from the saved checkpoint containing completed tool calls:
   if (e.status == 'UNAVAILABLE' && e.snapshotId != null) {
     final rerun = travelAgent.chat(snapshotId: e.snapshotId);
-    final recovered = await rerun.send();
-    print(recovered.text);
+    final response = await rerun.send();
   }
 }
 ```
@@ -78,8 +70,6 @@ Regular subagents run inside a single tool call and block the main agent until e
 Because background subagents run in their own tracked sessions outside the turn loop, the orchestrator can check in on progress, wait with a timeout to share partial results as faster tasks finish, cancel in-flight work the user no longer needs, or send follow-up instructions into a subagent's existing session without starting over:
 
 ```dart
-import 'package:genkit/experimental.dart';
-import 'package:genkit/genkit.dart';
 import 'package:genkit_middleware/agents.dart';
 
 final researcher = ai.defineAgent(
@@ -91,10 +81,9 @@ final researcher = ai.defineAgent(
 
 final orchestrator = ai.defineAgent(
   name: 'asyncOrchestrator',
-  system: 'Coordinate multi-topic research requests in the background and '
-      'keep the user updated as results come in.',
+  system: 'Coordinate multi-topic research requests in the background.',
   use: [
-    agents(agents: ['researcher'], async: true, maxDelegations: 8),
+    agents(agents: ['researcher'], async: true),
   ],
   store: InMemorySessionStore(),
 );
@@ -110,28 +99,15 @@ Core Genkit no longer pulls in OpenTelemetry dependencies by default, keeping yo
 
 ```dart
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
-import 'package:genkit/genkit.dart';
 import 'package:genkit/telemetry.dart';
-import 'package:genkit_google_genai/genkit_google_genai.dart';
 import 'package:genkit_otel/genkit_otel.dart';
 
-Future<void> main() async {
-  await OTel.initialize();
-  configureInstrumentation(
-    GenAiInstrumentation(contentCapturingMode: ContentCapturingMode.spanOnly),
-  );
+await OTel.initialize();
+configureInstrumentation(
+  GenAiInstrumentation(contentCapturingMode: ContentCapturingMode.spanOnly),
+);
 
-  final ai = Genkit(plugins: [googleAI()]);
-
-  final res = await ai.generate(
-    model: googleAI.gemini('gemini-flash-latest'),
-    prompt: 'Explain OpenTelemetry in one sentence.',
-  );
-  print(res.text);
-
-  await ai.shutdown();
-  await OTel.shutdown();
-}
+final ai = Genkit(plugins: [googleAI()]);
 ```
 
 ## Updated OpenAI model catalog
@@ -139,18 +115,14 @@ Future<void> main() async {
 The `genkit_openai` plugin now ships with an updated catalog of chat and embedding models with preconfigured capability presets for vision, tool calling, and structured outputs. Capabilities resolve automatically when you pass a model ID to `openAI.model`, or you can use the typed shortcuts on `OpenAIModels` and `OpenAIEmbedders` for IDE autocomplete:
 
 ```dart
-import 'package:genkit/genkit.dart';
 import 'package:genkit_openai/genkit_openai.dart';
 
-Future<void> main() async {
-  final ai = Genkit(plugins: [openAI()]);
+final ai = Genkit(plugins: [openAI()]);
 
-  final res = await ai.generate(
-    model: openAI.model('gpt-5.6-luna'),
-    prompt: 'Summarize the key findings in three bullet points.',
-  );
-  print(res.text);
-}
+final response = await ai.generate(
+  model: openAI.model('gpt-5.6-luna'),
+  prompt: 'Summarize the key findings in three bullet points.',
+);
 ```
 
 ## Also in this release
