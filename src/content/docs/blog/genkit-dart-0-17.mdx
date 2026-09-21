@@ -23,7 +23,7 @@ dart pub add genkit
 
 ## Keep progress across interrupted generate calls
 
-When a multi-step tool loop encounters a model error, a throwing tool, a `maxTurns` limit, or cooperative cancellation via `CancellationController`, `ai.generate` now resolves to a `GenerateResponse` instead of throwing an exception. The response reports `FinishReason.failed` or `FinishReason.aborted`, attaches the structured error on `res.error` (and the in-process exception on `res.cause`), and preserves the completed tool rounds in `res.messages`:
+When a multi-step tool loop fails on step four because of a rate limit or transient tool error, throwing an exception means losing all the work and tokens spent on the first three steps. In Genkit Dart 0.17, `ai.generate` preserves every completed tool round in `res.messages` whenever a run fails or is cancelled, so you can inspect `res.finishReason` and retry right where execution left off without re-running finished tools:
 
 ```dart
 final controller = CancellationController();
@@ -52,13 +52,9 @@ switch (res.finishReason) {
 }
 ```
 
-Any partial output from the interrupted turn is dropped automatically, ensuring `res.messages` stops at a clean turn boundary that any model provider accepts on retry.
-
 ## Resume failed or aborted agent snapshots
 
-Stateful agents (now imported via `package:genkit/experimental.dart`) build directly on this recovery model. When an agent turn fails or is cancelled, the runtime commits a `failed` or `aborted` snapshot to your `SessionStore` containing the user prompt, all completed tool rounds, and the structured error details.
-
-When `chat.send` encounters a failure, it throws an `AgentError` carrying the new `snapshotId` so you can inspect the status and rerun the turn from that saved state:
+Stateful agents bring this same crash recovery to persistent chat sessions. When an agent turn fails or is cancelled mid-flight, Genkit automatically checkpoints the user prompt and any completed tool calls into a session snapshot before throwing `AgentError`. Pass `e.snapshotId` back to `agent.chat` to resume the turn from that checkpoint instead of asking the user to start over:
 
 ```dart
 import 'package:genkit/experimental.dart';
@@ -70,7 +66,7 @@ try {
   final res = await chat.send(text: 'Book the full itinerary.');
   print(res.text);
 } on AgentError catch (e) {
-  // The runtime saved a 'failed' snapshot with the user turn and finished tool calls.
+  // Resume from the saved checkpoint containing completed tool calls:
   if (e.status == 'UNAVAILABLE' && e.snapshotId != null) {
     final rerun = travelAgent.chat(snapshotId: e.snapshotId);
     final recovered = await rerun.send();
@@ -78,8 +74,6 @@ try {
   }
 }
 ```
-
-Detached background runs also gain a transient `aborting` status while a cancelled turn winds down to its terminal `aborted` snapshot, and `getSnapshot` accepts `metadataOnly: true` when you want to poll task status without loading the full message history.
 
 ## Delegate work to background subagents
 
@@ -112,7 +106,9 @@ final orchestrator = ai.defineAgent(
 
 ## Configure pluggable telemetry and typed OpenAI models
 
-Genkit Dart 0.17 decouples core telemetry from OpenTelemetry through a pluggable `Instrumentation` interface in `package:genkit/telemetry.dart`. In local development, Genkit automatically injects a built-in HTTP telemetry provider whenever the Developer UI server is active. For production deployments, register your own provider with `configureInstrumentation` before initializing `Genkit`:
+Core Genkit no longer pulls in OpenTelemetry dependencies by default, keeping your app's footprint small. Local tracing still works automatically with the Genkit Developer UI, and when you deploy to production, you can plug in your own observability backend using `configureInstrumentation`.
+
+Alongside the telemetry update, `genkit_openai` now includes `OpenAIModels` and `OpenAIEmbedders` so you get IDE autocomplete and compile-time safety instead of passing raw model ID strings:
 
 ```dart
 import 'package:genkit/genkit.dart';
@@ -122,7 +118,6 @@ import 'package:genkit_openai/genkit_openai.dart';
 void main() async {
   configureInstrumentation(myCustomInstrumentation());
 
-  // Initializing openAI() performs no network I/O and requires no key at startup.
   final ai = Genkit(plugins: [openAI()]);
 
   final res = await ai.generate(
@@ -133,14 +128,11 @@ void main() async {
 }
 ```
 
-As shown above, `genkit_openai` now ships with `OpenAIModels` and `OpenAIEmbedders`, providing typed `ModelRef` and `EmbedderRef` constants across a curated catalog of 34 chat models and 3 embedding models with per-model capability presets.
-
 ## Also in this release
 
-* **MCP plugin rebuilt on mcp_dart.** `genkit_mcp` now delegates protocol negotiation and Streamable HTTP transport handling to `mcp_dart`, supporting the stateless MCP 2026-07-28 specification with automatic fallback and default DNS-rebinding protection.
-* **Multi-turn thinking in Anthropic.** `genkit_anthropic` now rebuilds thinking and redacted-thinking blocks across multi-turn tool loops using the standardized `thoughtSignature` metadata key, and maps HTTP 529 overloaded responses to `UNAVAILABLE`.
-* **Gemma discovery and seed support in Google GenAI.** `genkit_google_genai` curates and discovers Gemma models, requires `generateContent` support during model discovery, and forwards `seed` in `GenerationConfig`.
-* **Dynamic Action Provider parity.** `defineDynamicActionProvider` and registry lookup signatures now match Genkit JS across traces, reflection, and shortened action names.
+* **Streamable HTTP and latest MCP spec.** `genkit_mcp` is now powered by the official `mcp_dart` SDK, adding support for the latest Model Context Protocol specification and Streamable HTTP servers.
+* **Multi-turn extended thinking for Anthropic.** `genkit_anthropic` now preserves Claude's reasoning blocks across multi-step tool loops so extended thinking stays intact throughout complex workflows.
+* **Gemma discovery and deterministic seeds.** `genkit_google_genai` adds built-in model discovery for Gemma alongside `seed` support for reproducible outputs.
 
 ## Get started
 
