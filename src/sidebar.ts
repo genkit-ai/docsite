@@ -302,6 +302,10 @@ const DOCS_SIDEBAR = [
       },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
       { label: "Google Cloud plugin", slug: "docs/integrations/google-cloud" },
+      {
+        label: "OTel GenAI semantic conventions",
+        slug: "docs/observability/otel-genai-semantic-conventions",
+      },
     ],
   },
   {
