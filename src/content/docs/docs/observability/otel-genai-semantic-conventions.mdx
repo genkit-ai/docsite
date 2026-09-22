@@ -1,0 +1,184 @@
+---
+title: OpenTelemetry GenAI semantic conventions
+description: Export Genkit telemetry that follows the OpenTelemetry GenAI semantic conventions, including gen_ai.* spans, client metrics, and opt-in message content capture.
+supportedLanguages:
+  - dart
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+The [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+are a vendor-neutral vocabulary for model telemetry: what a span for a model
+call is named, which attributes carry the model and provider, and which metrics
+report token usage and latency. Genkit can emit telemetry in that shape, so any
+backend that speaks OTLP receives data it already understands, with no
+Genkit-specific mapping on your side.
+
+This is separate from the Developer UI pipeline. The Developer UI is fed by a
+built-in provider that posts spans straight to the Genkit telemetry server;
+see [Local observability and metrics](/docs/local-observability) for that
+workflow. The two compose, so you can keep the Developer UI while also
+exporting OTLP.
+
+## What gets emitted
+
+The conventions are defined by the spec, so the shape below is the same
+wherever Genkit implements them.
+
+**Model spans.** One client span per model call, named `chat <model>`, carrying:
+
+| Attribute                                                 | Notes                                                                                                                                                                              |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gen_ai.operation.name`                                   | `chat`                                                                                                                                                                             |
+| `gen_ai.provider.name`                                    | Derived from the plugin, for example `gcp.gemini`, `gcp.vertex_ai`, `openai`, `anthropic`. Unknown plugins pass through lowercased.                                                |
+| `gen_ai.request.model`                                    | The model name, without the plugin prefix.                                                                                                                                         |
+| `gen_ai.request.*`                                        | Request config that was actually set: `temperature`, `top_p`, `top_k`, `max_tokens`, `stop_sequences`, `frequency_penalty`, `presence_penalty`, `seed`, `choice.count`.            |
+| `gen_ai.output.type`                                      | `json` or `text`, when an output format was requested.                                                                                                                             |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | Token counts from the response. Reasoning and cached tokens land in `gen_ai.usage.reasoning.output_tokens` and `gen_ai.usage.cache_read.input_tokens` when the model reports them. |
+| `gen_ai.response.finish_reasons`                          | Mapped to spec values. A turn that ends in tool calls reports `tool_calls`.                                                                                                        |
+| `error.type`                                              | On failure. The exception is recorded on the span and rethrown unchanged.                                                                                                          |
+
+**Metrics.** The two spec-defined client metrics:
+
+- `gen_ai.client.token.usage`, a histogram of token counts split by
+  `gen_ai.token.type` (`input` or `output`).
+- `gen_ai.client.operation.duration`, in seconds, recorded for successful and
+  failed calls alike. Failures carry `error.type`.
+
+Both are tagged only with operation name, model, and provider, so cardinality
+stays low.
+
+**Everything else in the trace.** Tool calls can be emitted as `execute_tool`
+spans, and every other Genkit action type gets a generic span, so the trace
+tree stays connected rather than showing model calls as orphans. All spans also
+carry `genkit.action.type` and `genkit.action.name`, kept outside the reserved
+`gen_ai.*` namespace so GenAI-aware backends do not try to render Genkit
+payloads as spec content.
+
+<Lang lang="dart">
+
+## Setup
+
+The instrumentation lives in
+[`genkit_otel`](https://pub.dev/packages/genkit_otel), built on the
+[`dartastic_opentelemetry`](https://pub.dev/packages/dartastic_opentelemetry)
+SDK:
+
+```bash
+dart pub add genkit_otel dartastic_opentelemetry
+```
+
+Your application owns the SDK. Initialize it, register the provider, then
+create `Genkit`:
+
+```dart
+import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
+import 'package:genkit/genkit.dart';
+import 'package:genkit/telemetry.dart';
+import 'package:genkit_google_genai/genkit_google_genai.dart';
+import 'package:genkit_otel/genkit_otel.dart';
+
+Future<void> main() async {
+  // No arguments reads the standard OTEL_* env vars and otherwise defaults to
+  // http://localhost:4318 (OTLP http/protobuf).
+  await OTel.initialize();
+
+  configureInstrumentation(GenAiInstrumentation());
+
+  final ai = Genkit(plugins: [googleAI()]);
+
+  final response = await ai.generate(
+    model: googleAI.gemini('gemini-flash-latest'),
+    prompt: 'Explain OpenTelemetry in one sentence.',
+  );
+  print(response.text);
+
+  // optional:
+  await OTel.shutdown(); // Flushes spans and metrics.
+}
+```
+
+Point it at a collector with the usual environment variables, no code change:
+
+```bash
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+```
+
+Two properties matter for production. When the SDK was never initialized,
+dartastic hands back non-recording spans, so the provider is effectively a
+no-op and can stay wired up in builds that do not export. And it is independent
+of the built-in dev provider, which posts directly to the Genkit telemetry
+server without an OpenTelemetry dependency, so both can be active at once and
+export to separate pipelines.
+
+</Lang>
+
+## Capturing message content
+
+Prompts and responses can contain PII, so content capture is off by default.
+The mode mirrors the spec's `ContentCapturingMode`:
+
+| Mode                  | Where content goes                                                                                                    |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `noContent` (default) | Not captured.                                                                                                         |
+| `spanOnly`            | Span attributes `gen_ai.input.messages`, `gen_ai.output.messages`, and `gen_ai.system_instructions`, as JSON strings. |
+| `eventOnly`           | A `gen_ai.client.inference.operation.details` log record.                                                             |
+| `spanAndEvent`        | Both.                                                                                                                 |
+
+<Lang lang="dart">
+
+```dart
+configureInstrumentation(
+  GenAiInstrumentation(contentCapturingMode: ContentCapturingMode.spanOnly),
+);
+```
+
+Left unset, the value comes from the
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment variable using
+the spec's tokens (`NO_CONTENT`, `SPAN_ONLY`, `EVENT_ONLY`, `SPAN_AND_EVENT`).
+An explicit argument overrides it, and an unrecognized token logs one warning
+and falls back to `NO_CONTENT`.
+
+</Lang>
+
+:::caution[eventOnly is invisible to trace-only backends]
+`eventOnly` writes content to the OpenTelemetry logs signal, not to the span.
+Jaeger cannot display it: its GenAI tab reads span attributes and its Trace Logs
+tab reads span events, and neither is the logs signal. Use `spanOnly` or
+`spanAndEvent` for Jaeger, or send logs to a backend such as Loki or
+OpenSearch.
+:::
+
+<Lang lang="dart">
+
+## Options
+
+| Option                 | Default               | What it does                                                                                                                                                    |
+| ---------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contentCapturingMode` | env, else `noContent` | Where spec-shaped `gen_ai.*` message content is recorded.                                                                                                       |
+| `captureActionIO`      | `false`               | Records raw Genkit input and output as `genkit.input` / `genkit.output` on every span. A debugging aid, independent of `contentCapturingMode`. May contain PII. |
+| `emitMetrics`          | `true`                | Token usage and operation duration.                                                                                                                             |
+| `emitToolSpans`        | `false`               | `execute_tool` spans for tool actions.                                                                                                                          |
+| `scopeName`            | `genkit-genai`        | Instrumentation scope for the tracer, meter, and logger.                                                                                                        |
+| `tracer` / `meter`     | resolved lazily       | Escape hatches for injecting explicit instances.                                                                                                                |
+
+## Quieting the SDK logger
+
+dartastic prints an `[ERROR] Tracer: Exception in withSpanAsync ...` line for
+every exception that passes through a span, which reads as though the
+instrumentation itself failed. It did not: the exception is recorded on the
+span and rethrown to the caller. Turn the line off after `OTel.initialize()`:
+
+```dart
+OTelLog.currentLevel = LogLevel.fatal; // or set OTEL_LOG_LEVEL=fatal
+```
+
+## Try it
+
+The [`otel_jaeger` sample](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/otel_jaeger)
+is a runnable end-to-end setup: traces to Jaeger, metrics to a collector debug
+log, with a script that downloads and runs both without Docker.
+
+</Lang>
