@@ -214,7 +214,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Overview", slug: "docs/integrations/model-providers" },
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
-      { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
+      { label: "Gemini Enterprise", slug: "docs/integrations/vertex-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
       {
         label: "OpenAI-Compatible APIs",
@@ -253,11 +253,11 @@ const DOCS_SIDEBAR = [
       },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
       {
-        label: "Vertex AI Vector Search with BigQuery",
+        label: "Vector Search with BigQuery",
         slug: "docs/integrations/vectorsearch-bigquery",
       },
       {
-        label: "Vertex AI Vector Search with Firestore",
+        label: "Vector Search with Firestore",
         slug: "docs/integrations/vectorsearch-firestore",
       },
     ],

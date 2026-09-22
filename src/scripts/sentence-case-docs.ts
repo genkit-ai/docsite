@@ -4,8 +4,9 @@ import * as path from 'path';
 function sentenceCaseString(title?: string): string {
     if (!title) return '';
     const properNouns = [
-        "Cloud Functions for Firebase", "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
-        "JSON", "Google", "Firebase", "Cloud", "TypeScript", 
+        "Cloud Functions for Firebase", "Gemini Enterprise", "Model Garden", "Vector Search",
+        "Genkit", "Developer UI", "AI", "API", "LLM", "LLMs", "UI", 
+        "JSON", "Google", "Gemini", "Antigravity", "Firebase", "Cloud", "BigQuery", "TypeScript", 
         "JavaScript", "Go", "Dart", "Python", "Node.js", "Next.js", 
         "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI",
         "Agent Skills"
