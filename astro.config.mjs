@@ -8,6 +8,7 @@ import { sidebar, docsLanguageAgnosticBySlug } from './src/sidebar.ts';
 import { GOOGLE_DARK_THEME, GOOGLE_LIGHT_THEME } from './src/google-theme';
 
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const site = 'https://genkit.dev';
 const ogUrl = new URL('ogimage.png?v=1', site).href;
@@ -19,14 +20,39 @@ const blogAuthors = Object.fromEntries(
     {
       name: author.name,
       title: author.title,
+      // Shown as the avatar on blog cards (files live in public/authors/).
+      ...(author.image ? { picture: author.image } : {}),
     }
   ])
 );
+
+// starlight-blog doesn't expose its author chip (used on blog cards) as an
+// overridable component, so redirect its internal `./Author.astro` import to
+// our version, which shows initials when an author has no picture.
+const blogAuthorComponent = fileURLToPath(
+  new URL('./src/components/blog/BlogAuthor.astro', import.meta.url),
+);
+/** @returns {import('vite').Plugin} */
+const blogAuthorOverride = () => ({
+  name: 'genkit:starlight-blog-author-override',
+  enforce: 'pre',
+  resolveId(source, importer) {
+    if (
+      source === './Author.astro' &&
+      importer?.replace(/\\/g, '/').includes('/starlight-blog/components/')
+    ) {
+      return blogAuthorComponent;
+    }
+  },
+});
 
 // https://astro.build/config
 export default defineConfig({
   // TODO: Update to genkit.dev before launch
   site,
+  vite: {
+    plugins: [blogAuthorOverride()],
+  },
   markdown: {
     shikiConfig: {
       langAlias: {
@@ -122,6 +148,8 @@ export default defineConfig({
           // The "Blog" link is rendered by our shared header (src/components/Header.astro).
           navigation: 'none',
           prefix: 'blog',
+          // 1 featured post + 4 full rows of the 3-column card grid.
+          postCount: 13,
           metrics: { readingTime: true },
           authors: blogAuthors,
         }),
