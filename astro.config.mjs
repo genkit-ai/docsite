@@ -19,6 +19,8 @@ const blogAuthors = Object.fromEntries(
     {
       name: author.name,
       title: author.title,
+      // Shown as the avatar on blog cards (files live in public/authors/).
+      ...(author.image ? { picture: author.image } : {}),
     }
   ])
 );
@@ -122,6 +124,8 @@ export default defineConfig({
           // The "Blog" link is rendered by our shared header (src/components/Header.astro).
           navigation: 'none',
           prefix: 'blog',
+          // 1 featured post + 4 full rows of the 3-column card grid.
+          postCount: 13,
           metrics: { readingTime: true },
           authors: blogAuthors,
         }),

@@ -1,0 +1,134 @@
+---
+/**
+ * Header for blog listing pages (the blog index, its pagination pages and tag
+ * pages). Renders a Flutter-blog-style title block followed by a horizontally
+ * scrollable row of tag filters and an RSS "Subscribe" link.
+ */
+interface Props {
+  /** The slug of the tag currently being filtered on, if any. */
+  activeTag?: string | null;
+}
+
+const { activeTag = null } = Astro.props;
+
+type TagInfo = { label: string; href: string; slug: string; count: number };
+
+const posts = Astro.locals.starlightBlog?.posts ?? [];
+const tagMap = new Map<string, TagInfo>();
+for (const post of posts) {
+  for (const tag of post.tags) {
+    const slug = tag.href.replace(/\/$/, '').split('/').pop() ?? tag.label;
+    const existing = tagMap.get(slug);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      tagMap.set(slug, { label: tag.label, href: tag.href, slug, count: 1 });
+    }
+  }
+}
+// The filter bar is split into visually separated groups:
+//   All · Announcements · Releases  |  languages  |  any other tags
+// Tags listed in a fixed order below only appear if at least one post uses them.
+const PRIMARY_TAGS = ['announcements', 'releases'];
+const LANGUAGE_TAGS = ['typescript', 'javascript', 'go', 'python', 'dart'];
+
+const pickInOrder = (slugs: string[]) =>
+  slugs.map((slug) => tagMap.get(slug)).filter((tag): tag is TagInfo => !!tag);
+
+const primaryTags = pickInOrder(PRIMARY_TAGS);
+const languageTags = pickInOrder(LANGUAGE_TAGS);
+const otherTags = [...tagMap.values()]
+  .filter((tag) => !PRIMARY_TAGS.includes(tag.slug) && !LANGUAGE_TAGS.includes(tag.slug))
+  .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+const tagGroups = [languageTags, otherTags].filter((group) => group.length > 0);
+const activeLabel = activeTag ? (tagMap.get(activeTag)?.label ?? activeTag) : null;
+
+// Display names for tags whose casing can't be derived by capitalizing the slug.
+const TAG_LABELS: Record<string, string> = {
+  typescript: 'TypeScript',
+  javascript: 'JavaScript',
+  ai: 'AI',
+};
+const formatTag = (label: string) =>
+  TAG_LABELS[label.toLowerCase()] ?? label.charAt(0).toUpperCase() + label.slice(1);
+---
+
+<div class="blog-header blog-header--listing">
+  <div class="blog-hero">
+    <h1 id="_top" class="blog-hero-title">The Genkit Blog</h1>
+    <p class="blog-hero-subtitle">
+      {
+        activeLabel
+          ? `Posts tagged “${formatTag(activeLabel)}”`
+          : 'Releases, announcements, and deep dives from the Genkit team'
+      }
+    </p>
+  </div>
+
+  <nav class="blog-filter-bar" aria-label="Filter posts by tag">
+    <ul class="blog-filter-list">
+      <li>
+        <a href="/blog/" class="blog-filter-link" aria-current={activeTag ? undefined : 'page'}>All</a>
+      </li>
+      {
+        primaryTags.map((tag) => (
+          <li>
+            <a
+              href={tag.href}
+              class="blog-filter-link"
+              aria-current={activeTag === tag.slug ? 'page' : undefined}
+            >
+              {formatTag(tag.label)}
+            </a>
+          </li>
+        ))
+      }
+      {
+        tagGroups.map((group) => (
+          <>
+            <li class="blog-filter-divider" aria-hidden="true" />
+            {group.map((tag) => (
+              <li>
+                <a
+                  href={tag.href}
+                  class="blog-filter-link"
+                  aria-current={activeTag === tag.slug ? 'page' : undefined}
+                >
+                  {formatTag(tag.label)}
+                </a>
+              </li>
+            ))}
+          </>
+        ))
+      }
+    </ul>
+    <a href="/blog/rss.xml" class="blog-subscribe-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"></path>
+        <circle cx="5" cy="19" r="1.5" fill="currentColor"></circle>
+      </svg>
+      <span>Subscribe</span>
+    </a>
+  </nav>
+</div>
+
+<script>
+  // On narrow screens the tag row scrolls horizontally; make sure the active
+  // tag is visible without moving the page vertically.
+  function revealActiveBlogFilter() {
+    const list = document.querySelector<HTMLElement>('.blog-filter-list');
+    const active = list?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!list || !active) return;
+    const offset = active.offsetLeft - list.offsetLeft;
+    list.scrollLeft = Math.max(0, offset - (list.clientWidth - active.offsetWidth) / 2);
+  }
+
+  revealActiveBlogFilter();
+  document.addEventListener('astro:page-load', revealActiveBlogFilter);
+</script>
