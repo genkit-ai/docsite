@@ -140,33 +140,31 @@ Previously, if a model failed to match your `output_schema` or a tool call faile
 Now, `ai.generate` only raises `GenkitError` for setup mistakes before a turn starts, such as an invalid model name. Once a turn is underway, `ai.generate` always returns a `ModelResponse` so you can inspect `response.error` alongside the preserved `response.messages` and `response.text` to debug or retry without losing progress:
 
 ```python
-from pydantic import BaseModel
 from genkit import Genkit, GenkitError
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(
-    plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
-)
-
-
-class Recipe(BaseModel):
-    title: str
-
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 try:
-    await ai.generate(model='nope/x', prompt='hi')
-except GenkitError as err:
-    print(err.reason)  # MODEL_NOT_FOUND
+    history = None
+    for attempt in range(3):
+        response = await ai.generate(
+            prompt='Look up order #412 and process a refund.' if attempt == 0 else None,
+            messages=history,
+            tools=[lookup_order, process_refund],
+        )
+        if not response.error:
+            break
+        print(f'Turn failed ({response.error.reason}). Resuming...')
+        # => Turn failed (TOOL_FAILED). Resuming...
+        history = response.messages
 
-response = await ai.generate(
-    prompt='Give me a recipe as JSON.',
-    output_schema=Recipe,
-)
-if response.output is not None:
-    print(response.output.title)
-else:
-    print(response.error.reason, response.text)
+    print(response.text)
+    # => Looked up order #412 and issued an $85 refund.
+
+except GenkitError as err:
+    print(err.reason)
+    # => MODEL_NOT_FOUND
 ```
 
 Inside tools, you can also raise `PublicError` to pass safe, user-facing error messages back on `response.error` while unexpected exceptions stay masked.
