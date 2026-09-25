@@ -128,4 +128,137 @@ class LanguageAwareToC {
 }
 
 new LanguageAwareToC();
+
+/**
+ * Starlight only marks a ToC entry as current once its heading reaches the top
+ * of the viewport. Headings near the end of a page (e.g. "Get started") can
+ * never scroll that far, so clicking them left an earlier entry highlighted.
+ * This keeps the highlight in sync by:
+ *  - honoring the entry that was clicked (or linked via the URL hash) while
+ *    its heading is on screen, and
+ *  - highlighting the last on-screen heading once the page is scrolled to the
+ *    bottom.
+ */
+type TocElement = HTMLElement & { current?: HTMLAnchorElement };
+
+class TocEndOfPageHighlighter {
+	/** Entry the user navigated to; wins while its heading is visible. */
+	private pinnedHash: string | null = null;
+	private settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	constructor() {
+		if (document.readyState === 'loading') {
+			document.addEventListener('DOMContentLoaded', () => this.init());
+		} else {
+			this.init();
+		}
+	}
+
+	private get tocs(): TocElement[] {
+		return [...document.querySelectorAll<TocElement>('starlight-toc, mobile-starlight-toc')];
+	}
+
+	private init() {
+		if (this.tocs.length === 0) return;
+
+		document.addEventListener('click', (event) => {
+			const link = (event.target as Element | null)?.closest<HTMLAnchorElement>(
+				'starlight-toc a[href^="#"], mobile-starlight-toc a[href^="#"]'
+			);
+			if (!link) return;
+			this.pinnedHash = link.hash;
+			this.setCurrent(link.hash);
+			this.scheduleSync();
+		});
+
+		window.addEventListener('hashchange', () => {
+			this.pinnedHash = location.hash || null;
+			this.scheduleSync();
+		});
+
+		window.addEventListener('scroll', () => this.scheduleSync(), { passive: true });
+
+		// Once the reader scrolls manually, let normal scroll tracking take over.
+		const unpin = () => (this.pinnedHash = null);
+		window.addEventListener('wheel', unpin, { passive: true });
+		window.addEventListener('touchmove', unpin, { passive: true });
+		window.addEventListener('keydown', (event) => {
+			if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+				unpin();
+			}
+		});
+
+		// Deep links such as `/blog/post/#get-started`. Wait for Starlight's own
+		// (idle-time) ToC initialisation so our result isn't overwritten.
+		if (location.hash) {
+			this.pinnedHash = location.hash;
+			setTimeout(() => this.sync(), 300);
+		}
+	}
+
+	/** Run after scrolling settles so we override Starlight's observer, not race it. */
+	private scheduleSync() {
+		clearTimeout(this.settleTimer);
+		this.settleTimer = setTimeout(() => this.sync(), 120);
+	}
+
+	private sync() {
+		const viewportBottom = window.innerHeight;
+		const headerHeight = document.querySelector('header')?.getBoundingClientRect().height ?? 0;
+		const isOnScreen = (el: Element) => {
+			const rect = el.getBoundingClientRect();
+			return rect.bottom > headerHeight && rect.top < viewportBottom;
+		};
+
+		// 1. A clicked/linked entry stays current while its heading is visible.
+		if (this.pinnedHash) {
+			const heading = this.headingFor(this.pinnedHash);
+			if (heading && isOnScreen(heading)) {
+				this.setCurrent(this.pinnedHash);
+				return;
+			}
+			this.pinnedHash = null;
+		}
+
+		// 2. At the bottom of the page, the last heading on screen is current.
+		const scrolledToBottom =
+			window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+		if (!scrolledToBottom) return;
+
+		const hashes = this.visibleHashes();
+		for (let i = hashes.length - 1; i >= 0; i--) {
+			const heading = this.headingFor(hashes[i]);
+			if (heading && heading.getBoundingClientRect().top < viewportBottom) {
+				this.setCurrent(hashes[i]);
+				return;
+			}
+		}
+	}
+
+	/** ToC hashes in document order, skipping entries hidden by the language filter. */
+	private visibleHashes(): string[] {
+		const toc = this.tocs[0];
+		if (!toc) return [];
+		return [...toc.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')]
+			.filter((a) => a.closest('li')?.style.display !== 'none')
+			.map((a) => a.hash);
+	}
+
+	private headingFor(hash: string): HTMLElement | null {
+		const id = decodeURIComponent(hash.slice(1));
+		return id ? document.getElementById(id) : null;
+	}
+
+	/** Use Starlight's own `current` setter so its internal state stays in sync. */
+	private setCurrent(hash: string) {
+		for (const toc of this.tocs) {
+			const link = [...toc.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')].find(
+				(a) => a.hash === hash
+			);
+			if (link) toc.current = link;
+		}
+	}
+}
+
+new TocEndOfPageHighlighter();
 </script>
