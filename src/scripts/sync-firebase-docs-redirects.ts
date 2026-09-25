@@ -21,6 +21,10 @@ type FirebaseConfig = {
       }>;
 };
 
+function redirectKey({ source, destination, type }: RedirectRule): string {
+  return `${source}\n${destination}\n${type}`;
+}
+
 function buildCanonicalDocRedirects(): RedirectRule[] {
   const metadataByPath = getAllSourceDocsPathMetadata();
   const redirects: RedirectRule[] = [];
@@ -47,8 +51,10 @@ function buildCanonicalDocRedirects(): RedirectRule[] {
 }
 
 async function main() {
+  const checkOnly = process.argv.includes('--check');
   const firebasePath = path.resolve('firebase.json');
-  const config = JSON.parse(await readFile(firebasePath, 'utf8')) as FirebaseConfig;
+  const original = await readFile(firebasePath, 'utf8');
+  const config = JSON.parse(original) as FirebaseConfig;
   const hosting = Array.isArray(config.hosting) ? config.hosting[0] : config.hosting;
   const existingRedirects = hosting.redirects || [];
   const generatedRedirects = buildCanonicalDocRedirects();
@@ -64,7 +70,24 @@ async function main() {
     ...preservedRedirects.slice(insertIndex),
   ];
 
-  await writeFile(firebasePath, `${JSON.stringify(config, null, 2)}\n`);
+  const synced = `${JSON.stringify(config, null, 2)}\n`;
+
+  if (checkOnly) {
+    if (synced === original) {
+      console.log(`firebase.json has all ${generatedRedirects.length} canonical neutral docs redirects`);
+      return;
+    }
+    const existingKeys = new Set(existingRedirects.map(redirectKey));
+    const missing = generatedRedirects.filter((redirect) => !existingKeys.has(redirectKey(redirect)));
+    console.error('firebase.json is out of sync with the docs source. Run `pnpm sync-firebase-docs-redirects`.');
+    for (const redirect of missing) {
+      console.error(`  missing: ${redirect.source} -> ${redirect.destination}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  await writeFile(firebasePath, synced);
   console.log(`Synced ${generatedRedirects.length} canonical neutral docs redirects in firebase.json`);
 }
 
