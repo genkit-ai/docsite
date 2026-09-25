@@ -57,9 +57,11 @@ All commands run from repo root:
 | `pnpm generate-language-pages` | Generate `/docs/{lang}/...` content files from unified source docs     |
 | `pnpm generate-language-pages --watch` | Watch source docs and regenerate only changed pages |
 | `pnpm dev`                     | Start local dev server with incremental language-page regeneration     |
-| `pnpm build`                   | Generate language pages, build docs bundles/llms files, and build site |
+| `pnpm build`                   | Check redirects, generate language pages, build docs bundles/llms files, and build site |
 | `pnpm preview`                 | Preview the production build                                           |
 | `pnpm build-llms-direct`       | Generate `llms*.txt` outputs directly from docs source                 |
+| `pnpm sync-firebase-docs-redirects` | Write the neutral `/docs/<slug>` to `/docs/{lang}/<slug>/` 301s into `firebase.json` |
+| `pnpm check-firebase-docs-redirects` | Fail if `firebase.json` redirects are out of sync with the docs source |
 
 ## Contribution Notes
 
@@ -68,6 +70,7 @@ Before opening a PR:
 1. Run `pnpm generate-language-pages`.
 2. Run `pnpm build-bundle` and `pnpm build-llms-direct`.
 3. Ensure docs routes load locally (`pnpm dev`).
-4. Commit source docs and code changes only.
-5. Do not commit generated language pages or generated llms artifacts (both are gitignored build artifacts).
-6. Expect non-blocking warnings if a language page must link to a different language variant because that target is unavailable in the current language.
+4. If you added a docs page or changed its `supportedLanguages` or `isLanguageAgnostic`, run `pnpm sync-firebase-docs-redirects` and commit `firebase.json`. `pnpm build` fails until you do.
+5. Commit source docs and code changes only.
+6. Do not commit generated language pages or generated llms artifacts (both are gitignored build artifacts).
+7. Expect non-blocking warnings if a language page must link to a different language variant because that target is unavailable in the current language.
