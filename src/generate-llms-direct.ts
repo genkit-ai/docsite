@@ -18,6 +18,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { getAllProcessedDocuments, type ProcessedDocument } from './utils/content-processor.js';
 import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
+import { SITE_URL, meta } from './data/landing.js';
 import { sidebar } from './sidebar.js';
 
 interface LanguageSet {
@@ -257,7 +258,11 @@ function generateMainLlmsTxt(written: Map<Language, LanguageSet[]>): string {
 
   let content = `# Genkit
 
-> Open-source GenAI toolkit for JS, Go, Dart, and Python.
+> ${meta.description}
+
+## Overview
+
+- [Genkit overview](${SITE_URL}/index.md): what Genkit is, what you can build with it, how it works, how to get started, and answers to common questions
 
 ## Documentation Sets
 

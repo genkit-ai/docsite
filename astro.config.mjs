@@ -130,6 +130,7 @@ export default defineConfig({
         Footer: './src/content/custom/footer.astro',
         PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
+        ThemeSelect: './src/components/ThemeToggle.astro',
       },
       head: [
         {
