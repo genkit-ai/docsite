@@ -28,6 +28,9 @@ function applyLanguage(lang: string) {
   document.querySelectorAll<HTMLElement>('[data-install][data-view]').forEach((widget) => {
     widget.removeAttribute('data-view');
   });
+  document.querySelectorAll<HTMLElement>('[data-install] [data-skills-view]').forEach((el) => {
+    el.hidden = true;
+  });
   document.querySelectorAll<HTMLElement>('[data-skills-tab]').forEach((tab) => {
     tab.setAttribute('aria-selected', 'false');
     tab.tabIndex = -1;
@@ -53,6 +56,9 @@ function selectLanguage(lang: string) {
  */
 function showSkills(widget: HTMLElement) {
   widget.dataset.view = 'skills';
+  widget.querySelectorAll<HTMLElement>('[data-skills-view]').forEach((el) => {
+    el.hidden = false;
+  });
   widget.querySelectorAll<HTMLElement>('[role="tab"]').forEach((tab) => {
     const selected = tab.hasAttribute('data-skills-tab');
     tab.setAttribute('aria-selected', String(selected));
@@ -60,7 +66,7 @@ function showSkills(widget: HTMLElement) {
   });
 }
 
-function initLanguageTabs() {
+function initLanguageTabs(signal: AbortSignal) {
   document.querySelectorAll<HTMLElement>('[data-lang-tablist]').forEach((tablist) => {
     const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'));
     const widget = tablist.closest<HTMLElement>('[data-install]');
@@ -74,27 +80,35 @@ function initLanguageTabs() {
     };
 
     tabs.forEach((tab, index) => {
-      tab.addEventListener('click', () => activate(tab));
-      tab.addEventListener('keydown', (event) => {
-        const keys: Record<string, number> = {
-          ArrowRight: (index + 1) % tabs.length,
-          ArrowLeft: (index - 1 + tabs.length) % tabs.length,
-          Home: 0,
-          End: tabs.length - 1,
-        };
-        if (!(event.key in keys)) return;
-        event.preventDefault();
-        const next = tabs[keys[event.key]];
-        next.focus();
-        activate(next);
-      });
+      tab.addEventListener('click', () => activate(tab), { signal });
+      tab.addEventListener(
+        'keydown',
+        (event) => {
+          const keys: Record<string, number> = {
+            ArrowRight: (index + 1) % tabs.length,
+            ArrowLeft: (index - 1 + tabs.length) % tabs.length,
+            Home: 0,
+            End: tabs.length - 1,
+          };
+          if (!(event.key in keys)) return;
+          event.preventDefault();
+          const next = tabs[keys[event.key]];
+          next.focus();
+          activate(next);
+        },
+        { signal },
+      );
     });
   });
 
-  document.addEventListener('genkit:languagechange', (event) => {
-    const lang = (event as CustomEvent<{ language?: string }>).detail?.language;
-    if (lang) applyLanguage(lang);
-  });
+  document.addEventListener(
+    'genkit:languagechange',
+    (event) => {
+      const lang = (event as CustomEvent<{ language?: string }>).detail?.language;
+      if (lang) applyLanguage(lang);
+    },
+    { signal },
+  );
 
   // The page manager may have already announced the stored language.
   applyLanguage(document.documentElement.getAttribute('data-genkit-lang') ?? 'js');
@@ -121,7 +135,7 @@ const SHOWCASE_VISIBLE_RATIO = 0.4;
  * stage is on screen. Pointing at the stage or focusing inside it holds the
  * current scene. Choosing a tab, or the pause button, ends the tour.
  */
-function initShowcase() {
+function initShowcase(signal: AbortSignal) {
   const root = document.querySelector<HTMLElement>('[data-showcase]');
   const stage = root?.querySelector<HTMLElement>('[data-showcase-stage]');
   if (!root || !stage) return;
@@ -210,19 +224,23 @@ function initShowcase() {
   };
 
   tabs.forEach((tab, i) => {
-    tab.addEventListener('click', () => choose(i));
-    tab.addEventListener('keydown', (event) => {
-      const keys: Record<string, number> = {
-        ArrowRight: (i + 1) % tabs.length,
-        ArrowLeft: (i - 1 + tabs.length) % tabs.length,
-        Home: 0,
-        End: tabs.length - 1,
-      };
-      if (!(event.key in keys)) return;
-      event.preventDefault();
-      tabs[keys[event.key]].focus();
-      choose(keys[event.key]);
-    });
+    tab.addEventListener('click', () => choose(i), { signal });
+    tab.addEventListener(
+      'keydown',
+      (event) => {
+        const keys: Record<string, number> = {
+          ArrowRight: (i + 1) % tabs.length,
+          ArrowLeft: (i - 1 + tabs.length) % tabs.length,
+          Home: 0,
+          End: tabs.length - 1,
+        };
+        if (!(event.key in keys)) return;
+        event.preventDefault();
+        tabs[keys[event.key]].focus();
+        choose(keys[event.key]);
+      },
+      { signal },
+    );
   });
 
   if (!canTour) {
@@ -239,38 +257,58 @@ function initShowcase() {
 
   if (toggle) {
     toggle.hidden = false;
-    toggle.addEventListener('click', () => {
-      if (touring) {
-        setTouring(false);
-        sync();
-      } else {
-        setTouring(true);
-        show(index);
-      }
-    });
+    toggle.addEventListener(
+      'click',
+      () => {
+        if (touring) {
+          setTouring(false);
+          sync();
+        } else {
+          setTouring(true);
+          show(index);
+        }
+      },
+      { signal },
+    );
   }
 
-  stage.addEventListener('pointerenter', (event) => {
-    if (event.pointerType !== 'mouse') return;
-    pointing = true;
-    sync();
-  });
-  stage.addEventListener('pointerleave', (event) => {
-    if (event.pointerType !== 'mouse') return;
-    pointing = false;
-    sync();
-  });
-  stage.addEventListener('focusin', () => {
-    focused = true;
-    sync();
-  });
-  stage.addEventListener('focusout', (event) => {
-    if (stage.contains(event.relatedTarget as Node | null)) return;
-    focused = false;
-    sync();
-  });
+  stage.addEventListener(
+    'pointerenter',
+    (event) => {
+      if (event.pointerType !== 'mouse') return;
+      pointing = true;
+      sync();
+    },
+    { signal },
+  );
+  stage.addEventListener(
+    'pointerleave',
+    (event) => {
+      if (event.pointerType !== 'mouse') return;
+      pointing = false;
+      sync();
+    },
+    { signal },
+  );
+  stage.addEventListener(
+    'focusin',
+    () => {
+      focused = true;
+      sync();
+    },
+    { signal },
+  );
+  stage.addEventListener(
+    'focusout',
+    (event) => {
+      if (stage.contains(event.relatedTarget as Node | null)) return;
+      focused = false;
+      sync();
+    },
+    { signal },
+  );
 
-  new IntersectionObserver(
+  const observer = new IntersectionObserver(
     ([entry]) => {
       inView = entry.isIntersecting && entry.intersectionRatio >= SHOWCASE_VISIBLE_RATIO;
       // The first scene plays the first time the stage comes into view.
@@ -278,33 +316,47 @@ function initShowcase() {
       else sync();
     },
     { threshold: SHOWCASE_VISIBLE_RATIO },
-  ).observe(stage);
+  );
+  observer.observe(stage);
 
-  document.addEventListener('visibilitychange', sync);
+  document.addEventListener('visibilitychange', sync, { signal });
+  signal.addEventListener('abort', () => {
+    observer.disconnect();
+    window.clearTimeout(timer);
+    timer = undefined;
+  });
 }
 
-function initCopyButtons() {
+function initCopyButtons(signal: AbortSignal) {
   document.querySelectorAll<HTMLButtonElement>('button[data-copy]').forEach((button) => {
     const label = button.querySelector<HTMLElement>('[data-copy-label]');
     let resetTimer: number | undefined;
 
-    button.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(button.dataset.copy ?? '');
-        if (label) label.textContent = 'Copied!';
-        button.dataset.state = 'copied';
-      } catch {
-        // Clipboard access can be blocked. Select the command so it is easy to copy by hand.
-        const code = button.parentElement?.querySelector('code');
-        if (code) window.getSelection()?.selectAllChildren(code);
-        if (label) label.textContent = 'Selected';
-        button.dataset.state = 'selected';
-      }
+    button.addEventListener(
+      'click',
+      async () => {
+        try {
+          await navigator.clipboard.writeText(button.dataset.copy ?? '');
+          if (label) label.textContent = 'Copied!';
+          button.dataset.state = 'copied';
+        } catch {
+          // Clipboard access can be blocked. Select the command so it is easy to copy by hand.
+          const code = button.parentElement?.querySelector('code');
+          if (code) window.getSelection()?.selectAllChildren(code);
+          if (label) label.textContent = 'Selected';
+          button.dataset.state = 'selected';
+        }
+        window.clearTimeout(resetTimer);
+        resetTimer = window.setTimeout(() => {
+          if (label) label.textContent = 'Copy';
+          delete button.dataset.state;
+        }, 1600);
+      },
+      { signal },
+    );
+
+    signal.addEventListener('abort', () => {
       window.clearTimeout(resetTimer);
-      resetTimer = window.setTimeout(() => {
-        if (label) label.textContent = 'Copy';
-        delete button.dataset.state;
-      }, 1600);
     });
   });
 }
@@ -313,7 +365,7 @@ function initCopyButtons() {
 const MODEL_TOUR_DELAY_MS = 600;
 const MODEL_TOUR_STEP_MS = 1100;
 
-function initModelSwitchers() {
+function initModelSwitchers(signal: AbortSignal) {
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   document.querySelectorAll<HTMLElement>('[data-model-switcher]').forEach((switcher) => {
@@ -336,11 +388,15 @@ function initModelSwitchers() {
     };
 
     buttons.forEach((button) => {
-      button.addEventListener('click', () => {
-        // A choice by the reader ends the tour.
-        tourTimers.splice(0).forEach((timer) => window.clearTimeout(timer));
-        select(button);
-      });
+      button.addEventListener(
+        'click',
+        () => {
+          // A choice by the reader ends the tour.
+          tourTimers.splice(0).forEach((timer) => window.clearTimeout(timer));
+          select(button);
+        },
+        { signal },
+      );
     });
 
     if (reduceMotion || !('IntersectionObserver' in window) || buttons.length < 2) return;
@@ -357,6 +413,11 @@ function initModelSwitchers() {
       { threshold: 0.6 },
     );
     observer.observe(switcher);
+
+    signal.addEventListener('abort', () => {
+      observer.disconnect();
+      tourTimers.splice(0).forEach((timer) => window.clearTimeout(timer));
+    });
   });
 }
 
@@ -379,7 +440,7 @@ const HERO_TIMELINE: Array<[step: number, atMs: number]> = [
 const HERO_LOOP_MS = 11800;
 const HERO_STATIC_STEP = '4';
 
-function initHeroDemo() {
+function initHeroDemo(signal: AbortSignal) {
   const demo = document.getElementById('hero-demo');
   if (!demo) return;
 
@@ -425,33 +486,58 @@ function initHeroDemo() {
   const toggle = document.getElementById('hero-demo-toggle');
   if (toggle) {
     toggle.hidden = false;
-    toggle.addEventListener('click', () => {
-      paused = !paused;
-      demo.toggleAttribute('data-paused', paused);
-      toggle.toggleAttribute('data-paused', paused);
-      toggle.setAttribute('aria-label', paused ? 'Play animation' : 'Pause animation');
-      if (paused) stop();
-      else if (inView && !document.hidden) start(Number(demo.dataset.step) || 0);
-    });
+    toggle.addEventListener(
+      'click',
+      () => {
+        paused = !paused;
+        demo.toggleAttribute('data-paused', paused);
+        toggle.toggleAttribute('data-paused', paused);
+        toggle.setAttribute('aria-label', paused ? 'Play animation' : 'Pause animation');
+        if (paused) stop();
+        else if (inView && !document.hidden) start(Number(demo.dataset.step) || 0);
+      },
+      { signal },
+    );
   }
 
-  new IntersectionObserver(
+  const observer = new IntersectionObserver(
     ([entry]) => {
       inView = entry.isIntersecting;
       if (inView && !document.hidden) start();
       else stop();
     },
     { threshold: 0.25 },
-  ).observe(demo);
+  );
+  observer.observe(demo);
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stop();
-    else if (inView) start();
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.hidden) stop();
+      else if (inView) start();
+    },
+    { signal },
+  );
+
+  signal.addEventListener('abort', () => {
+    observer.disconnect();
+    stop();
   });
 }
 
-initLanguageTabs();
-initHeroDemo();
-initShowcase();
-initCopyButtons();
-initModelSwitchers();
+let pageController: AbortController | undefined;
+
+function initLandingDemos() {
+  pageController?.abort();
+  pageController = new AbortController();
+  const { signal } = pageController;
+
+  initLanguageTabs(signal);
+  initHeroDemo(signal);
+  initShowcase(signal);
+  initCopyButtons(signal);
+  initModelSwitchers(signal);
+}
+
+document.addEventListener('astro:page-load', initLandingDemos);
+initLandingDemos();

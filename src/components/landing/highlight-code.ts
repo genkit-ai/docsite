@@ -46,8 +46,8 @@ function escapeHtml(value: string) {
  */
 export async function highlightLines(code: string, lang: string): Promise<string[]> {
   const h = await getHighlighter();
-  const { tokens } = h.codeToTokens(code, {
-    lang: (shikiLangById[lang] ?? lang) as Parameters<Highlighter['codeToTokens']>[1]['lang'],
+  const tokens = h.codeToTokensBase(code, {
+    lang: (shikiLangById[lang] ?? lang) as Parameters<Highlighter['codeToTokensBase']>[1]['lang'],
     theme: GOOGLE_DARK_THEME.name,
   });
   return tokens.map((line) =>
