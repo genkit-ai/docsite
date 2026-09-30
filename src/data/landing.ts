@@ -71,7 +71,7 @@ export const meta = {
 };
 
 export const hero = {
-  title: 'Build AI apps that do more than chat',
+  title: 'Build agentic apps that do more than chat',
   /** The part of the title shown in the accent color. */
   highlight: 'more than chat',
   lead: "Genkit is Google's open-source framework for AI-powered apps and agents, in TypeScript, Go, Python, and Dart.",
