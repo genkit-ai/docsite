@@ -993,14 +993,14 @@ fmt.Println(claude.Text())
 
 <Lang lang="dart">
 
-The `genkit_anthropic` package provides a unified interface to connect with Anthropic's Claude models through the Anthropic API.
+The `genkit_anthropic` package provides access to Anthropic's Claude models through the Anthropic API.
 
 ## Setup
 
 ### Installation
 
 ```bash
-dart pub add genkit_anthropic
+dart pub add genkit genkit_anthropic
 ```
 
 ### Configuration
@@ -1008,44 +1008,76 @@ dart pub add genkit_anthropic
 To use this plugin, import it and specify it when you initialize Genkit:
 
 ```dart
-import 'dart:io';
 import 'package:genkit/genkit.dart';
-
 import 'package:genkit_anthropic/genkit_anthropic.dart';
 
 void main() async {
-  // Initialize Genkit with the Anthropic plugin
-  final ai = Genkit(
-    plugins: [anthropic(apiKey: Platform.environment['ANTHROPIC_API_KEY']!)],
-  );
+  // Reads the API key from the ANTHROPIC_API_KEY environment variable.
+  final ai = Genkit(plugins: [anthropic()]);
 }
 ```
 
-The plugin requires an Anthropic API Key, which you can get from the [Anthropic Console](https://console.anthropic.com/).
+You can get an API key from the [Anthropic Console](https://console.anthropic.com/). You can also pass it explicitly with `anthropic(apiKey: ...)`.
+
+The `anthropic()` function also accepts:
+
+- `baseUrl`: a different API host, such as a proxy
+- `headers`: extra HTTP headers to send on every request
+- `apiVersion`: `'stable'` (default) or `'beta'` (see [Stable and beta APIs](#stable-and-beta-apis))
+- `httpClient`: a custom `http.Client` (for a proxy, logging or a mock in tests)
+
+The plugin never closes an `httpClient` you provide, so close it yourself when you're done:
+
+```dart
+import 'package:http/http.dart' as http;
+
+final httpClient = http.Client();
+final ai = Genkit(plugins: [anthropic(httpClient: httpClient)]);
+// ...
+httpClient.close();
+```
 
 ## Usage
 
-### Language Models
+### Language models
 
-You can reference Claude models, e.g. `claude-sonnet-4-6` or `'claude-opus-4-8'`.
+Reference Claude models with `anthropic.model()`:
 
 ```dart
-import 'dart:io';
-import 'package:genkit/genkit.dart';
-import 'package:genkit_anthropic/genkit_anthropic.dart';
-
-void main() async {
-  final ai = Genkit(
-    plugins: [anthropic(apiKey: Platform.environment['ANTHROPIC_API_KEY']!)],
-  );
-
-  final response = await ai.generate(
-    model: anthropic.model('claude-sonnet-4-6'),
-    prompt: 'Tell me a joke about a developer.',
-  );
-  print(response.text);
-}
+final response = await ai.generate(
+  model: anthropic.model('claude-sonnet-5'),
+  prompt: 'Tell me a joke about a developer.',
+);
+print(response.text);
 ```
+
+The plugin curates capability metadata for these models:
+
+| Model ID | Default thinking mode |
+| --- | --- |
+| `claude-fable-5` | adaptive |
+| `claude-opus-5` | adaptive |
+| `claude-sonnet-5` | adaptive |
+| `claude-opus-4-8` | adaptive |
+| `claude-opus-4-7` | adaptive |
+| `claude-opus-4-6` | adaptive |
+| `claude-sonnet-4-6` | adaptive |
+| `claude-opus-4-5` | enabled (token budget) |
+| `claude-sonnet-4-5` | enabled (token budget) |
+| `claude-haiku-4-5` | enabled (token budget) |
+
+Dated model IDs (for example `claude-sonnet-4-5-20250929`) resolve to their alias. You can use models outside this list by name, but they don't get native structured output (see the structured output section below).
+
+### Model configuration
+
+Pass `AnthropicOptions` as `config`. It supports:
+
+- `maxTokens`, `temperature` (0–1), `topP` (0–1), `topK`, `stopSequences`
+- `thinking`: a `ThinkingConfig` (see [Thinking](#thinking))
+- `outputConfig`: an `AnthropicOutputConfig` whose `effort` is `'low'`, `'medium'`, `'high'`, `'xhigh'` or `'max'`
+- `forceTool`: the name of a tool the model must call
+- `apiVersion` and `betas` (see [Stable and beta APIs](#stable-and-beta-apis))
+- `apiKey`: overrides the plugin's API key for this request
 
 ### Streaming
 
@@ -1053,7 +1085,7 @@ The plugin supports streaming responses natively.
 
 ```dart
 final stream = ai.generateStream(
-  model: anthropic.model('claude-sonnet-4-6'),
+  model: anthropic.model('claude-sonnet-5'),
   prompt: 'Count to 5',
 );
 
@@ -1062,10 +1094,10 @@ await for (final chunk in stream) {
 }
 
 final response = await stream.onResult;
-print('Full response: \${response.text}');
+print('Full response: ${response.text}');
 ```
 
-### Tool Calling
+### Tool calling
 
 Claude models support function calling and tool use.
 
@@ -1086,12 +1118,12 @@ ai.defineTool(
   name: 'calculator',
   description: 'Multiplies two numbers',
   inputSchema: CalculatorInput.$schema,
-  outputSchema: intSchema(),
-  fn: (input, context) async => input.a * input.b,
+  outputSchema: .integer(),
+  fn: (input, context) async => .response(input.a * input.b),
 );
 
 final response = await ai.generate(
-  model: anthropic.model('claude-sonnet-4-6'),
+  model: anthropic.model('claude-sonnet-5'),
   prompt: 'What is 123 * 456?',
   toolNames: ['calculator'],
 );
@@ -1099,15 +1131,29 @@ final response = await ai.generate(
 print(response.text);
 ```
 
-### Thinking (Claude 4.x)
-
-Claude 4.x models support explicit thinking to expose the reasoning process before returning the final response.
+`toolChoice: .required` makes the model call at least one tool (Anthropic's `any`). To force one specific tool, set `forceTool` instead:
 
 ```dart
 final response = await ai.generate(
-  model: anthropic.model('claude-sonnet-4-6'),
+  model: anthropic.model('claude-sonnet-5'),
+  prompt: 'What is 123 * 456?',
+  toolNames: ['calculator'],
+  config: AnthropicOptions(forceTool: 'calculator'),
+);
+```
+
+### Thinking
+
+Claude models can think before answering. With an empty `ThinkingConfig()`, the plugin uses the model's default mode from the model table above: `adaptive` for Claude 4.6 and newer, and `enabled` (with a token budget) for Claude 4.5. Use `outputConfig.effort` to control how much the model thinks:
+
+```dart
+final response = await ai.generate(
+  model: anthropic.model('claude-sonnet-5'),
   prompt: 'Solve this 24 game: 2, 3, 10, 10',
-  config: AnthropicOptions(thinking: ThinkingConfig(budgetTokens: 2048)),
+  config: AnthropicOptions(
+    thinking: ThinkingConfig(),
+    outputConfig: AnthropicOutputConfig(effort: 'high'),
+  ),
 );
 
 // The thinking content is available in the message parts
@@ -1115,7 +1161,21 @@ print(response.message?.content);
 print(response.text);
 ```
 
-### Structured Output
+To set a mode explicitly, set `type` to `'adaptive'`, `'enabled'` or `'disabled'`. The `'enabled'` mode needs a token budget of at least 1,024:
+
+```dart
+config: AnthropicOptions(
+  thinking: ThinkingConfig(type: 'enabled', budgetTokens: 2048),
+),
+```
+
+:::caution
+For models outside the curated list, always set `thinking.type`. If you leave it out, the request fails with `INVALID_ARGUMENT` rather than sending a mode the model might reject.
+:::
+
+Thinking blocks, including redacted ones, are sent back to the model on later turns. This keeps multi-turn conversations and tool-calling loops working with thinking on. The thinking signature is stored in the part's `thoughtSignature` metadata.
+
+### Structured output
 
 ```dart
 import 'package:schemantic/schemantic.dart';
@@ -1131,14 +1191,84 @@ abstract class $Person {
 // ... inside main ...
 
 final response = await ai.generate(
-  model: anthropic.model('claude-sonnet-4-6'),
+  model: anthropic.model('claude-sonnet-5'),
   prompt: 'Generate a person named John Doe, age 30',
   outputSchema: Person.$schema,
 );
 
-final person = Person.fromJson(response.output!);
-print('Name: \${person.name}, Age: \${person.age}');
+final person = response.output!;
+print('Name: ${person.name}, Age: ${person.age}');
 ```
+
+For curated models, the schema is sent natively as `output_config.format` on both the stable and beta APIs, so structured output works together with thinking and your own tools. For uncurated models, Genkit puts the schema in the prompt instead.
+
+The plugin adjusts schemas to fit Anthropic's validator:
+
+- `oneOf` is rewritten to `anyOf`.
+- Validation keywords such as `minimum`, `maxLength` and `pattern` are removed.
+
+:::note
+A schema with a `dynamic`/`Object?` field or a `Map<String, T>` field can't be enforced by the API. For those schemas, the plugin puts the schema in the prompt instead of enforcing it natively.
+:::
+
+### PDF and image input
+
+Pass images and PDFs as `MediaPart`s, either as a base64 `data:` URL or as a remote URL:
+
+```dart
+final response = await ai.generate(
+  model: anthropic.model('claude-sonnet-5'),
+  messages: [
+    Message(
+      role: Role.user,
+      content: [
+        TextPart(text: 'Summarize this document.'),
+        MediaPart(
+          media: Media(
+            url: 'https://example.com/report.pdf',
+            contentType: 'application/pdf',
+          ),
+        ),
+      ],
+    ),
+  ],
+);
+```
+
+PDFs are sent as document blocks. For data URLs, the MIME type is read from the URL itself. Media that is neither an image nor a PDF fails with `INVALID_ARGUMENT`.
+
+### Stable and beta APIs
+
+Requests go to Anthropic's stable API by default. To use beta features, set `apiVersion` to `'beta'`, either for a single request or as the plugin-wide default. A request's own `apiVersion` takes precedence.
+
+```dart
+// Per request.
+final response = await ai.generate(
+  model: anthropic.model('claude-sonnet-5'),
+  prompt: 'Hello',
+  config: AnthropicOptions(apiVersion: 'beta'),
+);
+
+// Or as the plugin-wide default.
+final ai = Genkit(plugins: [anthropic(apiVersion: 'beta')]);
+```
+
+Beta requests send a curated `anthropic-beta` feature list. To use a beta the plugin doesn't know about yet, set `betas` to replace that list:
+
+```dart
+config: AnthropicOptions(
+  apiVersion: 'beta',
+  betas: ['some-new-beta-2026-01-01'],
+),
+```
+
+### Errors and retries
+
+When Anthropic is overloaded, it returns HTTP 529. The plugin maps this to Genkit's `UNAVAILABLE` status, so [retry middleware](/docs/middleware/) retries these requests automatically.
+
+:::note
+Prompt caching (`cache_control`) isn't supported in the Dart plugin yet.
+:::
 
 </Lang>
 
