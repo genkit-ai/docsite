@@ -525,6 +525,115 @@ function initHeroDemo(signal: AbortSignal) {
   });
 }
 
+/**
+ * "How it works" stepper. The focus line sits halfway down the space under the
+ * sticky nav. The last step whose node has crossed it is active, and the rail
+ * fills down to it. On wide screens, the active step's visual shows in the
+ * sticky stage, which is centered on the same line (see HowItWorks.astro).
+ */
+const NAV_HEIGHT_PX = 64;
+
+function initHowItWorks(signal: AbortSignal) {
+  const root = document.querySelector<HTMLElement>('[data-hiw]');
+  const rail = root?.querySelector<HTMLElement>('.hiw-rail');
+  const fill = root?.querySelector<HTMLElement>('[data-hiw-fill]');
+  const tip = root?.querySelector<HTMLElement>('[data-hiw-tip]');
+  if (!root || !rail || !fill || !tip) return;
+
+  const steps = Array.from(root.querySelectorAll<HTMLElement>('[data-hiw-step]'));
+  const nodes = steps.map((step) => step.querySelector<HTMLElement>('[data-hiw-node]'));
+  if (steps.length === 0 || nodes.some((node) => !node)) return;
+
+  const wide = window.matchMedia('(min-width: 64rem)');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  /** Node centers, relative to the top of the stepper. */
+  let centers: number[] = [];
+  let active = -1;
+  let frame = 0;
+
+  const focusLine = () => NAV_HEIGHT_PX + (window.innerHeight - NAV_HEIGHT_PX) / 2;
+
+  const measure = () => {
+    const top = root.getBoundingClientRect().top;
+    centers = nodes.map((node) => {
+      const rect = node!.getBoundingClientRect();
+      return rect.top + rect.height / 2 - top;
+    });
+    rail.style.top = `${centers[0]}px`;
+    rail.style.height = `${centers[centers.length - 1] - centers[0]}px`;
+  };
+
+  const update = () => {
+    frame = 0;
+    const focus = focusLine() - root.getBoundingClientRect().top;
+    const length = centers[centers.length - 1] - centers[0];
+    const progress = length > 0 ? Math.min(Math.max((focus - centers[0]) / length, 0), 1) : 0;
+    fill.style.transform = `scaleY(${progress})`;
+    tip.style.transform = `translateY(${progress * length}px)`;
+
+    let next = 0;
+    centers.forEach((center, index) => {
+      if (center <= focus) next = index;
+    });
+    if (next === active) return;
+    active = next;
+    steps.forEach((step, index) => {
+      step.dataset.state = index < active ? 'done' : index === active ? 'active' : 'upcoming';
+    });
+  };
+
+  const schedule = () => {
+    if (!frame) frame = window.requestAnimationFrame(update);
+  };
+
+  const remeasure = () => {
+    measure();
+    schedule();
+  };
+
+  /** Scrolls so a step's node sits just past the focus line. */
+  const focusStep = (index: number) => {
+    const top = root.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo({
+      top: top + centers[index] - focusLine() + 1,
+      behavior: reduceMotion.matches ? 'auto' : 'smooth',
+    });
+  };
+
+  // On wide screens, clicking a step (or tabbing into it) brings it into focus.
+  steps.forEach((step, index) => {
+    const copy = step.querySelector<HTMLElement>('.hiw-copy');
+    copy?.addEventListener(
+      'click',
+      (event) => {
+        if (!wide.matches || index === active || (event.target as Element).closest('a, button')) return;
+        focusStep(index);
+      },
+      { signal },
+    );
+    copy?.addEventListener(
+      'focusin',
+      () => {
+        if (wide.matches && index !== active) focusStep(index);
+      },
+      { signal },
+    );
+  });
+
+  // Text reflows (fonts loading, resizing) move the nodes.
+  const resizeObserver = new ResizeObserver(remeasure);
+  resizeObserver.observe(root);
+  window.addEventListener('scroll', schedule, { passive: true, signal });
+  window.addEventListener('resize', remeasure, { signal });
+
+  signal.addEventListener('abort', () => {
+    resizeObserver.disconnect();
+    window.cancelAnimationFrame(frame);
+  });
+
+  remeasure();
+}
+
 let pageController: AbortController | undefined;
 
 function initLandingDemos() {
@@ -537,6 +646,7 @@ function initLandingDemos() {
   initShowcase(signal);
   initCopyButtons(signal);
   initModelSwitchers(signal);
+  initHowItWorks(signal);
 }
 
 document.addEventListener('astro:page-load', initLandingDemos);
