@@ -425,7 +425,7 @@ export const faqs: Faq[] = [
   {
     question: 'Which programming languages can I use?',
     answer:
-      'Genkit has official SDKs for TypeScript and JavaScript, Go, Python, and Dart. The TypeScript and Go SDKs are generally available. The Python and Dart SDKs are in preview.',
+      'Genkit has official SDKs for TypeScript and JavaScript, Go, Python, and Dart.',
     link: { label: 'Get started in your language', href: '/docs/get-started' },
   },
   {
