@@ -332,6 +332,15 @@ export const howItWorks = {
 
 export const steps: Step[] = [
   {
+    id: 'agents',
+    title: 'Build it with your coding agent',
+    body: "Genkit gives coding agents guardrails, not guesswork. Agent skills teach Antigravity, Claude Code, and Cursor today's Genkit APIs. The Genkit MCP server lets them run your flows and read the traces, so they check their own work before you review it.",
+    links: [
+      { label: 'Set up agent skills', href: '/docs/develop-with-ai' },
+      { label: 'Connect the MCP server', href: '/docs/mcp-server' },
+    ],
+  },
+  {
     id: 'models',
     title: 'Pick any model',
     body: 'Gemini, Claude, OpenAI, open models with Ollama, and more. Switching is one line.',
@@ -342,15 +351,6 @@ export const steps: Step[] = [
     title: 'Build in your language',
     body: 'Official SDKs for TypeScript, Go, Python, and Dart, built on the same concepts.',
     links: [{ label: 'Choose your SDK', href: '/docs/get-started' }],
-  },
-  {
-    id: 'agents',
-    title: 'Build it with your coding agent',
-    body: "Genkit gives coding agents guardrails, not guesswork. Agent skills teach Antigravity, Claude Code, and Cursor today's Genkit APIs. The Genkit MCP server lets them run your flows and read the traces, so they check their own work before you review it.",
-    links: [
-      { label: 'Set up agent skills', href: '/docs/develop-with-ai' },
-      { label: 'Connect the MCP server', href: '/docs/mcp-server' },
-    ],
   },
   {
     id: 'ship',
