@@ -71,10 +71,10 @@ export const meta = {
 };
 
 export const hero = {
-  title: 'Build AI apps that do more than chat',
+  title: 'Build agentic apps that do more than chat',
   /** The part of the title shown in the accent color. */
   highlight: 'more than chat',
-  lead: "Genkit is Google's open-source framework for AI-powered apps and agents, in TypeScript, Go, Python, and Dart.",
+  lead: "Genkit is an open-source AI SDK and toolkit for building full-stack agentic experiences for any platform. Available in TypeScript, Go, Dart, and Python",
   /** The button under the install command. It links to the selected language's quickstart. */
   cta: 'Start the quickstart',
 };
@@ -283,7 +283,7 @@ export const useCases: UseCase[] = [
   },
   {
     id: 'media',
-    label: 'Images',
+    label: 'Media',
     title: 'Images and media',
     summary: 'Generate product shots, art, and marketing copy from a prompt.',
     example: 'One text prompt generates product photos of a speckled mug in three glazes.',
