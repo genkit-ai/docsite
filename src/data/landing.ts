@@ -76,7 +76,7 @@ export const hero = {
   highlight: 'more than chat',
   lead: "Genkit is an open-source AI SDK and toolkit for building full-stack agentic experiences for any platform. Available in TypeScript, Go, Dart, and Python",
   /** The button under the install command. It links to the selected language's quickstart. */
-  cta: 'Start the quickstart',
+  cta: 'Get started',
 };
 
 /** The last tab of the install widget: skills that teach coding agents Genkit. */
