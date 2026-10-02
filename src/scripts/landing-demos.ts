@@ -423,9 +423,9 @@ function initModelSwitchers(signal: AbortSignal) {
 
 /**
  * The hero demo: a short story in steps, looped while the hero is visible.
- * 0 reset, 1 typing, 2 sent, 3 searching (tool call), 4 GenUI flight cards,
- * 5 tap on "Select", 6 booking (tool call), 7 the card updates in place to a
- * booking pass.
+ * 0 reset, 1 typing, 2 sent, 3 finding seats (tool call), 4 GenUI seat map and
+ * options, 5 tap on "Select", 6 buying (tool call), 7 the card updates in place
+ * to a ticket.
  */
 const HERO_TIMELINE: Array<[step: number, atMs: number]> = [
   [0, 0],

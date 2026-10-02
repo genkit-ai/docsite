@@ -91,21 +91,21 @@ export const agentSkills = {
 };
 
 /**
- * The hero illustration: a travel app built with Genkit. The callouts show
+ * The hero illustration: a ticketing app built with Genkit. The callouts show
  * the Genkit code behind each moment, in the reader's language.
  */
 export const heroDemo = {
   description:
-    'Example: a travel app built with Genkit. Someone asks for a flight to Tokyo. The app calls your searchFlights tool, answers with flight cards they can tap instead of text (GenUI), and books the flight they pick with your bookFlight tool.',
+    "Example: a ticketing app built with Genkit. Someone asks for two seats at Saturday's show. The app calls your findSeats tool, answers with a seat map and seat options they can tap instead of text (GenUI), and buys the seats they pick with your buyTickets tool.",
   callouts: {
     tools: 'Tool calling',
     genui: 'GenUI',
   },
   code: {
-    js: { tools: 'tools: [searchFlights, bookFlight]', genui: 'use: [a2ui()]' },
-    go: { tools: 'ai.WithTools(searchFlights, bookFlight)', genui: 'ai.WithUse(&a2uix.Surfaces{})' },
-    python: { tools: 'tools=[search_flights, book_flight]', genui: 'use=[Surfaces()]' },
-    dart: { tools: 'tools: [searchFlights, bookFlight]', genui: 'use: [a2ui()]' },
+    js: { tools: 'tools: [findSeats, buyTickets]', genui: 'use: [a2ui()]' },
+    go: { tools: 'ai.WithTools(findSeats, buyTickets)', genui: 'ai.WithUse(&a2uix.Surfaces{})' },
+    python: { tools: 'tools=[find_seats, buy_tickets]', genui: 'use=[Surfaces()]' },
+    dart: { tools: 'tools: [findSeats, buyTickets]', genui: 'use: [a2ui()]' },
   } satisfies Record<SdkId, { tools: string; genui: string }>,
 };
 

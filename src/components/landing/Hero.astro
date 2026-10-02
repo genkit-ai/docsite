@@ -1,9 +1,7 @@
 ---
-import { Image } from 'astro:assets';
 import InstallWidget from './InstallWidget.astro';
 import { highlightLines } from './highlight-code';
 import { hero, heroDemo, sdks } from '../../data/landing';
-import tokyo from '../../assets/landing/tokyo-dusk.jpg';
 
 const DEFAULT_LANG = 'js';
 
@@ -12,8 +10,8 @@ const [titleStart, titleEnd = ''] = hero.title.split(hero.highlight);
 // Wrap the tool names so the demo can point at the tool being called.
 const markTools = (html: string) =>
   html
-    .replace(/(searchFlights|search_flights)/, '<mark data-tool="search">$1</mark>')
-    .replace(/(bookFlight|book_flight)/, '<mark data-tool="book">$1</mark>');
+    .replace(/(findSeats|find_seats)/, '<mark data-tool="find">$1</mark>')
+    .replace(/(buyTickets|buy_tickets)/, '<mark data-tool="buy">$1</mark>');
 
 const callouts = await Promise.all(
   sdks.map(async (sdk) => {
@@ -26,6 +24,65 @@ const callouts = await Promise.all(
 );
 
 const check = 'M20 6 9 17l-5-5';
+
+/*
+ * The seat map in the GenUI card: a stage with three tiers of seats around it.
+ * Each section is a ring segment centered on the stage, stretched sideways so
+ * the map fills the card. Angles are in degrees from straight down, so negative
+ * angles are on the left.
+ */
+const MAP_CX = 120;
+const MAP_CY = 2;
+const MAP_STRETCH = 1.4;
+
+const point = (radius: number, angle: number) => {
+  const rad = (angle * Math.PI) / 180;
+  return `${(MAP_CX + radius * MAP_STRETCH * Math.sin(rad)).toFixed(1)} ${(MAP_CY + radius * Math.cos(rad)).toFixed(1)}`;
+};
+
+/** An arc around the stage to `end`: sweep 0 runs left to right through the bottom, 1 runs back. */
+const arc = (radius: number, sweep: 0 | 1, end: string) =>
+  `A${(radius * MAP_STRETCH).toFixed(1)} ${radius} 0 0 ${sweep} ${end}`;
+
+/** The outline of a section, swept from `from` to `to` through the bottom. */
+const sectionPath = (inner: number, outer: number, from: number, to: number) =>
+  `M${point(outer, from)}${arc(outer, 0, point(outer, to))}` +
+  `L${point(inner, to)}${arc(inner, 1, point(inner, from))}Z`;
+
+/** Rows of seats inside a section, drawn as arcs that CSS dots with a dash pattern. */
+const seatRowsPath = (inner: number, outer: number, from: number, to: number) => {
+  let path = '';
+  for (let radius = inner + 3.5; radius < outer - 1.5; radius += 4) {
+    const inset = (2.2 / radius) * (180 / Math.PI);
+    path += `M${point(radius, from + inset)}${arc(radius, 0, point(radius, to - inset))}`;
+  }
+  return path;
+};
+
+interface VenueSection {
+  from: number;
+  to: number;
+  /** Set on the two sections the app suggests: "a" is the first option, "b" the second. */
+  offer?: 'a' | 'b';
+}
+
+const tiers: Array<{ inner: number; outer: number; sections: VenueSection[] }> = [
+  { inner: 20, outer: 38, sections: [{ from: -48, to: 48, offer: 'a' }] },
+  { inner: 42, outer: 60, sections: [{ from: -66, to: -22 }, { from: -20, to: 20 }, { from: 22, to: 66 }] },
+  {
+    inner: 64,
+    outer: 86,
+    sections: [{ from: -78, to: -40 }, { from: -38, to: -1 }, { from: 1, to: 38, offer: 'b' }, { from: 40, to: 78 }],
+  },
+];
+
+const venueSections = tiers.flatMap(({ inner, outer, sections }) =>
+  sections.map(({ from, to, offer }) => ({
+    offer,
+    outline: sectionPath(inner, outer, from, to),
+    seats: seatRowsPath(inner, outer, from, to),
+  })),
+);
 ---
 
 <section class="hero" aria-labelledby="hero-title">
@@ -58,14 +115,14 @@ const check = 'M20 6 9 17l-5-5';
 
             <div class="app-bar">
               <span class="avatar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"></path></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2"></path><path d="M13 17v2"></path><path d="M13 11v2"></path></svg>
               </span>
-              <span class="app-name">Trip assistant</span>
+              <span class="app-name">Ticket assistant</span>
             </div>
 
             <div class="chat">
-              <p class="msg-ai">Hi! Where are you headed?</p>
-              <p class="msg-user s1">Fly me to Tokyo next&nbsp;Friday</p>
+              <p class="msg-ai">Hi! What do you want to see?</p>
+              <p class="msg-user s1">2 seats for Saturday's&nbsp;show</p>
 
               <div class="row s2">
                 <span class="tool-chip">
@@ -74,10 +131,10 @@ const check = 'M20 6 9 17l-5-5';
                     <svg class="chip-check" data-on="4 5 7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d={check}></path></svg>
                   </span>
                   <span class="stack">
-                    <span data-on="3">Searching flights…</span>
-                    <span data-on="4 5">Found 2 flights</span>
-                    <span data-on="6">Booking your flight…</span>
-                    <span data-on="7">Flight booked</span>
+                    <span data-on="3">Finding seats…</span>
+                    <span data-on="4 5">Found 2 options</span>
+                    <span data-on="6">Buying tickets…</span>
+                    <span data-on="7">Tickets confirmed</span>
                   </span>
                 </span>
                 <span class="callout callout-tools">
@@ -91,43 +148,60 @@ const check = 'M20 6 9 17l-5-5';
               <div class="row s3">
                 <div class="surface">
                   <div class="surface-media">
-                    <Image src={tokyo} alt="" widths={[320, 640]} sizes="300px" class="surface-img" loading="eager" />
-                    <span class="surface-caption">
-                      <span class="surface-title">Tokyo</span>
-                      <span class="surface-meta">Friday · 1 adult</span>
+                    <span class="surface-head">
+                      <span class="surface-title">Harbor Hall</span>
+                      <span class="surface-meta">Sat · 8:00 PM · 2 seats</span>
                     </span>
+                    <svg class="venue" viewBox="0 0 240 90">
+                      <rect class="venue-stage" x="84" y="2" width="72" height="10" rx="2.5"></rect>
+                      <text class="venue-stage-label" x="120" y="9.1" text-anchor="middle">STAGE</text>
+                      {venueSections.map((section) => (
+                        <g class:list={['venue-section', section.offer && `venue-offer-${section.offer}`]}>
+                          <path class="venue-outline" d={section.outline}></path>
+                          <path class="venue-seats" d={section.seats}></path>
+                        </g>
+                      ))}
+                      <g transform="translate(120 31)">
+                        <g class="venue-booked">
+                          <circle r="5.5"></circle>
+                          <path d="M-2.5 0 -0.8 1.8 2.6 -1.7"></path>
+                        </g>
+                      </g>
+                    </svg>
                   </div>
 
                   <div class="surface-body stack">
-                    <div class="flights" data-off="7">
-                      <div class="flight">
-                        <span class="flight-info"><b>SFO → HND</b><small>Nonstop · 11h 05m</small></span>
-                        <span class="flight-price">$842</span>
+                    <div class="options" data-off="7">
+                      <div class="option">
+                        <span class="option-swatch option-swatch-a"></span>
+                        <span class="option-info"><b>Floor · Row F</b><small>Seats 7–8 · Center</small></span>
+                        <span class="option-price">$192</span>
                         <span class="select select-primary">
                           <span class="select-label">Select</span>
                           <span class="spinner spinner-dark" data-on="6"></span>
                           <span class="tap"></span>
                         </span>
                       </div>
-                      <div class="flight">
-                        <span class="flight-info"><b>SFO → NRT</b><small>1 stop · 14h 20m</small></span>
-                        <span class="flight-price">$615</span>
+                      <div class="option">
+                        <span class="option-swatch option-swatch-b"></span>
+                        <span class="option-info"><b>Balcony · Row B</b><small>Seats 21–22 · Full view</small></span>
+                        <span class="option-price">$128</span>
                         <span class="select"><span class="select-label">Select</span></span>
                       </div>
                     </div>
 
                     <div class="pass" data-on="7">
                       <span class="pass-top">
-                        <span class="pass-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d={check}></path></svg>You're booked</span>
-                        <span class="pass-seat">Seat 14A</span>
+                        <span class="pass-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d={check}></path></svg>You're in</span>
+                        <span class="pass-seat">2 tickets</span>
                       </span>
-                      <span class="pass-route">
-                        <b>SFO</b>
-                        <span class="pass-line"></span>
-                        <b>HND</b>
+                      <span class="pass-details">
+                        <span class="pass-field"><small>Section</small><b>Floor</b></span>
+                        <span class="pass-field"><small>Row</small><b>F</b></span>
+                        <span class="pass-field"><small>Seats</small><b>7–8</b></span>
                         <span class="pass-code"></span>
                       </span>
-                      <span class="pass-time">Fri · 11:05 AM → 3:10 PM +1</span>
+                      <span class="pass-time">Sat · Doors 7:00 PM · Show 8:00 PM</span>
                     </div>
                   </div>
                 </div>
@@ -143,7 +217,7 @@ const check = 'M20 6 9 17l-5-5';
             <div class="composer">
               <span class="stack composer-text">
                 <span class="composer-placeholder" data-off="1">Ask anything</span>
-                <span class="composer-typed" data-on="1">Fly me to Tokyo next Friday</span>
+                <span class="composer-typed" data-on="1">2 seats for Saturday's show</span>
               </span>
               <span class="send">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
@@ -264,6 +338,7 @@ const check = 'M20 6 9 17l-5-5';
     --ink: #0b1a33;
     --blue: #a8c7fa;
     --green: #34d399;
+    --amber: #fbbf24;
     position: relative;
     isolation: isolate;
     width: 34em;
@@ -572,30 +647,24 @@ const check = 'M20 6 9 17l-5-5';
     box-shadow: 0 0.8em 1.6em -0.8em rgb(0 0 0 / 0.7);
   }
 
+  /* The header and seat map, under a soft light from the stage. */
   .surface-media {
-    position: relative;
-    height: 6.6em;
+    padding: 0.6em 0.75em 0.4em;
+    border-bottom: 1px solid rgb(255 255 255 / 0.05);
+    background:
+      radial-gradient(60% 75% at 50% 30%, rgb(168 199 250 / 0.12), transparent 70%),
+      #12151c;
   }
 
-  .surface-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .surface-caption {
-    position: absolute;
-    inset: auto 0 0 0;
+  .surface-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding: 1.4em 0.8em 0.55em;
-    background: linear-gradient(to top, rgb(0 0 0 / 0.72), transparent);
+    gap: 0.5em;
   }
 
   .surface-title {
-    font-size: 0.95em;
+    font-size: 0.82em;
     font-weight: 600;
     letter-spacing: -0.01em;
     color: #fff;
@@ -603,47 +672,147 @@ const check = 'M20 6 9 17l-5-5';
 
   .surface-meta {
     font-size: 0.6em;
-    color: rgb(255 255 255 / 0.82);
+    color: rgb(255 255 255 / 0.7);
+  }
+
+  .venue {
+    display: block;
+    width: 100%;
+    height: 4.8em;
+    margin-top: 0.3em;
+  }
+
+  .venue-stage {
+    fill: rgb(255 255 255 / 0.12);
+  }
+
+  .venue-stage-label {
+    font-size: 6px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    fill: rgb(255 255 255 / 0.55);
+  }
+
+  .venue-section {
+    transition: opacity 0.4s ease;
+  }
+
+  /* Sold-out sections stay quiet. The offered ones take the colors of their options below. */
+  .venue-outline {
+    fill: rgb(255 255 255 / 0.04);
+    stroke: rgb(255 255 255 / 0.07);
+    stroke-width: 0.6;
+    transition:
+      fill 0.4s ease,
+      stroke 0.4s ease;
+  }
+
+  /* Zero-length dashes with round caps draw each row as a line of seats. */
+  .venue-seats {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.16);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-dasharray: 0 3.2;
+    transition: stroke 0.4s ease;
+  }
+
+  .venue-offer-a .venue-outline {
+    fill: rgb(168 199 250 / 0.18);
+    stroke: rgb(168 199 250 / 0.5);
+  }
+
+  .venue-offer-a .venue-seats {
+    stroke: var(--blue);
+  }
+
+  .venue-offer-b .venue-outline {
+    fill: rgb(251 191 36 / 0.14);
+    stroke: rgb(251 191 36 / 0.45);
+  }
+
+  .venue-offer-b .venue-seats {
+    stroke: var(--amber);
+  }
+
+  .venue-booked {
+    opacity: 0;
+    transform: scale(0.4);
+    transform-box: fill-box;
+    transform-origin: center;
+    transition:
+      opacity 0.35s ease,
+      transform 0.5s var(--ease);
+  }
+
+  .venue-booked circle {
+    fill: var(--green);
+    stroke: #12151c;
+    stroke-width: 1.2;
+  }
+
+  .venue-booked path {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .surface-body {
     padding: 0.55em;
   }
 
-  .flights {
+  .options {
     display: grid;
     gap: 0.4em;
   }
 
-  .flight {
+  .option {
     display: flex;
     align-items: center;
     gap: 0.55em;
-    padding: 0.45em 0.45em 0.45em 0.65em;
+    padding: 0.45em 0.45em 0.45em 0.6em;
     border-radius: 0.7em;
     border: 1px solid rgb(255 255 255 / 0.05);
     background: rgb(255 255 255 / 0.04);
   }
 
-  .flight-info {
+  /* Matches the option's section on the map. */
+  .option-swatch {
+    flex: none;
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 0.15em;
+  }
+
+  .option-swatch-a {
+    background: var(--blue);
+  }
+
+  .option-swatch-b {
+    background: var(--amber);
+  }
+
+  .option-info {
     display: grid;
     flex: 1;
     min-width: 0;
     gap: 0.1em;
   }
 
-  .flight-info b {
+  .option-info b {
     font-size: 0.7em;
     font-weight: 600;
     color: #f3f5f8;
   }
 
-  .flight-info small {
+  .option-info small {
     font-size: 0.58em;
     color: #9aa3b2;
   }
 
-  .flight-price {
+  .option-price {
     font-size: 0.74em;
     font-weight: 600;
     color: #f3f5f8;
@@ -684,10 +853,11 @@ const check = 'M20 6 9 17l-5-5';
     pointer-events: none;
   }
 
+  /* The confirmation is a ticket: the details sit below a tear line with a notch at each end. */
   .pass {
     display: grid;
     align-content: center;
-    gap: 0.35em;
+    gap: 0.4em;
     padding: 0.5em 0.65em;
     border-radius: 0.7em;
     border: 1px solid rgb(255 255 255 / 0.07);
@@ -720,24 +890,52 @@ const check = 'M20 6 9 17l-5-5';
     color: #9aa3b2;
   }
 
-  .pass-route {
+  .pass-details {
+    position: relative;
     display: flex;
-    align-items: center;
-    gap: 0.5em;
+    align-items: flex-end;
+    gap: 1em;
+    padding-top: 0.4em;
+    border-top: 1px dashed rgb(255 255 255 / 0.16);
   }
 
-  .pass-route b {
-    font-size: 1.05em;
+  /* The notches are circles in the card's color, centered on the ticket's edges. */
+  .pass-details::before,
+  .pass-details::after {
+    content: '';
+    position: absolute;
+    top: -0.35em;
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
+    background: #161a22;
+  }
+
+  .pass-details::before {
+    left: calc(-1em - 1px);
+  }
+
+  .pass-details::after {
+    right: calc(-1em - 1px);
+  }
+
+  .pass-field {
+    display: grid;
+    gap: 0.1em;
+  }
+
+  .pass-field small {
+    font-size: 0.48em;
     font-weight: 600;
-    letter-spacing: 0.02em;
-    color: #f3f5f8;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8e98a8;
   }
 
-  .pass-line {
-    flex: 1;
-    max-width: 3em;
-    height: 0;
-    border-top: 1px dashed rgb(255 255 255 / 0.3);
+  .pass-field b {
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #f3f5f8;
   }
 
   .pass-code {
@@ -880,8 +1078,8 @@ const check = 'M20 6 9 17l-5-5';
   }
 
   /* ---------- Playback ----------
-   * 0 reset, 1 typing, 2 sent, 3 searching (tool call), 4 GenUI flight
-   * cards, 5 tap on "Select", 6 booking (tool call), 7 booked.
+   * 0 reset, 1 typing, 2 sent, 3 finding seats (tool call), 4 GenUI seat map
+   * and options, 5 tap on "Select", 6 buying (tool call), 7 ticket.
    */
   .s1,
   .s2,
@@ -972,6 +1170,26 @@ const check = 'M20 6 9 17l-5-5';
     opacity: 0;
   }
 
+  /* The pick shows on the map: its section lights up and the other offer steps back. */
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-a .venue-outline {
+    fill: rgb(168 199 250 / 0.36);
+    stroke: var(--blue);
+  }
+
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-a .venue-seats {
+    stroke: #fff;
+  }
+
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-b {
+    opacity: 0.3;
+  }
+
+  /* Once the ticket is confirmed, a check lands on the section. */
+  .hero-demo[data-step='7'] .venue-booked {
+    opacity: 1;
+    transform: none;
+  }
+
   /* Point at the code behind the current moment. */
   .hero-demo:is([data-step='3'], [data-step='6']) .callout-tools .callout-label,
   .hero-demo:is([data-step='4'], [data-step='7']) .callout-genui .callout-label {
@@ -983,8 +1201,8 @@ const check = 'M20 6 9 17l-5-5';
     background: var(--blue);
   }
 
-  .hero-demo[data-step='3'] .callout-tools :global(mark[data-tool='search']),
-  .hero-demo[data-step='6'] .callout-tools :global(mark[data-tool='book']),
+  .hero-demo[data-step='3'] .callout-tools :global(mark[data-tool='find']),
+  .hero-demo[data-step='6'] .callout-tools :global(mark[data-tool='buy']),
   .hero-demo:is([data-step='4'], [data-step='7']) .callout-genui code {
     background: rgb(168 199 250 / 0.16);
   }
@@ -1027,7 +1245,11 @@ const check = 'M20 6 9 17l-5-5';
     [data-off],
     .send,
     .select,
-    .select-label {
+    .select-label,
+    .venue-section,
+    .venue-outline,
+    .venue-seats,
+    .venue-booked {
       transition: none;
     }
 
