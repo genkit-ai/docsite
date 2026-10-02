@@ -45,17 +45,16 @@ curl -sL cli.genkit.dev | bash
 Add the Genkit packages your app needs:
 
 ```bash
-dart pub add genkit genkit_google_genai genkit_shelf schemantic shelf shelf_cors_headers shelf_router dev:build_runner
+dart pub add genkit genkit_google_genai genkit_shelf schemantic shelf shelf_router dev:build_runner
 ```
 
 These packages include:
 
-- **`genkit`**: Core Genkit SDK.
+- **`genkit`**: Core Genkit SDK, including `GenkitRouter` for serving actions over HTTP.
 - **`genkit_google_genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`genkit_shelf`**: Exposes Genkit flows as Shelf handlers.
+- **`genkit_shelf`**: Mounts a `GenkitRouter` into a Shelf app.
 - **`schemantic`**: Generates JSON schemas from Dart classes for typed flow inputs and outputs.
 - **`shelf`** and **`shelf_router`**: Shelf server and routing.
-- **`shelf_cors_headers`**: CORS middleware. Lets browser frontends served from a different origin call the Genkit endpoint.
 - **`build_runner`**: Generates the schema code from your annotated classes.
 
 ### Configure a model API key
@@ -102,12 +101,12 @@ Replace `bin/my_genkit_shelf.dart` with the following:
 import 'dart:io';
 
 import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
 import 'package:genkit_google_genai/genkit_google_genai.dart';
 import 'package:genkit_shelf/genkit_shelf.dart';
 import 'package:schemantic/schemantic.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
-import 'package:shelf_cors_headers/shelf_cors_headers.dart';
 import 'package:shelf_router/shelf_router.dart';
 
 part 'my_genkit_shelf.g.dart';
@@ -214,19 +213,21 @@ void main() async {
       if (response.output == null) {
         throw GenkitException(
           'Failed to generate recipe',
-          status: StatusCodes.INTERNAL,
+          status: StatusCode.internal,
         );
       }
       return response.output!;
     },
   );
 
-  final router = Router();
-  router.post('/bargainChefFlow', shelfHandler(bargainChefFlow));
+  final genkit = GenkitRouter()..addAction(bargainChefFlow);
+
+  final router = Router()
+    ..get('/health', (Request request) => Response.ok('OK'))
+    ..mount('/', genkit.asShelfHandler(cors: const CorsOptions()));
 
   final handler = const Pipeline()
       .addMiddleware(logRequests())
-      .addMiddleware(corsHeaders())
       .addHandler(router.call);
   final server = await io.serve(handler, InternetAddress.anyIPv4, 8080);
   print('Server running on http://localhost:${server.port}');
@@ -249,8 +250,18 @@ A few details are worth noting:
 - **Final output and streamed chunks:** `outputSchema` is the complete recipe the flow returns at the end. `streamSchema` is the same shape Genkit emits as in-progress chunks during streaming, because early chunks might only include the title or description.
 - **The `getIngredientsOnSale` tool:** The model decides when to call it based on the prompt, and the typed input schema forces the model to pass `dayType: 'weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`ctx.sendChunk`:** Each call forwards the latest partial recipe to the client so the response fills in field by field. After the stream completes, the flow awaits `stream.onResult` so the HTTP request still resolves with a validated recipe.
-- **Serving the flow:** The flow is mounted at `/bargainChefFlow` with `shelfHandler`, which adapts the Genkit flow to the Shelf request and response lifecycle, including streamed responses over `text/event-stream`.
-- **CORS:** `corsHeaders()` with no options allows **all origins**, so any browser frontend can call this endpoint during development. Before deploying, pass `corsHeaders(headers: {...})` to restrict it to the origins you actually serve.
+- **Serving the flow:** `GenkitRouter` registers each action as a `POST` route named after it (`/bargainChefFlow`), including streamed responses over `text/event-stream`. `asShelfHandler()` turns the router into a Shelf handler you can mount next to your own routes. Paths the router doesn't own get a `404`, so it also works inside a Shelf `Cascade`.
+- **CORS:** `CorsOptions()` with no arguments allows **all origins**, so any browser frontend can call this endpoint during development. Before deploying, restrict it to the origins you actually serve, for example `CorsOptions(allowedOrigins: ['https://myapp.dev'])`.
+
+<Aside type="tip" title="No Shelf app yet?">
+  If you don't need your own Shelf routes, `GenkitRouter` can serve on its own with plain `dart:io`, and you can drop the `shelf`, `shelf_router`, and `genkit_shelf` dependencies:
+
+```dart
+final genkit = GenkitRouter()..addAction(bargainChefFlow);
+await genkit.serve(port: 8080, cors: const CorsOptions());
+```
+
+</Aside>
 
 ### Check the project layout
 

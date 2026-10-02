@@ -1243,15 +1243,27 @@ Genkit Dart uses a **registry-based system** for middleware, similar to plugins.
 
 ## Available middleware
 
-The following middleware is available in Genkit Dart:
+`retry` and `simulateConstrainedGeneration` are built into `package:genkit` and need no setup. The `filesystem`, `skills`, and `toolApproval` middleware come from the [`genkit_middleware`](https://pub.dev/packages/genkit_middleware) package; register their plugins on the `Genkit` instance so the references resolve:
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit_middleware/genkit_middleware.dart';
+
+final ai = Genkit(
+  plugins: [
+    googleAI(),
+    FilesystemPlugin(),
+    SkillsPlugin(),
+    ToolApprovalPlugin(),
+  ],
+);
+```
 
 ### 1. FileSystem middleware (`filesystem`)
 
 Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory.
 
 ```dart
-import 'package:genkit/genkit.dart';
-
 final response = await ai.generate(
   model: googleAI.gemini('gemini-flash-latest'),
   prompt: 'Create a hello world node app in the workspace',
@@ -1272,8 +1284,6 @@ _Note: Unlike the JavaScript version, the Dart FileSystem middleware does not cu
 Automatically scans a directory for `SKILL.md` files and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
 
 ```dart
-import 'package:genkit/genkit.dart';
-
 final response = await ai.generate(
   prompt: 'How do I run tests in this repo?',
   use: [
@@ -1288,45 +1298,46 @@ final response = await ai.generate(
 
 ### 3. Tool approval middleware (`toolApproval`)
 
-Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptException` allowing you to prompt the user for manual confirmation before resuming.
+Restricts execution of tools to an approved list. If the model calls a tool that isn't on the list, the generation stops with `FinishReason.interrupted` so you can ask the user for confirmation before resuming.
 
 ```dart
-import 'package:genkit/genkit.dart';
-
 final response = await ai.generate(
   prompt: 'write a file',
   tools: [writeFileTool],
   use: [
-    toolApproval(approved: []), // Empty list means call triggers interrupt
+    toolApproval(approved: []), // Empty list: every tool call needs approval
   ],
 );
 
 if (response.finishReason == FinishReason.interrupted) {
-  final part = response.interrupts.first;
+  final interrupt = response.interrupts.first;
 
   // Ask user for approval...
-  final approved = true; // Assume user approved
+  final approved = await askUser(interrupt.toolRequest.name);
 
-  // Resume execution
-  final response2 = await ai.generate(
-    messages: response.messages,
-    resume: [
-      InterruptResponse(part, approved),
-    ],
-    use: [
-      toolApproval(approved: []),
-    ],
-  );
+  if (approved) {
+    // Restart the tool call, marked as approved
+    final response2 = await ai.generate(
+      messages: response.messages,
+      tools: [writeFileTool],
+      interruptRestart: [
+        interrupt.toolRequestPart!.restart({'tool-approved': true}),
+      ],
+      use: [
+        toolApproval(approved: []),
+      ],
+    );
+  }
 }
 ```
 
 **Configuration options:**
 
-- `approved` (optional): List of approved tool names.
+- `approved` (optional): List of approved tool names. Replaces the default list set with `ToolApprovalPlugin(approvedTools: [...])`.
 
 ### 4. Retry middleware (`retry`)
 
-Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
+Automatically retries failed model generations on transient error codes (like `resourceExhausted`, `unavailable`) using exponential backoff with jitter. It is built into `package:genkit`, so there is no plugin to register.
 
 ```dart
 import 'package:genkit/genkit.dart';
@@ -1335,7 +1346,11 @@ final response = await ai.generate(
   model: googleAI.gemini('gemini-flash-latest'),
   prompt: 'Reliable request',
   use: [
-    retry(maxRetries: 3),
+    retry(
+      maxRetries: 3,
+      initialDelay: const Duration(milliseconds: 500),
+      maxDelay: const Duration(seconds: 30),
+    ),
   ],
 );
 ```
@@ -1343,24 +1358,28 @@ final response = await ai.generate(
 **Configuration options:**
 
 - `maxRetries` (optional): Maximum number of retry attempts (default: 3).
-- `statuses` (optional): A list of `StatusCodes` constants that should trigger a retry. Defaults to `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, `INTERNAL`.
-- `initialDelayMs` (optional): The initial delay before the first retry (default: 1000).
-- `maxDelayMs` (optional): The maximum capped delay between retries (default: 60000).
+- `statuses` (optional): A list of `StatusCode` values that should trigger a retry. Defaults to `unavailable`, `deadlineExceeded`, `resourceExhausted`, `aborted`, `internal`.
+- `initialDelay` (optional): The delay before the first retry, as a `Duration` (default: 1 second).
+- `maxDelay` (optional): The maximum capped delay between retries, as a `Duration` (default: 1 minute).
 - `backoffFactor` (optional): Exponential backoff multiplier (default: 2.0).
-- `noJitter` (optional): If false, adds a random factor (Full Jitter) to the delay (default: false).
-- `retryModel` (optional): Whether to retry model calls (default: true).
+- `noJitter` (optional): Set to `true` to disable the random factor (Full Jitter) added to the delay (default: false).
+- `noRetryModel` (optional): Set to `true` to skip retrying model calls (default: false).
 - `retryTools` (optional): Whether to retry tool calls (default: false).
 
 _Note: The `onError` callback is available when instantiating `RetryMiddleware` directly, but cannot be passed via the `retry()` helper._
 
-To use the `retry()` helper, you must register the `RetryPlugin` when initializing Genkit:
+### 5. Simulated constrained generation (`simulateConstrainedGeneration`)
+
+With an `outputSchema`, Genkit asks the model for native constrained output. For a model or provider without native support, `simulateConstrainedGeneration()` puts the schema in the prompt instead. Nothing enforces the schema, so expect the occasional malformed reply.
 
 ```dart
-final ai = Genkit(
-  plugins: [
-    RetryPlugin(),
-  ],
+final response = await ai.generate(
+  model: myModel,
+  prompt: 'Generate a person named John Doe, age 30',
+  outputSchema: Person.$schema,
+  use: [simulateConstrainedGeneration()],
 );
+final person = response.output; // Still typed and parsed
 ```
 
 ## Building your own custom middleware
@@ -1377,7 +1396,7 @@ import 'package:schemantic/schemantic.dart';
 part 'logger.g.dart';
 
 @Schema()
-abstract class LoggerOptions {
+abstract class $LoggerOptions {
   bool? get enableColor;
   int? get maxLogLength;
 }
@@ -1398,10 +1417,13 @@ class LoggerMiddleware extends GenerateMiddleware {
   });
 
   @override
-  Future model(
+  Future<ModelResponse> model(
     ModelRequest request,
-    dynamic ctx,
-    dynamic next,
+    ActionFnArg<ModelResponseChunk, ModelRequest, void> ctx,
+    Future<ModelResponse> Function(
+      ModelRequest request,
+      ActionFnArg<ModelResponseChunk, ModelRequest, void> ctx,
+    ) next,
   ) async {
     // Custom interception logic here...
     return next(request, ctx);
@@ -1441,10 +1463,10 @@ class SafetyMiddleware extends GenerateMiddleware {
   SafetyMiddleware(this.ai);
 
   @override
-  Future<GenerateResponseHelper> generate(
+  Future<GenerateResult> generate(
     GenerateTurnState envelope,
     ActionFnArg<ModelResponseChunk, GenerateActionOptions, void> ctx,
-    Future<GenerateResponseHelper> Function(
+    Future<GenerateResult> Function(
       GenerateTurnState envelope,
       ActionFnArg<ModelResponseChunk, GenerateActionOptions, void> ctx,
     ) next,

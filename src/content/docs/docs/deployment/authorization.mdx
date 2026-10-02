@@ -328,7 +328,7 @@ For more information about using Express, see the
 
 ## Authorize within a Flow
 
-Flows can check authorization by inspecting the `context` property passed to the flow function. It is up to the framework integration (like `genkit_shelf`) to populate this context.
+Flows can check authorization by inspecting the `context` property passed to the flow function. When a flow is served over HTTP, a [context provider](#context-providers) populates this context from the request.
 
 ```dart
 import 'package:genkit/genkit.dart';
@@ -356,11 +356,14 @@ final selfSummaryFlow = ai.defineFlow(
   fn: (input, context) async {
     final auth = context.context?['auth'];
     if (auth == null) {
-      throw GenkitException('Unauthenticated', status: StatusCodes.UNAUTHENTICATED);
+      throw GenkitException('Unauthenticated', status: StatusCode.unauthenticated);
     }
     // Access typed properties on the generated concrete class
     if (input.uid != auth['uid']) {
-      throw GenkitException('You may only summarize your own profile data.', status: StatusCodes.PERMISSION_DENIED);
+      throw GenkitException(
+        'You may only summarize your own profile data.',
+        status: StatusCode.permissionDenied,
+      );
     }
     // Flow logic here...
     return SelfSummaryOutput(profileSummary: 'User profile summary would go here');
@@ -387,43 +390,44 @@ await selfSummaryFlow(
 );
 ```
 
-## Context Providers (Shelf)
+## Context providers
 
-When deploying with `genkit_shelf` (running as a server), you can use a `ContextProvider` to verify incoming requests and populate the context.
+When serving flows over HTTP with `GenkitRouter` (from `package:genkit/io.dart`), pass a `contextProvider` to verify incoming requests and populate the context. The provider receives a framework-neutral `RequestData` (lowercased headers, method, and parsed input), so the same function works with the standalone server, Shelf, or any other adapter.
 
 ```dart
 import 'dart:async';
-import 'package:genkit/genkit.dart';
-import 'package:genkit_shelf/genkit_shelf.dart';
-import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart' as io;
 
-FutureOr<Map<String, dynamic>> apiKeyContextProvider(Request request) {
-  final authHeader = request.headers['Authorization'];
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+
+FutureOr<Map<String, dynamic>> apiKeyContextProvider(RequestData request) {
+  final authHeader = request.headers['authorization'];
   if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-     // Throwing here will result in a 403 Forbidden response
-     throw GenkitException('Missing API Key', status: StatusCodes.UNAUTHENTICATED);
+    // A thrown GenkitException is answered with its status (here 401).
+    // Any other exception results in a 403.
+    throw GenkitException('Missing API Key', status: StatusCode.unauthenticated);
   }
   final token = authHeader.substring(7);
   if (token != 'REQUIRED_API_KEY') {
-    throw GenkitException('Invalid API Key', status: StatusCodes.PERMISSION_DENIED);
+    throw GenkitException('Invalid API Key', status: StatusCode.permissionDenied);
   }
   return {
-    'auth': {'uid': 'admin', 'key': token}
+    'auth': {'uid': 'admin', 'key': token},
   };
 }
 
 void main() async {
-  final ai = Genkit(plugins: []);
-  // ... define flow ...
+  final ai = Genkit();
+  // ... define selfSummaryFlow ...
 
-  final handler = const Pipeline()
-      .addMiddleware(logRequests())
-      .addHandler(shelfHandler(selfSummaryFlow, contextProvider: apiKeyContextProvider));
+  final genkit = GenkitRouter()
+    ..addAction(selfSummaryFlow, contextProvider: apiKeyContextProvider);
 
-  await io.serve(handler, 'localhost', 3400);
+  await genkit.serve(port: 3400);
 }
 ```
+
+In a Shelf app, mount the same router with `genkit.asShelfHandler()` from `genkit_shelf`, or protect a single route with `shelfHandler(selfSummaryFlow, contextProvider: apiKeyContextProvider)`.
 
 </Lang>
 
