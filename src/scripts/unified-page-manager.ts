@@ -101,11 +101,15 @@ export class UnifiedPageManager {
   rewriteDocsEntryLinks() {
     const preferred = this.getStoredLanguage([...LANGUAGE_FALLBACK_ORDER]) || 'js';
     document.querySelectorAll<HTMLAnchorElement>('[data-genkit-docs-entry]').forEach((anchor) => {
-      const neutralPath = (anchor.getAttribute('href') || '').replace(/\/$/, '');
+      // The first rewrite replaces the neutral href, so keep it in the attribute
+      // value to re-point the link on later language changes.
+      const neutralPath =
+        anchor.dataset.genkitDocsEntry || (anchor.getAttribute('href') || '').replace(/\/$/, '');
       const slugMatch = neutralPath.match(/^\/docs\/([^/?#]+)$/);
       if (!slugMatch) return;
       const slug = slugMatch[1];
       if ((LANGUAGE_FALLBACK_ORDER as readonly string[]).includes(slug)) return;
+      anchor.dataset.genkitDocsEntry = neutralPath;
       anchor.href = `/docs/${preferred}/${slug}/`;
     });
   }
