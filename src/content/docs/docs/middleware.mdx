@@ -1384,7 +1384,7 @@ final person = response.output; // Still typed and parsed
 
 ## Building your own custom middleware
 
-To build a production-ready middleware in Dart that integrates with the Genkit UI, you should follow the registered middleware pattern, which consists of four parts:
+A custom middleware is a class that extends `GenerateMiddleware`, plus an optional configuration schema. Register it so it can be referenced from `use:` and shows up (and can be configured) in the Developer UI.
 
 ### 1. Define the configuration schema
 
@@ -1431,27 +1431,28 @@ class LoggerMiddleware extends GenerateMiddleware {
 }
 ```
 
-### 3. Define the middleware and plugin
+### 3. Register the middleware
 
-Use `defineMiddleware` to link your schema and implementation, and expose it via a `GenkitPlugin`. The `create` callback receives the resolved `config` and a `GenerateMiddlewareContext` (`ctx`).
+In app code, `ai.defineGenerateMiddleware` registers the middleware and returns its definition. Call the definition to build a reference for `use:`. The `create` callback receives the resolved `config` and a `GenerateMiddlewareContext` (`ctx`), and runs once per `generate` call.
 
 ```dart
-class LoggerPlugin extends GenkitPlugin {
-  @override
-  String get name => 'logger';
+final logger = ai.defineGenerateMiddleware<LoggerOptions>(
+  name: 'logger',
+  configSchema: LoggerOptions.$schema,
+  create: (config, ctx) => LoggerMiddleware(
+    enableColor: config?.enableColor ?? false,
+    maxLogLength: config?.maxLogLength ?? 1000,
+  ),
+);
 
-  @override
-  List<GenerateMiddlewareDef> middleware() => [
-    defineMiddleware<LoggerOptions>(
-      name: 'logger',
-      configSchema: LoggerOptions.$schema,
-      create: (config, ctx) => LoggerMiddleware(
-        enableColor: config?.enableColor ?? false,
-        maxLogLength: config?.maxLogLength ?? 1000,
-      ),
-    ),
-  ];
-}
+final response = await ai.generate(
+  model: googleAI.gemini('gemini-flash-latest'),
+  prompt: 'Hello world',
+  use: [
+    logger(LoggerOptions(enableColor: true, maxLogLength: 500)),
+    retry(maxRetries: 2),
+  ],
+);
 ```
 
 The `ctx` argument carries an ephemeral `GenkitAI` instance (`ctx.ai`) backed by the active registry. This lets a middleware run its own AI operations (`generate`, `generateStream`, `embed`) and resolve other registered actions at request time, which is useful for building guardrails, classifiers, or routers. For example, a safety middleware can screen a request with the model before letting it proceed:
@@ -1483,54 +1484,56 @@ class SafetyMiddleware extends GenerateMiddleware {
   }
 }
 
-class SafetyPlugin extends GenkitPlugin {
-  @override
-  String get name => 'safety';
-
-  @override
-  List<GenerateMiddlewareDef> middleware() => [
-    defineMiddleware(
-      name: 'safety',
-      // `ctx.ai` is an ephemeral GenkitAI the middleware can use for its own
-      // generate/embed calls at request time.
-      create: (config, ctx) => SafetyMiddleware(ctx.ai),
-    ),
-  ];
-}
-```
-
-### 4. Create the DX helper function
-
-Create a factory function that returns a `GenerateMiddlewareRef` for ergonomic use.
-
-```dart
-GenerateMiddlewareRef logger({
-  bool? enableColor,
-  int? maxLogLength,
-}) {
-  return middlewareRef(
-    name: 'logger',
-    config: LoggerOptions(
-      enableColor: enableColor,
-      maxLogLength: maxLogLength,
-    ),
-  );
-}
-```
-
-To use your custom middleware:
-
-```dart
-final ai = Genkit(
-  plugins: [LoggerPlugin()],
+final safety = ai.defineGenerateMiddleware<void>(
+  name: 'safety',
+  // `ctx.ai` is an ephemeral GenkitAI the middleware can use for its own
+  // generate/embed calls at request time.
+  create: (config, ctx) => SafetyMiddleware(ctx.ai),
 );
 
+// use: [safety()]
+```
+
+### 4. Package it in a plugin
+
+To share a middleware across apps or publish it, build the definition with `generateMiddleware` (it doesn't register anything by itself) and return it from a `GenkitPlugin`. A small helper with named parameters makes it pleasant to use:
+
+```dart
+final loggerDef = generateMiddleware<LoggerOptions>(
+  // The name should be reasonably unique to avoid conflicts with other plugins.
+  name: 'logger',
+  configSchema: LoggerOptions.$schema,
+  create: (config, ctx) => LoggerMiddleware(
+    enableColor: config?.enableColor ?? false,
+    maxLogLength: config?.maxLogLength ?? 1000,
+  ),
+);
+
+class LoggerPlugin extends GenkitPlugin {
+  @override
+  String get name => 'logger';
+
+  @override
+  List<GenerateMiddlewareDef> middleware() => [loggerDef];
+}
+
+GenerateMiddlewareRef<LoggerOptions> logger({
+  bool? enableColor,
+  int? maxLogLength,
+}) => loggerDef(
+  LoggerOptions(enableColor: enableColor, maxLogLength: maxLogLength),
+);
+```
+
+Users register the plugin and reference the middleware through the helper:
+
+```dart
+final ai = Genkit(plugins: [googleAI(), LoggerPlugin()]);
+
 final response = await ai.generate(
-  model: customModel,
+  model: googleAI.gemini('gemini-flash-latest'),
   prompt: 'Hello world',
-  use: [
-    logger(enableColor: true, maxLogLength: 500),
-  ],
+  use: [logger(enableColor: true, maxLogLength: 500)],
 );
 ```
 
