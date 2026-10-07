@@ -128,8 +128,10 @@ export default defineConfig({
         Hero: './src/content/custom/hero.astro',
         Head: './src/content/custom/head.astro',
         Footer: './src/content/custom/footer.astro',
+        PageFrame: './src/components/starlight/PageFrame.astro',
         PageTitle: './src/components/PageTitle.astro',
         TableOfContents: './src/components/LanguageAwareTableOfContents.astro',
+        ThemeSelect: './src/components/ThemeToggle.astro',
       },
       head: [
         {
