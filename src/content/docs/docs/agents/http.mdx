@@ -130,39 +130,73 @@ When browser clients connect across origins, apply standard CORS middleware (suc
 
 <Lang lang="dart">
 
-## Shelf routes
+## Serve with GenkitRouter
 
-Serve local agents over HTTP using the `genkit_shelf` package. Every local agent exposes its turn, snapshot, and abort loops as standard Genkit actions.
+Serve local agents over HTTP with `GenkitRouter` from `package:genkit/io.dart`. `addAgent` (from `package:genkit/experimental_io.dart`) mounts the turn route plus the companion routes the agent supports:
+
+- `POST /<name>`: runs a turn. Always mounted.
+- `POST /<name>/getSnapshot`: reads a snapshot. Mounted for agents with a session store.
+- `POST /<name>/abort`: aborts a detached turn. Mounted when the store can signal the running turn.
 
 ```dart
-import 'package:genkit/genkit.dart';
-import 'package:genkit/experimental.dart';
-import 'package:genkit_shelf/genkit_shelf.dart';
-import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart' as io;
-import 'package:shelf_router/shelf_router.dart';
+import 'package:genkit/experimental_io.dart';
+import 'package:genkit/io.dart';
 
 void main() async {
-  final router = Router();
+  final genkit = GenkitRouter()
+    ..addAgent(weatherAgent, path: '/api/weatherAgent');
 
-  // Mount primary turn handler:
-  router.post('/api/weatherAgent', shelfHandler(weatherAgent.action));
-
-  // Mount snapshot reader:
-  router.post(
-    '/api/weatherAgent/getSnapshot',
-    shelfHandler(weatherAgent.getSnapshotDataAction),
-  );
-
-  // Mount abort worker:
-  router.post('/api/weatherAgent/abort', shelfHandler(weatherAgent.abortAgentAction));
-
-  final server = await io.serve(router.call, '0.0.0.0', 8080);
-  print('Server running on http://localhost:${server.port}');
+  await genkit.serve(port: 8080);
 }
 ```
 
 The turn endpoint processes both streaming and non-streaming requests. The snapshot endpoint reads the database by `snapshotId` or returns the latest leaf by `sessionId`. The abort endpoint takes the `snapshotId` and cancels running background tasks.
+
+### Authorization
+
+Pass a `contextProvider` to authorize requests. It applies to every route of the agent, so reading or aborting a snapshot is authorized the same way as running a turn:
+
+```dart
+Future<Map<String, dynamic>> bearerAuth(RequestData request) async {
+  final user = await verifyToken(request.headers['authorization']);
+  if (user == null) {
+    throw GenkitException('Unauthorized', status: StatusCode.unauthenticated);
+  }
+  return {'uid': user.id};
+}
+
+genkit.addAgent(weatherAgent, contextProvider: bearerAuth);
+```
+
+### Mount into a Shelf app
+
+To serve agents next to your own [Shelf](https://pub.dev/packages/shelf) routes, mount the router with `asShelfHandler()` from `genkit_shelf`:
+
+```dart
+import 'package:genkit/experimental_io.dart';
+import 'package:genkit/io.dart';
+import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:shelf_router/shelf_router.dart';
+
+final genkit = GenkitRouter()
+  ..addAgent(weatherAgent) // /weatherAgent, /weatherAgent/getSnapshot, ...
+  ..addAgent(statelessAgent); // turn route only
+
+final app = Router()..mount('/api/', genkit.asShelfHandler());
+```
+
+### Browser clients and CORS
+
+Browser clients on another origin need CORS. Pass `CorsOptions` to `serve()` or `asShelfHandler()`. The JavaScript client sends an `X-Genkit-Stream-Id` header on streaming requests, so allow it along with the defaults:
+
+```dart
+await genkit.serve(
+  cors: const CorsOptions(
+    allowedOrigins: ['https://myapp.dev'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Genkit-Stream-Id'],
+  ),
+);
+```
 
 </Lang>
 

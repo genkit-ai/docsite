@@ -459,7 +459,7 @@ curl -X POST https://<service-url>/jokesFlow \
 
 <Lang lang="dart">
 
-You can easy deploy your Genkit Dart flows to Cloud Run as a containerized service. This guide shows you how to deploy a Genkit server using the `genkit_shelf` package.
+You can deploy your Genkit Dart flows to Cloud Run as a containerized service. This guide shows you how to deploy a Genkit server built with `GenkitRouter` from `package:genkit/io.dart`.
 
 ## Before you begin
 
@@ -482,12 +482,11 @@ Ensure your project is configured to listen on the port defined by the `PORT` en
 
 ### Update `bin/server.dart`
 
-If you are using `startFlowServer` or `shelfHandler` manually, make sure to parse the port from the environment.
+`GenkitRouter.serve()` listens on all interfaces and reads the port from `PORT` (falling back to 3400), which is what Cloud Run expects.
 
 ```dart title="bin/server.dart"
-import 'dart:io';
 import 'package:genkit/genkit.dart';
-import 'package:genkit_shelf/genkit_shelf.dart';
+import 'package:genkit/io.dart';
 // import 'package:your_app/flows.dart'; // Import your flows
 
 void main() async {
@@ -501,16 +500,17 @@ void main() async {
     outputSchema: .string(),
   );
 
-  await startFlowServer(
-    flows: [myFlow],
-    // Cloud Run sets the PORT environment variable
-    port: int.parse(Platform.environment['PORT'] ?? '3400'),
-    cors: {
-      'origin': '*',
-    },
+  final genkit = GenkitRouter()..addAction(myFlow); // POST /myFlow
+
+  // Uses the PORT environment variable that Cloud Run sets.
+  await genkit.serve(
+    // Only needed if browser apps on other origins call the service.
+    cors: const CorsOptions(allowedOrigins: ['https://myapp.dev']),
   );
 }
 ```
+
+If your server is a [Shelf](https://pub.dev/packages/shelf) app, mount the router with `genkit_shelf` instead (see the [Shelf tutorial](/docs/backend-frameworks/shelf)) and bind your Shelf server to `Platform.environment['PORT']`.
 
 ### Create a Dockerfile
 
@@ -561,17 +561,12 @@ gcloud secrets create google-api-key --data-file=-
 ```bash
 gcloud run deploy genkit-server \
   --source . \
-  --port 3400 \
   --allow-unauthenticated \
   --region us-central1 \
   --set-secrets GOOGLE_API_KEY=google-api-key:latest
 ```
 
-    _Note: Replace `3400` with your default port if different, but Cloud Run defaults to passing 8080 as `PORT` env var, which your code should respect._
-
-    _Actually, if you use `--port` flag in gcloud, it tells Cloud Run which port the container is listening on. If your code defaults to 3400, strictly speaking you should set the PORT env var or tell Cloud Run to listen on 3400._
-
-    _Correction_: Cloud Run injects a `PORT` environment variable (default 8080) and expects your container to listen on it. Your code above uses `Platform.environment['PORT']`. So you don't strictly _need_ `--port` if your code honors the env var, but it's good practice to match.
+Cloud Run injects a `PORT` environment variable (8080 by default) and `serve()` listens on it, so you don't need to pass `--port`.
 
 ## 4. Test your deployment
 

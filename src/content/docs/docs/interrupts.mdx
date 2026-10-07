@@ -1023,29 +1023,33 @@ interacting with an LLM:
 The most common kind of interrupt allows the LLM to request clarification from
 the user, for example by asking a multiple-choice question.
 
-For this use case, use the `ai.defineTool()` method and return `.interrupt()` from the tool function:
+For this use case, use the `ai.defineInterrupt()` method:
 
 ```dart
 import 'package:genkit/genkit.dart';
+import 'package:schemantic/schemantic.dart';
 
-// Input schema for the interrupt tool
+part 'interrupts.g.dart';
+
+// Input schema for the interrupt
 @Schema()
-class QuestionInput {
-  final List<String> choices;
-  final bool? allowOther;
-
-  QuestionInput({required this.choices, this.allowOther});
+abstract class $QuestionInput {
+  List<String> get choices;
+  bool? get allowOther;
 }
 
-final askQuestion = ai.defineTool(
+final askQuestion = ai.defineInterrupt(
   name: 'askQuestion',
   description: 'Use this to ask the user a clarifying question',
   inputSchema: QuestionInput.$schema,
   outputSchema: .string(), // The expected user answer type
-  // Trigger an interrupt with the input data as metadata.
-  fn: (input, ctx) => .interrupt(input),
 );
 ```
+
+An interrupt never runs any logic of its own. To pause only under certain
+conditions, or after doing some work, define a regular tool with
+`ai.defineTool()` and return `.interrupt(data)` from its function instead (see
+[restartable interrupts](#tools-with-restartable-interrupts) below).
 
 Note that the `outputSchema` of an interrupt tool corresponds to the response data
 you will provide (the user's answer) as opposed to something that will be automatically populated
@@ -1083,18 +1087,16 @@ if (response.interrupts.isNotEmpty) {
 }
 ```
 
-Responding to an interrupt is done using the `resume` parameter on a subsequent
-`generate` call, making sure to pass in the existing message history.
+Responding to an interrupt is done using the `interruptRespond` parameter on a
+subsequent `generate` call, making sure to pass in the existing message history.
 
 Once resumed, the model re-enters the generation loop, including tool
 execution, until either it completes or another interrupt is triggered:
 
 ```dart
 var response = await ai.generate(
+  system: 'Ask clarifying questions until you have a complete solution.',
   prompt: 'Help me plan a backyard BBQ.',
-  config: GeminiOptions(
-    systemInstruction: 'Ask clarifying questions until you have a complete solution.',
-  ),
   toolNames: ['askQuestion'],
 );
 
@@ -1104,10 +1106,10 @@ while (response.finishReason == FinishReason.interrupted) {
   // Handle all interrupts (multiple can occur)
   for (final part in response.interrupts) {
     // In a real app, this would involve UI interaction
-    final input = part.toolRequest.input as QuestionInput;
+    final input = QuestionInput.$schema.parse(part.toolRequest.input);
     final userAnswer = await askUser(input);
 
-    resumeResponses.add(InterruptResponse(part.toolRequestPart!, userAnswer));
+    resumeResponses.add(InterruptResponse(part, userAnswer));
   }
 
   // Resume generation
@@ -1166,7 +1168,7 @@ if (response.finishReason == FinishReason.interrupted) {
     toolNames: ['transfer_funds'],
     // Restart the interrupted tool with approval metadata.
     interruptRestart: [
-      interrupt.toolRequestPart!.restart({'approved': true}),
+      interrupt.restart({'approved': true}),
     ],
   );
 }
