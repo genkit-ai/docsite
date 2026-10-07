@@ -56,7 +56,7 @@ export const sdks: Sdk[] = [
     id: 'dart',
     label: 'Dart',
     icon: 'dart',
-    status: 'Preview',
+    status: 'GA',
     install: 'dart pub add genkit genkit_google_genai',
     quickstart: '/docs/dart/get-started/',
   },
