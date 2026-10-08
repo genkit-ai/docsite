@@ -314,7 +314,83 @@ overrides on the plugin struct. It describes the exact name you define, so
 defined carries your options. It also leaves discovery alone, so the Dev UI list
 still reports what the server said.
 
-See [Generating content](/docs/models) for more information.
+## Advanced usage
+
+### Model configuration (`GenerateContentConfig`)
+
+You can pass Ollama-specific generation parameters using `ollama.GenerateContentConfig`. Use the `ollama.Ptr` helper to initialize optional numeric fields:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+  ai.WithModelName("ollama/gemma3"),
+  ai.WithPrompt("Write a poem about the sea."),
+  ai.WithConfig(&ollama.GenerateContentConfig{
+    Temperature: ollama.Ptr(0.8),
+    TopK:        ollama.Ptr(40),
+    TopP:        ollama.Ptr(0.9),
+    MinP:        ollama.Ptr(0.05),
+    NumCtx:      ollama.Ptr(32000), // Context window size
+    NumPredict:  ollama.Ptr(100),   // Max output tokens
+    KeepAlive:   "5m",              // Keep model loaded in memory for 5 minutes
+    Seed:        ollama.Ptr(42),
+  }),
+)
+```
+
+### Thinking and reasoning
+
+For reasoning-capable models (such as `deepseek-r1`, `qwen3`, or `gpt-oss`), enable thinking mode via `ollama.ThinkEnabled` or set a reasoning effort level (`"low"`, `"medium"`, or `"high"`) via `ollama.ThinkEffort`:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+  ai.WithModelName("ollama/deepseek-r1"),
+  ai.WithPrompt("What is heavier, one kilo of steel or one kilo of feathers?"),
+  ai.WithConfig(&ollama.GenerateContentConfig{
+    Think: ollama.ThinkEnabled(true), // Or ollama.ThinkEffort("medium")
+  }),
+)
+if err != nil {
+  return err
+}
+
+// The model's reasoning trace is returned as a separate part
+log.Println("Reasoning:", resp.Reasoning())
+log.Println("Answer:", resp.Text())
+```
+
+### Multimodal input
+
+For vision-capable models (such as `llava` or `gemma3`), pass image parts using `ai.NewMediaPart`:
+
+```go
+imagePart := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,...")
+
+resp, err := genkit.Generate(ctx, g,
+  ai.WithModelName("ollama/llava"),
+  ai.WithMessages(
+    ai.NewUserMessage(
+      ai.NewTextPart("Describe this image."),
+      imagePart,
+    ),
+  ),
+)
+```
+
+### Embeddings
+
+You can define and use text embedding models hosted on Ollama (such as `nomic-embed-text`). Pass the model's embedding dimension count to `DefineEmbedder`:
+
+```go
+ollamaPlugin.DefineEmbedder(g, "nomic-embed-text", 768, nil)
+embedder := ollama.Embedder(g, "nomic-embed-text")
+
+res, err := genkit.Embed(ctx, g,
+  ai.WithEmbedder(embedder),
+  ai.WithTextDocs("Machine learning models process data to make predictions."),
+)
+```
+
+See [Generating content](/docs/models/) for more information.
 
 </Lang>
 
@@ -339,7 +415,7 @@ For development, you can run Ollama on your development machine. Deployed apps u
 ## Installation
 
 ```bash
-uv add genkit-ollama
+uv add genkit genkit-ollama
 ```
 
 ## Configuration
@@ -348,8 +424,7 @@ To use this plugin, import `Ollama` and specify it when you initialize Genkit:
 
 ```python
 from genkit import Genkit
-from genkit_ollama import Ollama, ollama_name
-from genkit_ollama.models import ModelDefinition
+from genkit_ollama import ModelDefinition, Ollama, ollama_name
 
 ai = Genkit(
     plugins=[
@@ -359,25 +434,45 @@ ai = Genkit(
                 ModelDefinition(name='gemma2'),
             ],
             server_address='http://127.0.0.1:11434',  # default local address
+            timeout=60.0,  # optional request timeout in seconds
         )
     ],
     model=ollama_name('llama3.2'),  # optional default model
 )
 ```
 
-### Authentication
+### Authentication and custom headers
 
-If you would like to access remote deployments of Ollama that require custom headers (such as API keys), you can specify those in the Ollama plugin configuration:
+If you need to access remote deployments of Ollama that require custom headers (such as API keys or bearer tokens), pass `request_headers` to `Ollama`. You can provide either a static dictionary or a callable (sync or async) that receives `RequestHeaderParams` and returns headers per request:
 
 ```python
+from genkit_ollama import ModelDefinition, Ollama, RequestHeaderParams
+
+# Static headers (applied once to a cached client)
 ai = Genkit(
     plugins=[
         Ollama(
             models=[ModelDefinition(name='gemma2')],
             server_address='https://my-deployment',
             request_headers={
-                'api-key': 'API Key goes here'
+                'api-key': 'API Key goes here',
             },
+        )
+    ],
+)
+
+# Callable / async headers (re-evaluated on every request for expiring tokens)
+async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
+    token = await mint_short_lived_token(params.server_address)
+    return {'Authorization': f'Bearer {token}'}
+
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[ModelDefinition(name='gemma2')],
+            server_address='https://my-deployment',
+            request_headers=auth_headers,
+            timeout=60.0,
         )
     ],
 )
@@ -389,8 +484,7 @@ This plugin doesn't statically export model references. Specify one of the model
 
 ```python
 from genkit import Genkit
-from genkit_ollama import Ollama, ollama_name
-from genkit_ollama.models import ModelDefinition
+from genkit_ollama import ModelDefinition, Ollama, ollama_name
 
 ai = Genkit(
     plugins=[
@@ -428,14 +522,82 @@ response = await ai.generate(
 
 ## Advanced usage
 
+### Model configuration (`OllamaConfig`)
+
+`OllamaConfig` extends Genkit's standard `GenerationCommonConfig` (`temperature`, `top_k`, `top_p`, `max_output_tokens`, `stop_sequences`) with Ollama-specific options:
+
+- `think`: `bool | Literal['low', 'medium', 'high']` — Enable or disable reasoning mode, or select an effort level for models that support graded reasoning.
+- `keep_alive`: `float | str` — How long Ollama keeps model weights loaded in memory after the request (for example, `'5m'`, `'1h'`, or `0` to unload immediately).
+- `num_ctx`: `int` — Context window size in tokens.
+- `min_p`: `float` — Minimum token probability relative to the most likely token (`0.0` to `1.0`).
+- `seed`: `int` — Random seed for reproducible outputs.
+- `num_predict`: `int` — Ollama-native alias for `max_output_tokens` (`-1` for infinite, `-2` to fill context).
+
+`OllamaConfig` accepts both `snake_case` and `camelCase` field names (`keep_alive` or `keepAlive`, `num_ctx` or `numCtx`) and forwards any extra sampler parameters directly to the Ollama `options` payload:
+
+```python
+from genkit_ollama import OllamaConfig
+
+response = await ai.generate(
+    model=ollama_name('llama3.2'),
+    prompt='Write a short poem about local inference.',
+    config=OllamaConfig(
+        temperature=0.7,
+        num_ctx=32_000,
+        keep_alive='30m',
+        seed=42,
+    ),
+)
+```
+
+### Thinking and reasoning
+
+For reasoning models such as `deepseek-r1`, `qwen3`, or `gpt-oss`, set `think=True` (or `'low'`, `'medium'`, `'high'` for models with graded effort) in `OllamaConfig`. When Ollama returns a thinking trace, the plugin exposes it as a separate reasoning part on the response:
+
+```python
+from genkit_ollama import OllamaConfig
+
+response = await ai.generate(
+    model='ollama/deepseek-r1',
+    prompt='Plan a small REST API for a bookmark manager.',
+    config=OllamaConfig(
+        think=True,  # Or 'low', 'medium', 'high'
+        num_ctx=32_000,
+    ),
+)
+
+print('Reasoning:', response.reasoning)
+print('Answer:', response.text)
+```
+
+### Vision models (`OllamaSupports`)
+
+Media support is opt-in per model so the plugin only advertises multimodal capabilities for models that actually support vision (such as `llava` or `gemma3`):
+
+```python
+from genkit_ollama import ModelDefinition, Ollama, OllamaSupports
+
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[
+                ModelDefinition(
+                    name='llava',
+                    supports=OllamaSupports(media=True),
+                )
+            ],
+        )
+    ],
+)
+```
+
 ### Embeddings
 
 The Ollama plugin supports embeddings, which can be used for similarity searches and other NLP tasks:
 
 ```python
 from genkit import Genkit
-from genkit_ollama import Ollama
-from genkit_ollama.embedders import EmbeddingDefinition
+from genkit_ollama import EmbeddingDefinition, Ollama
 
 ai = Genkit(
     plugins=[
@@ -495,7 +657,7 @@ async def streaming_story(topic: str, ctx: ActionRunContext) -> str:
     return (await stream_response.response).text
 ```
 
-### Tool Calling
+### Tool calling
 
 Some Ollama models support tool calling (e.g., Mistral, Llama 3.1+):
 
@@ -533,7 +695,7 @@ async def weather_flow(location: str) -> str:
     return response.text
 ```
 
-### Structured Output
+### Structured output
 
 Generate structured data using Pydantic models:
 
@@ -565,7 +727,7 @@ async def create_recipe(dish: str) -> Recipe:
     return response.output
 ```
 
-### Custom Server Configuration
+### Custom server configuration
 
 For production deployments or custom Ollama server locations:
 
@@ -575,6 +737,7 @@ ai = Genkit(
         Ollama(
             models=[ModelDefinition(name='llama3.2')],
             server_address='http://ollama-server.internal:11434',
+            timeout=60.0,
             request_headers={
                 'X-Custom-Header': 'value',
             },
@@ -582,5 +745,9 @@ ai = Genkit(
     ],
 )
 ```
+
+### Troubleshooting
+
+If the plugin cannot reach the Ollama server, it raises `OllamaConnectionError` (exported from `genkit_ollama`) with the target server URL. Verify that the Ollama daemon is running (`ollama serve`) or that `server_address` points to a reachable host.
 
 </Lang>
