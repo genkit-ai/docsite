@@ -221,11 +221,48 @@ g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{
 }))
 ```
 
+## Media input
+
+A media part in a user message goes out as the chat completions content part its type calls for:
+
+| Media type | Content part | Source |
+| --- | --- | --- |
+| `image/*`, or no type | `image_url` | An `https:` URL or a `data:` URI |
+| `audio/*` | `input_audio`, with the subtype as its format (`wav`, `mp3`, ...) | A `data:` URI |
+| any other type, such as `application/pdf` | `file`, with the data inline | A `data:` URI |
+
+Audio and files travel inline, and the plugin does not download a URL named in model input, so an `https:` URL for either fails with `INVALID_ARGUMENT`. Video fails the same way, because chat completions have no standard content part for it.
+
+Each plugin also declares which types its provider's chat completions read, and a part of any other type fails before the request is sent. That matters most for providers that drop a content part they do not read instead of rejecting it:
+
+| Plugin | Media it sends |
+| --- | --- |
+| `openai` | images, audio, and PDF |
+| `anthropic`, `dashscope`, `kimi`, `xai` | images only |
+| `deepseek`, `openrouter`, `zai` | every type; the provider decides |
+
+```go
+pdf, err := os.ReadFile("report.pdf")
+if err != nil {
+    return err
+}
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(openai.ModelRef("gpt-5.4", nil)),
+    ai.WithPromptParts(
+        ai.NewTextPart("Summarize this report in three bullets."),
+        ai.NewMediaPart("application/pdf", "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(pdf)),
+    ),
+)
+```
+
 ## Response fields
 
 Every plugin in the family fills in three response fields that are easy to miss.
 
-**Reasoning.** Providers send reasoning text under two non-standard fields: `reasoning_content` (DeepSeek, Kimi) and `reasoning` (OpenRouter's normalized field). Both are read, in that order, and the first non-empty one becomes a single Genkit reasoning part. A response carrying both is read once, not concatenated. Reach it with `resp.Reasoning()`.
+**Reasoning.** Providers send reasoning text under two non-standard fields: `reasoning_content` (DeepSeek, Kimi) and `reasoning` (OpenRouter's normalized field). Both are read, in that order, and the first non-empty one becomes a single Genkit reasoning part. A response carrying both is read once, not concatenated. A field that is present but empty still becomes an empty reasoning part, while a missing or `null` field makes none. Reach it with `resp.Reasoning()`.
+
+A model message that carries a reasoning part, even an empty one, sends it back as `reasoning_content` when the history is replayed, so pass `resp.History()` or the message itself to the next request. DeepSeek in thinking mode needs it: a tool call whose ID DeepSeek did not issue, for example one your app rewrote, is rejected without it.
 
 **Cost.** A gateway that prices the request reports it as `resp.Usage.Custom["cost"]`, in whatever currency the gateway bills in. Presence of the key decides, not its value: a free-tier request is priced at an explicit zero, which is an answer. Read it with the two-value map form rather than testing for a value above zero. Provider endpoints that do not price requests leave the key absent.
 
@@ -257,11 +294,16 @@ if _, err := genkit.Generate(ctx, g, ai.WithStreaming(onChunk)); err != nil {
 }
 ```
 
-`resp.Custom` carries the same map as `resp.Raw` for older code, but it is deprecated; prefer `resp.Raw`.
-
 ## Custom provider
 
-For a service with no dedicated plugin, register `compat_oai.OpenAICompatible` itself. Give it a `Provider` name, which becomes both the plugin's name and the prefix its model IDs carry, plus `APIKey`, `BaseURL`, and any `Opts` the client needs. If the service's models endpoint does not speak OpenAI's pagination, supply a `ListModels` function that returns every model it serves.
+For a service with no dedicated plugin, register `compat_oai.OpenAICompatible` itself. Give it a `Provider` name, which becomes both the plugin's name and the prefix its model IDs carry, plus `APIKey`, `BaseURL`, and any `Opts` the client needs. Four optional fields describe how the service differs from OpenAI:
+
+| Field | Type | Use |
+| --- | --- | --- |
+| `ListModels` | `func(ctx context.Context, client *openai.Client) ([]string, error)` | Lists every model the service serves, when its models endpoint does not speak OpenAI's pagination. |
+| `MediaTypes` | `[]string` | The media types its chat completions read, exact (`"application/pdf"`) or a wildcard (`"image/*"`). A part of any other type fails before the request is sent. Empty sends every type. |
+| `SeparateReasoningTokens` | `bool` | The service counts `reasoning_tokens` apart from `completion_tokens`, as xAI does, rather than inside them, as OpenAI does. Left false, each response is read by its `total_tokens`. |
+| `ClassifyError` | `func(err *openai.Error) status.Name` | Names the status of an error the service sends with a misleading HTTP code, such as an unknown model answered with 400. Return `""` to keep the status the HTTP code gives. |
 
 The base plugin knows nothing about the service it points at, so it ships no typed config and no `ModelRef` helper. Models take the OpenAI SDK's own `openai.ChatCompletionNewParams` as their config, and you name them with `ai.NewModelRef` under the provider prefix; the advertised schema is the SDK's minus the fields Genkit builds from the request, which are rejected by name rather than silently dropped.
 
@@ -300,10 +342,6 @@ resp, err := genkit.Generate(ctx, g,
 ```
 
 The [compat_oai/custom sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/custom) is this shape end to end. Prefer a dedicated plugin whenever one exists: the SDK request type has no home for provider extensions such as routing, thinking, or reasoning budgets, and its schema rejects them.
-
-:::caution
-`OpenAICompatible.DefineModel` is still the untyped path, and it is deprecated. It builds a model whose config is validated against nothing, so an unknown key is accepted and forwarded to the provider instead of being refused at the action boundary. Use `OpenAICompatible.NewModel`, which takes the provider from the plugin rather than as an argument, for a model the framework validates.
-:::
 
 </Lang>
 

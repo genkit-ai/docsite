@@ -358,7 +358,7 @@ pEngine, err := postgresql.NewPostgresEngine(ctx,
 		postgresql.WithDatabase("my-database"))
 ```
 
-- Using email authentication
+- Using IAM database authentication
 
 ```go
 pEngine, err := postgresql.NewPostgresEngine(ctx,
@@ -367,17 +367,36 @@ pEngine, err := postgresql.NewPostgresEngine(ctx,
 	postgresql.WithIAMAccountEmail("mail@company.com"))
 ```
 
-- Using custom pool (add `github.com/jackc/pgx/v5/pgxpool` to the imports)
+  With neither a password nor `WithIAMAccountEmail`, the engine logs in with IAM as the
+  principal of Application Default Credentials, such as the service account a Cloud Run
+  service runs as, so no credentials appear in code:
+
+```go
+pEngine, err := postgresql.NewPostgresEngine(ctx,
+	postgresql.WithCloudSQLInstance("my-project", "us-central1", "my-instance"),
+	postgresql.WithDatabase("my-database"))
+```
+
+  A service account logs in under its email without the `.gserviceaccount.com` suffix,
+  which is the database user name Cloud SQL gives it. An IAM login sends no password, so
+  a `PGPASSWORD` or `.pgpass` in the environment is ignored.
+
+- Using your own pool (add `github.com/jackc/pgx/v5/pgxpool` to the imports). The pool
+  already names its database, so `WithDatabase` is not needed. The engine leaves a pool
+  you pass in open, so close it yourself:
 
 ```go
 pool, err := pgxpool.New(ctx, "add_your_connection_string")
 if err != nil {
 	log.Fatal(err)
 }
+defer pool.Close()
 
-pEngine, err := postgresql.NewPostgresEngine(ctx,
-	postgresql.WithDatabase("db_test"),
-	postgresql.WithPool(pool))
+pEngine, err := postgresql.NewPostgresEngine(ctx, postgresql.WithPool(pool))
+if err != nil {
+	log.Fatal(err)
+}
+defer pEngine.Close()
 ```
 
 3. Create the Postgres plugin
@@ -594,11 +613,15 @@ func main() {
 `PostgresEngine` wraps a `*pgxpool.Pool`, so the engine, the `*DocStore` and the `ai.Retriever` it
 produces are safe to share across request goroutines. Build them once at startup, not per request.
 
-- Call `defer pEngine.Close()` on shutdown. `Close` closes the pool unconditionally, including a pool
-  you supplied with `WithPool`, so do not share that pool with code that outlives the engine.
+- Call `defer pEngine.Close()` on shutdown. `Close` releases what `NewPostgresEngine` built: the
+  pool it dialed and the Cloud SQL dialer behind it. A pool you supplied with `WithPool` belongs to
+  you, so it stays open for other code and you close it yourself.
 - To control pool sizing and connection limits, build the pool yourself from a `pgxpool.Config` and
   pass it in with `WithPool`. `pEngine.GetClient()` returns the pool if you need to reach it later.
 - Per-request `context` deadlines pass through to pgx. Cancelling a request context aborts its query.
+
+The preview PostgreSQL session store for agents connects through the same plugin; see
+[Session stores](/docs/agents/session-stores/).
 
 See the [Retrieval-augmented generation](/docs/rag) page for a general
 discussion on using retrievers for RAG.
