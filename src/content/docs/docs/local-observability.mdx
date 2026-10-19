@@ -51,7 +51,7 @@ a provider that follows the OTel GenAI semantic conventions; see
 
 </Lang>
 
-<Lang lang="js go python">
+<Lang lang="js python">
 
 Genkit provides a robust set of built-in observability features, including
 tracing and metrics collection powered by
@@ -77,6 +77,43 @@ UI does not display metrics: they only leave the process once an exporting
 plugin such as the Firebase plugin is installed. In production, Genkit can
 export both traces and metrics to Firebase Genkit Monitoring for further
 analysis.
+
+</Lang>
+
+<Lang lang="go">
+
+Genkit records a trace of every flow, action, and step it runs. During
+development, the Genkit Developer UI shows these traces so you can debug a flow
+step by step. In production, the Firebase plugin sends traces and metrics to
+Genkit Monitoring in the Firebase console, or you can export them to any
+[OpenTelemetry](https://opentelemetry.io/) backend.
+
+## Tracing & metrics
+
+Genkit traces every run without explicit configuration. Under `genkit start`,
+Genkit sends its spans straight to the Developer UI's telemetry server, with no
+OpenTelemetry SDK on that path, so you can analyze a flow step by step with its
+inputs, outputs, and timing. The Developer UI shows Genkit spans only. Spans
+that other libraries create through OpenTelemetry, such as `otelhttp`, do not
+appear there.
+
+Everywhere else, Genkit reports its spans through pluggable instrumentation.
+The default provider creates OpenTelemetry spans that carry `genkit:*`
+attributes, on the `TracerProvider` your application registers. Genkit does not
+install a `TracerProvider` itself, so nothing leaves the process until you
+register one, directly or through a plugin. See
+[Export to any OTel backend](#export-to-any-otel-backend).
+
+Metrics travel a separate path. Genkit records action metrics, and the Firebase
+and Google Cloud plugins add metric families for feature, flow, generate, and
+tool activity, including `genkit/flow/latency` and
+the token counters `genkit/ai/generate/input/tokens` and
+`genkit/ai/generate/output/tokens`. The full table is in
+[Telemetry collection](/docs/observability/telemetry-collection). The Developer
+UI does not display metrics: they only leave the process once an exporting
+plugin such as the Firebase plugin is installed. The
+[OpenTelemetry GenAI instrumentation](/docs/observability/otel-genai-semantic-conventions)
+records the spec's token usage and duration metrics instead.
 
 </Lang>
 
@@ -233,7 +270,8 @@ alone and warns instead, so set that handler's level rather than calling
 | --- | --- | --- | --- |
 | `GENKIT_LOG_LEVEL` | `debug`, `info`, `warn`, `error`, case-insensitive, with an optional offset such as `error+2` | `info` | Minimum level for the console. It never changes what the Developer UI receives. A value it cannot parse, such as `warning`, `verbose`, or a number, is ignored with a warning, and so is the variable as a whole if your application installed its own default `slog` handler. |
 | `GENKIT_OTEL_ENABLE_LOGS` | any value that parses as false (`false`, `0`, `f`) turns export off | unset, so export is on | An opt-out. You do not have to set it to see logs. Unset, `true`, and anything that does not parse as false all leave export on. |
-| `GENKIT_ENV` | `dev` installs the Developer UI log sink | `prod` | `genkit start` sets `dev`. Nothing is exported outside the dev environment. |
+| `GENKIT_ENV` | `dev` installs the Developer UI log sink | `prod` | `genkit start` sets `dev`. Outside the dev environment, nothing is exported unless the reflection API is on. |
+| `GENKIT_REFLECTION_ENABLED` | `true`, `false` | unset, so it follows `GENKIT_ENV` | `true` runs the reflection API and installs the log sink in any environment. `false` turns the reflection API off, even under dev. See [Developer tools](/docs/devtools#run-the-reflection-api-outside-dev). |
 | `GENKIT_TELEMETRY_SERVER` | a base URL, for example `http://localhost:4033` | empty | Where records are posted. `genkit start` sets it. When it is empty, the CLI supplies the address at runtime instead. |
 
 :::note[Coming from the JS SDK]
@@ -255,7 +293,7 @@ stderr.
 
 ## Trace your own work
 
-### Add a step and attach attributes
+### Add a step and attach metadata
 
 A step is a named span inside a flow. `genkit.Run` creates one:
 
@@ -270,27 +308,32 @@ that traces its own work reports against the enclosing flow instead of the step.
 Use `genkit.RunWithContext` when the work inside takes a context:
 
 ```go
-file, err := genkit.RunWithContext(ctx, "upload-image",
-	func(ctx context.Context) (*genai.File, error) {
-		// The upload's own HTTP spans nest under "upload-image".
-		return client.Files.UploadFromPath(ctx, path, nil)
+summary, err := genkit.RunWithContext(ctx, "summarize-chunk",
+	func(ctx context.Context) (string, error) {
+		// The generate and model spans nest under "summarize-chunk".
+		return genkit.GenerateText(ctx, g, ai.WithPrompt("Summarize: %s", chunk))
 	})
 ```
 
-To attach a measurement to the active span, use the OpenTelemetry API directly.
-The attributes appear on the span in the Developer UI trace viewer:
+To attach a measurement to the active span, use `tracing.SetSpanMetadata`. It
+works with every instrumentation provider, so the values appear in the
+Developer UI trace viewer and in your OpenTelemetry backend alike:
 
 ```go
 import (
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"strconv"
+
+	"github.com/firebase/genkit/go/core/tracing"
 )
 
-trace.SpanFromContext(ctx).SetAttributes(
-	attribute.Float64("retrieval.hitRate", rate),
-	attribute.Int("retrieval.docs", len(docs)),
-)
+tracing.SetSpanMetadata(ctx, map[string]string{
+	"retrieval.hitRate": strconv.FormatFloat(rate, 'f', 2, 64),
+	"retrieval.docs":    strconv.Itoa(len(docs)),
+})
 ```
+
+Each entry is stored as a `genkit:metadata:<key>` attribute. Values are strings,
+and the call is safe from any goroutine. Outside a span it does nothing.
 
 ### Get the current trace id
 
@@ -314,32 +357,179 @@ Return that trace id to the caller in a response header and an operator can go
 straight to `genkit trace:get <traceId>`. `tracing.SpanPath(ctx)` gives the step's
 path within the trace, which is what identifies a step in the Developer UI.
 
-Genkit's spans are ordinary OpenTelemetry spans, so the standard API works too:
-`trace.SpanContextFromContext(ctx).TraceID().String()` from
-`go.opentelemetry.io/otel/trace` returns the same value.
+The ids are always set inside a span. Under `genkit start` they are the
+Developer UI's ids. Elsewhere they come from your OpenTelemetry SDK when you
+have registered one, and Genkit assigns its own when no provider reports any.
+Outside a span, `SpanTraceInfo` returns empty ids.
 
 ### Export to any OTel backend
 
-Genkit's traces go through a standard OpenTelemetry `TracerProvider`, so any
-exporter can be attached alongside the Developer UI sink. Register the span
-processor after `genkit.Init`, so the provider Genkit installed is the one you
-extend:
+Genkit creates its spans on the global OpenTelemetry `TracerProvider`. Register
+an SDK provider with your exporter, and Genkit's traces go to it:
 
 ```go
 import (
-	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/genkit"
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-g := genkit.Init(ctx)
-tracing.TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(yourExporter))
+func main() {
+	ctx := context.Background()
+
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(yourExporter))
+	otel.SetTracerProvider(tp)
+	defer tp.Shutdown(context.Background()) // Flushes buffered spans.
+
+	g := genkit.Init(ctx)
+	// ... define flows, serve ...
+	_ = g
+}
 ```
 
-`yourExporter` is any `sdktrace.SpanExporter`: OTLP, Jaeger, or one you wrote. If
-you are packaging the exporter for other people to install rather than wiring it
-into one application, do it as a plugin instead; see
+`yourExporter` is any `sdktrace.SpanExporter`: OTLP, Jaeger, or one you wrote.
+Genkit looks up the global provider for each span, so a provider registered
+after `genkit.Init` is picked up too. Register it first so no early span is
+lost. Under `genkit start`, the Developer UI keeps receiving every trace, because
+its feed does not go through OpenTelemetry.
+
+To keep Genkit's spans on a dedicated provider, for example one with its own
+sampler, without changing the global one, pass it to the default provider:
+
+```go
+tracing.SetInstrumentation(&tracing.OTelInstrumentation{TracerProvider: tp})
+```
+
+Outside the dev environment, inline base64 media in the `genkit:input`,
+`genkit:init`, and `genkit:output` attributes keeps only its data URL header,
+such as `data:image/png;base64,[redacted]`, so a trace records the media type
+without a copy of the bytes. Under `GENKIT_ENV=dev`, nothing is redacted,
+because the Developer UI renders media from these attributes.
+
+For telemetry that follows the OpenTelemetry GenAI semantic conventions instead
+of the `genkit:*` attributes, see
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
+If you are packaging an exporter for other people to install rather than wiring
+it into one application, do it as a plugin instead; see
 [Writing Genkit plugins](/docs/plugin-authoring/overview).
+
+### Choose the instrumentation providers
+
+`tracing.SetInstrumentation` sets the providers that receive every Genkit span,
+in order, and replaces the default OpenTelemetry provider. List
+`&tracing.OTelInstrumentation{}` to keep it next to your own:
+
+```go
+tracing.SetInstrumentation(&tracing.OTelInstrumentation{}, myProvider)
+```
+
+Call it once, at startup. The setting is process-wide, because Genkit actions
+can run without a Genkit instance (for example, a model taken straight from a
+plugin) and are traced too. Calling it with no providers restores the default.
+Under `genkit start`, the Developer UI's provider always runs first, whatever
+you set.
+
+`tracing.NewDirectTelemetryInstrumentation(client)` is the provider that feeds
+the Developer UI, built over any `tracing.TelemetryClient`. Use it to send Genkit
+spans to a telemetry server of your own without an OpenTelemetry SDK, or to
+capture them in memory with `tracing.NewTestOnlyTelemetryClient()` in a test.
+It saves each span when the span ends.
+
+### Write your own provider
+
+A provider implements `tracing.Instrumentation`. Genkit calls `StartSpan` on each
+provider when a span starts, runs the operation once, and then calls `End` on
+each returned `tracing.Span`, so a provider observes a run but cannot skip,
+repeat, or change it:
+
+```go
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/core/tracing"
+)
+
+type logInstrumentation struct{}
+
+func (logInstrumentation) StartSpan(ctx context.Context, info *tracing.SpanInfo) (context.Context, tracing.Span) {
+	log.Printf("-> %s (%s) at %s", info.Name(), info.Subtype(), info.Path())
+	return ctx, &logSpan{name: info.Name()}
+}
+
+type logSpan struct{ name string }
+
+// TraceInfo returns empty ids, so Genkit assigns its own.
+func (*logSpan) TraceInfo() tracing.TraceInfo { return tracing.TraceInfo{} }
+
+func (*logSpan) SetMetadata(md map[string]string) {}
+
+func (s *logSpan) End(res *tracing.SpanResult) {
+	if err := res.Err(); err != nil {
+		log.Printf("<- %s failed: %v (source: %t)", s.name, err, res.IsFailureSource())
+		return
+	}
+	log.Printf("<- %s", s.name)
+}
+```
+
+The contract:
+
+- `tracing.SpanInfo` describes the span: `Name`, `Type`, `Subtype`, `Path`,
+  `IsRoot`, `Input`, `Init`, `Labels`, and `Metadata`.
+- `tracing.SpanResult` carries the outcome: `Output`, `Err`, and
+  `IsFailureSource`. `IsFailureSource` is true only on the span where an error
+  originated, not on the spans that passed it up, so a backend that counts
+  failures counts each one once.
+- `End` is called exactly once, in reverse start order across providers, and
+  also when the operation panics.
+- `SetMetadata` receives what `tracing.SetSpanMetadata` records, and can be
+  called from any goroutine.
+- `TraceInfo` reports the provider's own trace and span ids, or empty ids if it
+  has none. Return a nil `Span` from `StartSpan` to ignore a span.
+
+### Observe the spans of one run
+
+`tracing.WithInstrumentation` adds providers to a context instead of the whole
+process. Every span started under that context reaches them, nested runs and
+subagents included. They run after the process-wide providers, and a nested
+scope cannot remove them. Middleware uses this to react to what its own run
+does, with no setup by the application.
+
+`aix.Observer` is a provider that reports each model call, typed:
+
+:::caution[Preview]
+`Observer` is in the experimental `ai/exp` package and can change in a minor
+release.
+:::
+
+```go
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/genkit"
+)
+
+ctx = tracing.WithInstrumentation(ctx, aix.Observer{
+	ModelDone: func(ctx context.Context, call *aix.ModelCall) {
+		if u := call.Response.Usage; u != nil {
+			log.Printf("%s used %d tokens", call.Model, u.TotalTokens)
+		}
+	},
+})
+text, err := genkit.GenerateText(ctx, g, ai.WithPrompt("Tell me a joke."))
+```
+
+`ModelDone` runs after every model call under the context, failed calls
+included. `call.Response` is never nil: a call that failed without a response
+gets the failed record that `Generate` returns, and `call.Err` holds the error.
+A response that a middleware hook supplies without calling the model, such as a
+cache hit, is not reported. The `Budget` middleware is built on this; see
+[Middleware](/docs/middleware/).
 
 ## Shutdown and flushing
 
@@ -347,26 +537,13 @@ The Genkit instance itself needs no shutdown. There is no `Close` or `Shutdown`
 method; background work is released by cancelling the context you passed to
 `genkit.Init`.
 
-Traces can be drained explicitly, because `tracing.TracerProvider` hands you the
-OpenTelemetry provider:
-
-```go
-import "github.com/firebase/genkit/go/core/tracing"
-
-func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	g := genkit.Init(ctx)
-	defer tracing.TracerProvider().Shutdown(context.Background())
-	// ... define flows, serve ...
-	_ = g
-}
-```
-
-Use `ForceFlush` instead of `Shutdown` if the process keeps running afterwards.
-Log export has no equivalent hook, so a short-lived `go run .` can still lose its
-last few log records; sleep briefly before exit if that matters.
+Spans buffered by your OpenTelemetry SDK are flushed by the provider you
+registered: defer `tp.Shutdown`, as in
+[Export to any OTel backend](#export-to-any-otel-backend), or call
+`tp.ForceFlush` if the process keeps running afterwards. Spans sent to the
+Developer UI are saved when each span ends, so a completed span is never lost.
+Log export has no flush hook, so a short-lived `go run .` can still lose its last
+few log records; sleep briefly before exit if that matters.
 
 </Lang>
 
