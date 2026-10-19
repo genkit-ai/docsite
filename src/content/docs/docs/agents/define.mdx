@@ -185,6 +185,7 @@ See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime co
 - **`genkitx.DefineAgent`** keeps inline prompt configuration beside the agent wiring. Use it for most prompt-backed agents.
 - **`genkitx.DefinePromptAgent`** wraps a prompt that is already registered, including prompts loaded from Dotprompt files.
 - **`genkitx.DefineCustomAgent`** replaces the prompt loop with your own code, for a custom per-turn loop, direct session control, or multiple model calls.
+- **`genkitx.DefineRemoteAgent`** registers an agent that another Genkit app serves over HTTP, so this app can call it by name or delegate to it. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent).
 
 All agents implement `api.BidiAction`, so transports and route helpers can serve them directly. Server-managed agents also expose typed snapshot helpers and companion actions.
 
@@ -243,18 +244,23 @@ The agent's custom state type is inferred from typed options such as `WithSessio
 
 ### Constructor and entry-point signatures
 
-The `genkitx.Define*` constructors all return `aix` types, so a helper that takes an agent, a tool, or a turn result names the type from `github.com/firebase/genkit/go/ai/exp`.
+The `genkitx.Define*` agent constructors all return `aix` types, so a helper that takes an agent or a turn result names the type from `github.com/firebase/genkit/go/ai/exp`.
 
 ```go
 func DefineAgent[State any](g *genkit.Genkit, name string, prompt aix.InlinePrompt,
 	opts ...aix.AgentOption[State]) *aix.Agent[State]
 
-func DefineTool[In, Out any](g *genkit.Genkit, name, description string,
-	fn aix.ToolFunc[In, Out], opts ...ai.ToolOption) *aix.Tool[In, Out]
+func DefinePromptAgent[State any](g *genkit.Genkit, name string,
+	opts ...aix.PromptAgentOption[State]) *aix.Agent[State]
 
-func DefineInterruptibleTool[In, Out, Resume any](g *genkit.Genkit, name, description string,
-	fn aix.InterruptibleToolFunc[In, Out, Resume], opts ...ai.ToolOption) *aix.InterruptibleTool[In, Out, Resume]
+func DefineCustomAgent[State any](g *genkit.Genkit, name string, fn aix.AgentFunc[State],
+	opts ...aix.AgentOption[State]) *aix.Agent[State]
+
+func DefineRemoteAgent(g *genkit.Genkit, name, url string,
+	opts ...aix.RemoteAgentOption) *aix.AgentHandle
 ```
+
+A remote agent has no Go state type, so `DefineRemoteAgent` returns the untyped `*aix.AgentHandle` described in [Run and stream agents](/docs/agents/run/#agent-handles).
 
 The entry points on the agent itself:
 
@@ -280,8 +286,9 @@ The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai
 - **`aix.WithStreamTransform[State](fn)`** redacts or reshapes each streamed chunk before it is sent to clients.
 - **`aix.WithDescription[State](text)`** adds a human-readable description to action metadata and developer tooling.
 - **`aix.WithNamedPrompt[State](name, input)`** points `DefinePromptAgent` at a specific registered prompt and renders input.
+- **`aix.WithMaxSnapshotWait[State](d)`** caps how long one request to the agent's `waitForSnapshot` route holds before it answers with the snapshot as it stands. The default is 25 seconds. Keep it under the shortest request or idle timeout between your clients and the server. See [Background execution](/docs/agents/background/#poll-or-wait).
 
-Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time.
+Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time. A later option of the same kind replaces an earlier one, so a shared option list can be extended with an override. Invalid values still fail: an empty `WithSessionID` or a non-positive `WithMaxSnapshotWait` is rejected.
 
 ### Prompt options
 
@@ -335,11 +342,12 @@ grounded := genkitx.DefineAgent(g, "grounded",
 
 Agent tools use the same constructors as any other tool. Each one reaches the active session the same way, so the choice is about signature and capability:
 
-- **`genkit.DefineTool`** hands the handler an `*ai.ToolContext`. It embeds `context.Context`, so `aix.SessionFromContext[State](ctx)` works on it directly, and it adds `Interrupt`, `IsResumed`, `Resumed`, and `OriginalInput`.
-- **`genkitx.DefineTool`** hands the handler a plain `context.Context`, plus `tool.AttachParts` for returning extra content parts alongside the output.
-- **`genkitx.DefineInterruptibleTool`** adds a typed resume parameter for tools that pause and wait for an answer.
+- **`genkit.DefineTool`** hands the handler an `*ai.ToolContext`. It embeds `context.Context`, so `aix.SessionFromContext[State](ctx)` works on it directly.
+- **`genkit.DefineResumableTool`** hands the handler a plain `context.Context` and a typed resume parameter, for tools that pause with `tool.Interrupt` and continue with the caller's answer.
 
-See [Tool calling](/docs/tool-calling), [Sessions and state](/docs/agents/state), and [Agent interrupts](/docs/agents/interrupts).
+The runtime verbs in `github.com/firebase/genkit/go/ai/tool`, such as `tool.Interrupt`, `tool.Fail`, and `tool.AttachParts`, take a `context.Context`, so they work in both kinds of tool.
+
+See [Tool calling](/docs/tool-calling), [Sessions and state](/docs/agents/state), [Interrupts](/docs/interrupts/), and [Agent interrupts](/docs/agents/interrupts/).
 
 ## How a turn is composed
 

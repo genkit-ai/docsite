@@ -123,7 +123,7 @@ Abort flips a pending snapshot to `aborted`. The background worker observes the 
 
 ## Requirements
 
-Background execution needs a server-managed agent whose store implements `aix.SnapshotSubscriber`, which is how an abort reaches the running work. The bundled in-memory and file stores and the Firestore store all do.
+Background execution needs a server-managed agent whose store implements `aix.SnapshotSubscriber`, which is how an abort reaches the running work. The bundled in-memory and file stores, the Firestore store, and the PostgreSQL store all do.
 
 Choose background execution when the caller should get a snapshot ID back at once and let the agent keep working on the server. A command-line tool or a service that can hold the connection open is usually simpler with a streaming `Connect` call.
 
@@ -229,7 +229,22 @@ if snap.Status == aix.SnapshotStatusCompleted {
 }
 ```
 
-The same reads exist on the agent for a bare snapshot ID: `agent.GetSnapshot(ctx, id)`, `agent.GetLatestSnapshot(ctx, sessionID)`, and `agent.WaitForSnapshot(ctx, id)`. The wait is push-driven where the store implements `aix.SnapshotSubscriber`, with a periodic re-read either way, because an expiry is not a write and no subscription can report one. Over HTTP it is one request, `POST /agents/{name}/waitForSnapshot`, that answers once the row settles, so a client in another language needs no polling loop either. See [Serve agents over HTTP](/docs/agents/http).
+The same reads exist on the agent for a bare snapshot ID: `agent.GetSnapshot(ctx, id)`, `agent.GetLatestSnapshot(ctx, sessionID)`, and `agent.WaitForSnapshot(ctx, id)`. The wait is push-driven where the store implements `aix.SnapshotSubscriber`, with a periodic re-read either way, because an expiry is not a write and no subscription can report one. A wait in process has no time limit of its own.
+
+Over HTTP the wait is `POST /agents/{name}/waitForSnapshot`. One request holds until the row settles or the agent's wait limit passes, and then answers with the row as it stands, still `pending` or `aborting` when the limit won. The limit keeps each request short enough to pass through proxies and load balancers. It is 25 seconds by default; set it with `aix.WithMaxSnapshotWait`:
+
+```go
+agent := genkitx.DefineAgent(g, "report",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Create detailed research reports."),
+	},
+	aix.WithSessionStore(store),
+	aix.WithMaxSnapshotWait[ReportState](10*time.Second),
+)
+```
+
+A client that calls the route directly sends the request again while the row is not settled. An `aix.AgentHandle`, local or remote, does that for you: its `WaitForSnapshot` and the `Wait` of its tasks ask again until the snapshot settles or `ctx` ends. See [Serve agents over HTTP](/docs/agents/http).
 
 A status check does not need the conversation. Pass `aix.WithMetadataOnly()` to `Poll`, `GetSnapshot`, or `GetLatestSnapshot` and the returned snapshot carries the status, finish reason, parent, timestamps, and error with `State` left nil. A store that implements the optional `aix.SnapshotMetadataReader`, as the bundled stores and the Firestore store do, answers without loading the state at all; any other store is read in full and the state dropped.
 
@@ -242,7 +257,7 @@ snap, err := task.Poll(ctx, aix.WithMetadataOnly())
 | Status      | Meaning                                                                                         | Resume point |
 | ----------- | ----------------------------------------------------------------------------------------------- | ------------ |
 | `pending`   | The worker is running and refreshing the heartbeat.                                             | No           |
-| `aborting`  | An abort has stopped the work; the worker is saving what it finished.                           | Not yet      |
+| `aborting`  | An abort was requested; the worker is saving how the turn in flight ended.                      | Not yet      |
 | `completed` | The run settled. `State` holds the final state.                                                 | Yes          |
 | `failed`    | A turn broke. `Error` holds the failure, `State` holds the turns that completed before it.      | Yes          |
 | `aborted`   | The caller stopped the run. `State` holds the turns that finished.                              | Yes          |
@@ -263,9 +278,15 @@ if err != nil {
 }
 ```
 
-An abort takes two writes. The first flips the `pending` row to `aborting` and cancels the work context, so `Abort` answers `aborting` for a run that was still going. The worker keeps heartbeating while it unwinds, then lands the second write: an `aborted` snapshot holding every turn that finished before the stop. `Wait` rides that window and returns the settled row.
+An abort takes two writes. The first flips the `pending` row to `aborting` and cancels the work context, so `Abort` answers `aborting` for a run that was still going. The worker keeps heartbeating while it unwinds, then lands the second write, which records how the run ended. `Wait` rides that window and returns the settled row.
 
-An aborted snapshot is a resume point. The turn that was in flight is discarded whole, so the conversation ends at a turn seam: a tool that had already run inside it loses its response along with the rest of the round, and resuming calls it again. Send an input with no payload to run that turn again on the committed conversation, or a new message to change course:
+An abort is best effort. It stops the turn in flight and drops the inputs queued behind it, and the settled row says what happened to that turn:
+
+- **`completed`** when the turn finished without an error anyway. Its result stands, so do not resume it.
+- **`aborted`** when the turn ended in an error after the stop reached it, or when no turn had started. The snapshot holds every turn that finished before the stop.
+- **`failed`** when the turn broke on its own before the stop reached it. The error is kept.
+
+Check the status that `Wait` returns rather than assuming `aborted`. An aborted snapshot is a resume point. The turn that was in flight is discarded whole, so the conversation ends at a turn seam: a tool that had already run inside it loses its response along with the rest of the round, and resuming calls it again. Send an input with no payload to run that turn again on the committed conversation, or a new message to change course:
 
 ```go
 snap, err := task.Wait(ctx)
@@ -287,7 +308,7 @@ Detached work runs in the process that started it. It is not durable execution: 
 
 A running detached turn refreshes its snapshot's heartbeat every 30 seconds, and keeps doing so for up to five minutes while it winds down after an abort. A `pending` or `aborting` snapshot whose heartbeat has not advanced for 60 seconds is reported as `expired` on the next read. `expired` is terminal and not resumable. The row's `ParentID` names the last snapshot committed before the detach, so resume from that and send the work again.
 
-On `SIGTERM`, abort the pending snapshots and wait for them to settle before exiting. Callers then find `aborted` rows they can resume, instead of waiting 60 seconds for expiry and losing the run.
+On `SIGTERM`, abort the pending snapshots and wait for them to settle before exiting. Callers then find settled rows, `aborted` ones resumable, instead of waiting 60 seconds for expiry and losing the run.
 
 Detach and durable streaming solve different problems. Detach keeps the work running and gives you a snapshot ID to wait on, but it does not replay the stream. [Durable streaming](/docs/durable-streaming) replays the chunk transcript by `streamId`, but it does not keep work alive past the request. `genkitx.Route.Handler` accepts `genkit.HandlerOption`s, so you can apply both to the same agent route.
 
@@ -307,6 +328,8 @@ snap, err := h.Task(snapshotID).Wait(ctx)
 ```
 
 `agent.Handle()` returns the same view for an agent value you hold. A handle offers every call the typed agent does, with state as raw JSON, and every read through it is shaped exactly as it would be for a remote client: the agent's `WithStateTransform` applies, and a stale-heartbeat row reads as `expired`. See [Run and stream agents](/docs/agents/run) for the handle's full surface.
+
+A service that does not run the agent at all follows its background work the same way. `genkitx.DefineRemoteAgent` returns a handle to an agent another app serves, and `RunDetached`, `Task(snapshotID).Wait`, and `Abort` on it go through that server's companion routes. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent).
 
 </Lang>
 

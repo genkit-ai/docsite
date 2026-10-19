@@ -102,7 +102,7 @@ func main() {
 }
 ```
 
-Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent. The fields on `Route` are exported, so a router other than `http.ServeMux` can mount the same layout: read `Method` and `Path`, and serve `Action` with `genkit.Handler`.
+Use `genkitx.AgentRoutes(agent)` to mount one agent, or `genkitx.AllAgentRoutes(g)` to mount every registered agent. `AllAgentRoutes` skips the agents that `genkitx.DefineRemoteAgent` registered, so a server never serves another service's agent under its own credentials. The fields on `Route` are exported, so a router other than `http.ServeMux` can mount the same layout: read `Method` and `Path`, and serve `Action` with `genkit.Handler`.
 
 A client-managed agent gets the turn route alone. A store-backed agent adds `getSnapshot` and `waitForSnapshot`, and `abort` when its store supports status subscriptions, which is what an abort needs to reach the running work.
 
@@ -249,7 +249,7 @@ Agent routes follow a consistent layout across backend frameworks:
 
 <Lang lang="go">
 
-Go mounts one more companion, **`POST /agents/{name}/waitForSnapshot`**, on every store-backed agent. It takes the same body as `getSnapshot` and answers with the same shaped snapshot, but only once the row has settled, so a client follows a detached run in one request instead of a polling loop. Both read routes accept `"metadataOnly": true` in `data` to return the status, finish reason, parent, and timestamps without the conversation.
+Go mounts one more companion, **`POST /agents/{name}/waitForSnapshot`**, on every store-backed agent. It takes the same body as `getSnapshot` and answers with the same shaped snapshot once the row settles, so a client follows a detached run without a tight polling loop. One request holds for at most the agent's wait limit, 25 seconds unless the agent sets `aix.WithMaxSnapshotWait`, and then answers with the row as it stands. A client that gets a `pending` or `aborting` row back sends the request again. Keep the limit under the shortest request or idle timeout of the proxies between the client and the server. Both read routes accept `"metadataOnly": true` in `data` to return the status, finish reason, parent, and timestamps without the conversation.
 
 </Lang>
 
@@ -349,6 +349,12 @@ data: {"message":{"customPatch":[{"op":"replace","path":"/agentStatus","value":"
 
 The first patch of each turn is a whole-document replace at the root pointer `""`, which re-bases a client that joined mid-conversation. Apply later patches incrementally to keep a local copy live. In Go, use `aix.ApplyPatch`; browser clients can use standard RFC 6902 libraries like `fast-json-patch`. The Vercel AI SDK transport described below performs this reassembly automatically.
 
+<Lang lang="go">
+
+`aix.ApplyPatch` and `aix.Diff` return numbers as `json.Number`, so an integer above 2^53, such as a `UnixNano` time or a token count, keeps its exact value. Marshal the result and unmarshal it into your state type, or assert `json.Number` rather than `float64` when you read a value directly.
+
+</Lang>
+
 ## Interrupts over HTTP
 
 When an interruptible tool pauses, the turn returns HTTP 200: `finishReason` is `interrupted` and the interrupt rides as a tool-request part on the message content, carrying the tool's payload under `metadata.interrupt`.
@@ -424,7 +430,7 @@ curl -X POST http://localhost:8080/agents/chat/getSnapshot \
   -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40","metadataOnly":true}}'
 ```
 
-An abort answers `aborting` for a run that was still going; the settled row is one `waitForSnapshot` away.
+An abort answers `aborting` for a run that was still going. Call `waitForSnapshot` until the row settles to learn how the run ended.
 
 </Lang>
 
@@ -438,13 +444,103 @@ Failures arrive at two different levels:
 If a store-backed agent receives a `sessionId` that does not exist in the store, it initializes a new conversation under that ID. If your application needs to restrict client-generated session IDs, validate the identifier in your authentication or authorization middleware before invoking the agent handler.
 :::
 
+<Lang lang="go">
+
+A request-level failure has a JSON body that names the status, so a client can tell apart statuses that share an HTTP code:
+
+```
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"status":"INVALID_ARGUMENT","message":"invalid argument"}
+```
+
+Outside the dev environment, an error not built with `status.PublicErrorf` goes out with the generic message for its status, so hosts, queries, and credentials in error text stay in the server log. A served agent applies the same rule to the `error` of a failed turn and to the errors in the snapshots its `getSnapshot` and `waitForSnapshot` routes return. Errors about the caller's own input, such as an invalid message, a resume that does not match the history, or a snapshot from another session, keep their text. The store and in-process callers always see the full text. Only `genkit.Handler`, and so `Route.Handler`, applies this rule: an agent you call from a handler of your own returns its errors unchanged. See [Error types](/docs/error-types/).
+
+</Lang>
+
 ## Connect a client
 
 The client is independent of the backend language. Point it at the primary turn URL your server exposes, the route you mounted above, and it speaks the same wire protocol either way. The snapshot and abort companion URLs follow your server's route layout.
 
 <Lang lang="go">
 
-Go ships no prebuilt HTTP agent client. Server code should hold the agent value and call `RunText`, `Run`, or `Connect` in process; see [Run and stream agents](/docs/agents/run). Another Go service can POST the envelope shown above directly.
+Code in the same process as the agent holds the agent value and calls `RunText`, `Run`, or `Connect` directly; see [Run and stream agents](/docs/agents/run). A Go app that calls an agent another app serves uses a remote agent.
+
+### Call a remote agent
+
+`genkitx.DefineRemoteAgent` connects to an agent that another Genkit app serves over HTTP, in Go, JavaScript, or Dart. It returns an `*aix.AgentHandle`, the same handle `LookupAgent` returns for an agent in this process, and registers the agent under the name you give it. The agents middleware, the Dev UI, and `LookupAgent` then reach it by name.
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithExperimental())
+
+	billing := genkitx.DefineRemoteAgent(g, "billing", "https://billing.internal/agents/billing",
+		aix.WithDescription[any]("Answers billing questions."),
+		aix.WithAgentMetadata(&aix.AgentMetadata{
+			StateManagement: aix.AgentStateManagementServer,
+			Abortable:       true,
+		}),
+		aix.WithHeaders(func(ctx context.Context) (http.Header, error) {
+			return http.Header{"Authorization": {"Bearer " + os.Getenv("BILLING_TOKEN")}}, nil
+		}),
+	)
+
+	out, err := billing.RunText(ctx, "Why was I charged twice?")
+	if err != nil {
+		log.Fatalf("call billing agent: %v", err)
+	}
+	fmt.Println(out.Message.Text())
+
+	next, err := billing.RunText(ctx, "Refund the second charge.",
+		aix.WithSessionID[json.RawMessage](out.SessionID),
+	)
+	if err != nil {
+		log.Fatalf("continue billing conversation: %v", err)
+	}
+	fmt.Println(next.Message.Text())
+}
+```
+
+The URL is the agent's turn route. The handle expects the snapshot companions next to it, at `/getSnapshot`, `/waitForSnapshot`, and `/abort`. `DefineRemoteAgent` sends no request; it panics if the name is empty or the URL is not an absolute `http` or `https` URL without user info, query, or fragment.
+
+The options are `aix.RemoteAgentOption` values:
+
+- **`aix.WithHTTPClient(client)`** sets the `*http.Client` that reaches the server. Use it for authentication with an ID token or OAuth2 client, for mTLS, and for transport timeouts. The default is `http.DefaultClient`. The handle refuses redirects unless the client sets its own `CheckRedirect`, so a request body and its credentials never go to another host.
+- **`aix.WithHeaders(fn)`** adds headers to every request, such as a bearer token read from `ctx`. An error from `fn` fails the request before it is sent.
+- **`aix.WithAgentMetadata(meta)`** declares what the server supports: who manages state, and whether background work can be aborted. Callers such as the agents middleware decide on it, so declare only what the server really supports. Without it the capabilities are unknown, and callers find out from the agent's answers.
+- **`aix.WithDescription[any](text)`** sets the description that `Ref()` carries and that the agents middleware shows the model. A remote agent has no Go state type, so any type argument works.
+- **`aix.WithRouteURLs(aix.AgentRouteURLs{...})`** points the companions at other URLs, for a server that does not mount them next to the turn route, such as a Next.js app with one route file per action. An empty field keeps its default.
+
+A remote handle works like a local one, as far as the server allows:
+
+- **Turns stream over server-sent events, and the call returns the final output.** The handle has no `Connect`, so continue a conversation with `aix.WithSessionID` or `aix.WithSnapshotID` on each call.
+- **Failures keep their status name.** A failed turn resolves as a failed `AgentOutput`, as it does in process. A route the server does not publish fails with `UNIMPLEMENTED`. Match a decoded error with `errors.Is` against the base sentinel of its status, such as `status.ErrNotFound`.
+- **Background work works across the wire.** `RunDetached`, `Task`, `WaitForSnapshot`, and `Abort` use the companion routes. `WaitForSnapshot` asks again each time the server's wait limit passes, until the snapshot settles or `ctx` ends, and falls back to polling `getSnapshot` when the server has no wait route.
+- **A turn is never retried.** The server may have started it, so the handle reports the failure and leaves the retry to you. `aix.IsRetryableReadError(err)` reports whether a failed snapshot read may succeed if you make it again.
+- **The caller's trace travels.** Each request carries a `traceparent` header from `ctx`.
+
+To use a remote agent as a sub-agent, pass `billing.Ref()` to the agents middleware. See [Multi-agent delegation](/docs/agents/multi-agent/#delegate-to-a-remote-agent). [`go/samples/basic-agents-remote`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-remote) runs an orchestrator that delegates to an agent served by a second process.
+
+`aix.NewRemoteAgent(name, url, opts...)` builds the same handle without registering it, for code that only calls the agent directly. To reach agents over a protocol other than Genkit's HTTP routes, implement `aix.AgentTransport`, and `aix.SnapshotTransport` for snapshot reads and aborts, then build a handle over it with `aix.NewAgentHandle`.
+
+### Call a Go agent from a frontend
 
 For a browser or mobile frontend in front of a Go backend, use the JavaScript client. It is in the `genkit` npm package:
 

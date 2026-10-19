@@ -215,10 +215,13 @@ type AgentOutput[State any] struct {
 	SnapshotID string `json:"snapshotId,omitempty"`
 	// State is the final conversation state, for client-managed agents only.
 	State *SessionState[State] `json:"state,omitempty"`
+	// Usage sums the agent's own model calls in this invocation, failed turns
+	// included. Nil when the invocation detached.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 ```
 
-`State` is populated only when no session store is configured. A store-backed agent returns `SnapshotID` instead, and the state lives in the snapshot. `AgentOutput` carries no token or usage counts; read those from the [trace](/docs/local-observability).
+`State` is populated only when no session store is configured. A store-backed agent returns `SnapshotID` instead, and the state lives in the snapshot. See [Token usage](#token-usage) for `Usage`.
 
 ```go
 type AgentStreamChunk struct {
@@ -237,10 +240,12 @@ type TurnEnd struct {
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID is the snapshot persisted at the end of this turn, if any.
 	SnapshotID string `json:"snapshotId,omitempty"`
+	// Usage sums the agent's own model calls in this turn, failed or not.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 ```
 
-Those four fields are the whole chunk, and more than one can be set on a single chunk. There is no interrupt field and no detach field: interrupts arrive on `chunk.ModelChunk`, so read them with `chunk.ModelChunk.Interrupts()`, and a detach is reported on `AgentOutput.FinishReason`. Tool requests and responses stream as ordinary model chunk content, so a tool-call indicator reads `chunk.ModelChunk.Content`.
+Every turn ends with exactly one `TurnEnd`, a failed turn included, and it arrives before the output resolves. Those four fields are the whole chunk, and more than one can be set on a single chunk. There is no interrupt field and no detach field: interrupts arrive on `chunk.ModelChunk`, so read them with `chunk.ModelChunk.Interrupts()`, and a detach is reported on `AgentOutput.FinishReason`. Tool requests and responses stream as ordinary model chunk content, so a tool-call indicator reads `chunk.ModelChunk.Content`.
 
 ### Finish reasons
 
@@ -250,13 +255,46 @@ The first six values are forwarded verbatim from the model's own finish reason. 
 | --- | --- | --- |
 | `aix.AgentFinishReasonStop` | `stop` | The model stopped naturally. |
 | `aix.AgentFinishReasonLength` | `length` | Generation hit the token limit. |
-| `aix.AgentFinishReasonBlocked` | `blocked` | Generation was blocked, usually by a safety filter. |
+| `aix.AgentFinishReasonBlocked` | `blocked` | Generation was blocked, usually by a safety filter. Only a custom agent that forwards the model's reason reports it: a prompt-backed agent fails a blocked turn with `ai.ErrGenerationBlocked`. See [Agent error handling](/docs/agents/errors). |
 | `aix.AgentFinishReasonInterrupted` | `interrupted` | A tool paused for input. See [Agent interrupts](/docs/agents/interrupts). |
 | `aix.AgentFinishReasonOther` | `other` | The model stopped for some other reason. |
 | `aix.AgentFinishReasonUnknown` | `unknown` | The model gave no reason. |
-| `aix.AgentFinishReasonAborted` | `aborted` | The caller stopped the run: a cancelled context, an expired deadline, a closed transport, a limit it set such as `ai.WithMaxTurns`, or `Abort` on a detached run. The snapshot keeps the turns that finished. |
+| `aix.AgentFinishReasonAborted` | `aborted` | The caller stopped the run: a cancelled context, an expired deadline, a closed transport, a limit it set such as `ai.WithMaxTurns` or a usage budget, or `Abort` on a detached run. The snapshot keeps the turns that finished. |
 | `aix.AgentFinishReasonDetached` | `detached` | The client detached and the work continues in the background. |
 | `aix.AgentFinishReasonFailed` | `failed` | A turn broke. Read `out.Error`. The snapshot keeps the tool rounds the turn completed. |
+
+## Token usage
+
+An agent reports what its own model calls used at three levels. Each is an `*ai.GenerationUsage`, summed field by field:
+
+- **`chunk.TurnEnd.Usage`** covers one turn, whether it succeeded or failed.
+- **`out.Usage`** covers one invocation, failed turns included. It is nil when the invocation detached, because the work continues.
+- **`SessionState.Usage`** covers the whole session. Snapshots persist it, so read it from `snap.State.Usage` for a server-managed agent or from `out.State.Usage` for a client-managed one.
+
+```go
+for chunk, err := range conn.Receive() {
+	if err != nil {
+		return fmt.Errorf("stream turn: %w", err)
+	}
+	if chunk.TurnEnd != nil && chunk.TurnEnd.Usage != nil {
+		fmt.Printf("turn used %d input and %d output tokens\n",
+			chunk.TurnEnd.Usage.InputTokens, chunk.TurnEnd.Usage.OutputTokens)
+		break
+	}
+}
+
+out, err := conn.Output()
+if err != nil {
+	return fmt.Errorf("finalize turn: %w", err)
+}
+if out.Usage != nil {
+	fmt.Printf("invocation used %d input tokens\n", out.Usage.InputTokens)
+}
+```
+
+The session usage is a ledger: each model call adds to it when the call returns, and nothing takes it back. A failed turn's messages can roll back, but its spend stays on the session. Usage counts the agent's own calls only. A sub-agent records its calls in its own session, so a sum of `out.Usage` across agents never counts a token twice. A tool that calls `genkit.Generate` directly, with no agent in between, counts toward the turn that ran it.
+
+To stop a run or a session that spends too much, attach the `Budget` middleware. See [Middleware](/docs/middleware/).
 
 ## Invocation options
 
@@ -420,7 +458,9 @@ out, err := h.RunText(ctx, "Weather in Tokyo?",
 )
 ```
 
-A handle has every call the typed agent has (`Run`, `RunText`, `RunDetached`, `Task`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort`), plus `Name()` and `Metadata()`, which reports whether the agent is server-managed and abortable. Its invocation options are the same `aix.InvocationOption` values typed at `json.RawMessage`, resolved through the same code as the typed calls, so it rejects the same inputs with the same wording. Every read goes through the agent's companion actions: the state transform applies and a stale detached row reads as `expired`, exactly as over HTTP. `LookupAgent` needs no `genkit.WithExperimental()`, since it only reads the registry and only the gated constructors can register an agent.
+A handle has every call the typed agent has (`Run`, `RunText`, `RunDetached`, `Task`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort`), plus `Name()`, `Description()`, `Ref()`, and `Metadata()`, which reports whether the agent is server-managed and abortable. Its invocation options are the same `aix.InvocationOption` values typed at `json.RawMessage`, resolved through the same code as the typed calls, so it rejects the same inputs with the same wording. Every read goes through the agent's companion actions: the state transform applies and a stale detached row reads as `expired`, exactly as over HTTP. `LookupAgent` needs no `genkit.WithExperimental()`, since it only reads the registry and only the gated constructors can register an agent.
+
+A handle does not care where the agent runs. `genkitx.DefineRemoteAgent` returns a handle to an agent that another Genkit app serves over HTTP, with the same calls, and registers it so `LookupAgent` and the agents middleware find it by name. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent).
 
 ## Next steps
 
