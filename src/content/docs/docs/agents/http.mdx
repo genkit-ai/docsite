@@ -68,6 +68,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/server"
 )
 
 func main() {
@@ -97,8 +98,12 @@ func main() {
 		mux.HandleFunc(route.Pattern(), route.Handler())
 	}
 
-	log.Println("listening on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	// server.Start returns nil after Ctrl+C or SIGTERM, once in-flight
+	// requests drain.
+	log.Println("listening on http://127.0.0.1:8080")
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
@@ -291,6 +296,12 @@ The fields of `AgentOutput`:
 | `finishReason` | Why the invocation finished: `stop`, `length`, `blocked`, `interrupted`, `other`, `unknown`, `aborted`, `detached`, or `failed`. |
 | `error` | Structured failure details. Present only when `finishReason` is `failed`. |
 
+<Lang lang="go">
+
+A Go server also sets `error` when `finishReason` is `aborted`, and adds `usage`: the token usage of the agent's own model calls in this invocation, failed turns included. `usage` is omitted for a detached run.
+
+</Lang>
+
 Copy `result.sessionId` into `init.sessionId` on the next request, and `result.snapshotId` into the `getSnapshot` and `abort` bodies. When streaming, read the session ID from the terminal `data: {"result": ...}` frame; chunk frames do not carry it. For a client-managed agent it also rides at `result.state.sessionId`.
 
 Continue a server-managed conversation with the ID the previous response returned:
@@ -454,6 +465,8 @@ Content-Type: application/json
 
 {"status":"INVALID_ARGUMENT","message":"invalid argument"}
 ```
+
+Sending `state` to a store-backed agent, or a `sessionId` to a client-managed one, fails with `FAILED_PRECONDITION` (400). An unknown `snapshotId` fails with `NOT_FOUND` (404).
 
 Outside the dev environment, an error not built with `status.PublicErrorf` goes out with the generic message for its status, so hosts, queries, and credentials in error text stay in the server log. A served agent applies the same rule to the `error` of a failed turn and to the errors in the snapshots its `getSnapshot` and `waitForSnapshot` routes return. Errors about the caller's own input, such as an invalid message, a resume that does not match the history, or a snapshot from another session, keep their text. The store and in-process callers always see the full text. Only `genkit.Handler`, and so `Route.Handler`, applies this rule: an agent you call from a handler of your own returns its errors unchanged. See [Error types](/docs/error-types/).
 

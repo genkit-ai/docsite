@@ -117,7 +117,7 @@ res.assertValid();
 - **Rejected init** returns a non-nil Go error from `Connect`, `Run`, `RunText`, or `RunDetached` before any turn runs. Fix the caller or the selected resume source.
 - **Failed turns** return an `AgentOutput` whose `FinishReason` is `AgentFinishReasonFailed` and whose `Error` is non-nil. The tool rounds the turn completed are kept, and the output names the resume point: `SnapshotID` for a server-managed agent, `State` for a client-managed one.
 - **Blocked or rejected responses** fail the turn. A prompt-backed agent fails a turn whose model response the provider blocked, with `ai.ErrGenerationBlocked`, and a turn whose output does not match the prompt's output schema. See [Blocked and rejected responses](#blocked-and-rejected-responses).
-- **Stopped runs** return the error that stopped them together with an `AgentOutput` whose `FinishReason` is `AgentFinishReasonAborted` and whose `Error` carries the same stop, classified. A cancelled context, an expired deadline, a closed transport, a limit such as `ai.WithMaxTurns` (`ai.ErrMaxTurnsExceeded`) or a usage budget (`ai.ErrBudgetExceeded`), and `Abort` on a detached run all count. The snapshot keeps the turns that finished.
+- **Stopped runs** return an `AgentOutput` whose `FinishReason` is `AgentFinishReasonAborted` and whose `Error` carries the stop, classified. When the caller's context ends (a cancelled context, an expired deadline, a closed transport), the Go error is that stop too. A limit the caller set, such as `ai.WithMaxTurns` (`ai.ErrMaxTurnsExceeded`) or a usage budget (`ai.ErrBudgetExceeded`), stops the run in band: the Go error is nil. The snapshot keeps the turns that finished.
 - **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. The first two resume like their foreground counterparts. An expired run is lost; restart it from the snapshot's `ParentID`.
 - **Tool domain problems** should return structured tool output when the orchestrator or model can recover.
 
@@ -127,9 +127,9 @@ The rejected-init cases from `Run`, `RunText`, and `Connect` are narrow: sending
 
 ## Check both error channels
 
-An agent reports failure through two channels. A non-nil Go error means the invocation was rejected, could not produce an output, or was stopped by its caller. A failed turn is in-band, so the output carries the resume point. A stopped run sets both, so read `out` before acting on `err`.
+An agent reports failure through two channels. A non-nil Go error means the invocation was rejected, could not produce an output, or its caller's context ended. A failed turn and a run stopped by a limit are in band, so the output carries the resume point. A run whose context ended sets both, so read `out` before acting on `err`.
 
-`AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
+`AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. A tool that fails is the exception: its turn reports `INTERNAL` (`ai.ErrToolFailed`) whatever status the tool returned. In process, `errors.Is(out.Error, ...)` still matches the tool's own error, but only the `INTERNAL` status survives serialization. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
 
 ```go
 import (
@@ -159,6 +159,12 @@ if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
 	default:
 		return fmt.Errorf("agent turn failed: %s: %s", out.Error.Status, out.Error.Message)
 	}
+}
+
+if out.FinishReason == aix.AgentFinishReasonAborted && out.Error != nil {
+	// A limit such as ai.WithMaxTurns stopped the run. out.SnapshotID is the
+	// resume point.
+	return fmt.Errorf("agent stopped at %s: %s", out.SnapshotID, out.Error.Message)
 }
 
 fmt.Println(out.Message.Text())

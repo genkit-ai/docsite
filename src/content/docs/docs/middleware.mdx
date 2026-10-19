@@ -338,7 +338,7 @@ resp, err := genkit.Generate(ctx, g,
 **Configuration options:**
 
 - `MaxRetries` (optional): The number of retries after the first attempt (default: 3). `MaxRetries: 3` allows up to four model calls in total.
-- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`). The Developer UI offers the canonical set as a multi-select, and `status.Names()` returns the same list in code.
+- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`). The Developer UI offers every status name as a multi-select, and `status.Names()` returns that full list in code.
 - `InitialDelayMs` (optional): The initial delay between retries in milliseconds (default: 1000).
 - `MaxDelayMs` (optional): The upper bound on retry delay in milliseconds (default: 60000).
 - `BackoffFactor` (optional): The factor by which the delay increases after each retry (default: 2).
@@ -595,7 +595,7 @@ Loading a skill costs a turn of the tool loop, which counts toward `ai.WithMaxTu
 
 ### 5. Filesystem middleware (`Filesystem`)
 
-Grants the model access to a single root directory by injecting file manipulation tools. Two are always registered, `list_files` and `read_file`; `write_file` and `edit_file` join them only when `AllowWriteAccess` is true. Path safety is enforced by `os.Root`, which rejects any path that resolves outside the root, including via `..`, absolute paths, or symbolic links.
+Grants the model access to a single root directory by injecting file manipulation tools. Two are always registered, `list_files` and `read_file`; `write_file` and `edit_file` join them only when `AllowWriteAccess` is true. Paths are relative to the root, and an absolute path such as `/notes.txt` is read as `notes.txt` inside it. Path safety is enforced by `os.Root`, which rejects any path that resolves outside the root, including via `..` or symbolic links.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -685,6 +685,8 @@ Before each tool-loop iteration, compression runs when the context exceeds `MaxI
 3. `Summarize` has a model fold older messages into a summary, unless the first two strategies already saved `SkipSummarizationThreshold` of the context and brought it under budget.
 4. Older messages are dropped when nothing was summarized and the conversation is still over its message budget. A notice tells the model that context was removed.
 
+Set `MaxInputTokens` well above the size of a typical first turn. The prompt of a plain `Generate` call is an ordinary user message, so a compaction early in a tool loop, far over budget, can fold the request itself into the summary, and the model then works from the summary of its task.
+
 `MaxToolResponseChars` caps every tool response on every iteration, whether or not a trigger fires. Leading system messages are always kept, and the kept messages never start with a tool response separated from its request. The scaffolding an agent's prompt renders on every turn, and the message that carries output-format instructions, are never summarized or dropped.
 
 **The model gets a view, the history keeps the transcript.** `resp.History()` keeps every original message, and the compression is recorded in their metadata under the `"contextCompression"` key. That metadata is the whole state, so compression continues across `Generate` calls, agent sessions, and process restarts when you carry the history forward, and a history that the JavaScript middleware compressed resolves the same way. `middlewarex.ResolveCompressedHistory(msgs)` returns the messages a model receives for a history. Set `ReplaceHistory` to get the compressed messages back as the history instead. The final response carries the newest compression's stats in `resp.Custom`, under `"contextCompression"`.
@@ -695,7 +697,7 @@ Before each tool-loop iteration, compression runs when the context exceeds `MaxI
 
 - `MaxInputTokens` (optional): Compress when the context exceeds this many tokens. Zero disables the token trigger.
 - `MaxMessages` (optional): Compress when the conversation holds more than this many messages, and keep at most this many. Zero disables it. Without `Summarize`, a tight cap drops the turns that record a tool loop's progress, and the model may repeat calls it already made.
-- `PreserveRecent` (optional): How many of the newest non-system messages are kept when older ones are dropped, and the default window for `Summarize` (default: 4). It shrinks when the context is far over budget.
+- `PreserveRecent` (optional): How many of the newest non-system messages are kept when older ones are dropped, and the default window for `Summarize` (default: 4). This window and the summarizer's both shrink when the context is far over budget: they are halved, to no fewer than 2, beyond 1.5 times `MaxInputTokens`, and are at most 2 beyond twice it.
 - `MaxToolResponseChars` (optional): A hard cap on the characters of any one tool response, applied on every iteration (default: 400000). Negative disables it.
 - `DedupeToolResponses` (optional): A `*middlewarex.CompressionDedupe`. `MatchBy` matches duplicates by tool name and input (`middlewarex.CompressionDedupeNameAndInput`, the default) or by tool name alone (`middlewarex.CompressionDedupeNameOnly`); `KeepRecent` is how many of the newest responses in each group stay intact (default: 1); `Notice` replaces the default notice.
 - `TruncateToolResponses` (optional): A `*middlewarex.CompressionToolTruncation`. `MaxChars` (required) is the most characters an older tool response keeps; `PreserveRecent` is how many of the newest tool messages stay intact (default: 2, negative truncates every tool message).
@@ -1176,15 +1178,15 @@ The following example demonstrates how to build an illustrative custom middlewar
 // response before the caller sees it. Both hooks use a classifier model.
 type Guardrail struct {
     Classifier string `json:"classifier,omitempty"`
-    g          *genkit.Genkit
 }
 
 func (Guardrail) Name() string { return "mine/guardrail" }
 
 func (gr Guardrail) classify(ctx context.Context, instruction, text string) (string, error) {
-    verdict, err := genkit.GenerateText(ctx, gr.g,
+    // Every generation carries its Genkit instance on the context.
+    verdict, err := genkit.GenerateText(ctx, genkit.FromContext(ctx),
         ai.WithModelName(gr.Classifier),
-        ai.WithSystem("%s Answer with one word: ALLOW or BLOCK.", instruction),
+        ai.WithSystem("%s Answer with one word: BLOCK if it does, ALLOW otherwise.", instruction),
         ai.WithPrompt("%s", text),
     )
     if err != nil {
@@ -1204,7 +1206,7 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
                     sb.WriteString("\n")
                 }
             }
-            verdict, err := gr.classify(ctx, "Decide whether this request is abusive.", sb.String())
+            verdict, err := gr.classify(ctx, "Does this request contain abuse?", sb.String())
             if err != nil {
                 return nil, err
             }
@@ -1222,7 +1224,7 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
             if err != nil || resp.Text() == "" {
                 return resp, err
             }
-            verdict, err := gr.classify(ctx, "Decide whether this answer leaks private data.", resp.Text())
+            verdict, err := gr.classify(ctx, "Does this answer leak private data?", resp.Text())
             if err != nil {
                 return nil, err
             }
@@ -1256,6 +1258,7 @@ import (
     "context"
     "fmt"
     "io"
+    "os"
     "time"
 
     "github.com/firebase/genkit/go/ai"
@@ -1270,11 +1273,15 @@ type Logger struct {
 func (Logger) Name() string { return "mine/logger" }
 
 func (l Logger) New(ctx context.Context) (*ai.Hooks, error) {
+    out := l.out
+    if out == nil {
+        out = os.Stderr // a value built outside the plugin has no writer
+    }
     return &ai.Hooks{
         WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
             start := time.Now()
             resp, err := next(ctx, p)
-            fmt.Fprintf(l.out, "%s model call took %s\n", l.Prefix, time.Since(start))
+            fmt.Fprintf(out, "%s model call took %s\n", l.Prefix, time.Since(start))
             return resp, err
         },
     }, nil
@@ -1294,7 +1301,7 @@ func (p *LoggerPlugin) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, e
 
 The `io.Writer` above is the plugin-level state the example is about, not a recommendation: middleware that only wants its records on the trace should call the `core/logger` helpers.
 
-Application code then registers the plugin once during `Init`, which makes the middleware available everywhere by name:
+Application code then registers the plugin once during `Init`, which registers the middleware by name:
 
 ```go
 g := genkit.Init(ctx, genkit.WithPlugins(
@@ -1308,7 +1315,7 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-When the Dev UI dispatches the same middleware with JSON like `{"prefix": "[debug]"}`, Genkit value-copies the prototype to recreate the config: `out` (which isn't in JSON) is preserved from the plugin's prototype, while the unmarshaled JSON overrides `Prefix`.
+A value passed with `ai.WithUse` runs as you built it, without a registry lookup, so it carries only the fields you set. Code outside the package cannot set `out`, which is why `New` falls back to a default. The prototype applies to calls dispatched by name: when the Dev UI or a `.prompt` file's `use:` entry sends JSON like `{"prefix": "[debug]"}`, Genkit value-copies the prototype to recreate the config, so `out` (which isn't in JSON) comes from the plugin, while the unmarshaled JSON overrides `Prefix`.
 
 The built-in `plugins/middleware` package follows exactly this pattern. See [`plugin.go`](https://github.com/genkit-ai/genkit/blob/main/go/plugins/middleware/plugin.go) for a minimal real-world example.
 
