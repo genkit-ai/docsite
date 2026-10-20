@@ -2,7 +2,7 @@
 title: 'Genkit Go 1.14: Typed HITL tools, usage budgets, context compression, and decision models'
 date: 2026-10-21
 authors: chris-gill
-description: Genkit Go 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, and decision models.
+description: Genkit Go 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, OpenTelemetry GenAI tracing, and decision models.
 cover:
   alt: Genkit Go 1.14
   image: ./_assets/genkit-go-1-14/banner.png
@@ -12,7 +12,7 @@ tags:
   - releases
 ---
 
-[Genkit Go](https://genkit.dev/docs/go/overview/) 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, and decision models. Tools can pause for human approval and resume with a typed answer, and a failed tool call can go back to the model to fix. Every run reports what it spent, a budget can cap that spend, and context compression keeps long runs inside the model's context window. Decision models classify and route in milliseconds.
+[Genkit Go](https://genkit.dev/docs/go/overview/) 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, OpenTelemetry GenAI tracing, and decision models. Tools can pause for human approval and resume with a typed answer, and a failed tool call can go back to the model to fix. Every run reports what it spent, a budget can cap that spend, and context compression keeps long runs inside the model's context window. Model calls can be traced with the standard OpenTelemetry GenAI semantic conventions, and decision models classify and route in milliseconds.
 
 To start using this new version, run the following command in your terminal:
 
@@ -118,6 +118,22 @@ Subagents count toward the budget, so delegating work can't get around the cap. 
 
 Compression tries the cheapest strategies first, dropping duplicate tool output and trimming old results before it summarizes earlier turns with a smaller model. Only the model sees the compressed view, and `History()` still keeps every message.
 
+## Trace model calls with OpenTelemetry GenAI semantic conventions
+
+The [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) give observability tools a standard way to describe model calls, so any backend that supports them can chart token usage and latency, and show the prompts behind each call. The new `otelgenai` plugin reports Genkit actions using these conventions:
+
+```go
+tracing.SetInstrumentation(otelgenai.New(&otelgenai.Options{
+    ContentCapturingMode: otelgenai.SpanOnly, // message content is off by default
+    EmitToolSpans:        true,
+}))
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+```
+
+Each model call becomes a `chat <model>` span with standard `gen_ai.*` attributes for the request, response, and token usage, along with token usage and duration metrics. Capturing message content is opt-in, and inline media is never captured. The plugin replaces Genkit's default span format, so use it instead of the Google Cloud and Firebase telemetry plugins rather than alongside them.
+
+This works because tracing in Genkit Go is now pluggable: OpenTelemetry is one provider among others, and `tracing.SetInstrumentation` chooses which ones run. See the [`otel-genai`](https://github.com/genkit-ai/genkit/tree/main/go/samples/otel-genai) sample for a complete setup with the standard OpenTelemetry exporters.
+
 ## Route and classify with decision models (preview)
 
 Not every decision needs a full LLM. Routing a support ticket, flagging urgency, or enforcing a guardrail calls for an answer that's fast, cheap, and tells you how sure the model is. The preview `systemone/exp` plugin serves decision models such as TypeSafe's jev, Liquid AI's d1, and Cloudflare's Clef, which answer typed questions in a few hundred milliseconds. You describe the questions as a Go struct, and each field comes back calibrated: a choice with its confidence, or the probability that a yes/no statement is true:
@@ -155,7 +171,6 @@ The plugin works with TypeSafe, OpenRouter's Decisions API, Cloudflare Workers A
 * **Remote agents.** `DefineRemoteAgent` connects to an agent served by another Genkit app, whether it's written in Go, JavaScript, or Dart, and uses it as a subagent just like a local one.
 * **Agent Skills.** The `Skills` middleware loads skills that follow the [Agent Skills specification](https://agentskills.io) from any `fs.FS`, giving the model reusable instructions along with the files bundled with them.
 * **PostgreSQL session store.** Agent sessions can persist in PostgreSQL with the preview `postgresql/exp` package, and a new test suite helps you verify your own custom store.
-* **Pluggable telemetry.** Tracing now works with any telemetry provider, not only OpenTelemetry, and the new `otelgenai` plugin follows the OpenTelemetry GenAI semantic conventions.
 * **Provider updates.** Hosted Ollama servers support custom headers and API keys, OpenAI-compatible providers accept audio and PDF input, Anthropic extended thinking works without streaming, and Gemini image models return images from a plain prompt.
 
 ## Get started
