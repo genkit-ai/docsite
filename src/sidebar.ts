@@ -230,6 +230,10 @@ const DOCS_SIDEBAR = [
       { label: "Z.ai", slug: "docs/integrations/zai" },
       { label: "DashScope (Qwen)", slug: "docs/integrations/dashscope" },
       { label: "Ollama", slug: "docs/integrations/ollama" },
+      {
+        label: "Decision models (System One)",
+        slug: "docs/integrations/system-one",
+      },
     ],
   },
   {

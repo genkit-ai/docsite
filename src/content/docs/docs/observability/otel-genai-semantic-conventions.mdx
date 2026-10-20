@@ -2,6 +2,7 @@
 title: OpenTelemetry GenAI semantic conventions
 description: Export Genkit telemetry that follows the OpenTelemetry GenAI semantic conventions, including gen_ai.* spans, client metrics, and opt-in message content capture.
 supportedLanguages:
+  - go
   - dart
 ---
 
@@ -48,12 +49,46 @@ wherever Genkit implements them.
 Both are tagged only with operation name, model, and provider, so cardinality
 stays low.
 
+<Lang lang="dart">
+
 **Everything else in the trace.** Tool calls can be emitted as `execute_tool`
 spans, and every other Genkit action type gets a generic span, so the trace
 tree stays connected rather than showing model calls as orphans. All spans also
 carry `genkit.action.type` and `genkit.action.name`, kept outside the reserved
 `gen_ai.*` namespace so GenAI-aware backends do not try to render Genkit
 payloads as spec content.
+
+</Lang>
+
+<Lang lang="go">
+
+**Everything else in the trace.** Tool calls can be emitted as `execute_tool`
+spans, and every other Genkit action type gets a generic span named after the
+action, so the trace tree stays connected rather than showing model calls as
+orphans. Generic spans carry `genkit.action.type`, kept outside the reserved
+`gen_ai.*` namespace so GenAI-aware backends do not try to render Genkit
+payloads as spec content. Telemetry labels become span attributes, and
+`tracing.SetSpanMetadata` writes `genkit:metadata:<key>`, as with the default
+instrumentation.
+
+A few mapping rules are specific to Go:
+
+- `error.type` is the Genkit status name, such as `INVALID_ARGUMENT` or
+  `RESOURCE_EXHAUSTED`, and `INTERNAL` when the error has no status. The error
+  is recorded on the span and returned to the caller unchanged.
+- A call that fails after the model responded, for example when output schema
+  validation fails, still records the response: token usage, content, token
+  metrics, and a finish reason of `error`.
+- Input and output tokens are recorded whenever the response reports usage.
+  Reasoning and cache-read tokens are recorded only when they are not zero.
+- `gen_ai.request.*` values are read from the request config whether it is
+  Genkit's `ai.GenerationCommonConfig` or a provider SDK's own config type. A
+  value set to `0` is recorded.
+- Inline media is never captured. A `data:` URI becomes a spec `blob` part with
+  its modality, MIME type, and estimated size, and remote media becomes a `uri`
+  part.
+
+</Lang>
 
 <Lang lang="dart">
 
@@ -115,6 +150,139 @@ export to separate pipelines.
 
 </Lang>
 
+<Lang lang="go">
+
+## Setup
+
+The instrumentation lives in the `otelgenai` plugin:
+
+```bash
+go get github.com/firebase/genkit/go/plugins/otelgenai
+go get go.opentelemetry.io/contrib/exporters/autoexport
+```
+
+Your application owns the OpenTelemetry SDK. Register its providers, set the
+GenAI instrumentation with `tracing.SetInstrumentation`, then call
+`genkit.Init`. This setup reads the standard `OTEL_*` environment variables
+through the contrib `autoexport` package, and otherwise exports OTLP
+`http/protobuf` to `localhost:4318`:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"go.opentelemetry.io/contrib/exporters/autoexport"
+	"go.opentelemetry.io/otel"
+	otellogglobal "go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/otelgenai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	shutdown := setupOTel(ctx)
+	defer shutdown(ctx) // Flushes spans, metrics, and logs.
+
+	tracing.SetInstrumentation(otelgenai.New(&otelgenai.Options{
+		EmitToolSpans: true,
+	}))
+
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithPrompt("Explain OpenTelemetry in one sentence."))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Text())
+}
+
+// setupOTel registers the global trace, metric, and log providers, and returns
+// a function that flushes them.
+func setupOTel(ctx context.Context) func(context.Context) {
+	spanExp, err := autoexport.NewSpanExporter(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(spanExp))
+	otel.SetTracerProvider(tp)
+
+	reader, err := autoexport.NewMetricReader(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+
+	logExp, err := autoexport.NewLogExporter(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewBatchProcessor(logExp)))
+	otellogglobal.SetLoggerProvider(lp)
+
+	return func(ctx context.Context) {
+		_ = tp.Shutdown(ctx)
+		_ = mp.Shutdown(ctx)
+		_ = lp.Shutdown(ctx)
+	}
+}
+```
+
+Point it at a collector with the usual environment variables, no code change:
+
+```bash
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+`autoexport` accepts the `grpc` and `http/protobuf` OTLP protocols. The log
+provider is needed only for the `EventOnly` and `SpanAndEvent` content modes.
+
+Some properties to know before you deploy:
+
+- **It replaces the default encoding.** `tracing.SetInstrumentation` replaces
+  Genkit's default OpenTelemetry provider, which writes the `genkit:*`
+  attributes. To export both encodings, list both providers:
+
+  ```go
+  tracing.SetInstrumentation(&tracing.OTelInstrumentation{}, otelgenai.New(nil))
+  ```
+
+- **The Developer UI keeps working.** Under `genkit start`, the Developer UI's
+  own provider runs first, whatever you set, so it keeps showing Genkit's
+  traces next to this export.
+- **Without an SDK, it does nothing.** When no OpenTelemetry SDK is registered,
+  spans and instruments are no-ops, so the instrumentation can stay wired up in
+  builds that do not export. The first span logs one warning that nothing is
+  exported.
+- **The setting is process-wide.** Genkit actions can run without a Genkit
+  instance, for example a model taken straight from a plugin, and those calls
+  are instrumented too.
+
+:::caution[Do not combine with the Firebase or Google Cloud telemetry plugins]
+`firebase.EnableFirebaseTelemetry` and `googlecloud.EnableGoogleCloudTelemetry`
+build their metrics and logs from the `genkit:*` attributes that this
+instrumentation replaces, so their Genkit metrics stop. Their input and output
+redaction also does not cover the `gen_ai.*` content attributes. Use one or the
+other.
+:::
+
+</Lang>
+
 ## Capturing message content
 
 Prompts and responses can contain PII, so content capture is off by default.
@@ -140,6 +308,28 @@ Left unset, the value comes from the
 the spec's tokens (`NO_CONTENT`, `SPAN_ONLY`, `EVENT_ONLY`, `SPAN_AND_EVENT`).
 An explicit argument overrides it, and an unrecognized token logs one warning
 and falls back to `NO_CONTENT`.
+
+</Lang>
+
+<Lang lang="go">
+
+In Go, the modes are the `otelgenai.ContentCapturingMode` constants
+`otelgenai.NoContent`, `otelgenai.SpanOnly`, `otelgenai.EventOnly`, and
+`otelgenai.SpanAndEvent`:
+
+```go
+tracing.SetInstrumentation(otelgenai.New(&otelgenai.Options{
+	ContentCapturingMode: otelgenai.SpanOnly, // May contain PII.
+}))
+```
+
+Left unset, the value comes from the
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment variable
+(`otelgenai.CaptureContentEnvVar`) using the spec's tokens (`NO_CONTENT`,
+`SPAN_ONLY`, `EVENT_ONLY`, `SPAN_AND_EVENT`), case-insensitive. An explicit value
+overrides it, and an unrecognized token logs one warning and falls back to
+`NO_CONTENT`. In the log record, content is carried as structured map and slice
+values; on the span, as JSON strings.
 
 </Lang>
 
@@ -180,5 +370,29 @@ OTelLog.currentLevel = LogLevel.fatal; // or set OTEL_LOG_LEVEL=fatal
 The [`otel_jaeger` sample](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/otel_jaeger)
 is a runnable end-to-end setup: traces to Jaeger, metrics to a collector debug
 log, with a script that downloads and runs both without Docker.
+
+</Lang>
+
+<Lang lang="go">
+
+## Options
+
+`otelgenai.New` takes an `*otelgenai.Options`. Pass `nil` for the defaults. The
+options are read once, in `New`.
+
+| Field                                                 | Default            | What it does                                                                                                                                                                                                                          |
+| ----------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ContentCapturingMode`                                | env, else `NoContent` | Where spec-shaped `gen_ai.*` message content is recorded.                                                                                                                                                                         |
+| `CaptureActionIO`                                     | `false`            | Records raw Genkit input and output as `genkit.input` / `genkit.output` on every span. A debugging aid, independent of `ContentCapturingMode`. May contain PII. Inline media in model requests and responses is replaced by a size marker such as `data:image/png;base64,[1834 bytes omitted]`; other values, such as flow inputs, are recorded as is. |
+| `EmitToolSpans`                                       | `false`            | `execute_tool` spans for tool actions.                                                                                                                                                                                                |
+| `DisableMetrics`                                      | `false`            | Turns off the token usage and operation duration metrics.                                                                                                                                                                             |
+| `ScopeName`                                           | `genkit-genai`     | Instrumentation scope for the tracer, meter, and logger.                                                                                                                                                                              |
+| `TracerProvider`, `MeterProvider`, `LoggerProvider`   | the globals        | Providers for spans, metrics, and content events. A global registered after `New` is still picked up.                                                                                                                                |
+
+## Try it
+
+The [`otel-genai` sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/otel-genai)
+is a runnable end-to-end setup: traces to Jaeger and metrics to a collector,
+with a script that downloads and runs both without Docker.
 
 </Lang>

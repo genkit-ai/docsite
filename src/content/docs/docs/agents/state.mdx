@@ -237,7 +237,7 @@ Server-managed state is the default recommendation for user-facing conversationa
 
 ## Understand session state
 
-Session state contains messages, typed custom state, artifacts, and the framework-owned session ID:
+Session state contains messages, typed custom state, artifacts, and the framework-owned session ID and usage:
 
 ```go
 import (
@@ -248,16 +248,18 @@ import (
 
 ```go
 type SessionState[State any] struct {
-	Artifacts []*aix.Artifact `json:"artifacts,omitempty"`
-	Custom    State           `json:"custom,omitempty"`
-	Messages  []*ai.Message   `json:"messages,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
+	Artifacts []*aix.Artifact     `json:"artifacts,omitempty"`
+	Custom    State               `json:"custom,omitempty"`
+	Messages  []*ai.Message       `json:"messages,omitempty"`
+	SessionID string              `json:"sessionId,omitempty"`
+	Usage     *ai.GenerationUsage `json:"usage,omitempty"`
 }
 ```
 
 - **`Custom`** is your typed application state. Use it for compact data the agent needs across turns, such as workflow status, selected records, preferences, task state, or progress.
 - **`Messages`** is conversation history.
 - **`Artifacts`** contains generated outputs that the app or user may inspect independently.
+- **`Usage`** sums the agent's own model calls across the session. The framework owns it, and it never rolls back: a failed turn's spend stays even when its messages do not. See [Token usage](/docs/agents/run/#token-usage).
 
 ### Custom state vs. artifacts
 
@@ -286,8 +288,10 @@ A tool reaches the same session through its context with `aix.SessionFromContext
 
 ```go
 import (
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
@@ -298,9 +302,9 @@ type OrderState struct {
 ```
 
 ```go
-addToOrder := genkitx.DefineTool(g, "addToOrder",
+addToOrder := genkit.DefineTool(g, "addToOrder",
 	"Records one drink the customer ordered.",
-	func(ctx context.Context, in struct {
+	func(ctx *ai.ToolContext, in struct {
 		Drink string `json:"drink"`
 	}) (string, error) {
 		sess := aix.SessionFromContext[OrderState](ctx)
@@ -394,13 +398,13 @@ These methods apply `WithStateTransform` and read-time shaping, such as reportin
 | Status      | Meaning                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `pending`   | A detached invocation is still running.                                                                                  |
-| `aborting`  | An abort stopped the work and the worker is saving what it finished.                                                     |
+| `aborting`  | An abort was requested and the worker is saving how the turn in flight ended.                                            |
 | `completed` | The turn finished. The snapshot captures settled state and can be resumed.                                               |
 | `failed`    | The turn broke. The snapshot holds the tool rounds it completed and the structured error, and can be resumed.            |
 | `aborted`   | The caller stopped the run. The snapshot holds the turns that finished, and can be resumed.                              |
 | `expired`   | A pending or aborting snapshot's heartbeat is stale. This status is computed on read and is not written back to the store. |
 
-A turn that finishes writes `completed`. A turn that breaks writes `failed`, and a run its caller stops, by cancelling the context, letting a deadline expire, or aborting a detached run, writes `aborted`. Both keep the turns that ended at a seam and drop the one that did not, so both are resume points, and the output names them in `SnapshotID`. See [Agent error handling](/docs/agents/errors).
+A turn that finishes writes `completed`. A turn that breaks writes `failed`, and a run its caller stops, by cancelling the context, letting a deadline expire, or aborting a detached run, writes `aborted`. Both keep the turns that ended at a seam and drop the one that did not, so both are resume points, and the output names them in `SnapshotID`. An abort is best effort: a detached turn that finishes without an error before the stop reaches it settles `completed`, as described in [Background execution](/docs/agents/background/#abort-and-resume). See [Agent error handling](/docs/agents/errors).
 
 `Status` is the persistence lifecycle, not the outcome. A turn that ends on an interrupt still writes `completed`, because it is resumable. To detect an interrupt, read `snap.FinishReason`, which is a separate field:
 

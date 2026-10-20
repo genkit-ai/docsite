@@ -539,6 +539,11 @@ for _, c := range result.Content {
 }
 ```
 
+A result the server flags with `isError` is not an output. The tool returns it as a
+tool error made with `tool.Fail`, so the model receives the result's text as the
+call's error and can correct its arguments and try again, and the tool loop goes
+on. See [Return an error to the model](/docs/tool-calling#return-an-error-to-the-model).
+
 :::note
 This differs from the JavaScript plugin, which namespaces with `/` and coerces MCP content into a plain Genkit value.
 :::
@@ -665,14 +670,14 @@ For an `MCPHost`, call `host.Disconnect(ctx, name)` for each registered server d
 
 The rest of the operational picture:
 
-- **Timeouts.** Per-request calls (`GetActiveTools`, `GetActiveResources`, `GetPrompt`, and tool execution) take a context and honor it, so wrap them in `context.WithTimeout`. Connection setup does not: `NewGenkitMCPClient` takes no context and starts the transport with a background context, so a stdio child that never speaks blocks indefinitely. `StreamableHTTPConfig.Timeout` bounds individual HTTP requests; `StdioConfig` and `SSEConfig` have no timeout field.
+- **Timeouts.** Per-request calls (`GetActiveTools`, `GetActiveResources`, `GetPrompt`, and tool execution) take a context and honor it, so wrap them in `context.WithTimeout`. Connection setup does not: `NewGenkitMCPClient` takes no context and starts the transport with a background context, so a stdio child that never speaks blocks indefinitely. `StreamableHTTPConfig.Timeout` bounds individual HTTP requests; `StdioConfig` and `SSEConfig` have no timeout field, so set an SSE timeout on its `HTTPClient`.
 - **Concurrency.** Host and client management operations (`Connect`, `Disconnect`, `Reconnect`, `Disable`, `Reenable`) mutate connection state. Initialize connections during application startup, or protect dynamic connection changes with synchronization. Read operations during active flows are safe once connections are established.
 - **Reconnection.** Connection recovery is managed explicitly using `host.Reconnect(ctx, name)` or `client.Restart(ctx)`.
 - **Failed handshakes.** If the MCP `initialize` exchange fails, the error is recorded on the connection rather than returned: `NewGenkitMCPClient` still gives you a client, and `GetActiveTools` then returns an empty list with no error. Call `GetActiveTools` right after construction to confirm the server really answered.
 
 ### Running as an MCP server
 
-`mcp.NewMCPServer` returns a `GenkitMCPServer` that publishes every tool defined with `genkit.DefineTool` and every resource registered on the Genkit instance. It discovers them from the registry, so you do not list them anywhere:
+`mcp.NewMCPServer` returns a `GenkitMCPServer` that publishes every tool and every resource registered on the Genkit instance, each once. It discovers them from the registry, so you do not list them anywhere:
 
 ```go
 package main
@@ -720,11 +725,24 @@ Flows are not published. To expose a flow over MCP, wrap it in a tool defined wi
 In stdio mode the MCP server owns stdout: every byte written there must be protocol framing. The standard `log` package writes to stderr, so `log.Println` is safe, but `fmt.Println`, anything writing to `os.Stdout`, and any library that prints a startup banner will corrupt the stream. Keep all diagnostics on stderr.
 :::
 
-The server speaks stdio only. `Serve(transport)` ignores its argument and calls `ServeStdio` regardless, and `Close()` is currently a no-op. `GetServer()` returns the underlying `mcp-go` server, but it is nil until `ServeStdio` has run the server's setup pass, so it is not usable as an HTTP escape hatch. `ListRegisteredTools` and `ListRegisteredResources` are empty for the same reason until the server starts.
+Each published tool advertises its full input schema, so descriptions, `required` fields, enums, and nested objects and arrays reach the client. MCP requires an object input, so a tool whose input is not an object is advertised with an empty object schema and a warning. A tool's output goes back as text: a string as is, any other value as its JSON encoding. Text and data parts that the tool attached follow it, and image and audio parts given as `data:` URIs become MCP image and audio content. MCP has no content type for other media or for media given by URL, so those parts are dropped with a warning. A tool that returns an error answers with an `isError` result carrying the error text.
+
+`ServeStdio()` serves over stdio, and `Serve(nil)` does the same; `Serve` returns an error for any other argument. To serve over HTTP, wrap `GetServer()`, the underlying `mcp-go` server with the Genkit tools and resources registered on it, in one of mcp-go's HTTP transports:
+
+```go
+// mcpserver "github.com/mark3labs/mcp-go/server"
+httpServer := mcpserver.NewStreamableHTTPServer(srv.GetServer())
+log.Println("starting MCP server on :8080")
+if err := httpServer.Start(":8080"); err != nil {
+	log.Fatal(err)
+}
+```
+
+`mcpserver.NewSSEServer` is the legacy SSE transport. `Close()` is a no-op.
 
 ## Transport options
 
-`MCPClientOptions` has three transport fields. Set exactly one.
+`MCPClientOptions` has three transport fields. Set exactly one. On every transport the client asks for MCP protocol version `2025-03-26` and does not fall back to an older one.
 
 | Field | Use |
 | --- | --- |
@@ -756,6 +774,21 @@ client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
     },
 })
 ```
+
+`HTTPClient` takes a custom `*http.Client` for TLS, a proxy, connection pooling, or a `RoundTripper` that authenticates each request. The transport uses a shallow copy, so the client you pass is never modified, and `Timeout`, when set, wins over the client's own:
+
+```go
+client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
+    Name: "docs-server",
+    StreamableHTTP: &mcp.StreamableHTTPConfig{
+        BaseURL:    "https://mcp.example.com/mcp",
+        HTTPClient: &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}},
+        Timeout:    30 * time.Second,
+    },
+})
+```
+
+Either timeout bounds the whole response read, including the event stream of a long tool call, so a short one aborts slow or streaming tool calls.
 
 ### SSE
 
@@ -831,12 +864,10 @@ type SSEConfig struct {
 type StreamableHTTPConfig struct {
     BaseURL    string            // Endpoint, for example https://mcp.example.com/mcp
     Headers    map[string]string // Sent on every request; use for Authorization or API keys
-    HTTPClient *http.Client      // Currently ignored by this transport; use Timeout instead
-    Timeout    time.Duration     // Per-request HTTP timeout
+    HTTPClient *http.Client      // Optional; copied, so later changes to it are not observed
+    Timeout    time.Duration     // HTTP request timeout; wins over HTTPClient.Timeout
 }
 ```
-
-The Streamable HTTP transport applies `Headers` and `Timeout` only. `HTTPClient` is accepted but not wired up, so custom TLS or instrumentation needs the SSE transport today.
 
 ### MCPServerConfig
 

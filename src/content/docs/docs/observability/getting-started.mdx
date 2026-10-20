@@ -197,7 +197,9 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	log.Fatal(server.Start(ctx, "0.0.0.0:"+port, mux))
+	if err := server.Start(ctx, "0.0.0.0:"+port, mux); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
@@ -326,8 +328,8 @@ import (
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/genkit"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type jokeResponse struct {
@@ -337,7 +339,7 @@ type jokeResponse struct {
 
 func defineJokesFlow(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (jokeResponse, error) {
-		traceID := trace.SpanContextFromContext(ctx).TraceID().String()
+		traceID := tracing.SpanTraceInfo(ctx).TraceID
 
 		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Tell a short joke about %s.", topic))
 		if err != nil {
@@ -368,9 +370,9 @@ the flow.
 
 ## Export to any OTLP backend
 
-Firebase and Google Cloud are not the only destinations. `core/tracing` exports
-the SDK tracer provider as application API, so you can attach any OpenTelemetry
-span exporter to it: Datadog, Honeycomb, Grafana, or a self-hosted collector.
+Firebase and Google Cloud are not the only destinations. Genkit creates its
+spans on the global OpenTelemetry `TracerProvider`, so any OpenTelemetry span
+exporter works: Datadog, Honeycomb, Grafana, or a self-hosted collector.
 
 ```bash
 go get go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
@@ -383,12 +385,12 @@ import (
 	"context"
 	"log"
 
-	"github.com/firebase/genkit/go/core/tracing"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// registerOTLP attaches an OTLP exporter to Genkit's tracer provider and
+// registerOTLP installs a global tracer provider that exports over OTLP and
 // returns a shutdown function that flushes buffered spans.
 func registerOTLP(ctx context.Context) func(context.Context) error {
 	// Reads OTEL_EXPORTER_OTLP_ENDPOINT and the usual OTEL_* variables.
@@ -397,22 +399,36 @@ func registerOTLP(ctx context.Context) func(context.Context) error {
 		log.Fatalf("failed to build OTLP exporter: %v", err)
 	}
 
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exp))
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+	otel.SetTracerProvider(tp)
 	return tp.Shutdown
 }
 ```
 
 Call `registerOTLP` before `genkit.Init` and defer the returned shutdown
 function. For metrics, build an OTLP `metric.Exporter` and install it with
-`otel.SetMeterProvider`; Genkit records its counters and histograms through the
-global meter provider.
+`otel.SetMeterProvider`. Genkit records its action counters and latency
+histograms through the global meter provider. The generate and feature metrics
+listed on [Telemetry collection](/docs/observability/telemetry-collection) are
+computed by the Firebase and Google Cloud telemetry plugins.
+
+To export spans that follow the OpenTelemetry GenAI semantic conventions
+instead of Genkit's `genkit:*` attributes, see
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
+That instrumentation is not for use together with the Firebase plugin.
 
 :::caution[Order matters if you also enable Firebase or Google Cloud telemetry]
-`EnableFirebaseTelemetry` and `EnableGoogleCloudTelemetry` build a fresh
-`TracerProvider` and install it as the global one, which discards any span
-processor registered earlier. To send spans to both destinations, call
-`registerOTLP` **after** the telemetry plugin, not before.
+`EnableFirebaseTelemetry` and `EnableGoogleCloudTelemetry` build their own
+`TracerProvider` and install it as the global one, which replaces a provider
+registered earlier. To send spans to both destinations, enable the plugin
+first, then add your exporter to the provider it installed:
+
+```go
+firebase.EnableFirebaseTelemetry(nil)
+if tp, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); ok {
+	tp.RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exp))
+}
+```
 :::
 
 </Lang>

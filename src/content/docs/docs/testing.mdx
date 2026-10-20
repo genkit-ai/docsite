@@ -581,6 +581,34 @@ func defineErrorModel(g *genkit.Genkit, name string, err error) {
 
 `genkit.Init(ctx)` with no plugins initializes a test-friendly instance: it registers no external providers, reads no credentials, and starts no reflection server. Build a fresh instance per test to isolate registrations.
 
+A stub does not have to be registered when the code under test takes the model as a value. `ai.NewModelAction` builds the same model without a registry, and `ai.WithModel` calls that value directly:
+
+```go
+func TestWithUnregisteredStub(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+
+	stub := ai.NewModelAction("mock/inline", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, _ struct{}, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			FinishReason: ai.FinishReasonStop,
+			Message:      ai.NewModelTextMessage("stubbed"),
+		}, nil
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(stub), ai.WithPrompt("anything"))
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if resp.Text() != "stubbed" {
+		t.Fatalf("got %q", resp.Text())
+	}
+}
+```
+
+A model named in a `.prompt` file or in `genkit.DefinePrompt` is looked up by name, so a prompt under test still needs `defineTestModel`.
+
 ## Test structured output
 
 Configure the test model to return JSON conforming to your output schema, and assert on the decoded Go value:
@@ -715,7 +743,7 @@ func TestHTTPBoundary(t *testing.T) {
 }
 ```
 
-The request body is `{"data": <flow input>}` and a successful response is `{"result": <flow output>}`. A failure body is plain text, and only a message built with `status.PublicErrorf` appears in it. See [Error types](/docs/error-types) for the rules the handler applies.
+The request body is `{"data": <flow input>}` and a successful response is `{"result": <flow output>}`. A failure body is `{"status": <status name>, "message": <message>}`, and only a message built with `status.PublicErrorf` appears in it. See [Error types](/docs/error-types) for the rules the handler applies.
 
 ## Test failure handling
 

@@ -771,7 +771,6 @@ The response is split between the two sides:
 | `Operation` | `*ai.Operation` | Plugin, for long-running background models only. |
 | `Request` | `*ai.ModelRequest` | Framework. Leave it nil. |
 | `LatencyMs` | `float64` | Framework. Leave it zero. |
-| `Custom` | `any` | Deprecated. Use `Raw`. |
 
 `ai.FinishReason` has eight values:
 
@@ -790,12 +789,25 @@ Map your provider's reasons onto the first five. Do not invent a value: the
 field is a string type, and Genkit treats every reason except `stop`, `length`,
 and `unknown` as an abnormal finish that skips output parsing.
 
-Fill `Usage` with what the provider billed. Besides `InputTokens`,
-`OutputTokens`, and `TotalTokens`, `ai.GenerationUsage` carries
-`CachedContentTokens`, `ThoughtsTokens`, per-modality counts such as
+Fill `Usage` with what the provider billed. Every model plugin reports tokens
+under the same convention, so cost accounting, budgets, and telemetry read the
+same numbers from every provider:
+
+- `InputTokens` is the whole prompt, cached tokens included.
+  `CachedContentTokens` (served from the provider's cache) and
+  `CacheWriteTokens` (written to it) are parts of `InputTokens`, not additions
+  to it.
+- `OutputTokens` and `ThoughtsTokens` do not overlap. Together they are every
+  token the model generated. If the provider's completion count includes
+  reasoning, subtract the reasoning count from it. A provider that does not
+  report reasoning apart from the answer counts it all in `OutputTokens`.
+- `TotalTokens` is the provider's own total when it reports one, and otherwise
+  `InputTokens + OutputTokens + ThoughtsTokens`.
+
+Besides tokens, `ai.GenerationUsage` carries per-modality counts such as
 `InputImages` and `OutputAudioFiles`, and `Custom map[string]float64` for
-provider metrics such as cost. See [Generating content](/docs/models) for the
-read side.
+provider metrics such as cost or a cache-write split by lifetime. See
+[Generating content](/docs/models) for the read side.
 
 A text-only conversion, end to end:
 
@@ -815,9 +827,15 @@ func genkitResponseFromAPIResponse(req *ai.ModelRequest, apiResp *apiResponse) (
         Message:      ai.NewModelTextMessage(apiResp.Text),
         FinishReason: reason,
         Usage: &ai.GenerationUsage{
-            InputTokens:  apiResp.PromptTokens,
-            OutputTokens: apiResp.CompletionTokens,
-            TotalTokens:  apiResp.TotalTokens,
+            // This provider counts cached tokens inside the prompt count,
+            // as the convention does.
+            InputTokens:         apiResp.PromptTokens,
+            CachedContentTokens: apiResp.CachedTokens,
+            // It also counts reasoning inside the completion count, which the
+            // convention keeps apart.
+            OutputTokens:   apiResp.CompletionTokens - apiResp.ReasoningTokens,
+            ThoughtsTokens: apiResp.ReasoningTokens,
+            TotalTokens:    apiResp.TotalTokens,
         },
         Raw: apiResp,
     }, nil
@@ -889,6 +907,10 @@ The chunk contract:
 - The framework does not aggregate chunks. The `*ai.ModelResponse` you return is
   authoritative, so build it from the provider's final frame, not from what you
   streamed.
+- If the provider has no final frame and you assemble the message from the
+  deltas, merge adjacent text parts into one, and adjacent reasoning parts
+  likewise, so the reply is not stored one part per chunk. Keep a part that carries metadata, such as a thought
+  signature, as a part of its own.
 
 #### Structured output
 
@@ -967,6 +989,12 @@ resp := &ai.ModelResponse{
 `ToolRequest.Input` is `any`, not a map type, so decoded JSON arguments go in
 as-is. Set `Partial` to true on a tool-call part emitted as a streaming chunk
 whose arguments are not complete yet.
+
+The results come back in the history as an `ai.RoleTool` message of tool
+response parts (`part.IsToolResponse()`). `part.ToolResponse.Output` is the
+tool's output, and `part.ToolResponse.Content` holds any media or other parts
+the tool attached with `tool.AttachParts`. Send those parts if your provider
+accepts them in a tool result. Otherwise, log a warning and leave them out.
 
 #### Per-request credentials
 
@@ -1388,10 +1416,13 @@ and passes everything else through untouched.
 
 ### Telemetry plugins
 
-The Genkit libraries are instrumented with [OpenTelemetry](http://opentelemetry.io)
-to support collecting traces, metrics, and logs. Genkit users can export this
-telemetry data to monitoring and visualization tools by installing a plugin that
-configures the [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/getting-started/)
+Genkit reports every flow, action, and step as a span through pluggable
+instrumentation. The default instrumentation creates
+[OpenTelemetry](http://opentelemetry.io) spans with `genkit:*` attributes on
+the global `TracerProvider`, and Genkit records its action metrics through the
+global `MeterProvider`. Genkit installs neither, so Genkit users export this
+telemetry by installing a plugin that configures the
+[OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/getting-started/)
 to export to a particular OpenTelemetry-capable system.
 
 Genkit includes a plugin that configures OpenTelemetry to export data to
@@ -1451,7 +1482,7 @@ import (
     "time"
 
     "github.com/firebase/genkit/go/core/api"
-    "github.com/firebase/genkit/go/core/tracing"
+    "github.com/firebase/genkit/go/core/logger"
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/sdk/metric"
     sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1477,7 +1508,8 @@ type Config struct {
 type Plugin struct {
     Config
 
-    meterProvider *metric.MeterProvider
+    tracerProvider *sdktrace.TracerProvider
+    meterProvider  *metric.MeterProvider
 }
 
 // Name returns the provider ID.
@@ -1491,9 +1523,11 @@ func (p *Plugin) Init(ctx context.Context) []api.Action {
         return nil
     }
 
-    // Traces: register a span processor on Genkit's tracer provider.
+    // Traces: an SDK provider with your exporter, installed as the global
+    // one. Genkit's default instrumentation creates its spans on it.
     exporter := &redactingSpanExporter{SpanExporter: newSpanExporter()}
-    tracing.TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(exporter))
+    p.tracerProvider = sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+    otel.SetTracerProvider(p.tracerProvider)
 
     // Metrics: a periodic reader on the configured interval.
     interval := p.MetricInterval
@@ -1504,12 +1538,14 @@ func (p *Plugin) Init(ctx context.Context) []api.Action {
     p.meterProvider = metric.NewMeterProvider(metric.WithReader(reader))
     otel.SetMeterProvider(p.meterProvider)
 
-    // Logs: your slog handler, honoring the configured minimum level.
+    // Logs: your slog handler as the base handler, honoring the configured
+    // minimum level. Unlike slog.SetDefault, this keeps the other log
+    // destinations Genkit registered.
     level := p.LogLevel
     if level == nil {
         level = slog.LevelInfo
     }
-    slog.SetDefault(slog.New(newLogHandler(&slog.HandlerOptions{Level: level})))
+    logger.SetDefaultHandler(newLogHandler(&slog.HandlerOptions{Level: level}))
 
     return nil
 }
@@ -1518,6 +1554,13 @@ func (p *Plugin) Init(ctx context.Context) []api.Action {
 `newSpanExporter`, `newMetricExporter`, and `newLogHandler` stand in for your
 service's implementations of `sdktrace.SpanExporter`, `metric.Exporter`, and
 `slog.Handler`.
+
+Do not call `tracing.SetInstrumentation` from a plugin. It sets the providers
+for the whole process, which is the application's choice, and installing the
+global `TracerProvider` is enough for Genkit's default instrumentation to reach
+your exporter. Under `genkit start`, the Developer UI receives Genkit's spans
+directly, without OpenTelemetry, so a plugin that also exports in dev does not
+affect it.
 
 #### Shutting down cleanly
 
@@ -1536,7 +1579,10 @@ func (p *Plugin) Shutdown(ctx context.Context) error {
     if p.meterProvider != nil {
         errs = errors.Join(errs, p.meterProvider.Shutdown(ctx))
     }
-    return errors.Join(errs, tracing.TracerProvider().Shutdown(ctx))
+    if p.tracerProvider != nil {
+        errs = errors.Join(errs, p.tracerProvider.Shutdown(ctx))
+    }
+    return errs
 }
 ```
 
@@ -1544,6 +1590,18 @@ The in-tree `googlecloud` plugin takes the other route and installs its own
 `SIGINT` and `SIGTERM` handler that flushes and then exits. That works for a
 server, but it takes the exit path away from the application, so prefer the
 explicit `Shutdown` unless you have a reason not to.
+
+#### Reporting spans without OpenTelemetry
+
+To report Genkit spans to a backend that has no OpenTelemetry exporter, or in a
+shape other than the `genkit:*` attributes, implement `tracing.Instrumentation`
+instead; see
+[Write your own provider](/docs/local-observability#write-your-own-provider).
+Ship it as a value the application passes to `tracing.SetInstrumentation`,
+together with `&tracing.OTelInstrumentation{}` when the application wants both.
+The `otelgenai` plugin is built this way: `otelgenai.New` returns a
+`tracing.Instrumentation` that encodes spans with the
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
 
 #### PII redaction
 
@@ -1606,6 +1664,11 @@ The attribute keys are `genkit:input` and `genkit:output`, with a colon. Genkit
 writes them in `core/tracing`, so a wrapper that filters on any other spelling
 redacts nothing.
 
+Outside the dev environment, Genkit already strips the payload of inline base64
+media from `genkit:input`, `genkit:init`, and `genkit:output`, keeping only the
+data URL header, such as `data:image/png;base64,[redacted]`. Text and remote
+media URLs reach your exporter unchanged.
+
 #### Troubleshooting
 
 If you're having trouble getting data to show up where you expect, the
@@ -1614,57 +1677,39 @@ covers SDK diagnostics that help locate the source of the problem.
 
 ## Finding the constructor to call
 
-Every `Define*` helper that took an `api.Registry` as its first argument is
-gone. A registry is unobtainable outside the framework, so those helpers had no
-reachable callers; the replacement is to construct the action and return it from
-`Plugin.Init`, which is what the framework registers. Every plugin-side
-replacement below is a constructor, so return its result from `Plugin.Init`.
-Applications keep reaching the same primitives through the `genkit.Define*`
-functions, which construct and register in one call.
+A plugin constructs its actions and returns them from `Plugin.Init`, which is
+what the framework registers. Applications reach the same primitives through
+the `genkit.Define*` functions, which construct and register in one call.
 
-| Removed | Plugin-side replacement | App-side equivalent |
+| Primitive | Plugin-side constructor | App-side equivalent |
 | --- | --- | --- |
-| `core.DefineAction` | `core.NewActionOf` | None |
-| `core.DefineStreamingAction` | `core.NewStreamingActionOf` | None |
-| `core.DefineBidiAction` | `core.NewBidiActionOf` | None |
-| `core.DefineBackgroundAction` | `core.NewBackgroundActionOf` | None |
-| `core.DefineFlow` | `core.NewFlow` | `genkit.DefineFlow` |
-| `core.DefineStreamingFlow` | `core.NewStreamingFlow` | `genkit.DefineStreamingFlow` |
-| `core.DefineSchema` | None | `genkit.DefineSchema` |
-| `core.DefineSchemaFor` | None | `genkit.DefineSchemaFor` / `genkit.DefineSchemasFor` |
-| `ai.DefineModel` | `ai.NewModelAction` | `genkit.DefineModelAction` |
-| `ai.DefineBackgroundModel` | `ai.NewBackgroundModelAction` | `genkit.DefineBackgroundModelAction` |
-| `ai.DefineRetriever` | `ai.NewRetrieverAction` | `genkit.DefineRetrieverAction` |
-| `ai.DefineEmbedder` | `ai.NewEmbedderAction` | `genkit.DefineEmbedderAction` |
-| `ai.DefineEvaluator` | `ai.NewEvaluatorAction` | `genkit.DefineEvaluatorAction` |
-| `ai.DefineBatchEvaluator` | `ai.NewBatchEvaluatorAction` | `genkit.DefineBatchEvaluatorAction` |
-| `ai.DefineTool` | `ai.NewTool` | `genkit.DefineTool` |
-| `ai.DefineToolWithInputSchema` | `ai.NewTool` with `ai.WithInputSchema` | `genkit.DefineTool` with `ai.WithInputSchema` |
-| `ai.DefineMultipartTool` | `ai.NewMultipartTool` | `genkit.DefineMultipartTool` |
-| `ai.DefineResource` | `ai.NewResource` | `genkit.DefineResource` |
-| `ai.DefineMiddleware` | `ai.NewMiddleware` | `genkit.DefineMiddleware` |
-| `ai.DefineFormat` | `ai.DefineFormats`, which takes the name from each `Formatter` | `genkit.DefineFormats` |
-| `ai/exp.DefineTool` | `ai/exp.NewTool` | `genkit/exp.DefineTool` |
-| `ai/exp.DefineInterruptibleTool` | `ai/exp.NewInterruptibleTool` | `genkit/exp.DefineInterruptibleTool` |
+| Action | `core.NewActionOf` | None |
+| Streaming action | `core.NewStreamingActionOf` | None |
+| Bidirectional action | `core.NewBidiActionOf` | None |
+| Background action | `core.NewBackgroundActionOf` | None |
+| Flow | `core.NewFlow` | `genkit.DefineFlow` |
+| Streaming flow | `core.NewStreamingFlow` | `genkit.DefineStreamingFlow` |
+| Schema | None | `genkit.DefineSchema`, `genkit.DefineSchemaFor`, `genkit.DefineSchemasFor` |
+| Model | `ai.NewModelAction` | `genkit.DefineModelAction` |
+| Background model | `ai.NewBackgroundModelAction` | `genkit.DefineBackgroundModelAction` |
+| Retriever | `ai.NewRetrieverAction` | `genkit.DefineRetrieverAction` |
+| Embedder | `ai.NewEmbedderAction` | `genkit.DefineEmbedderAction` |
+| Evaluator | `ai.NewEvaluatorAction` | `genkit.DefineEvaluatorAction` |
+| Batch evaluator | `ai.NewBatchEvaluatorAction` | `genkit.DefineBatchEvaluatorAction` |
+| Tool | `ai.NewTool` | `genkit.DefineTool` |
+| Tool with a JSON schema input | `ai.NewTool` with `ai.WithInputSchema` | `genkit.DefineTool` with `ai.WithInputSchema` |
+| Resumable tool | `ai.NewResumableTool` | `genkit.DefineResumableTool` |
+| Resource | `ai.NewResource` | `genkit.DefineResource` |
+| Middleware | `ai.NewMiddleware` | `genkit.DefineMiddleware` |
+| Format | `ai.DefineFormats`, which takes the name from each `Formatter` | `genkit.DefineFormats` |
+
+Any tool can return media or other content parts next to its typed output by
+calling `tool.AttachParts(ctx, parts...)` from
+`github.com/firebase/genkit/go/ai/tool` before it returns.
 
 `ai.DefinePrompt`, `ai.DefineDataPrompt`, `ai.DefineFormats`, and
-`ai.DefineGenerateAction` still take a registry: there the registry is a
-structural input rather than a registration target.
-
-Package `core`'s own error envelope went with them. `core.ReflectionError`,
-`core.ToReflectionError`, and `core.SchemaValidationError` were deleted with no
-exported replacement, and `core.NewSchemaValidationError` gave way to
-`status.Errorf` with a sentinel from `core/status`.
-
-The flat `core.NewAction`, `NewStreamingAction`, `NewBidiAction`, and
-`NewBackgroundAction` constructors still work and are deprecated in favor of
-their `Of` counterparts. They take `name` before `atype`, so swapping the first
-two arguments is the likeliest mistake when moving a call across. The untyped
-`ai.NewModel`, `NewRetriever`, `NewEmbedder`, `NewEvaluator`,
-`NewBatchEvaluator`, and `NewBackgroundModel` constructors, and the matching
-`genkit.Define*` names, are likewise deprecated in favor of the typed-config
-family: they resolve `Config` to `any`, which infers no schema and passes the
-raw config through untouched.
+`ai.DefineGenerateAction` take a registry: there the registry is a structural
+input rather than a registration target.
 
 ## Publishing a plugin
 

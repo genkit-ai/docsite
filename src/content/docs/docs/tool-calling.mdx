@@ -582,9 +582,13 @@ getRevenue := genkit.DefineTool(g, "getRevenue",
 	})
 ```
 
-The struct also carries `Resumed map[string]any` and `OriginalInput any`, both
-set only after an interrupt, plus the methods `Interrupt(*ai.InterruptOptions)`
-and `IsResumed()`. The [interrupts guide](/docs/interrupts) covers that half.
+For the same reason, the tool context goes straight into the runtime verbs of
+package `github.com/firebase/genkit/go/ai/tool`, which take a `context.Context`.
+They let a tool attach content parts to its answer, stream progress, and return
+an error to the model, all without a change to its signature. The sections below
+show each one. A tool that pauses generation to ask the caller something is
+defined with `genkit.DefineResumableTool()` instead, which the
+[interrupts guide](/docs/interrupts) covers.
 
 #### Tools run concurrently
 
@@ -646,12 +650,14 @@ resp, err := genkit.Generate(ctx, g,
 ```
 
 `ai.WithTools(tools ...ai.ToolRef)` accepts anything with a `Name() string`
-method: `*ai.ToolAction` from `genkit.DefineTool`, `*aix.Tool` from the
-in-preview API below, and `ai.ToolName("getWeather")` when all you have is the
-name. So a per-request tool set is just a slice you spread. Repeating the option
-appends, and duplicate names are rejected when the request runs:
+method: the `*ai.ToolAction` that `genkit.DefineTool` returns, the
+`*ai.ResumableToolAction` that `genkit.DefineResumableTool` returns, and
+`ai.ToolName("getWeather")` when all you have is the name. So a per-request tool
+set is just a slice you spread. Repeating the option appends, and duplicate
+names are rejected when the request runs:
 
 ```go
+// auditLog is a tool registered elsewhere, for example by a plugin.
 adminTools := []ai.ToolRef{getWeather, getRevenue, ai.ToolName("auditLog")}
 
 resp, err := genkit.Generate(ctx, g,
@@ -659,6 +665,10 @@ resp, err := genkit.Generate(ctx, g,
 	ai.WithTools(adminTools...),
 )
 ```
+
+The model receives the tool definitions in the order you list them, followed by
+any tools that middleware adds. Two identical calls send identical requests, so
+provider-side prompt caching keeps working across turns.
 
 **Using `genkit.DefinePrompt()`:**
 
@@ -734,19 +744,27 @@ Genkit sends nothing and the provider's own default applies. A model whose
 ### Returning more than one value from a tool
 
 A tool sometimes has more to say than a single value: a chart of what it
-measured, a screenshot of what it saw, a document it retrieved. Define it with
-`genkit.DefineMultipartTool()` and return an `*ai.MultipartToolResponse`. The
-value a plain tool would have answered with goes in `Output`, and whatever is
-not a value goes in `Content`:
+measured, a screenshot of what it saw, a document it retrieved. Call
+`tool.AttachParts()` from inside the tool to add content parts to its response.
+The tool keeps its own return type, so the output schema the model sees is still
+the one inferred from that type:
 
 ```go
+import (
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
+	"github.com/firebase/genkit/go/genkit"
+)
+
 // Deploy is what the model fills in to call the tool.
 type Deploy struct {
 	Service     string `json:"service" jsonschema_description:"The service to deploy."`
 	Environment string `json:"environment" jsonschema:"enum=staging,enum=production" jsonschema_description:"Where to deploy it."`
 }
 
-// Rollout is the tool's answer, and the Output half of its response.
+// Rollout is the tool's answer, and the whole of its return type.
 type Rollout struct {
 	Service  string  `json:"service"`
 	Revision string  `json:"revision"`
@@ -754,44 +772,65 @@ type Rollout struct {
 	P95Ms    float64 `json:"p95Ms" jsonschema_description:"The p95 latency after the rollout, in milliseconds."`
 }
 
-deployService := genkit.DefineMultipartTool(g, "deployService",
+deployService := genkit.DefineTool(g, "deployService",
 	"Deploys a service to an environment and reports how the rollout went.",
-	func(ctx *ai.ToolContext, input Deploy) (*ai.MultipartToolResponse, error) {
+	func(ctx *ai.ToolContext, input Deploy) (*Rollout, error) {
 		latencies, err := rollOut(input)
 		if err != nil {
 			return nil, err
 		}
 
-		return &ai.MultipartToolResponse{
-			// The value a plain tool would have returned.
-			Output: &Rollout{
-				Service:  input.Service,
-				Revision: fmt.Sprintf("%s-00042", input.Service),
-				Healthy:  true,
-				P95Ms:    latencies[len(latencies)-1],
-			},
-			// The model receives this as a picture, so it can describe the
-			// shape of the rollout rather than only its last number.
-			Content: []*ai.Part{ai.NewMediaPart("image/png", barChartPNG(latencies))},
+		// The model receives this as a picture, so it can describe the
+		// shape of the rollout rather than only its last number.
+		tool.AttachParts(ctx, ai.NewMediaPart("image/png", barChartPNG(latencies)))
+
+		return &Rollout{
+			Service:  input.Service,
+			Revision: fmt.Sprintf("%s-00042", input.Service),
+			Healthy:  true,
+			P95Ms:    latencies[len(latencies)-1],
 		}, nil
 	})
 ```
 
+`rollOut` and `barChartPNG` stand for your own code: `rollOut` runs the
+deployment and returns its latencies, and `barChartPNG` renders them as a
+`data:image/png;base64,...` URL, the form `ai.NewMediaPart()` takes for inline
+media.
+
 The attached parts reach the model and the client both, so the model can reason
-about the chart and the Dev UI can render it. They must be media or data parts;
-a text part is not a valid attachment. Pass a multipart tool to `ai.WithTools()`
-like any other. Its advertised output schema is the multipart envelope, not
-`Rollout`; pass `ai.WithOutputSchema` or `ai.WithOutputSchemaName` to advertise
-the `Output` shape instead.
+about the chart and the Dev UI can render it. Attach media or data parts:
+providers such as Gemini reject a text part in a tool response. The parts are
+added to the response when the tool returns, so attach them before then. A
+goroutine the tool starts can attach parts while the tool waits for it, but one
+that outlives the call attaches to nothing. A WrapTool hook in
+[middleware](/docs/middleware) can call `tool.AttachParts()` too.
 
 ### Streaming and tool calling
 
 A tool call takes several turns, so a stream carries the tool's traffic as well
-as the model's text. Use `genkit.GenerateStream()` when the caller needs to act
-on that traffic, and switch on the part kind. `core.StreamCallback` and
-`genkit.DefineStreamingFlow` come from the [flows](/docs/flows) API, and
-`status` here is `github.com/firebase/genkit/go/core/status`, not
-`google.golang.org/grpc/status`; see [Error types](/docs/error-types):
+as the model's text. A slow tool can also stream progress while it works with
+`tool.SendChunk()`. The tool builds the chunk itself; set its `Role` to
+`ai.RoleTool` so the caller can tell it from the model's own text:
+
+```go
+// Inside the deployService tool, before each step of the rollout.
+tool.SendChunk(ctx, &ai.ModelResponseChunk{
+	Role:    ai.RoleTool,
+	Content: []*ai.Part{ai.NewTextPart("shifting 50% of traffic")},
+})
+```
+
+Streaming is best effort. With a caller that is not streaming, `SendChunk` is a
+no-op, and the value the tool returns is always the authoritative answer.
+Progress is not written to history, since it is for showing rather than for the
+model to read.
+
+Use `genkit.GenerateStream()` when the caller needs to act on that traffic, and
+switch on the part kind. `core.StreamCallback` and `genkit.DefineStreamingFlow`
+come from the [flows](/docs/flows) API, and `status` here is
+`github.com/firebase/genkit/go/core/status`, not `google.golang.org/grpc/status`;
+see [Error types](/docs/error-types):
 
 ```go
 import (
@@ -818,8 +857,10 @@ genkit.DefineStreamingFlow(g, "deployFlow",
 			}
 			for _, part := range val.Chunk.Content {
 				switch {
+				case part.IsText() && val.Chunk.Role == ai.RoleTool:
+					sendChunk(ctx, "deploy: "+part.Text) // Progress from tool.SendChunk.
 				case part.IsText():
-					sendChunk(ctx, part.Text)
+					sendChunk(ctx, part.Text) // The model's own text.
 				case part.IsToolRequest():
 					sendChunk(ctx, fmt.Sprintf("[calling %s]", part.ToolRequest.Name))
 				case part.IsToolResponse():
@@ -842,7 +883,7 @@ When a tool might trigger several sequential calls, `ai.WithMaxTurns()` caps how
 many back-and-forth iterations the model gets in one generation. It controls
 cost, keeps latency bounded, and guards against a loop that never settles. Each
 turn is one complete cycle of the model calling tools and receiving their
-responses. The default is 5:
+responses. The default is 50:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -867,19 +908,25 @@ the limit or look for a tool the model keeps retrying.
 
 ### When a tool fails
 
-A tool that returns a non-nil error is fail-fast. Genkit stops the tool loop as
-soon as the error arrives, while any siblings in the same round finish on their
-own, and `genkit.Generate()` returns the error wrapped as `ai.ErrToolFailed`, a
-subtype of `status.ErrInternal` (HTTP 500). The model never sees it and never
-retries. The response comes back beside the error with `ai.FinishReasonFailed`:
-its `History()` holds the rounds before the failure and drops the failed round
-whole, the model's request message included, because a conversation cannot end
-on an unanswered tool request. Output that does not match the tool's declared
-schema reports the same sentinel, and so does input the model sent that fails
-the declared input schema: the tool function never runs and the call aborts with
-`ai.ErrToolFailed` wrapping `status.ErrInvalidInput`. A tool that stopped because
-the call's context ended is not a tool failure: that error carries `CANCELLED`,
-and the response reports `ai.FinishReasonAborted`.
+A tool that returns a non-nil error is fail-fast by default. Genkit stops the
+tool loop as soon as the error arrives, while any siblings in the same round
+finish on their own, and `genkit.Generate()` returns the error wrapped as
+`ai.ErrToolFailed`, a subtype of `status.ErrInternal` (HTTP 500). The model never
+sees it and never retries. The response comes back beside the error with
+`ai.FinishReasonFailed`: its `History()` holds the rounds before the failure and
+drops the failed round whole, the model's request message included, because a
+conversation cannot end on an unanswered tool request. Output that does not
+match the tool's declared schema reports the same sentinel, and so does input
+the model sent that fails the declared input schema: the tool function never
+runs and the call aborts with `ai.ErrToolFailed` wrapping
+`status.ErrInvalidInput`. A tool that stopped because the call's context ended
+is not a tool failure: that error carries `CANCELLED`, and the response reports
+`ai.FinishReasonAborted`.
+
+A tool that panics fails the same way. The panic becomes the tool's own error,
+with the fixed message `tool panicked`. The panic value and its stack go only to
+the error log, because they can hold anything the tool had in hand, secrets
+included.
 
 The tool's own error is wrapped with `%w`, so both the framework sentinel and
 your own cause still match:
@@ -900,30 +947,61 @@ if err != nil {
 }
 ```
 
-There is no soft-fail flag and no `ai.ToolError`. To let the model recover from
-a failure instead of aborting the call, return a nil error and put the failure
-in the tool's own output type, then say in the description how the model should
-react:
+#### Return an error to the model
+
+Some errors are the model's to fix: a misspelled name, a query with a syntax
+error, a record that does not exist. Return them with `tool.Fail(ctx, err)`. The
+loop answers the call with the error and continues, so the model reads the
+message and can call the tool again with better input. Every other error still
+stops the loop, so a tool decides error by error:
 
 ```go
-type Forecast struct {
-	Summary     string `json:"summary,omitempty"`
-	Unavailable bool   `json:"unavailable" jsonschema_description:"True when the forecast could not be read. Say so, and do not retry."`
-	Reason      string `json:"reason,omitempty"`
-}
+// errUnknownLocation is returned by readStation, your own call to the
+// weather service, when it has no station for a location.
+var errUnknownLocation = errors.New("unknown location")
 
 getWeather := genkit.DefineTool(g, "getWeather",
-	"Gets the current weather in a given location. If unavailable is true, tell the user rather than guessing.",
-	func(ctx *ai.ToolContext, input WeatherInput) (Forecast, error) {
-		// readStation is your own call to the weather service.
-		summary, err := readStation(ctx, input.Location)
-		if err != nil {
-			// A nil error, so the loop continues and the model can react.
-			return Forecast{Unavailable: true, Reason: err.Error()}, nil
+	"Gets the current weather in a given location.",
+	func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
+		forecast, err := readStation(ctx, input.Location)
+		if errors.Is(err, errUnknownLocation) {
+			// The model can fix this one: it reads the message and tries
+			// another name.
+			return "", tool.Fail(ctx, fmt.Errorf("no station for %q; use a city name", input.Location))
 		}
-		return Forecast{Summary: summary}, nil
+		// Any other error, such as errStationOffline, still stops the loop.
+		return forecast, err
 	})
 ```
+
+The model receives the error message as the tool's output, `{"error": "..."}`,
+and model plugins whose API marks a failed call, such as Anthropic's
+`is_error`, mark it. In the history, `part.IsToolError()` reports true on that
+tool response. `ai.IsToolFailError(err)` reports whether an error was made with
+`tool.Fail()`, which is how a test checks that a tool returns an error to the
+model.
+
+#### Return every error of a tool to the model
+
+For tools you do not own, such as tools from an [MCP server](/docs/model-context-protocol)
+or tools that middleware adds, the `SoftToolErrors` middleware from
+`github.com/firebase/genkit/go/plugins/middleware` returns their errors to the
+model in the same way. `Tools` limits it to some tool names. Left empty, it
+covers every tool, and calls to tool names that do not exist:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("Find the cheapest flight to Lisbon next Friday."),
+	ai.WithTools(searchFlights, bookFlight), // tools defined with genkit.DefineTool
+	// Errors from searchFlights go to the model; bookFlight stays fail-fast.
+	ai.WithUse(&middleware.SoftToolErrors{Tools: []string{"searchFlights"}}),
+)
+```
+
+It covers the tool's own errors, input validation errors included. Interrupts,
+cancellation, and an error that a WrapTool hook returns in place of the tool's
+error still stop the generation. Other WrapTool hooks, such as a retry, see the
+tool's error first, wherever `SoftToolErrors` sits in the chain.
 
 See [Error types](/docs/error-types) for the rest of the sentinels generation
 reports.
@@ -970,9 +1048,13 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-The `Skills` middleware adds a single `use_skill` tool and lists the available
-skills in the system prompt, so the heavy instructions stay off the hot path
-until the model asks for one. Both are worked through in the
+A failed file operation, such as reading a directory as a file, answers the call
+with its error, as `SoftToolErrors` does, so the model can correct the path and
+try again.
+
+The `Skills` middleware lists the available skills in the system prompt and
+adds tools that load a skill only when the model asks for it, so the heavy
+instructions stay off the hot path. Both are worked through in the
 [filesystem](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/filesystem)
 and [skills](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/skills)
 samples, and the [middleware guide](/docs/middleware) covers the rest of the
@@ -988,8 +1070,10 @@ to, for example:
 - Confirm a potentially risky action with the user.
 - Request out-of-band approval for an action.
 
-**Interrupts** are special tools that can halt the loop and return control
-to your code so that you can handle more advanced scenarios. Visit the
+**Interrupts** halt the loop and return control to your code so that you can
+handle more advanced scenarios. A tool defined with
+`genkit.DefineResumableTool()` pauses by returning `tool.Interrupt()`, and
+resumes with the caller's answer as a typed parameter. Visit the
 [interrupts guide](/docs/interrupts) to learn how to use them.
 
 ### Explicitly handling tool calls
@@ -1068,148 +1152,12 @@ log.Fatalf("gave up after %d turns", maxTurns)
 `ai.WithMaxTurns()` has nothing to bound in this mode, since Genkit is no longer
 running the loop, so the turn cap is yours to enforce.
 
-`RunRaw` returns the tool's output value. For a multipart tool, use
-`RunRawMultipart` instead when you also need the attached content parts.
-
-### The tools API in preview
-
-A second tools API is in preview under `go/ai/exp` and `go/genkit/exp`. It is
-slated to replace the stable one in the next major version, and it changes the
-shape of a tool rather than what a tool can do:
-
-- The function takes a plain `context.Context` rather than an `*ai.ToolContext`.
-- It returns its answer directly, so the signature stops having to announce that
-  the tool sometimes has more to say. `tool.AttachParts(ctx, parts...)` attaches
-  the extra content instead of an `*ai.MultipartToolResponse` envelope.
-- `tool.SendPartial(ctx, value)` streams structured progress while the tool
-  works, so a slow tool does not look like a hang.
-- `tool.SendChunk(ctx, chunk)` streams a chunk the tool builds itself, for an
-  update that is a line of prose rather than a value.
-
-Both streaming helpers are best-effort: with a caller that is not streaming they
-are no-ops, and the returned value is always the authoritative answer. Neither
-streamed message is written to history, since progress is for showing rather
-than for the model to read.
-
-The package names collide, so import them deliberately:
-
-```go
-import (
-	"github.com/firebase/genkit/go/ai"
-	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/ai/exp/tool"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
-)
-```
-
-The constructors panic unless `genkit.Init` was given
-`genkit.WithExperimental()`:
-
-```go
-// Progress is what the tool streams while it works. It is the tool's own
-// shape, not one the API dictates: any value that survives JSON works.
-type Progress struct {
-	Step    string `json:"step"`
-	Percent int    `json:"percent"`
-}
-
-g := genkit.Init(ctx,
-	genkit.WithPlugins(&googlegenai.GoogleAI{}),
-	genkit.WithExperimental(), // Required: the exp constructors panic without it.
-)
-
-deployService := genkitx.DefineTool(g, "deployService",
-	"Deploys a service to an environment and reports how the rollout went.",
-	func(ctx context.Context, input Deploy) (*Rollout, error) {
-		// Structured progress, so a slow tool does not look like a hang.
-		tool.SendPartial(ctx, Progress{Step: "shifting traffic", Percent: 50})
-
-		latencies, err := rollOut(input)
-		if err != nil {
-			return nil, err
-		}
-
-		revision := fmt.Sprintf("%s-00042", input.Service)
-
-		// An update with no structure worth giving it. RoleTool marks the
-		// chunk as the tool's, so the caller can tell it from the model's
-		// own text.
-		tool.SendChunk(ctx, &ai.ModelResponseChunk{
-			Role:    ai.RoleTool,
-			Content: []*ai.Part{ai.NewTextPart(revision + " is live")},
-		})
-
-		// The chart travels beside the answer instead of inside it.
-		tool.AttachParts(ctx, ai.NewMediaPart("image/png", barChartPNG(latencies)))
-
-		return &Rollout{
-			Service:  input.Service,
-			Revision: revision,
-			Healthy:  true,
-			P95Ms:    latencies[len(latencies)-1],
-		}, nil
-	})
-```
-
-The exact signatures are:
-
-```go
-func AttachParts(ctx context.Context, parts ...*ai.Part)
-func SendPartial(ctx context.Context, output any)
-func SendChunk(ctx context.Context, chunk *ai.ModelResponseChunk)
-```
-
-There is no in-preview generate entry point, and none is needed.
-`genkitx.DefineTool[In, Out]` returns `*aix.Tool[In, Out]`, the stable
-`genkit.DefineTool[In, Out]` returns `*ai.ToolAction[In, Out]`, and both have a
-`Name() string` method, so both satisfy `ai.ToolRef`. Write the type out when a
-helper hands a tool back, and pass it to the ordinary `ai.WithTools()` on a
-stable `genkit.Generate()`:
-
-```go
-func newDeployTool(g *genkit.Genkit) *aix.Tool[Deploy, *Rollout] {
-	return genkitx.DefineTool(g, "deployService",
-		"Deploys a service to an environment and reports how the rollout went.",
-		func(ctx context.Context, input Deploy) (*Rollout, error) {
-			tool.SendPartial(ctx, Progress{Step: "shifting traffic", Percent: 50})
-			// ... roll out, then return the answer ...
-			return &Rollout{Service: input.Service, Healthy: true}, nil
-		})
-}
-
-deployService := newDeployTool(g)
-
-for val, err := range genkit.GenerateStream(ctx, g,
-	ai.WithPrompt("Deploy checkout to staging."),
-	ai.WithTools(deployService),
-) {
-	if err != nil {
-		log.Fatal(err)
-	}
-	if val.Done {
-		fmt.Println(val.Response.Text())
-		break
-	}
-	for _, part := range val.Chunk.Content {
-		// A value from tool.SendPartial lands here as a tool response part
-		// flagged partial, named and ref'd like the call it is reporting on.
-		// It is progress, not the answer, and never reaches history.
-		if part.IsToolResponse() && part.IsPartial() {
-			fmt.Printf("[%s] %v\n", part.ToolResponse.Name, part.ToolResponse.Output)
-		}
-	}
-}
-```
-
-`genkitx.DefineInterruptibleTool` is the interruptible counterpart, which takes
-a third type parameter for the value that comes back on the resume. The
-[interrupts guide](/docs/interrupts) covers it.
-
-The [basic-tools-exp sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tools-exp)
-runs on this in-preview API and is deliberately the same program as basic-tools,
-written twice, so a `diff` between the two files is the whole API lesson.
-Anything under `exp` may change in any minor release.
+`RunRaw` returns the tool's output value. Use `RunRawMultipart` instead when
+you also need the content parts the tool attached with `tool.AttachParts()`;
+they go in the `Content` field of the tool response. An error a tool made with
+`tool.Fail()` comes back from both like any other error, so check it with
+`ai.IsToolFailError()` and answer the call with the message if the model should
+see it.
 
 </Lang>
 

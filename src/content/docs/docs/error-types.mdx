@@ -119,8 +119,9 @@ From `ai`, for generation:
 | -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `ErrModelNotFound`         | `status.ErrNotFound`       | The named model is not registered. Usually the providing plugin is missing from `genkit.Init`.                                       |
 | `ErrToolNotFound`          | `status.ErrNotFound`       | The model called a tool that is on neither the request nor the registry.                                                             |
-| `ErrToolFailed`            | `status.ErrInternal`       | A tool returned an error, or its output did not match its declared schema. The loop's partial response rides alongside it.           |
+| `ErrToolFailed`            | `status.ErrInternal`       | A tool returned an error, panicked, or produced output that did not match its declared schema. The loop's partial response rides alongside it. |
 | `ErrMaxTurnsExceeded`      | `status.ErrAborted`        | The tool loop hit its turn limit before the model produced a final response. Raise the limit with `ai.WithMaxTurns`, or continue from the partial response's `History()`. |
+| `ErrBudgetExceeded`        | `status.ErrAborted`        | Middleware that enforces a usage budget stopped the run. Like the turn limit, it is a limit the caller set, so the partial response reports `ai.FinishReasonAborted`. |
 | `ErrUnsupportedByModel`    | `status.ErrInvalidArgument` | The request used a capability the model does not advertise: media, tools, tool choice, a system role.                               |
 | `ErrInvalidPart`           | `status.ErrInvalidArgument` | A `Part` is malformed for the operation: the wrong kind, missing a required field, or carrying a field its kind does not allow.     |
 | `ErrInputTypeMismatch`     | `status.ErrInvalidArgument` | A prompt's input could not be interpreted as the type a content function declared, so the function never ran.                       |
@@ -131,6 +132,12 @@ From `ai`, for generation:
 and wraps the tool's own error with `%w`, so `errors.Is` and `errors.As` still reach it.
 There is no structured tool-name field. To tell one tool's failure from another's,
 define a sentinel inside the tool and branch on that rather than on `ErrToolFailed`.
+
+A tool error that the model can fix, such as invalid input or a missing record,
+does not have to stop the loop. Return it through `tool.Fail` from
+`github.com/firebase/genkit/go/ai/tool`, and the loop answers the call with the
+error text and lets the model try again; see
+[Return an error to the model](/docs/tool-calling#return-an-error-to-the-model).
 
 ### Generation errors carry the partial response
 
@@ -151,7 +158,7 @@ From `core/status`, for the action machinery:
 | `ErrInvalidInput`   | `status.ErrInvalidArgument` | A value failed validation against an action's input schema, for example a model producing malformed tool arguments.                                                 |
 | `ErrInvalidOutput`  | `status.ErrInternal`        | An action or model produced a value that does not match the declared output schema: unparseable JSON, an enum reply outside the set, an action output failing validation. |
 | `ErrActionNotFound` | `status.ErrNotFound`        | No action is registered under the requested key.                                                                                                                    |
-| `ErrPanic`          | `status.ErrInternal`        | The framework recovered a panic at one of the two boundaries that recover. See [Panics](#panics).                                                                   |
+| `ErrPanic`          | `status.ErrInternal`        | The framework recovered a panic at an action boundary that recovers: a bidirectional action or the agent runtime. See [Panics](#panics).                         |
 
 `ErrInvalidOutput` is the one to branch on when a model's structured output is
 unusable and the generation is worth retrying:
@@ -203,6 +210,28 @@ deliberate reclassification at a boundary wins. It maps a cancelled context to
 chain really carried one. That second bit is what middleware needs, so an unclassified
 failure is not mistaken for a deliberate `INTERNAL`.
 
+### Errors that crossed a wire
+
+A `*status.Error` decoded from JSON carries its status but not the sentinel that
+built it. That is the error in an agent's `AgentOutput.Error`, in the `Error` of a
+snapshot read back from a session store, in a remote agent's failure, and in
+`resp.Error` on a model response that travelled as data. Such an error matches the base sentinel of its
+status, and no sentinel derived from it, because the wire does not say which one
+classified it:
+
+```go
+var decoded status.Error
+if err := json.Unmarshal([]byte(`{"status":"NOT_FOUND","message":"no such model"}`), &decoded); err != nil {
+	return err
+}
+
+errors.Is(&decoded, status.ErrNotFound)  // true: the base sentinel of NOT_FOUND
+errors.Is(&decoded, ai.ErrModelNotFound) // false: the domain sentinel did not travel
+```
+
+Branch on base sentinels for anything that can come from another process, and keep
+domain sentinels for errors raised in your own.
+
 ### Which provider errors arrive classified
 
 The first-party model plugins classify provider HTTP failures into canonical
@@ -223,9 +252,18 @@ second result is false when nothing in the chain carried a status.
 
 ### Panics
 
-Genkit does not recover panics at the ordinary action boundary. A panic in a flow, a
-tool, or middleware unwinds normally; under `net/http` the connection is dropped with
-no response body. `status.ErrPanic` is raised only where the framework does recover:
+Genkit does not recover panics at the ordinary action boundary. A panic in a flow or
+in model middleware unwinds normally; under `net/http` the connection is dropped with
+no response body.
+
+Tool calls are the exception, because each one runs on its own goroutine, where an
+unrecovered panic would end the process. A tool, or a `WrapTool` hook, that panics
+fails its call with the fixed message `tool panicked`, so the loop reports
+`ai.ErrToolFailed` as for any other tool error. The panic value can hold anything
+the tool had in hand, so it and the stack go to the error log only, never to the
+model or the returned error.
+
+`status.ErrPanic` is raised where the framework recovers at an action boundary:
 bidirectional actions and the experimental agent runtime, which turn the recovered
 value into a classified `INTERNAL` error such as `panic in bidi action "name": ...`.
 
@@ -260,17 +298,21 @@ at run time, `status.Base(name)` returns its base sentinel.
 the message can never disagree:
 
 - The response code is `status.Of(err).HTTPCode()`, always.
-- The body is `status.PublicMessage(err)`: the message verbatim when the error was
+- The body is JSON, `{"status": ..., "message": ...}`, with the `application/json`
+  content type. `status` is the status name, so a client can tell apart statuses that
+  share an HTTP code, such as `INVALID_ARGUMENT` and `FAILED_PRECONDITION`.
+- `message` is `status.PublicMessage(err)`: the message verbatim when the error was
   built with `status.PublicErrorf`, otherwise a generic string derived from the status.
 - The full error is logged server-side either way, which is the only complete record.
 
-A failure body is plain text, not JSON. Only success is JSON, as `{"result": ...}`.
+A success body is `{"result": ...}`. This is the same error body a JavaScript Genkit
+server sends.
 
-| What the flow returned                                                      | Code | Body                     |
-| --------------------------------------------------------------------------- | ---- | ------------------------ |
-| `errors.New("connecting to db at 10.0.0.3 as admin: password rejected")`      | 500  | `internal`               |
-| `status.Errorf(status.ErrInvalidArgument, "dish %q is not on the menu", dish)` | 400  | `invalid argument`       |
-| `status.PublicErrorf(status.ErrInvalidArgument, "dish must not be empty")`     | 400  | `dish must not be empty` |
+| What the flow returned                                                      | Code | Body                                                          |
+| --------------------------------------------------------------------------- | ---- | ------------------------------------------------------------- |
+| `errors.New("connecting to db at 10.0.0.3 as admin: password rejected")`      | 500  | `{"status":"INTERNAL","message":"internal"}`                  |
+| `status.Errorf(status.ErrInvalidArgument, "dish %q is not on the menu", dish)` | 400  | `{"status":"INVALID_ARGUMENT","message":"invalid argument"}`  |
+| `status.PublicErrorf(status.ErrInvalidArgument, "dish must not be empty")`     | 400  | `{"status":"INVALID_ARGUMENT","message":"dish must not be empty"}` |
 
 ```go
 genkit.DefineFlow(g, "cookbookFlow", func(ctx context.Context, input CookbookRequest) (string, error) {
@@ -293,11 +335,23 @@ for _, a := range genkit.ListFlows(g) {
 }
 ```
 
+### Served agents
+
+An agent served with `genkit.Handler` applies the same rule to the errors inside its
+results. A failed turn's `AgentOutput.Error`, and the snapshot error that
+`getSnapshot` and `waitForSnapshot` return, go out with the generic message for their
+status and no details unless the error was built with `status.PublicErrorf`. Errors
+about the caller's own input, such as an invalid message or a snapshot from another
+session, are public, so a remote caller still learns what it sent wrong. The session
+store and in-process callers keep the full text, and so does the Dev UI under
+`GENKIT_ENV=dev`. Only `genkit.Handler` redacts: an agent you run from a handler of your
+own returns its errors unchanged. See [Agents over HTTP](/docs/agents/http/).
+
 ### Custom error bodies
 
-`genkit.Handler` always writes plain text. To return machine-readable failure detail,
-mount `genkit.HandlerFunc` instead: it runs the action and hands the error back rather
-than writing a response, so you render the body.
+`genkit.Handler` always writes the `{"status", "message"}` body. To return another
+shape, mount `genkit.HandlerFunc` instead: it runs the action and hands the error back
+rather than writing a response, so you render the body.
 
 ```go
 func errorJSON(h func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
@@ -359,58 +413,6 @@ field, and redaction works the same as on the non-streaming path, so an unclassi
 failure arrives as `{"error":{"status":"INTERNAL","message":"internal"}}` and the full
 error reaches the server log only. A client has to read the body to notice a streaming
 failure, because the HTTP status is 200 either way.
-
-## Upgrading from GenkitError and UserFacingError
-
-Older code split error handling between two unrelated types, `core.GenkitError` and
-`core.UserFacingError`. Those names fall into three groups.
-
-**Aliases: nothing to change.** `core.GenkitError` is a type alias of `status.Error`,
-and `core.StatusName` is a type alias of `status.Name`. They are the same types, not
-wrappers, so existing detection code keeps matching every error the framework raises,
-and a `[]core.StatusName` is interchangeable with a `[]status.Name`.
-
-```go
-err := status.Errorf(status.ErrNotFound, "no such order")
-
-var ge *core.GenkitError
-if errors.As(err, &ge) {
-	// *core.GenkitError is *status.Error, so this still matches.
-	_ = ge.Status // status.NotFound
-}
-```
-
-**Deprecated but working.** These keep their behavior, with one difference noted below
-the table. `UserFacingError`'s message still reaches clients and its status still picks
-the response code. Move at your own pace.
-
-| Deprecated                                | Use instead                                                  |
-| ----------------------------------------- | ------------------------------------------------------------ |
-| `core.NewError(name, msg, args...)`       | `status.Errorf(sentinel, msg, args...)`                       |
-| `core.NewPublicError(name, msg, details)` | `status.PublicErrorf(sentinel, msg, args...)`                 |
-| `core.UserFacingError`                    | a `status.Error` from `status.PublicErrorf`                   |
-| `core.AsGenkitError(err)`                 | `status.Convert(err)`, or `status.Of(err)` for the status only|
-| `core.HTTPStatusCode(name)`               | `name.HTTPCode()`                                             |
-| `core.StatusFromHTTPCode(code)`           | `status.FromHTTPCode(code)`                                   |
-| `core.StatusNameToCode[name]`             | `name.Code()`                                                 |
-| `core.Status`, `core.NewStatus`           | `status.Error`, `status.Errorf`                               |
-| `core.INVALID_ARGUMENT` and the other SCREAMING_SNAKE constants | `status.InvalidArgument` and the other Go-cased names |
-
-The one difference is the details payload: `status.PublicErrorf` takes a format string
-and arguments, and has no details parameter. Nothing is lost on the wire, because
-`UserFacingError.Details` was never serialized by `genkit.Handler`, which writes a
-plain-text body. If a custom handler was reading `Details` through `errors.As`, move
-that payload into the flow's own output type, or fold it into the public message.
-
-On `status.Error` itself, the `HTTPCode` and `Source` fields are deprecated as well.
-Use `Status.HTTPCode()` instead of the first; the second is never populated.
-
-**Removed.** `core.ReflectionError`, `core.ReflectionErrorDetails`,
-`core.ToReflectionError`, the `(*core.GenkitError).ToReflectionError` method,
-`core.SchemaValidationError`, and `core.NewSchemaValidationError` are not part of
-`core` and have no replacement there. They were framework internals: the reflection
-error envelope is private to the reflection server, and input validation failures
-raise `status.ErrInvalidInput`.
 
 </Lang>
 

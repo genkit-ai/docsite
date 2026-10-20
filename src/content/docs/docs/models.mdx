@@ -822,9 +822,10 @@ opts := []ai.GenerateOption{
 resp, err := genkit.Generate(ctx, g, opts...)
 ```
 
-`ai.WithStepName()`, `ai.WithToolResponses()`, and `ai.WithToolRestarts()` are
-the three that are `ai.GenerateOption` and nothing else: they mean nothing to a
-prompt definition, so `genkit.DefinePrompt()` does not accept them.
+`ai.WithStepName()` and `ai.WithResume()` are the two that are
+`ai.GenerateOption` and nothing else: they mean nothing to a prompt definition,
+so `genkit.DefinePrompt()` does not accept them. `ai.WithResume()` answers the
+interrupts of an earlier response; see [Interrupts](/docs/interrupts/).
 
 #### How prompt text is treated
 
@@ -1085,6 +1086,36 @@ if err != nil {
 
 The constructor for the model reference will enforce that the correct config
 type is provided which may reduce mismatches.
+
+#### Pass a model value
+
+`ai.WithModel()` also takes an `ai.Model` value, and calls that value directly
+instead of looking its name up in the registry. So a model built with
+`ai.NewModelAction()` works without being registered, which suits a one-off
+wrapper or a stub in a test. The value runs as its own action, so middleware,
+tracing, and usage totals apply to it as to a registered model.
+
+```go
+echo := ai.NewModelAction("local/echo", &ai.ModelOptions{
+	Supports: &ai.ModelSupports{Multiturn: true},
+}, func(ctx context.Context, req *ai.ModelRequest, _ struct{}, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	last := req.Messages[len(req.Messages)-1]
+	return &ai.ModelResponse{
+		FinishReason: ai.FinishReasonStop,
+		Message:      ai.NewModelTextMessage("You said: " + last.Text()),
+	}, nil
+})
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(echo),
+	ai.WithPrompt("Hello"),
+)
+```
+
+A value passed this way wins over a registered model of the same name. A
+prompt's `Execute()` takes a model value the same way. `genkit.DefinePrompt()`
+stores only the model's name, though, so the model a prompt is defined with must
+be registered, for example with `genkit.DefineModelAction()`.
 
 #### Model versions and aliases
 
@@ -1365,6 +1396,14 @@ and any of them can be selected explicitly:
 whole of what an enum output needs. Selecting a name that is not registered
 fails with `INVALID_ARGUMENT` before the model is ever called.
 
+When the model can constrain its output natively, `json` relies on that
+constraint alone. Every other format, `array` and `enum` included, also adds
+its instructions to the prompt, because a plugin may constrain only some formats
+and a request with neither a constraint nor instructions has nothing to follow.
+The Gemini and Anthropic plugins send `array` and `enum` schemas as native
+constraints; the [OpenAI-compatible plugins](/docs/integrations/openai-compatible)
+send them only to a model whose `ai.ModelSupports.Output` lists the format.
+
 A format does not replace your schema: the schema still comes from the output
 type, and only the way the model is asked to write it out changes.
 
@@ -1561,8 +1600,9 @@ to send, normally the map handed to `Handler()`, and `Constrained` says the
 schema can be enforced natively rather than described in prose. `Constrained`
 is a request, not a switch. Genkit keeps it only when the caller asked for
 constrained output, a schema exists, and the model declares support; otherwise it
-clears the flag, drops `Schema`, and injects your `Instructions()` into the
-prompt instead.
+clears the flag and drops `Schema`. Your `Instructions()` go into the prompt
+either way, because only the built-in `json` format leaves them out under a
+native constraint.
 
 ### Streaming
 
@@ -1799,8 +1839,10 @@ content type.
 ### Generating media
 
 Image, video, and speech models answer with media parts rather than text, so the
-same `genkit.Generate()` call covers them. This example generates an image and
-writes it to disk:
+same `genkit.Generate()` call covers them. This example generates an image with
+a Gemini image model and writes it to disk. The Google plugins ask a
+`gemini-*-image` model for text and image output when the config sets no
+`ResponseModalities`, so a bare prompt comes back with a picture:
 
 ```go
 package main
@@ -1823,7 +1865,7 @@ func main() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/imagen-4.0-generate-001"),
+		ai.WithModelName("googleai/gemini-3.1-flash-image"),
 		ai.WithPrompt("An illustration of a dog wearing a space suit, photorealistic."),
 	)
 	if err != nil {
@@ -1894,7 +1936,7 @@ if err := os.WriteFile("output.wav", data, 0o644); err != nil {
 ```
 
 See the [Google GenAI plugin](/docs/integrations/google-genai) page for the
-Imagen, Veo, and TTS model IDs each backend serves.
+image, Veo, and TTS model IDs each backend serves.
 
 ### Reasoning
 
@@ -1914,8 +1956,8 @@ there is none. If you replay history yourself rather than using
 `resp.History()`, carry the signature back unchanged on the next turn, or the
 provider may reject the request.
 
-Reasoning tokens are billed and are reported separately in
-`resp.Usage.ThoughtsTokens`.
+Reasoning tokens are billed and are reported in `resp.Usage.ThoughtsTokens`,
+apart from `OutputTokens`.
 
 ### Resources
 
@@ -1987,35 +2029,78 @@ request and are discarded afterward.
 
 ### Token usage and cost
 
-`resp.Usage` reports what the request consumed. It is a `*ai.GenerationUsage`
-and can be nil, because a provider that reports nothing leaves it unset:
+A response carries two `*ai.GenerationUsage` values:
+
+- `resp.TotalUsage` is every model call made under the `genkit.Generate()` run,
+  summed: each turn of the tool loop, plus the calls its tools and middleware
+  make, such as a nested generate or a fallback model. Bill and meter with this
+  one.
+- `resp.Usage` is the one model call that produced the response, the last turn
+  of a tool loop. Its `InputTokens` is how much of the context window that call
+  filled.
 
 ```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithPrompt("What's the weather in Paris and Tokyo?"),
+	ai.WithTools(weather),
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+if u := resp.TotalUsage; u != nil {
+	log.Printf("run: in=%d out=%d thoughts=%d total=%d",
+		u.InputTokens, u.OutputTokens, u.ThoughtsTokens, u.TotalTokens)
+}
 if u := resp.Usage; u != nil {
-	log.Printf("in=%d out=%d total=%d thoughts=%d cached=%d",
-		u.InputTokens, u.OutputTokens, u.TotalTokens,
-		u.ThoughtsTokens, u.CachedContentTokens)
+	log.Printf("last call: in=%d", u.InputTokens)
 }
 ```
 
-| Field                                                                       | Type                 | What it counts                              |
-| --------------------------------------------------------------------------- | -------------------- | ------------------------------------------- |
-| `InputTokens`, `OutputTokens`, `TotalTokens`                                | `int`                | The usual billing counters                   |
-| `ThoughtsTokens`                                                            | `int`                | Reasoning tokens, billed but not returned    |
-| `CachedContentTokens`                                                       | `int`                | Input tokens served from the provider's cache |
-| `InputCharacters`, `InputImages`, `InputVideos`, `InputAudioFiles`          | `int`                | Non-token input units some providers bill on |
-| `OutputCharacters`, `OutputImages`, `OutputVideos`, `OutputAudioFiles`      | `int`                | The output twins of those                    |
-| `Custom`                                                                    | `map[string]float64` | Provider-specific metrics                    |
+Both can be nil, because a provider that reports nothing leaves usage unset.
+The partial response that comes back beside an error or an interrupt carries
+`TotalUsage` too, because those tokens were spent.
+
+Every first-party model plugin reports usage under one convention, so the same
+arithmetic holds whichever provider served the call:
+
+| Field                                                                  | Type                 | What it counts                                                                                       |
+| ---------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `InputTokens`                                                          | `int`                | The whole prompt, including the tokens read from and written to the provider's cache                |
+| `CachedContentTokens`                                                  | `int`                | The part of `InputTokens` served from the provider's cache                                           |
+| `CacheWriteTokens`                                                     | `int`                | The part of `InputTokens` written to the provider's cache, which some providers bill above the base rate |
+| `OutputTokens`                                                         | `int`                | Generated tokens, not counting `ThoughtsTokens`                                                      |
+| `ThoughtsTokens`                                                       | `int`                | Reasoning tokens the provider reports apart from the answer                                          |
+| `TotalTokens`                                                          | `int`                | The provider's own total, or `InputTokens + OutputTokens + ThoughtsTokens` when it reports none     |
+| `InputCharacters`, `InputImages`, `InputVideos`, `InputAudioFiles`     | `int`                | Non-token input units some providers bill on                                                         |
+| `OutputCharacters`, `OutputImages`, `OutputVideos`, `OutputAudioFiles` | `int`                | The output twins of those                                                                            |
+| `Custom`                                                               | `map[string]float64` | Provider-specific metrics                                                                            |
+
+`OutputTokens` and `ThoughtsTokens` never overlap, so output billed at the
+output rate is their sum. A provider that does not report its reasoning apart
+counts it in `OutputTokens`, and then `ThoughtsTokens` is zero even though the
+model reasoned.
 
 Every field is `omitempty`, so a zero means "not reported" as often as it means
 zero. Read `Custom` with the two-value map form rather than trusting a zero.
 
-:::caution[A tool loop reports its last turn only]
-The `*ai.ModelResponse` you get back carries the usage of the final model call.
-Genkit does not accumulate usage across the turns of a tool loop, so billing a
-whole loop means summing the turns yourself. Attach middleware to see each model
-call, as in the metering example on the [Middleware](/docs/middleware) page.
-:::
+`ai.SumUsage()` adds usages field by field, and `Custom` key by key. It skips nil
+entries and returns nil when every entry is nil, so it is the way to total the
+runs of a conversation you drive yourself:
+
+```go
+var spent *ai.GenerationUsage
+for _, question := range questions {
+	resp, err := genkit.Generate(ctx, g, ai.WithPrompt("%s", question))
+	if err != nil {
+		return err
+	}
+	spent = ai.SumUsage(spent, resp.TotalUsage)
+}
+```
+
+To stop a run that spends too much, use the `Budget` middleware from the
+preview `plugins/middleware/exp` package; see [Middleware](/docs/middleware).
 
 #### Caching
 
@@ -2072,7 +2157,7 @@ if err != nil && resp != nil {
 `FinishReason` says which kind of stop it was. `ai.FinishReasonFailed` means
 something broke, a model call or a tool. `ai.FinishReasonAborted` means the
 caller stopped the loop, through a cancelled context, an expired deadline, or a
-limit it set such as `ai.WithMaxTurns`. `FinishMessage` carries the cause as
+limit it set such as `ai.WithMaxTurns` or a usage budget (`ai.ErrBudgetExceeded`). `FinishMessage` carries the cause as
 text and `resp.Error` carries it classified, so a response that travelled as
 data, in a trace or a persisted turn, still says why it stopped without anyone
 matching a string.
@@ -2111,7 +2196,10 @@ Cancelling the context aborts the in-flight provider call and ends the tool loop
 The response comes back beside the error, marked `ai.FinishReasonAborted` and
 holding the rounds that completed. An expired deadline classifies as
 `status.DeadlineExceeded`; an explicit cancel classifies as `status.Cancelled`.
-See [Error types](/docs/error-types).
+The error wraps the context's own error, so test it with
+`errors.Is(err, context.DeadlineExceeded)` or read its status with
+`status.Classified(err)`; `errors.Is(err, status.ErrDeadlineExceeded)` does not
+match it. See [Error types](/docs/error-types).
 
 :::caution[Put the deadline outside Retry, not under it]
 `status.DeadlineExceeded` is on `middleware.Retry`'s default status list, so a

@@ -1316,9 +1316,9 @@ type AskUserRequest struct {
 	Question string `json:"question"`
 }
 
-// AskUser is the interrupt payload: what the person answering needs to see.
-type AskUser struct {
-	Question string `json:"question"`
+// UserAnswer is what askUser is resumed with if it runs again.
+type UserAnswer struct {
+	Text string `json:"text"`
 }
 
 // A tool for the agent to search the web.
@@ -1331,14 +1331,16 @@ searchWeb := genkit.DefineTool(g,
 	},
 )
 
-// A tool for the agent to ask the user a question.
-askUser := genkit.DefineTool(g,
+// A tool for the agent to ask the user a question. It pauses on the first
+// call, and the flow answers it with the user's reply.
+askUser := genkit.DefineResumableTool(g,
 	"askUser",
 	"Ask the user a clarifying question.",
-	func(ctx *ai.ToolContext, req *AskUserRequest) (string, error) {
-		// InterruptWith pauses the loop with a typed payload, which
-		// ai.InterruptAs reads back below.
-		return "", ai.InterruptWith(ctx, AskUser{Question: req.Question})
+	func(ctx context.Context, req *AskUserRequest, answer *UserAnswer) (string, error) {
+		if answer == nil {
+			return "", tool.Interrupt(ctx, nil)
+		}
+		return answer.Text, nil
 	},
 )
 
@@ -1362,22 +1364,16 @@ researchAgent := genkit.DefineFlow(g, "researchAgent",
 			for _, part := range response.Interrupts() {
 				// Every interrupt in the turn has to be answered, so an
 				// unrecognized one is an error rather than a skip.
-				if part.ToolRequest.Name != askUser.Name() {
-					return "", fmt.Errorf("no handler for interrupt from tool %q", part.ToolRequest.Name)
-				}
-				meta, ok := ai.InterruptAs[AskUser](part)
+				call, ok := askUser.Interrupted(part)
 				if !ok {
-					return "", errors.New("askUser interrupt carried no AskUser metadata")
+					return "", fmt.Errorf("no handler for interrupt from tool %q", part.ToolRequest.Name)
 				}
 
 				// In a real app, you would put the question to the user and
-				// wait for their answer.
-				userAnswer := fmt.Sprintf("The user answered: \"Sample answer for '%s'\"", meta.Question)
-				answer, err := askUser.RespondWith(part, userAnswer)
-				if err != nil {
-					return "", err
-				}
-				answers = append(answers, answer)
+				// wait for their answer. call.Input is the model's request.
+				userAnswer := fmt.Sprintf("The user answered: \"Sample answer for '%s'\"", call.Input.Question)
+				// Respond answers the call outright: the tool does not run again.
+				answers = append(answers, call.Respond(userAnswer))
 			}
 
 			response, err = genkit.Generate(ctx, g,
@@ -1387,7 +1383,7 @@ researchAgent := genkit.DefineFlow(g, "researchAgent",
 				ai.WithModelName("googleai/gemini-pro-latest"),
 				ai.WithMaxTurns(5),
 				ai.WithTools(searchWeb, askUser),
-				ai.WithToolResponses(answers...),
+				ai.WithResume(answers...),
 			)
 			if err != nil {
 				return "", err
@@ -1399,7 +1395,10 @@ researchAgent := genkit.DefineFlow(g, "researchAgent",
 )
 ```
 
-`response.History()` is the request's messages plus the response, and
+`askUser` is a resumable tool, and `tool` is the
+`github.com/firebase/genkit/go/ai/tool` package. `askUser.Interrupted()` claims
+each paused call and decodes its input, and `call.Respond()` answers it with the
+user's reply. `response.History()` is the request's messages plus the response, and
 `ai.WithSystem` adds a real system message, so the system prompt rides along and
 does not need repeating. The model name and the turn limit do not: leave them
 off a resume and the call falls back to the registry's default model and the

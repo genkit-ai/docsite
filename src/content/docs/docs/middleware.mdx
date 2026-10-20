@@ -253,7 +253,7 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 ))
 ```
 
-The snippets that follow also draw on `log`, `net/http`, `os`, `time`, `github.com/firebase/genkit/go/ai`, and `github.com/firebase/genkit/go/core/status`.
+The snippets that follow also draw on `errors`, `log`, `net/http`, `os`, `time`, `github.com/firebase/genkit/go/ai`, and `github.com/firebase/genkit/go/core/status`.
 
 For pure Go programs that just attach middleware to a `genkit.Generate()` call, plugin registration is optional. Passing a middleware value directly to `ai.WithUse` invokes its `New` method on the local fast path without consulting the registry.
 
@@ -292,10 +292,7 @@ resp, err = p.Execute(ctx,
 )
 ```
 
-Two things about prompts catch people out:
-
-- Prompt-level and execute-level middleware do **not** merge. `ai.WithUse` at execute time replaces the whole chain the prompt was defined with.
-- `ai.MiddlewareFunc` cannot be used in `genkit.DefinePrompt`. A prompt action serializes its options, and a function value has no JSON form, so execution fails with `json: unsupported type: ai.MiddlewareFunc`. Use a named config type at definition time.
+Prompt-level and execute-level middleware do **not** merge. `ai.WithUse` at execute time replaces the whole chain the prompt was defined with.
 
 **By name.** Middleware that is registered, either by a plugin or by `genkit.DefineMiddleware`, can be selected by name from a `.prompt` file's `use:` frontmatter. Each entry is a bare name or a `name` with a `config` map:
 
@@ -310,9 +307,7 @@ use:
 ---
 ```
 
-These entries resolve through the registry at execute time, so the plugin providing them has to be registered or the execution fails with `NOT_FOUND`.
-
-`ai.WithMiddleware` still exists but is deprecated. It takes an `ai.ModelMiddleware`, which wraps only the model call, has no generate or tool hook, and never appears in the Dev UI. Use `ai.WithUse` instead.
+These entries resolve through the registry at execute time, so the plugin providing them has to be registered or the execution fails with `NOT_FOUND`. The `Middleware` plugin registers `genkit-middleware/retry`, `genkit-middleware/fallback`, `genkit-middleware/toolApproval`, `genkit-middleware/softToolErrors`, `genkit-middleware/skills`, and `genkit-middleware/filesystem`.
 
 ## Available middleware
 
@@ -343,7 +338,7 @@ resp, err := genkit.Generate(ctx, g,
 **Configuration options:**
 
 - `MaxRetries` (optional): The number of retries after the first attempt (default: 3). `MaxRetries: 3` allows up to four model calls in total.
-- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`). The Developer UI offers the canonical set as a multi-select, and `status.Names()` returns the same list in code.
+- `Statuses` (optional): A list of `status.Name` values, from `github.com/firebase/genkit/go/core/status`, that should trigger a retry (default: `status.Unavailable`, `status.DeadlineExceeded`, `status.ResourceExhausted`, `status.Aborted`, `status.Internal`). The Developer UI offers every status name as a multi-select, and `status.Names()` returns that full list in code.
 - `InitialDelayMs` (optional): The initial delay between retries in milliseconds (default: 1000).
 - `MaxDelayMs` (optional): The upper bound on retry delay in milliseconds (default: 60000).
 - `BackoffFactor` (optional): The factor by which the delay increases after each retry (default: 2).
@@ -423,11 +418,13 @@ func isFallbackRetryable(err error, statuses []status.Name) bool {
 
 An unclassified error never triggers a fallback; it propagates immediately. This is the deliberate opposite of `Retry`, and the reason is cost: moving a request to a different billed model is a bigger action than reissuing the same one, so it demands an explicit classification. A plugin that classifies its provider's errors, for example with `status.Base(status.FromHTTPCode(code))`, is what makes fallback work at all.
 
+**Models that fail for good are skipped.** `Fallback` acts per model call, so in a tool loop each turn starts at the primary again. A model that falls back with a status that does not clear up between calls (`NotFound`, `PermissionDenied`, `Unauthenticated`, `InvalidArgument`, or `Unimplemented`, when `Statuses` lists it) is skipped for the rest of that generate call, and each later turn starts at the next model. Transient statuses such as `Unavailable` and `ResourceExhausted` try the primary again on the next turn, and the next generate call tries every model again.
+
 The [retry-fallback sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/retry-fallback) composes the two, pointing the primary at a model id that does not exist so the cascade fires on every run.
 
 ### 3. Tool approval middleware (`ToolApproval`)
 
-Restricts tool execution to an allow list. Tools not in the list trigger a tool interrupt that you can resolve by prompting the user and then resuming with an explicit approval flag.
+Restricts tool execution to an allow list. A call to any other tool is held: the generation stops with an interrupt, and you resume it with a decision for each held call. With a [judge model](#let-a-judge-model-decide) set, a model decides those calls instead and holds only the ones it is unsure about.
 
 ```go
 type WriteFileInput struct {
@@ -435,7 +432,7 @@ type WriteFileInput struct {
     Content string `json:"content"`
 }
 
-writeFileTool := genkit.DefineTool(g, "write_file", "Write a text file.",
+writeFile := genkit.DefineTool(g, "write_file", "Write a text file.",
     func(ctx *ai.ToolContext, in WriteFileInput) (string, error) {
         if err := os.WriteFile(in.Path, []byte(in.Content), 0o600); err != nil {
             return "", err
@@ -443,67 +440,101 @@ writeFileTool := genkit.DefineTool(g, "write_file", "Write a text file.",
         return "wrote " + in.Path, nil
     })
 
-// 1. Initial attempt: any tool not in AllowedTools interrupts the call.
+approval := &middleware.ToolApproval{
+    AllowedTools: []string{}, // An empty list holds every tool call.
+}
+
+// 1. Initial attempt: any tool not in AllowedTools holds the call.
 resp, err := genkit.Generate(ctx, g,
-    ai.WithPrompt("write a file"),
-    ai.WithTools(writeFileTool),
-    ai.WithUse(&middleware.ToolApproval{
-        AllowedTools: []string{}, // Empty list interrupts every tool call.
-    }),
+    ai.WithPrompt("Write hello.txt with a short greeting."),
+    ai.WithTools(writeFile),
+    ai.WithUse(approval),
 )
 if err != nil {
     log.Fatal(err)
 }
 
 if resp.FinishReason == ai.FinishReasonInterrupted {
-    // 2. One turn can hold several interrupts. Approve each one you accept.
-    var restarts []*ai.Part
-    for _, interrupt := range resp.Interrupts() {
-        // Show interrupt.ToolRequest to the user before approving.
-        approved, err := writeFileTool.RestartWith(interrupt,
-            ai.WithResumedMetadata[WriteFileInput](map[string]any{"toolApproved": true}),
-        )
-        if err != nil {
-            log.Fatal(err)
+    // 2. One turn can hold several calls. Decide each one.
+    var answers []*ai.Part
+    for _, part := range resp.Interrupts() {
+        call, ok := middleware.ToolApprovalInterrupted(part)
+        if !ok {
+            continue // A tool's own interrupt: claim it with that tool.
         }
-        restarts = append(restarts, approved)
+        // Show the tool name and call.Input to the user.
+        if confirm(part.ToolRequest.Name, call.Input) {
+            answers = append(answers, call.Restart(middleware.ToolCallDecision{Approved: true}))
+        } else {
+            answers = append(answers, call.Restart(middleware.ToolCallDecision{Reason: "the user declined"}))
+        }
     }
 
-    // 3. Resume, with the same middleware config as the first call.
-    resumed, err := genkit.Generate(ctx, g,
+    // 3. Resume, with the same tools and middleware as the first call.
+    resp, err = genkit.Generate(ctx, g,
         ai.WithMessages(resp.History()...),
-        ai.WithTools(writeFileTool),
-        ai.WithToolRestarts(restarts...),
-        ai.WithUse(&middleware.ToolApproval{AllowedTools: []string{}}),
+        ai.WithTools(writeFile),
+        ai.WithResume(answers...),
+        ai.WithUse(approval),
     )
-    _ = resumed
+    if err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
-`RestartWith` is a method on the typed `*ai.ToolAction[In, Out]` that `genkit.DefineTool` returns, so it needs the tool's input type at compile time. When the interrupted tool is not known statically, resolve it by name and use the type-erased `Restart`:
+`confirm` stands for your own approval UI. `middleware.ToolApprovalInterrupted` claims a call that `ToolApproval` held and returns it typed: `call.Input` is the tool's input, and `call.Restart` takes a `middleware.ToolCallDecision`. Every restart of a hold decides it:
 
-```go
-tool := genkit.LookupTool(g, interrupt.ToolRequest.Name)
-approved := tool.Restart(interrupt, &ai.RestartOptions{
-    ResumedMetadata: map[string]any{"toolApproved": true},
-})
-```
+- `Approved: true` runs the tool.
+- Any other restart refuses the call, a bare one included, so no resume flow gets past approval by leaving the field out. The model receives the refusal as the tool's error, with `Reason` when you set one, and the generation continues.
 
-A bare resume without the `toolApproved` flag is **not** treated as approval, so unrelated resume flows can't bypass approval gating. Approval travels entirely through that restart metadata, not through the allow list, which is why the resume call above passes the same config as the first one.
+Answer a hold with `Restart`, not `Respond`. A response stands in for the tool's output, must match the tool's output schema, and does not refuse the call. The hold's data is `{"message": "..."}`; read it with `ai.InterruptAs[map[string]any](call.Part)`.
+
+The hold is the middleware's own interrupt, so a tool's claim (`myTool.Interrupted(part)`) declines it, and `ToolApprovalInterrupted` declines a tool's own interrupt. Once approved, the tool runs as a fresh call and can interrupt with a question of its own, which you answer through the tool as described in [Pause generation using interrupts](/docs/interrupts/). The restart that answers that question passes the gate without a second approval, unless it replaces the call's input, which the gate then holds again.
 
 A blocked call is still visible in traces: when a `WrapTool` hook resolves a call without running the tool, Genkit emits the tool span the tool itself would have produced.
 
 **Configuration options:**
 
-- `AllowedTools` (defaults to gating every tool): The tool names pre-approved to run without interruption. The gate is a membership test, so a nil slice and an empty slice behave identically: every tool interrupts. There is no wildcard. To let a tool run unconditionally, list its name.
+- `AllowedTools` (defaults to holding every tool): The tool names pre-approved to run without a hold. The gate is a membership test, so a nil slice and an empty slice behave identically. There is no wildcard. Tools that other middleware add are covered too, so list them by name: `Skills` exports its tool names as constants for this.
+- `Judge` (optional): The model that decides each call `AllowedTools` does not cover. The zero value holds those calls.
+- `JudgePolicy` (optional): Extra rules for the judge, in natural language, added to its instructions.
 
-:::caution
-The approval flag is the literal key `"toolApproved"` in the resumed-metadata namespace. Avoid that key in your own `ai.ResumedValue` reads, or your tool and the middleware will read each other's flag.
-:::
+Every `ToolApproval` in one chain claims the same holds, since a claim matches the middleware's name.
+
+#### Let a judge model decide
+
+A judge is a model that decides the calls the allow list does not cover, in place of an unconditional hold. This is the auto-approval mode that coding agents offer: routine calls run, and only the questionable ones reach the user.
+
+```go
+approval := &middleware.ToolApproval{
+    AllowedTools: []string{"list_files", "read_file"},
+    Judge:        googlegenai.ModelRef("googleai/gemini-flash-lite-latest", nil),
+    JudgePolicy:  "Never allow deleting anything outside the build directory.",
+}
+```
+
+The judge answers each call with one of three verdicts:
+
+- `allow` runs the tool.
+- `deny` answers the call with an error the model sees, as a refusal does, and the generation continues.
+- `ask` holds the call for you, as a call without a judge is held.
+
+The judge fails closed: an error, or an answer that is not a verdict, holds the call. The hold's data then carries a `judge` key, `"ask"` or `"failed"`, so a resume UI can tell a judge that wants confirmation from one that could not decide. A hold you answer is your decision, and the judge does not revisit it.
+
+The judge sees the text the user wrote and the pending call (the tool's name, description, and input) as one JSON document. Model text, tool results, retrieved documents, and the file contents the `Filesystem` middleware adds never reach it, since injected instructions usually arrive through those.
+
+Each judged call costs one model call, so pick a model that is small and fast. The judge answers through the enum output format, so any model that can pick from a list of values works, including [decision models](/docs/integrations/system-one/) such as TypeSafe's jev, which answer in a fraction of the time a general model takes.
 
 ### 4. Skills middleware (`Skills`)
 
-Scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects a list of them into the system prompt. It also registers a `use_skill` tool, taking a single `skillName` string, that the model calls to load one skill's full body on demand. Keeping the heavy instructions behind that tool is the point: only the name and description of each skill are on the hot path.
+Makes a library of skills available to the model, following the [Agent Skills specification](https://agentskills.io), so a skill directory written for any compliant agent works unchanged. A skill is a directory with a `SKILL.md` file: YAML frontmatter with a `name` and a `description`, then the instructions. The middleware discloses skills in three tiers:
+
+- **Catalog.** The system prompt lists each skill's name and description, and names the tool that loads one.
+- **Instructions.** The `use_skill` tool, taking a single `skillName` string, returns the skill's full `SKILL.md`. A skill already loaded in the conversation is not sent twice.
+- **Resources.** With `AllowResourceAccess` set, each load lists the files the skill bundles, and the `read_skill_file` tool reads one of them.
+
+Keeping the heavy instructions behind a tool is the point: only the name and description of each skill are on the hot path.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -514,19 +545,57 @@ resp, err := genkit.Generate(ctx, g,
 
 **Configuration options:**
 
-- `SkillPaths` (optional): A list of directories to scan for skills. Each direct subdirectory containing a `SKILL.md` file is exposed as a skill (default: `["skills"]`, resolved against the process working directory).
+- `SkillPaths` (optional): A list of directories to scan for skills. Each direct subdirectory containing a `SKILL.md` file is exposed as a skill (default: `[".agents/skills", "skills"]`, resolved against the process working directory). When two paths hold a skill of the same name, the later path wins, and the log says so.
+- `Preload` (optional): Skills whose instructions are injected before the first model turn, for when the application rather than the model decides that a skill applies. Preloaded skills leave the catalog. A name that matches no skill is logged and ignored.
+- `AllowResourceAccess` (optional): If true, registers `read_skill_file` and lists each skill's bundled files when it loads (default: false). Reads are confined to that one skill's directory, so `..`, absolute paths, and symbolic links that leave it are refused, and each read is capped at 256 KiB.
+- `ToolNamePrefix` (optional): A prefix prepended to each tool name. Use distinct prefixes when attaching more than one `Skills` middleware to one call, since duplicate tool names fail the request.
+- `SkillFS` (optional): A file system to read `SkillPaths` from, in place of the disk. It is not part of the JSON configuration, so a call that the Dev UI dispatches by name reads from disk.
 
-Three details of the scan are worth knowing:
+Use `SkillFS` to ship skills inside the binary:
 
-- The **directory name** is the skill name the model uses. The `name` field in the frontmatter is parsed but never used for that, so a directory named `python-helper` is `python-helper` no matter what the file says. Only `description` reaches the prompt.
-- Discovery is one level deep. Direct subdirectories are considered, nested ones are not, and names starting with `.` are skipped.
-- A path that cannot be read is skipped rather than fatal, with a warning in the log. A mistyped `SkillPaths` entry therefore yields no skills and no error.
+```go
+//go:embed skills
+var skillsFS embed.FS
 
-Loading a skill costs a turn of the tool loop, so raise `ai.WithMaxTurns` above the default of 5 to leave room for the answer. The [skills sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/skills) ships four deliberately loud personas so the effect of a load is visible in one run.
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("How do I run tests in this repo?"),
+    ai.WithUse(&middleware.Skills{SkillFS: skillsFS}),
+)
+```
+
+The default paths apply inside `SkillFS`. A `go:embed` pattern that names a directory leaves out the files in it whose names start with `.` or `_`, so name `.agents/skills` in the pattern itself, and add the `all:` prefix if a skill bundles such a file.
+
+`ToolApproval.AllowedTools` matches tool names exactly, so name the skills tools with the exported constants `middleware.SkillToolName` (`use_skill`) and `middleware.SkillResourceToolName` (`read_skill_file`), after your `ToolNamePrefix` when you set one:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("How do I run tests in this repo?"),
+    ai.WithUse(
+        &middleware.Skills{AllowResourceAccess: true},
+        &middleware.ToolApproval{AllowedTools: []string{
+            middleware.SkillToolName,
+            middleware.SkillResourceToolName,
+        }},
+    ),
+)
+```
+
+Details of the scan worth knowing:
+
+- The **directory name** is the skill name the model uses. The `name` field in the frontmatter does not change it, so a directory named `python-helper` is `python-helper` no matter what the file says.
+- Discovery is one level deep. Direct subdirectories are considered, nested ones are not, and names starting with `.` are skipped. A symbolic link to a skill directory is followed, but the `SKILL.md` itself must be a regular file named exactly `SKILL.md`, of at most 1 MiB.
+- A path that cannot be read is skipped rather than fatal, with a record in the log. A mistyped `SkillPaths` entry therefore yields no skills and no error, and with no skills found, no tool is registered.
+- A skill whose frontmatter is malformed still loads, with a record in the log, so a library written for another agent keeps working.
+
+A failed skills tool call, such as one naming a skill that does not exist, answers the call with a message that lists the valid names, so the generation continues. Each part that carries a skill's instructions has the skill's name in its metadata under `middleware.SkillActivationMetadataKey`, which context-management middleware can use to find skill instructions in a transcript.
+
+A discovered `SKILL.md` becomes instruction text that the model follows. Treat a skills tree the way you treat source code, and prefer absolute paths over the defaults in a server process.
+
+Loading a skill costs a turn of the tool loop, which counts toward `ai.WithMaxTurns`. The [skills sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/skills) ships four deliberately loud personas so the effect of a load is visible in one run.
 
 ### 5. Filesystem middleware (`Filesystem`)
 
-Grants the model access to a single root directory by injecting file manipulation tools. Two are always registered, `list_files` and `read_file`; `write_file` and `edit_file` join them only when `AllowWriteAccess` is true. Path safety is enforced by `os.Root`, which rejects any path that resolves outside the root, including via `..`, absolute paths, or symbolic links.
+Grants the model access to a single root directory by injecting file manipulation tools. Two are always registered, `list_files` and `read_file`; `write_file` and `edit_file` join them only when `AllowWriteAccess` is true. Paths are relative to the root, and an absolute path such as `/notes.txt` is read as `notes.txt` inside it. Path safety is enforced by `os.Root`, which rejects any path that resolves outside the root, including via `..` or symbolic links.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
@@ -544,13 +613,183 @@ resp, err := genkit.Generate(ctx, g,
 - `AllowWriteAccess` (optional): If true, additionally registers `write_file` and `edit_file` (default: false).
 - `ToolNamePrefix` (optional): A prefix prepended verbatim to each tool name, so `"repo_"` yields `repo_list_files` and the rest. Use distinct prefixes when attaching multiple `Filesystem` middlewares to one call so their tool names don't collide.
 
+A failed file operation, such as a missing file or an edit that does not match, does not fail the generation. Its error answers the call under the same rules as [`SoftToolErrors`](#6-soft-tool-errors-middleware-softtoolerrors), so the model can correct its path or edit. Errors of other tools, errors that other hooks return, and cancellation still stop the generation.
+
 `read_file` does not return the file in its tool result. It answers with a short summary and injects the contents as a user message on the next turn, which is why the middleware needs a `WrapGenerate` hook as well as tools. `edit_file` refuses to touch a file that was not read earlier in the same call, and `write_file` refuses to overwrite an existing one that was not read; both refuse again if the file changed on disk since that read. Creating a new file with `write_file` needs no prior read.
 
 The [filesystem sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/filesystem) ships a small mock project and one flow per mode, read-only and write-enabled.
 
+### 6. Soft tool errors middleware (`SoftToolErrors`)
+
+A tool error fails the generation with `ai.ErrToolFailed` by default. `SoftToolErrors` returns tool errors to the model instead: the error answers the tool call, the model can correct its input and try again, and the loop continues. Use it for tools you do not own, such as MCP tools or tools that another middleware adds.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("What is the weather in Paris?"),
+    ai.WithTools(weatherTool),
+    ai.WithUse(&middleware.SoftToolErrors{}),
+)
+```
+
+The model receives `{"error": "<message>"}` as the tool's output, with `{"isError": true}` in the part's metadata. `Part.IsToolError` reports such a response, and model plugins whose API marks tool errors, such as Anthropic's `is_error`, read it.
+
+How it decides:
+
+- It covers the errors a tool returns, input validation errors included, and calls to tool names that do not exist.
+- Interrupts, cancellation, and an error that a `WrapTool` hook returns in place of the tool's own still stop the generation. A hook that wraps the tool's error with `%w` keeps it covered.
+- The conversion happens after the whole `WrapTool` chain, so every hook, a retry included, sees the error first, wherever `SoftToolErrors` sits in the chain.
+- The policy belongs to one `Generate`. A `Generate` that a tool runs does not inherit it.
+
+**Configuration options:**
+
+- `Tools` (optional): Limits the middleware to these tool names. Empty covers every tool, and calls to tools that do not exist.
+
+A tool you own can return one specific error to the model without this middleware: return `tool.Fail(ctx, err)` from `github.com/firebase/genkit/go/ai/tool`. Only the author knows which errors the model can fix, so mark those and let the rest stop the loop. See [Return an error to the model](/docs/tool-calling/#return-an-error-to-the-model).
+
+### 7. Context compression middleware (`ContextCompression`)
+
+:::caution[Preview]
+This middleware is in the experimental `plugins/middleware/exp` package and can change in a minor release.
+:::
+
+Keeps a conversation inside a context budget through long chats and tool loops. When the context grows past a trigger, the middleware compresses what the model receives, cheapest strategy first, while the history you get back keeps every message.
+
+```go
+import (
+    "github.com/firebase/genkit/go/plugins/middleware"
+    middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+)
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Research this topic thoroughly."),
+    ai.WithTools(searchTool),
+    ai.WithUse(
+        &middlewarex.ContextCompression{
+            MaxInputTokens:        80_000,
+            DedupeToolResponses:   &middlewarex.CompressionDedupe{},
+            TruncateToolResponses: &middlewarex.CompressionToolTruncation{MaxChars: 2000},
+            Summarize: &middlewarex.CompressionSummarizer{
+                Model: googlegenai.ModelRef("googleai/gemini-flash-lite-latest", nil),
+            },
+        },
+        &middleware.Retry{}, // Inside compression, so a retry resends the compressed view.
+    ),
+)
+```
+
+Before each tool-loop iteration, compression runs when the context exceeds `MaxInputTokens` (the input tokens the model reported for the previous call, estimated from the messages before there is one) or the conversation holds more than `MaxMessages` messages. The strategies run in order:
+
+1. `DedupeToolResponses` replaces older duplicate tool responses with a short notice.
+2. `TruncateToolResponses` truncates older tool responses, leaving the newest tool messages intact.
+3. `Summarize` has a model fold older messages into a summary, unless the first two strategies already saved `SkipSummarizationThreshold` of the context and brought it under budget.
+4. Older messages are dropped when nothing was summarized and the conversation is still over its message budget. A notice tells the model that context was removed.
+
+Set `MaxInputTokens` well above the size of a typical first turn. The prompt of a plain `Generate` call is an ordinary user message, so a compaction early in a tool loop, far over budget, can fold the request itself into the summary, and the model then works from the summary of its task.
+
+`MaxToolResponseChars` caps every tool response on every iteration, whether or not a trigger fires. Leading system messages are always kept, and the kept messages never start with a tool response separated from its request. The scaffolding an agent's prompt renders on every turn, and the message that carries output-format instructions, are never summarized or dropped.
+
+**The model gets a view, the history keeps the transcript.** `resp.History()` keeps every original message, and the compression is recorded in their metadata under the `"contextCompression"` key. That metadata is the whole state, so compression continues across `Generate` calls, agent sessions, and process restarts when you carry the history forward, and a history that the JavaScript middleware compressed resolves the same way. `middlewarex.ResolveCompressedHistory(msgs)` returns the messages a model receives for a history. Set `ReplaceHistory` to get the compressed messages back as the history instead. The final response carries the newest compression's stats in `resp.Custom`, under `"contextCompression"`.
+
+**Order.** List `ContextCompression` after middleware that adds context (`Skills`, `Filesystem`, `Agents`, `Artifacts`), so it accounts for what they add, and before `Retry` and `Fallback`, so retried and fallback calls receive the compressed view.
+
+**Configuration options:**
+
+- `MaxInputTokens` (optional): Compress when the context exceeds this many tokens. Zero disables the token trigger.
+- `MaxMessages` (optional): Compress when the conversation holds more than this many messages, and keep at most this many. Zero disables it. Without `Summarize`, a tight cap drops the turns that record a tool loop's progress, and the model may repeat calls it already made.
+- `PreserveRecent` (optional): How many of the newest non-system messages are kept when older ones are dropped, and the default window for `Summarize` (default: 4). This window and the summarizer's both shrink when the context is far over budget: they are halved, to no fewer than 2, beyond 1.5 times `MaxInputTokens`, and are at most 2 beyond twice it.
+- `MaxToolResponseChars` (optional): A hard cap on the characters of any one tool response, applied on every iteration (default: 400000). Negative disables it.
+- `DedupeToolResponses` (optional): A `*middlewarex.CompressionDedupe`. `MatchBy` matches duplicates by tool name and input (`middlewarex.CompressionDedupeNameAndInput`, the default) or by tool name alone (`middlewarex.CompressionDedupeNameOnly`); `KeepRecent` is how many of the newest responses in each group stay intact (default: 1); `Notice` replaces the default notice.
+- `TruncateToolResponses` (optional): A `*middlewarex.CompressionToolTruncation`. `MaxChars` (required) is the most characters an older tool response keeps; `PreserveRecent` is how many of the newest tool messages stay intact (default: 2, negative truncates every tool message).
+- `Summarize` (optional): A `*middlewarex.CompressionSummarizer`. `Model` (required) writes the summaries, with its config used as is, so set the summary's output limit there; `PreserveRecent` is how many of the newest messages stay out of the summary (default: the top-level `PreserveRecent` when set, 6 otherwise); `Prompt` replaces the default prompt, with each `{conversation}` in it replaced by the messages to summarize.
+- `SkipSummarizationThreshold` (optional): Skip `Summarize` when deduplication and truncation saved at least this fraction of the context, between 0 and 1, and brought it under `MaxInputTokens`. Zero always summarizes.
+- `TruncationNotice` (optional): A custom notice for dropped messages. `NoTruncationNotice` drops them without one.
+- `ReplaceHistory` (optional): If true, the returned history is the compressed messages instead of the originals (default: false).
+
+A nil strategy is off. `New` fails with `INVALID_ARGUMENT` for a negative count, a missing `MaxChars` or summarizer model, or a threshold outside 0 to 1, and with `ai.ErrModelNotFound` for a summarizer model that no plugin resolves.
+
+The [context-compression sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/context-compression) runs a research loop with a small budget, so compression starts partway through, and reports what it compressed next to the answer.
+
+### 8. Budget middleware (`Budget`)
+
+:::caution[Preview]
+This middleware is in the experimental `plugins/middleware/exp` package and can change in a minor release.
+:::
+
+Caps what a generate run, or an agent session, may spend. `Limit` is an `ai.GenerationUsage`, and each non-zero field is a cap, with `Custom` capped key by key, so tokens, images, and a cost that the provider reports are all covered.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("Research the topic and summarize it."),
+    ai.WithTools(searchTool),
+    ai.WithUse(&middlewarex.Budget{Limit: ai.GenerationUsage{
+        TotalTokens: 50_000,
+    }}),
+)
+if errors.Is(err, ai.ErrBudgetExceeded) {
+    // The partial response keeps the turns that ran.
+    log.Printf("out of budget after %d tokens", resp.TotalUsage.TotalTokens)
+}
+```
+
+Usage counts as models report it. `OutputTokens` leaves out `ThoughtsTokens`, so cap both, or `TotalTokens`, to cap what a model generates. A model that reports no usage spends nothing.
+
+**When it stops.** The limit is checked before each model call of the tool loop, outside every `WrapModel` hook, so `Retry` and `Fallback` never see the stop, in any order. A turn that is already running finishes, so a run can go over its limit by one turn, and with `Retry` in the chain, one turn can be several billed calls. The run stops with `ai.ErrBudgetExceeded`. Like `ai.ErrMaxTurnsExceeded`, it is a limit the caller set: the partial response reports `ai.FinishReasonAborted`, and an agent turn reports aborted, not failed.
+
+**What counts.** With the default run scope, every model call made under the `Generate` counts: the calls `resp.TotalUsage` sums (the tool loop, hooks, nested generates), plus those of any subagent the run starts, so delegation cannot spend around the cap. With `Scope: middlewarex.BudgetScopeSession`, the limit covers the agent session's recorded usage across all its turns, plus what the current run spends. That needs a server-managed agent with a [session store](/docs/agents/session-stores/), and `New` fails otherwise. A budget stops only the run it wraps: a background delegation the run started keeps running, and spending, after the run stops.
+
+**Pausing instead of stopping.** With `Interrupt` set, a run-scoped budget holds the tool calls that would lead to the next turn, and you decide whether the run continues:
+
+```go
+budget := &middlewarex.Budget{
+    Limit:     ai.GenerationUsage{TotalTokens: 50_000},
+    Interrupt: true,
+}
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithPrompt("Research the topic and summarize it."),
+    ai.WithTools(searchTool),
+    ai.WithUse(budget),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+if resp.FinishReason == ai.FinishReasonInterrupted {
+    var answers []*ai.Part
+    for _, part := range resp.Interrupts() {
+        if call, ok := middlewarex.BudgetInterrupted(part); ok {
+            hold, _ := ai.InterruptAs[middlewarex.BudgetExceeded](call.Part)
+            log.Printf("%s, approving more", hold.Message)
+            answers = append(answers, call.Restart(middlewarex.BudgetDecision{Approved: true}))
+        }
+    }
+    resp, err = genkit.Generate(ctx, g,
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(searchTool),
+        ai.WithResume(answers...),
+        ai.WithUse(budget),
+    )
+}
+```
+
+`middlewarex.BudgetExceeded` says which limit the run reached: `Message`, plus `Spent` and `Limit` keyed by each capped field's JSON name, such as `"totalTokens"` or `"custom.cost"`. A `middlewarex.BudgetDecision` with `Approved: true` continues the run with the full limit again. Any other restart, a bare one included, stops the run with `ai.ErrBudgetExceeded` and your `Reason` before the held calls run, and so does a `Respond`. The holds of one run share one decision, so one refusal stops it.
+
+The pause happens only when the run is over its limit by the time its tool calls start. A run that goes over while its tools run (a nested generate, a subagent) has nothing left to hold, and the check before the next model call stops it. A session-scoped budget cannot pause, since the next turn would start over its limit with no tool call to pause on, so `New` rejects that combination.
+
+A run counts across its resumes. The run's final message records what it spent, and a resume of that conversation continues from there, so answering another middleware's hold, such as a `ToolApproval` hold, does not renew the limit; only approving the budget's own hold does. A history that comes back without that record, which a client-managed history can do, starts the count over.
+
+**Configuration options:**
+
+- `Limit` (required): The usage the run or session may spend. Each non-zero field is a cap, and at least one must be set.
+- `Scope` (optional): `middlewarex.BudgetScopeRun` (the default) or `middlewarex.BudgetScopeSession`.
+- `Interrupt` (optional): If true, a run-scoped budget pauses for approval instead of stopping (default: false).
+
+Budgets in one chain count the same calls and claim the same holds, so stacking them enforces all their limits together. The [budget sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/budget) sends the model along a chain of clues that a small budget cannot reach the end of, once stopping and once pausing.
+
 ### The experimental middleware plugin
 
-A second, in-preview middleware plugin lives at `github.com/firebase/genkit/go/plugins/middleware/exp`. It provides `Agents` for sub-agent delegation, synchronous or in the background, and `Artifacts` for session artifact access; both are documented in [Multi-agent delegation](/docs/agents/multi-agent). It registers under the provider name `genkit-middleware-exp`, so its names do not collide with the stable plugin's and you can register both:
+The experimental middleware live in a second, in-preview plugin at `github.com/firebase/genkit/go/plugins/middleware/exp`. Beside `ContextCompression` and `Budget`, it provides `Agents` for sub-agent delegation, synchronous or in the background, and `Artifacts` for session artifact access; both are documented in [Multi-agent delegation](/docs/agents/multi-agent). It registers under the provider name `genkit-middleware-exp`, so its names do not collide with the stable plugin's and you can register both:
 
 ```go
 import (
@@ -565,7 +804,7 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 ))
 ```
 
-A `.prompt` reference such as `genkit-middleware/retry` resolves to the stable plugin; the experimental ones are named `genkit-middleware-exp/agents` and `genkit-middleware-exp/artifacts`. Being in preview, they may change in any minor release.
+A `.prompt` reference such as `genkit-middleware/retry` resolves to the stable plugin; the experimental ones are named `genkit-middleware-exp/agents`, `genkit-middleware-exp/artifacts`, `genkit-middleware-exp/budget`, and `genkit-middleware-exp/contextCompression`. As with the stable plugin, passing them to `ai.WithUse` directly needs no registration. Being in preview, they may change in any minor release.
 
 A third package, `github.com/firebase/genkit/go/plugins/a2ui/exp`, ships one middleware of its own: `a2uix.Surfaces` lets the model stream generative UI to a browser over the A2UI protocol, and `a2uix.A2UI` is the plugin that registers it by name. It is in preview too. See [Generative UI (A2UI)](/docs/agents/a2ui).
 
@@ -590,7 +829,7 @@ type Hooks struct {
     // WrapGenerate wraps each iteration of the tool loop.
     WrapGenerate func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error)
 
-    // WrapModel wraps each model API call.
+    // WrapModel wraps each model API call of this Generate call.
     WrapModel func(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error)
 
     // WrapTool wraps each tool execution. May run concurrently for parallel tool calls.
@@ -608,14 +847,19 @@ import (
     "crypto/sha256"
     "encoding/hex"
     "encoding/json"
+    "errors"
     "slices"
     "strings"
     "sync"
+    "sync/atomic"
     "time"
 
     "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/ai/tool"
     "github.com/firebase/genkit/go/core/logger"
     "github.com/firebase/genkit/go/core/status"
+    "github.com/firebase/genkit/go/core/tracing"
     "github.com/firebase/genkit/go/genkit"
 )
 ```
@@ -673,15 +917,16 @@ Both `Request` fields above are the same `*ai.ModelRequest`:
 `ai.ModelRequest` carries no model name. In `WrapGenerate`, read `params.Options.Model`. In `WrapModel`, the name is not on `params` at all: if needed, capture it in `WrapGenerate` and close over it.
 :::
 
-**Mutating params.** A hook may edit `params` in place, or build a different value and hand that to `next`; the engine reads whatever it is given. Three rules follow from how the loop owns these values:
+**Mutating params.** A hook may edit `params` in place, or build a different value and hand that to `next`; the engine reads whatever it is given. These rules follow from how the loop owns these values:
 
 - `GenerateParams.Request` and `ModelParams.Request` are fresh per turn, so an in-place edit stays with that turn. The exception is a `*ai.Message` shared with the next turn: copy the message with `Clone()` before editing its text.
 - `GenerateParams.Options` is a shallow per-turn copy. Writes to it reach nothing, so treat it as read-only.
 - For redaction that must not reach the stored history, prefer `WrapModel`, and shallow-copy the `ModelRequest` plus only the messages and parts you change.
+- Models record the request they ran on in the response's `Request`, and `ModelResponse.History()` reads the conversation from it. A `WrapModel` hook that sends the model different messages than it received must put the original messages back on the response's `Request`, or the caller's history becomes the messages the model saw.
 
 Middleware that emits its own chunks through `Callback` must set `ModelResponseChunk.Role` and `Index` explicitly, and advance `GenerateParams.MessageIndex` so downstream middleware and the model see the shifted value.
 
-**Short-circuiting.** A hook can return without calling `next`. `WrapTool` is the useful case: return an `*ai.MultipartToolResponse` and the tool never runs, but the model still receives a result it can react to on the next turn.
+**Short-circuiting.** A hook can return without calling `next`. `WrapTool` is the useful case: the tool never runs, but the model still receives an answer it can react to on the next turn. To refuse a call, return `tool.Fail` from `github.com/firebase/genkit/go/ai/tool`, and the model receives the error as the tool's response, the same shape `SoftToolErrors` produces:
 
 ```go
 type ToolRefusal struct {
@@ -694,9 +939,7 @@ func (tr ToolRefusal) New(context.Context) (*ai.Hooks, error) {
     return &ai.Hooks{
         WrapTool: func(ctx context.Context, p *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
             if slices.Contains(tr.Denied, p.Request.Name) {
-                return &ai.MultipartToolResponse{
-                    Output: map[string]any{"error": "denied by policy: " + p.Request.Name},
-                }, nil
+                return nil, tool.Fail(ctx, errors.New("denied by policy: "+p.Request.Name))
             }
             return next(ctx, p)
         },
@@ -704,7 +947,7 @@ func (tr ToolRefusal) New(context.Context) (*ai.Hooks, error) {
 }
 ```
 
-This is the shape `ToolApproval` uses. A hook that skips `next` still produces the tool span, so the refusal is visible in traces.
+Any other error from a `WrapTool` hook stops the generation. To answer with a result instead, such as a cached one, return an `*ai.MultipartToolResponse` without calling `next`. A hook that skips `next` still produces the tool span, so the refusal is visible in traces.
 
 ### Logging from a hook
 
@@ -805,6 +1048,127 @@ func (Counter) New(ctx context.Context) (*ai.Hooks, error) {
 
 The built-in `Filesystem` middleware uses this pattern: `New` allocates a per-call file-state cache and a path-lock map, then the read, write, and edit tool implementations close over both.
 
+### Holding a tool call for the caller
+
+A `WrapTool` hook can also pause a call without running it, the way `ToolApproval` does, and read the caller's answer when the generation resumes. Three verbs from `github.com/firebase/genkit/go/ai/tool` do the work:
+
+- `tool.Interrupt(ctx, data)` holds the call. Return it from the hook. `data` must serialize to a JSON object, a struct or a map.
+- `tool.ResumeData[T](ctx)` reads the answer in the hook that raised the hold, when the restart answers it.
+- `tool.Released(ctx)` reports that this hook let the call through before the call paused at a later stage, such as the tool's own interrupt. Pass such a call on rather than holding it again.
+
+```go
+// SpendApproval holds calls to the listed tools until the caller decides them.
+type SpendApproval struct {
+    Tools []string `json:"tools,omitempty" jsonschema_description:"Tools whose calls need approval."`
+}
+
+// SpendHold is the data a SpendApproval hold carries.
+type SpendHold struct {
+    Tool string `json:"tool"`
+}
+
+// SpendDecision is the caller's answer to a SpendApproval hold.
+type SpendDecision struct {
+    Approved bool   `json:"approved"`
+    Reason   string `json:"reason,omitempty"`
+}
+
+func (SpendApproval) Name() string { return "mine/spendApproval" }
+
+func (s SpendApproval) New(context.Context) (*ai.Hooks, error) {
+    return &ai.Hooks{
+        WrapTool: func(ctx context.Context, p *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
+            if !slices.Contains(s.Tools, p.Tool.Name()) {
+                return next(ctx, p)
+            }
+            // This hook let the call through before it paused for another reason.
+            if tool.Released(ctx) {
+                return next(ctx, p)
+            }
+            // The restart answers this hook's hold.
+            if d, ok := tool.ResumeData[SpendDecision](ctx); ok {
+                if d.Approved {
+                    return next(ctx, p)
+                }
+                return nil, tool.Fail(ctx, errors.New("the user declined this call: "+d.Reason))
+            }
+            return nil, tool.Interrupt(ctx, SpendHold{Tool: p.Tool.Name()})
+        },
+    }, nil
+}
+```
+
+The context names the stage that raises the hold, and the restart that answers it reaches that stage alone. A hook's stage is its middleware name, with a `#n` suffix when the name repeats in the chain. Once the hook lets the call through, the tool runs as a fresh call and can interrupt on its own; the restart that answers the tool finds `tool.Released` true in this hook. `tool.Released` is false when that restart replaces the call's input, so a revised call gets a new decision.
+
+Give callers a typed claim, so they answer your holds the way they answer a tool's interrupts. Wrap `ai.MiddlewareInterrupted[Res](name, part)` in a function that fixes the middleware name and the answer type:
+
+```go
+// SpendApprovalInterrupted reports whether part is a call SpendApproval held
+// and, when it is, returns the call, to be answered with a SpendDecision.
+func SpendApprovalInterrupted(part *ai.Part) (*ai.InterruptedCall[any, any, SpendDecision], bool) {
+    return ai.MiddlewareInterrupted[SpendDecision](SpendApproval{}.Name(), part)
+}
+```
+
+The claim matches the hold's stage, so a tool's own interrupt and another middleware's hold report false. The call's input and output types are `any`, since a hook holds any tool, and the answer type must serialize to a JSON object. A caller then decides each hold with `call.Restart`:
+
+```go
+var answers []*ai.Part
+for _, part := range resp.Interrupts() {
+    if call, ok := SpendApprovalInterrupted(part); ok {
+        hold, _ := ai.InterruptAs[SpendHold](call.Part)
+        answers = append(answers, call.Restart(SpendDecision{Approved: confirm(hold.Tool, call.Input)}))
+    }
+}
+```
+
+Carry a refusal as a field of the answer type and answer it with `tool.Fail`, as above: `call.Respond` stands in for the tool's output, must match its output schema, and never reaches the hook. The caller's side of resuming, with `ai.WithResume`, is described in [Pause generation using interrupts](/docs/interrupts/).
+
+### Counting usage across nested calls
+
+A caller reads what a run spent from `resp.TotalUsage`, the sum of every model call the run made: the tool loop's calls, and the calls its tools and hooks make, such as a fallback model or a nested generate. `resp.Usage` is the last call alone.
+
+A `WrapModel` hook sees only the model calls of the `Generate` it is attached to, so a middleware that meters or caps usage there misses a `Generate` that a tool runs, a judge, or a subagent. Add an `aix.Observer` to the context with `tracing.WithInstrumentation` instead: it sees every model call made under that context, whoever makes it. Add it in the first iteration of `WrapGenerate`, whose context every later iteration runs under:
+
+:::caution[Preview]
+`aix.Observer` is in the experimental `ai/exp` package and can change in a minor release.
+:::
+
+```go
+// TokenCap stops a run once its model calls, nested ones included, spend
+// MaxTokens.
+type TokenCap struct {
+    MaxTokens int `json:"maxTokens" jsonschema_description:"Tokens the run may spend."`
+}
+
+func (TokenCap) Name() string { return "mine/tokenCap" }
+
+func (c TokenCap) New(context.Context) (*ai.Hooks, error) {
+    var spent atomic.Int64
+    return &ai.Hooks{
+        WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
+            if p.Iteration == 0 {
+                ctx = tracing.WithInstrumentation(ctx, aix.Observer{
+                    ModelDone: func(_ context.Context, call *aix.ModelCall) {
+                        if u := call.Response.Usage; u != nil {
+                            spent.Add(int64(u.TotalTokens))
+                        }
+                    },
+                })
+            }
+            if n := spent.Load(); n >= int64(c.MaxTokens) {
+                return nil, status.Errorf(ai.ErrBudgetExceeded, "spent %d of %d tokens", n, c.MaxTokens)
+            }
+            return next(ctx, p)
+        },
+    }, nil
+}
+```
+
+`ModelDone` runs on the goroutine that made the call, and calls can run concurrently, so guard the state it touches. `call.Response` is never nil, and failed calls are reported too. A response that a `WrapModel` hook supplies without calling the model, such as a cache hit, is not a model call and is not reported, and neither is a background model. Returning `ai.ErrBudgetExceeded` makes the partial response report `ai.FinishReasonAborted`, as the built-in [`Budget`](#8-budget-middleware-budget) does; use `Budget` itself unless you need different rules.
+
+An application can add the same observer around a flow, to meter usage per tenant. The [metering sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-middleware/metering) bills a tool's nested model call at that model's own rate.
+
 ### Illustrative example: Guardrails middleware
 
 The following example demonstrates how to build an illustrative custom middleware that performs pre- and post-generation policy checks. Using `WrapModel` and `WrapGenerate`, the middleware can evaluate inputs before an expensive model invocation runs, and inspect outputs before returning them to the caller:
@@ -814,15 +1178,15 @@ The following example demonstrates how to build an illustrative custom middlewar
 // response before the caller sees it. Both hooks use a classifier model.
 type Guardrail struct {
     Classifier string `json:"classifier,omitempty"`
-    g          *genkit.Genkit
 }
 
 func (Guardrail) Name() string { return "mine/guardrail" }
 
 func (gr Guardrail) classify(ctx context.Context, instruction, text string) (string, error) {
-    verdict, err := genkit.GenerateText(ctx, gr.g,
+    // Every generation carries its Genkit instance on the context.
+    verdict, err := genkit.GenerateText(ctx, genkit.FromContext(ctx),
         ai.WithModelName(gr.Classifier),
-        ai.WithSystem("%s Answer with one word: ALLOW or BLOCK.", instruction),
+        ai.WithSystem("%s Answer with one word: BLOCK if it does, ALLOW otherwise.", instruction),
         ai.WithPrompt("%s", text),
     )
     if err != nil {
@@ -842,7 +1206,7 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
                     sb.WriteString("\n")
                 }
             }
-            verdict, err := gr.classify(ctx, "Decide whether this request is abusive.", sb.String())
+            verdict, err := gr.classify(ctx, "Does this request contain abuse?", sb.String())
             if err != nil {
                 return nil, err
             }
@@ -860,7 +1224,7 @@ func (gr Guardrail) New(context.Context) (*ai.Hooks, error) {
             if err != nil || resp.Text() == "" {
                 return resp, err
             }
-            verdict, err := gr.classify(ctx, "Decide whether this answer leaks private data.", resp.Text())
+            verdict, err := gr.classify(ctx, "Does this answer leak private data?", resp.Text())
             if err != nil {
                 return nil, err
             }
@@ -894,6 +1258,7 @@ import (
     "context"
     "fmt"
     "io"
+    "os"
     "time"
 
     "github.com/firebase/genkit/go/ai"
@@ -908,11 +1273,15 @@ type Logger struct {
 func (Logger) Name() string { return "mine/logger" }
 
 func (l Logger) New(ctx context.Context) (*ai.Hooks, error) {
+    out := l.out
+    if out == nil {
+        out = os.Stderr // a value built outside the plugin has no writer
+    }
     return &ai.Hooks{
         WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
             start := time.Now()
             resp, err := next(ctx, p)
-            fmt.Fprintf(l.out, "%s model call took %s\n", l.Prefix, time.Since(start))
+            fmt.Fprintf(out, "%s model call took %s\n", l.Prefix, time.Since(start))
             return resp, err
         },
     }, nil
@@ -932,7 +1301,7 @@ func (p *LoggerPlugin) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, e
 
 The `io.Writer` above is the plugin-level state the example is about, not a recommendation: middleware that only wants its records on the trace should call the `core/logger` helpers.
 
-Application code then registers the plugin once during `Init`, which makes the middleware available everywhere by name:
+Application code then registers the plugin once during `Init`, which registers the middleware by name:
 
 ```go
 g := genkit.Init(ctx, genkit.WithPlugins(
@@ -946,7 +1315,7 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
-When the Dev UI dispatches the same middleware with JSON like `{"prefix": "[debug]"}`, Genkit value-copies the prototype to recreate the config: `out` (which isn't in JSON) is preserved from the plugin's prototype, while the unmarshaled JSON overrides `Prefix`.
+A value passed with `ai.WithUse` runs as you built it, without a registry lookup, so it carries only the fields you set. Code outside the package cannot set `out`, which is why `New` falls back to a default. The prototype applies to calls dispatched by name: when the Dev UI or a `.prompt` file's `use:` entry sends JSON like `{"prefix": "[debug]"}`, Genkit value-copies the prototype to recreate the config, so `out` (which isn't in JSON) comes from the plugin, while the unmarshaled JSON overrides `Prefix`.
 
 The built-in `plugins/middleware` package follows exactly this pattern. See [`plugin.go`](https://github.com/genkit-ai/genkit/blob/main/go/plugins/middleware/plugin.go) for a minimal real-world example.
 
@@ -975,9 +1344,9 @@ ai.WithUse(ai.MiddlewareFunc(func(ctx context.Context) (*ai.Hooks, error) {
 }))
 ```
 
-The adapter satisfies `Middleware` with a placeholder name. Inline middleware is resolved on the local fast path and never touches the registry, so the placeholder is fine.
+It works anywhere `ai.WithUse` does: `genkit.Generate`, `Prompt.Execute`, `genkit.DefinePrompt`, and an agent's inline prompt. Inline middleware is resolved on the local fast path and never touches the registry, so every `ai.MiddlewareFunc` shares the placeholder name `inline`.
 
-It works on `genkit.Generate` and on `Prompt.Execute`, but not in `genkit.DefinePrompt`: a prompt action serializes its options and a function value has no JSON form.
+A closure has no JSON form, so inline middleware lives only in the Go process that created it. Wherever the request is serialized (prompt metadata, trace spans, the Dev UI), it shows as a reference named `inline` with no config, and a request replayed from that JSON, such as a prompt run from the Dev UI, fails with `FAILED_PRECONDITION`. The name `inline` is reserved for this reason. For middleware that must run from JSON, define a named type and register it.
 
 ### Composition order
 

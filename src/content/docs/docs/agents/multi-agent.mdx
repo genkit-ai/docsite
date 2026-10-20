@@ -187,6 +187,8 @@ The middleware resolves sub-agents through the `Genkit` instance seeded on the t
 
 Middleware is per-agent. A delegation tool runs the sub-agent as its own invocation, so middleware attached with `ai.WithUse` on the orchestrator's inline prompt wraps only the orchestrator's model calls, never a sub-agent's. Attach cross-cutting middleware such as redaction or logging to every agent that should have it. Doing so does not double-apply: the two agents' generate calls are separate.
 
+Token usage is per-agent too. Each sub-agent records its model calls in its own session, so the orchestrator's `Usage` fields count only its own calls. A `Budget` middleware on the orchestrator is the exception: while the run lasts, it also counts the calls of the in-process sub-agents the run starts, so delegation cannot spend around the cap. See [Middleware](/docs/middleware/).
+
 The orchestrator agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample is this arrangement running: it delegates to two client-managed sub-agents and reads their work back through session artifacts.
 
 ## Delegation options
@@ -199,6 +201,7 @@ The `Agents` middleware is configured through struct fields:
 - **`HistoryLength`** sets how many recent conversation messages are forwarded to a sub-agent. `0` forwards only the task description.
 - **`ArtifactStrategy`** controls how sub-agent artifacts surface, `ArtifactStrategyInline` (default) or `ArtifactStrategySession`.
 - **`Async`** lets the orchestrator launch a sub-agent in the background and collect its result later. See [Delegate in the background](#delegate-in-the-background).
+- **`MaxWaitSeconds`** bounds how long one `wait_for_background_tasks` call blocks, whatever timeout the model asks for. `0` means no bound.
 
 History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
 
@@ -245,7 +248,7 @@ commander := genkitx.DefineAgent(g, "commander",
 )
 ```
 
-The orchestrator launches with `{"task": "...", "background": true}`, calls other tools while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn: zero waits until the tasks settle, and a wait that runs out returns the current statuses with `timedOut` set. `waitFor: "first"` turns the join into a race that returns as soon as any listed task settles while the rest keep running. An abort is safe on any task and never blocks: a task that had already finished is left alone and reports its result, and a live one reports `aborting` while it saves its progress, settling as a resumable `aborted` that the wait tool can collect.
+The orchestrator launches with `{"task": "...", "background": true}`, calls other tools while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn: zero waits until the tasks settle, and a wait that runs out returns the current statuses with `timedOut` set. `waitFor: "first"` turns the join into a race that returns as soon as any listed task settles while the rest keep running. Set `MaxWaitSeconds` to put an upper bound on every wait, zero included, so a sub-agent that keeps running cannot hold the orchestrator's turn open: at the bound the tool reports `timedOut`, as it does at the model's own timeout. An abort is safe on any task and never blocks: a task that had already finished is left alone and reports its result, and a live one reports `aborting` while it saves its progress. It settles as a resumable `aborted`, or as `completed` when the turn in flight finished anyway, and the wait tool can collect either.
 
 The middleware keeps no task registry. A task ID is `<agent>:<snapshotId>`, and it rides in the tool result, so the orchestrator's own conversation is the registry: a re-instantiated orchestrator collects with nothing but the IDs in its history. Reports key on the snapshot. A `pending` task reports its status alone; a `completed` one carries the sub-agent's last message and its artifacts; a `failed`, `aborted`, or `expired` one carries an explanatory error; a completed run whose finish reason carries no answer, such as an interrupt, reports as `failed` with the reason. A task ID the store cannot find reports "delegate again".
 
@@ -262,6 +265,37 @@ Every delegation to a server-managed sub-agent leaves a continuable handle behin
 
 With `Async` set, `continue_task` also takes `background: true` and returns a fresh task ID in the same session. A client-managed delegation settles inline, carries no `taskId`, and is redone by delegating again. The tool registers only when some configured sub-agent may be server-managed, so an all-client-managed configuration gets no dead tool. A continuation spends a `MaxDelegations` slot; a refusal that names a retry which can succeed refunds it.
 
+## Delegate to a remote agent
+
+A sub-agent can run in another service. Any agent that a Genkit app serves over HTTP, in Go, JavaScript, or Dart, becomes a sub-agent once `genkitx.DefineRemoteAgent` registers it, and the orchestrator code is the same as for a local agent, background delegation included:
+
+```go
+researcher := genkitx.DefineRemoteAgent(g, "researcher", "https://research.internal/agents/researcher",
+	aix.WithDescription[any]("Researches one question and answers in a few sentences."),
+	aix.WithAgentMetadata(&aix.AgentMetadata{
+		StateManagement: aix.AgentStateManagementServer,
+		Abortable:       true,
+	}),
+)
+
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Give each part of a question to the researcher in the background, then combine the answers."),
+		ai.WithUse(&middlewarex.Agents{
+			Agents: []aix.AgentRef{researcher.Ref()},
+			Async:  true,
+		}),
+		ai.WithMaxTurns(10),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The metadata tells the middleware what the remote server supports. `StateManagement: aix.AgentStateManagementServer` means the remote agent keeps its own session, so it gets no forwarded history. `Abortable: true` declares that its store can stop background work, which background delegation needs. Without metadata the middleware forwards no history and learns from the agent's answer whether it can run in the background. The remote server needs a session store for background tasks and `continue_task`, the same as a local sub-agent.
+
+A remote sub-agent's failures reach the orchestrator with their status names, so `continue_task` and the background-task tools classify them the same way as a local agent's. Its token usage stays in the remote session, and a `Budget` on the orchestrator does not see the calls it makes in its own process. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent) for authentication and the other options. [`go/samples/basic-agents-remote`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-remote) is this arrangement running.
+
 ## Read sub-agent artifacts
 
 The `Artifacts` middleware gives a model `read_artifact` and `write_artifact` tools over the active session's artifacts, and injects an `<artifacts>` listing into the system prompt each turn. Set `Readonly: true` to provide only `read_artifact`.
@@ -274,7 +308,7 @@ Artifacts live on the active agent session, so the `Artifacts` tools only have a
 
 A sub-agent failure is returned to the orchestrator as the delegation tool's output, with the task ID to continue it, rather than propagated as a top-level error to the original client. A sub-agent interrupt is reported the same way but cannot be continued: there is no stateful sub-agent runtime to answer it from. Write orchestrator instructions that say how to handle a delegated failure, such as continuing the task, choosing another specialist, or asking the user for clarification.
 
-Task handles are not access-scoped. The background-task and continue tools read any snapshot ID belonging to a configured sub-agent, whether or not this conversation launched it, mirroring the sub-agent's own companion actions. In a multi-tenant deployment treat snapshot IDs as capability-like secrets: text that reaches the orchestrator model can steer these tools at any ID it names.
+Task handles are scoped to the conversation. `check_background_tasks`, `wait_for_background_tasks`, `abort_background_tasks`, and `continue_task` accept a task ID only when this generate call started the task, or when a delegation or `continue_task` result in the history carries the ID. Any other ID reports as unknown, "was not started in this conversation", and an abort leaves it alone. Text that reaches the orchestrator model, such as a sub-agent's answer or a retrieved document, therefore cannot steer these tools at another conversation's task. A history trimmed or compacted past a launch result loses that task's handle. The sub-agent's own companion actions and routes are not scoped this way, so in a multi-tenant deployment treat snapshot IDs as capability-like secrets wherever those are exposed.
 
 ## Register as a plugin
 
