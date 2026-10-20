@@ -1,0 +1,176 @@
+---
+title: 'Genkit Go 1.14: Typed HITL tools, budgets, context compression, GenAI tracing, and decision models'
+date: 2026-10-20
+authors: chris-gill
+description: Genkit Go 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, pluggable tracing with OpenTelemetry GenAI semantic conventions, and decision models.
+cover:
+  alt: Genkit Go 1.14
+  image: ./_assets/genkit-go-1-14/banner.png
+tags:
+  - go
+  - announcements
+  - releases
+---
+
+[Genkit Go](https://genkit.dev/docs/go/overview/) 1.14 brings typed human-in-the-loop (HITL) tools, recoverable tool errors, usage budgets, context compression, pluggable tracing, and decision models. Tools can pause for human approval and resume with a typed answer, and a failed tool call can go back to the model to fix. Every run reports what it spent, a budget can cap that spend, and context compression keeps long runs inside the model's context window. Tracing is now pluggable and supports the OpenTelemetry GenAI semantic conventions, and decision models classify and route in milliseconds.
+
+To start using this new version, run the following command in your terminal:
+
+```shell
+go get github.com/firebase/genkit/go@latest
+```
+
+## Human-in-the-loop with resumable tools
+
+Some tool calls shouldn't run until a person signs off, like moving money, sending an email, or deleting files. Resumable tools handle this by pausing the run, waiting for someone to approve, edit, or reject the call, and then picking up where they left off.
+
+In 1.14, the typed API behind this graduates from experimental to stable. `DefineResumableTool` declares the type of answer the tool resumes with, and when the run pauses, the tool's `Interrupted` method returns each paused call with its input already decoded, so you can show the user exactly what they're approving:
+
+```go
+transferMoney := genkit.DefineResumableTool(g, "transferMoney", "Transfers money to another account.",
+    func(ctx context.Context, in TransferInput, resume *Confirmation) (*TransferOutput, error) {
+        if resume == nil && in.Amount > approvalLimit {
+            return nil, tool.Interrupt(ctx, map[string]any{"reason": "over_limit"})
+        }
+        if resume != nil && !resume.Approved {
+            return &TransferOutput{Status: "declined"}, nil
+        }
+        return transfer(ctx, in)
+    })
+
+// The run paused on the transfer. Claim the call and answer it.
+var parts []*ai.Part
+for _, part := range resp.Interrupts() {
+    if call, ok := transferMoney.Interrupted(part); ok {
+        approved := askUser(call.Input.Amount, call.Input.ToAccount) // TransferInput, decoded
+        parts = append(parts, call.Restart(Confirmation{Approved: approved}))
+    }
+}
+resp, err = genkit.Generate(ctx, g,
+    ai.WithMessages(resp.History()...),
+    ai.WithTools(transferMoney),
+    ai.WithResume(parts...),
+)
+```
+
+You can also answer on the tool's behalf without running it, or rerun it with corrected arguments.
+
+If approving every call by hand gets tedious, the `ToolApproval` middleware can now send calls outside its allowlist to a judge model, the same auto-approval mode coding agents offer:
+
+```go
+ai.WithUse(&middleware.ToolApproval{
+    AllowedTools: []string{"list_files"},
+    Judge:        ai.NewModelRef("googleai/gemini-flash-lite-latest", nil),
+    JudgePolicy:  "Never allow deleting anything outside build/.",
+})
+```
+
+The judge can allow a call, deny it, or escalate it to you. If the judge itself fails, the call is denied. It never sees tool results, so instructions injected into them can't sway it.
+
+## Recover from tool errors
+
+Models make mistakes when they call tools, like writing a malformed SQL query or guessing a file path that doesn't exist. Often the quickest fix is to show the model the error and let it try again.
+
+Return `tool.Fail` to send an error back to the model instead of ending the request. For tools you don't own, such as MCP tools, the `SoftToolErrors` middleware does the same:
+
+```go
+query := genkit.DefineTool(g, "query", "Runs a read-only SQL query.",
+    func(ctx *ai.ToolContext, in QueryInput) ([]string, error) {
+        rows, err := runQuery(ctx, in.SQL)
+        if errors.Is(err, errSyntax) {
+            return nil, tool.Fail(ctx, err) // the model reads the error and fixes the query
+        }
+        return rows, err // a lost connection still stops the loop
+    })
+```
+
+Genkit also recovers panics inside tools, so one bad call can't take down your process.
+
+## Control cost and context in long runs
+
+An agent working through many tool calls can spend more than you expect, and a long enough run eventually outgrows the model's context window. Every model plugin now reports usage the same way, and Genkit totals it across every model call in a run, including calls made by tools, fallbacks, and subagents. Two preview middlewares build on that: `Budget` stops a run at a token or cost limit, and `ContextCompression` keeps long tool loops inside the context window:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Research the topic and summarize it."),
+    ai.WithTools(search),
+    ai.WithUse(
+        &middlewarex.Budget{Limit: ai.GenerationUsage{
+            TotalTokens: 200_000,
+            Custom:      map[string]float64{"cost": 0.50},
+        }},
+        &middlewarex.ContextCompression{
+            MaxInputTokens:      80_000,
+            DedupeToolResponses: &middlewarex.CompressionDedupe{},
+            Summarize: &middlewarex.CompressionSummarizer{
+                Model: ai.NewModelRef("googleai/gemini-flash-lite-latest", nil),
+            },
+        },
+    ),
+)
+if errors.Is(err, ai.ErrBudgetExceeded) {
+    log.Println(resp.FinishReason) // aborted: your limit, not a failure
+}
+```
+
+Subagents count toward the budget, so delegating work can't get around the cap. A budget can also pause the run for your approval instead of stopping it.
+
+Compression tries the cheapest strategies first, dropping duplicate tool output and trimming old results before it summarizes earlier turns with a smaller model. Only the model sees the compressed view, and `History()` still keeps every message.
+
+## Trace model calls with OpenTelemetry GenAI semantic conventions
+
+Tracing in Genkit is now pluggable: OpenTelemetry is one provider among others, and `tracing.SetInstrumentation` chooses which ones run. The new `otelgenai` plugin uses this to report model calls with the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), so any backend that supports them can chart token usage, latency, and prompts:
+
+```go
+tracing.SetInstrumentation(otelgenai.New(&otelgenai.Options{
+    ContentCapturingMode: otelgenai.SpanOnly, // message content is off by default
+    EmitToolSpans:        true,
+}))
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+```
+
+Model calls become `chat <model>` spans with standard `gen_ai.*` attributes and metrics. Message content is opt-in, and the plugin replaces the Google Cloud and Firebase telemetry plugins rather than running alongside them. See the [`otel-genai`](https://github.com/genkit-ai/genkit/tree/main/go/samples/otel-genai) sample.
+
+## Route and classify with decision models (preview)
+
+Not every decision needs a full LLM. Routing a support ticket, flagging urgency, or enforcing a guardrail calls for an answer that's fast, cheap, and tells you how sure the model is. The preview `systemone/exp` plugin serves decision models such as TypeSafe's jev, Liquid AI's d1, and Cloudflare's Clef, which answer typed questions in a few hundred milliseconds. You describe the questions as a Go struct, and each field comes back calibrated: a choice with its confidence, or the probability that a yes/no statement is true:
+
+```go
+type Dept string
+
+func (Dept) Criteria() map[Dept]string {
+    return map[Dept]string{
+        "billing":   "Payments, invoicing, refunds",
+        "technical": "Bugs, outages, login problems",
+        "sales":     "Pricing, upgrades, new accounts",
+    }
+}
+
+type Triage struct {
+    Department systemonex.Choice[Dept] `json:"department" jsonschema_description:"Which team should handle this ticket?"`
+    IsUrgent   systemonex.Noul         `json:"isUrgent" jsonschema_description:"Does the ticket communicate time pressure?"`
+}
+
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.TypeSafe()))
+triage, _, err := genkit.GenerateData[Triage](ctx, g,
+    ai.WithModelName("typesafe/jev-1.13.0"),
+    ai.WithPrompt(ticket),
+)
+if err == nil && triage.Department.Confidence < 0.6 {
+    escalate(ticket) // too close to call, so a person decides
+}
+```
+
+The plugin works with TypeSafe, OpenRouter's Decisions API, Cloudflare Workers AI, and Ollama, and a decision model can also serve as the `ToolApproval` judge. See the [`basic-decisions`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-decisions) sample.
+
+## Also in this release
+
+* **Remote agents.** `DefineRemoteAgent` connects to an agent served by another Genkit app, whether it's written in Go, JavaScript, or Dart, and uses it as a subagent just like a local one.
+* **Agent Skills.** The `Skills` middleware loads skills that follow the [Agent Skills specification](https://agentskills.io) from any `fs.FS`, giving the model reusable instructions along with the files bundled with them.
+* **PostgreSQL session store.** Agent sessions can persist in PostgreSQL with the preview `postgresql/exp` package, and a new test suite helps you verify your own custom store.
+* **Provider updates.** Hosted Ollama servers support custom headers and API keys, OpenAI-compatible providers accept audio and PDF input, Anthropic extended thinking works without streaming, and Gemini image models return images from a plain prompt.
+
+## Get started
+
+We can't wait to see what you build with Genkit Go 1.14. Check out the [Genkit Go docs](https://genkit.dev/docs/go/get-started/), run the [samples](https://github.com/genkit-ai/genkit/tree/main/go/samples), or read the [full release notes](https://github.com/genkit-ai/genkit/releases/tag/go%2Fv1.14.0), which list the deprecations and upgrade notes.
