@@ -161,8 +161,9 @@ import { vertexAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   plugins: [
-    vertexAI({ location: 'us-central1' }), // Regional endpoint
+    vertexAI(), // Default location (see Interactions API below)
     // vertexAI({ location: 'global' }),      // Global endpoint
+    // vertexAI({ location: 'us-central1' }), // Regional endpoint (not for Interactions API models)
   ],
 });
 ```
@@ -193,11 +194,15 @@ The following Gemini models are registered for use with the Gemini Enterprise pl
 - `gemini-nano-banana-2.1` - Fast and efficient image generation and editing
 - `gemini-3-pro-image` - State-of-the-art image generation and editing for complex visual tasks
 
+**Text-to-speech** - `gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts` (see [Text-to-speech](#text-to-speech))
+
+**Video (Gemini Omni)** - `gemini-omni-1.1-flash-preview`, `gemini-omni-flash-preview` (see [Video Generation (Gemini Omni)](#video-generation-gemini-omni))
+
 ### Interactions API
 
-Newer Gemini models (such as `gemini-4-argon` and `gemini-3.8-flash`), Gemini Omni video models, and any Gemini model the plugin does not know go to the Interactions API. Older models (such as `gemini-3.5-flash`, `gemini-3.1-pro-preview`, and the Gemini 2.5 family), the `-latest` aliases, image models, text-to-speech models, and tuned model endpoints stay on `generateContent`. `text`, `reasoning`, `media`, tool calls, streaming, and usage work the same on both; `response.raw` has a different shape (a `GeminiInteraction` with a `steps[]` timeline). Unlike the Google AI plugin, `safetySettings` and `labels` are supported on these models.
+Newer Gemini models (such as `gemini-4-argon` and `gemini-3.8-flash`), Gemini Omni video models, and any Gemini model the plugin does not list (including the `-latest` aliases) go to the Interactions API. Older models (such as `gemini-3.5-flash`, `gemini-3.1-pro-preview`, and the Gemini 2.5 family), image models, text-to-speech models, and tuned model endpoints stay on `generateContent`. `text`, `reasoning`, `media`, tool calls, streaming, and usage work the same on both; `response.raw` has a different shape (a `GeminiInteraction` with a `steps[]` timeline). Some `generateContent` options don't apply: `thinkingConfig.thinkingBudget` is dropped with a warning (use `thinkingLevel`), and `videoMetadata` on media parts is ignored. Unlike the Google AI plugin, `safetySettings` and `labels` are supported on these models.
 
-The Interactions API is available on the `global` location (and on the `us` and `eu` multi-regions with CMEK), and in Express mode. If you do not set a location, these models use `global`. Interactions are not stored by default; set `config: { store: true }` (or `vertexAI({ store: true })`) to store them and continue a conversation from the previous response's messages.
+The Interactions API is available on the `global` location (and on the `us` and `eu` multi-regions with CMEK), and in Express mode. If you do not set a location (no `vertexAI({ location })`, no `GCLOUD_LOCATION`, no `config.location`), these models use `global` and `generateContent` models use `us-central1`. A location you set is used as is, so a regional location such as `us-central1` makes these models fail; use `global` or leave the location unset. Interactions are not stored by default; set `config: { store: true }` (or `vertexAI({ store: true })`) to store them and continue a conversation from the previous response's messages.
 
 ### Basic Usage
 
@@ -206,7 +211,7 @@ import { genkit } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
-  plugins: [vertexAI({ location: 'us-central1' })],
+  plugins: [vertexAI()],
 });
 
 const response = await ai.generate({
@@ -223,7 +228,7 @@ You can specify the `payGo` option to use Flex or Priority routing in Gemini Ent
 
 ```typescript
 const response = await ai.generate({
-  model: vertexAI.model('gemini-flash-lite-latest'),
+  model: vertexAI.model('gemini-3.5-flash'),
   prompt: 'Explain Gemini Enterprise in simple terms.',
   config: {
     payGo: 'priority', // Can be 'priority', 'priority-only', 'flex', or 'flex-only'
@@ -233,11 +238,11 @@ const response = await ai.generate({
 
 ### Multimodal Input
 
-Gemini models can process multimodal inputs, including images and video. When using videos, you can use `videoMetadata` to specify specific timestamps or sampling rates.
+Gemini models can process multimodal inputs, including images and video. When using videos, you can use `videoMetadata` to specify specific timestamps or sampling rates (only on models that use `generateContent`).
 
 ```typescript
 const response = await ai.generate({
-  model: vertexAI.model('gemini-flash-latest'),
+  model: vertexAI.model('gemini-3.5-flash'),
   prompt: [
     { text: 'transcribe this video' },
     {
@@ -259,6 +264,13 @@ const response = await ai.generate({
 
 ### Text Embedding
 
+**Available Models:**
+- `text-embedding-005` - English text (768 dimensions)
+- `text-multilingual-embedding-002` - Multilingual text (768 dimensions)
+- `multimodalembedding@001` - Text, image, and video (1408 dimensions)
+- `gemini-embedding-001` - Text (3072 dimensions)
+- `gemini-embedding-2` - Text, image, and video (3072 dimensions); a document's text and media parts are embedded together, and `taskType` and `title` are ignored
+
 ```typescript
 const embeddings = await ai.embed({
   embedder: vertexAI.embedder('text-embedding-005'),
@@ -267,6 +279,8 @@ const embeddings = await ai.embed({
 ```
 
 ### Image Generation (Imagen)
+
+Imagen image generation models on Gemini Enterprise were retired on June 30, 2026. To generate or edit images, use a Gemini image model such as `gemini-nano-banana-2.1` or `gemini-3-pro-image`.
 
 **Available Models:**
 - `virtual-try-on-001`
@@ -290,23 +304,44 @@ const response = await ai.generate({
 const generatedImage = response.media;
 ```
 
+### Video Generation (Gemini Omni)
+
+**Available Models:**
+- `gemini-omni-1.1-flash-preview`
+- `gemini-omni-flash-preview`
+
+These IDs differ from the Google AI plugin's (`gemini-omni-1.1-flash`). Omni models use the Interactions API, so they need a location it supports (see [Interactions API](#interactions-api)). Unlike Veo, generation isn't a long-running operation: `ai.generate()` returns the video directly.
+
+```typescript
+const response = await ai.generate({
+  model: vertexAI.model('gemini-omni-1.1-flash-preview'),
+  prompt: 'An origami butterfly flaps its wings and flies out of the french doors into the garden.',
+  config: {
+    videoFormat: { aspectRatio: '16:9', resolution: '720p' },
+  },
+});
+
+const video = response.media;
+```
+
+- Images and videos in the prompt are used as inputs (for example, image to video or editing a video). `config.videoConfig.task` (`text_to_video`, `image_to_video`, `reference_to_video`, `edit`, `extend`) sets the kind of generation; without it, the model infers it from the prompt.
+- `config.videoFormat` sets `aspectRatio` (`16:9`, the default, or `9:16`) and `resolution` (`360p`, `720p` (the default), `1080p`, or `4k`). The video is returned inline by default; set `delivery: 'uri'` and `gcsUri` to write it to Cloud Storage instead.
+- To edit a generated video in a follow-up turn, set `config: { store: true }` and pass the previous response's messages.
+
 ### Video Generation (Veo)
 
 Generate videos from text prompts or manipulate existing images to create dynamic video content.
 
 **Available Models:**
-- `veo-3.1-generate-preview`
-- `veo-3.1-fast-generate-preview`
-- `veo-3.1-lite-generate-preview`
-- `veo-3.0-generate-001`
-- `veo-3.0-fast-generate-001`
-- `veo-2.0-generate-001`
+- `veo-3.1-generate-001`
+- `veo-3.1-fast-generate-001`
+- `veo-3.1-lite-generate-001`
 
 **Usage (Text-to-Video):**
 
 ```typescript
 let { operation } = await ai.generate({
-  model: vertexAI.model('veo-3.1-lite-generate-preview'),
+  model: vertexAI.model('veo-3.1-lite-generate-001'),
   prompt: 'A majestic dragon soaring over a mystical forest at dawn.',
   config: {
     aspectRatio: '16:9',
@@ -332,7 +367,7 @@ You can extend an existing Veo-generated video by providing it as input to anoth
 
 ```typescript
 let { operation } = await ai.generate({
-  model: vertexAI.model('veo-3.1-generate-preview'),
+  model: vertexAI.model('veo-3.1-generate-001'),
   prompt: [
     { text: 'Track the butterfly into the garden as it lands on a flower.' },
     {
@@ -357,6 +392,8 @@ Generate high-quality music and audio clips.
 - `lyria-3-clip-preview`
 - `lyria-002` (Legacy)
 
+The Lyria 3 models use the Interactions API and are available only on the `global` location: if you don't set a location they use `global`, and a regional location you set makes them fail.
+
 **Usage:**
 
 ```typescript
@@ -367,6 +404,33 @@ const response = await ai.generate({
 
 const audioMedia = response.media;
 ```
+
+### Text-to-speech
+
+**Available Models:**
+- `gemini-3.8-flash-tts`
+- `gemini-3.8-flash-lite-tts`
+
+The text is read verbatim, so put delivery instructions in the part's `metadata.speechMetadata.style`. Choose a voice with `speechConfig.voiceConfig.voice` (a prebuilt voice name or a voice ID); the Google AI plugin's `prebuiltVoiceConfig: { voiceName }` shape also works.
+
+```typescript
+const response = await ai.generate({
+  model: vertexAI.model('gemini-3.8-flash-tts'),
+  prompt: [
+    {
+      text: 'Have a wonderful day!',
+      metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+    },
+  ],
+  config: {
+    speechConfig: { voiceConfig: { voice: 'Kore' } },
+  },
+});
+
+const audio = response.media;
+```
+
+Without `audioFormat`, a non-streamed request returns a WAV file (`audio/wav`) and a streamed request returns raw PCM (`audio/l16`). Set `config.audioFormat.mimeType` to `audio/wav`, `audio/l16`, `audio/mulaw`, or `audio/alaw` to choose the format.
 
 ### Thinking Config
 
@@ -385,20 +449,7 @@ const response = await ai.generate({
 });
 ```
 
-#### Thinking Budget (Gemini 2.5)
-
-```typescript
-const { message } = await ai.generate({
-  model: vertexAI.model('gemini-pro-latest'),
-  prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
-  config: {
-    thinkingConfig: {
-      thinkingBudget: 1024,
-      includeThoughts: true,
-    },
-  },
-});
-```
+`thinkingConfig.thinkingBudget` applies only to the Gemini 2.5 models on `generateContent`, which reached their retirement date on October 20, 2026 (the plugin still lists them until the service stops serving them). Models on the Interactions API drop `thinkingBudget` with a warning; use `thinkingLevel` instead.
 
 ### Grounding (Gemini Enterprise Search & Google Search)
 
@@ -407,7 +458,7 @@ Enable Google Search or Gemini Enterprise data stores to provide answers grounde
 ```typescript
 // Google Search Grounding
 const searchResponse = await ai.generate({
-  model: vertexAI.model('gemini-flash-latest'),
+  model: vertexAI.model('gemini-3.8-flash'),
   prompt: 'What are the top tech news stories this week?',
   config: {
     tools: [{ googleSearch: {} }],
@@ -416,16 +467,15 @@ const searchResponse = await ai.generate({
 
 // Gemini Enterprise Search Grounding
 const vertexResponse = await ai.generate({
-  model: vertexAI.model('gemini-flash-latest'),
+  model: vertexAI.model('gemini-3.8-flash'),
   prompt: 'Summarize our company policies.',
   config: {
     vertexRetrieval: {
       datastore: {
         projectId: 'your-project-id',
-        location: 'us-central1',
+        location: 'global', // Data store location: 'global', 'us', or 'eu'
         dataStoreId: 'your-data-store-id',
       },
-      disableAttribution: false,
     },
   },
 });
@@ -586,10 +636,10 @@ Use Vector Search in Gemini Enterprise for enterprise-grade vector operations:
 
 1. Create a Vector Search index in the [Google Cloud Console](https://console.cloud.google.com/vertex-ai/matching-engine/indexes)
 2. Configure dimensions based on your embedding model:
-   - `gemini-embedding-001` / `gemini-embedding-2-preview`: **default 3072** dimensions; you can set **`output_dimensionality`** on embed calls (for example **768**, **1536**, or **3072** per Google). Size the index to the length you actually use.
+   - `gemini-embedding-001` / `gemini-embedding-2`: **default 3072** dimensions; you can set **`outputDimensionality`** in the embed call's `options` (for example **768**, **1536**, or **3072** per Google). Size the index to the length you actually use.
    - `text-embedding-005`: 768 dimensions
    - `text-multilingual-embedding-002`: 768 dimensions
-   - `multimodalEmbedding001`: 128, 256, 512, or 1408 dimensions
+   - `multimodalembedding@001`: 128, 256, 512, or 1408 dimensions
 3. Deploy the index to a standard endpoint
 
 #### Configuration

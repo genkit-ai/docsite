@@ -18,8 +18,8 @@ The plugin supports a wide range of capabilities:
 
 - **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks
 - **Embedding Models**: Text and multimodal embeddings
-- **Image Models**: Imagen for generation and Gemini for image analysis
-- **Video Models**: Veo for video generation and Gemini for video understanding
+- **Image Models**: Gemini image (Nano Banana) models for generation and editing, and Gemini for image analysis
+- **Video Models**: Gemini Omni for video generation and editing, and Gemini for video understanding
 - **Speech Models**: Polyglot text-to-speech generation
 
 ## Setup
@@ -213,26 +213,13 @@ const response = await ai.generate({
     },
   },
 });
-```
-
-**Thinking Budget (Gemini 2.5):**
-
-```typescript
-const response = await ai.generate({
-  model: googleAI.model('gemini-pro-latest'),
-  prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
-  config: {
-    thinkingConfig: {
-      thinkingBudget: 8192, // Number of thinking tokens
-      includeThoughts: true, // Include thought summaries
-    },
-  },
-});
 
 if (response.reasoning) {
   console.log('Reasoning:', response.reasoning);
 }
 ```
+
+**Thinking Budget (Gemini 2.5):** `thinkingConfig.thinkingBudget` sets a token budget for the legacy Gemini 2.5 models on `generateContent`, which are available only to projects that already used them. Models routed to the [Interactions API](#interactions-api) ignore it with a warning; use `thinkingLevel` instead.
 
 ### Context Caching
 
@@ -257,7 +244,7 @@ await ai.generate({
 
 ### Safety Settings
 
-You can configure safety settings to control content filtering for different harm categories. Safety settings apply to models on `generateContent` only; models routed to the [Interactions API](#interactions-api) reject them.
+You can configure safety settings to control content filtering for different harm categories. Safety settings apply to models on `generateContent` only. Models routed to the [Interactions API](#interactions-api) ignore `BLOCK_NONE` settings and reject blocking thresholds with `INVALID_ARGUMENT`.
 
 ```typescript
 const response = await ai.generate({
@@ -294,7 +281,7 @@ Available thresholds:
 
 **Accessing Safety Ratings:**
 
-Safety ratings are typically only included when content is flagged. You can access them from the response custom metadata:
+Safety ratings are typically only included when content is flagged. On `generateContent` models, you can access them from the response custom metadata:
 
 ```typescript
 const geminiResponse = response.custom as any;
@@ -308,9 +295,10 @@ Deep Research models can perform extensive research tasks over multiple turns, u
 
 **Available Models:**
 
-- `deep-research-pro-preview-12-2025`
 - `deep-research-preview-04-2026`
 - `deep-research-max-preview-04-2026`
+
+`deep-research-pro-preview-12-2025` is deprecated and will shut down on October 23, 2026.
 
 **Usage:**
 
@@ -336,11 +324,28 @@ console.log(operation.output?.message?.content);
 
 You can also use `previousInteractionId` for multi-turn research, set `collaborativePlanning: true` to get a research plan first, or use `ai.cancelOperation(operation)` to halt an ongoing research task.
 
+### Antigravity
+
+The Antigravity agent works in a sandbox environment that persists across turns:
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('antigravity-preview-09-2026'),
+  prompt: 'Read Hacker News, summarize the top 10 stories.',
+  // Required: the sandbox the agent works in.
+  config: { environment: 'remote' },
+});
+```
+
+To continue, pass the previous response's messages (plus your next message) in a follow-up call; the plugin continues the stored interaction in the same environment. Antigravity requires stored interactions, so unlike Gemini models it doesn't default to `store: false`. Don't set `store: false` for it; if you use `googleAI({ store: false })`, set `store: true` in the Antigravity request config.
+
 ### Google Search Grounding
 
 Enable Google Search to provide answers with current information and verifiable sources.
 
 ```typescript
+import type { GeminiInteraction } from '@genkit-ai/google-genai';
+
 const response = await ai.generate({
   model: googleAI.model('gemini-flash-latest'),
   prompt: 'What are the top tech news stories this week?',
@@ -349,7 +354,18 @@ const response = await ai.generate({
   },
 });
 
-// Access grounding metadata
+// Sources: URL citations on the model_output text.
+const raw = response.raw as GeminiInteraction;
+const sources = raw.steps
+  ?.flatMap((step) => (step.type === 'model_output' ? step.content : []))
+  .flatMap((c) => (c.type === 'text' ? (c.annotations ?? []) : []))
+  .filter((a) => a.type === 'url_citation');
+console.log('Sources:', sources);
+```
+
+Models on `generateContent` (such as `gemini-3.1-pro-preview`) return grounding metadata on the first candidate instead:
+
+```typescript
 const groundingMetadata = (response.custom as any)?.candidates?.[0]
   ?.groundingMetadata;
 if (groundingMetadata) {
@@ -370,7 +386,7 @@ The following configuration options are available for Google Search grounding:
     - **dynamicThreshold** _number_
       The threshold for dynamic retrieval (e.g., `0.7`).
 
-**Response Metadata:**
+**Response Metadata (`generateContent` models):**
 
 - **webSearchQueries** _string[]_
 
@@ -508,13 +524,12 @@ const response = await ai.generate({
     'What is the southernmost city in Canada? What is the weather like there today?',
   config: {
     tools: [{ googleSearch: {} }], // Built-in tools are defined in the config
-    toolConfig: {
-      includeServerSideToolInvocations: true,
-    },
   },
   tools: [getWeather], // Genkit tools are defined in top-level tools
 });
 ```
+
+Models routed to the [Interactions API](#interactions-api) always include server-side tool invocations, so they don't need `toolConfig` (and ignore it with a warning). On `generateContent` models, set `toolConfig: { includeServerSideToolInvocations: true }` in `config`.
 
 ### Code Execution
 
@@ -551,8 +566,8 @@ const response = await ai.generate({
 });
 
 // Extract image
-if (response.image) {
-  console.log('Image:', response.image);
+if (response.media) {
+  console.log('Image:', response.media.url);
 }
 
 // Extract text
@@ -615,6 +630,25 @@ const response = await ai.generate({
 - **Sampling**: 1 frame per second (default)
 - **Context**: 2M context models can handle up to 2 hours of video.
 - **Inputs**: Up to 10 videos per request (Gemini 2.5+).
+
+**Agentic processing:** Models routed to the [Interactions API](#interactions-api) (for example `gemini-4-argon` and `gemini-3.8-flash`) can explore a video and load only the parts they need instead of reading frames at a fixed rate, which works better for long videos. Set `metadata: { processing: 'agentic' }` on the video part (the default is `'static'`):
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-4-argon'),
+  prompt: [
+    {
+      media: { url: 'https://www.youtube.com/watch?v=...' },
+      metadata: { processing: 'agentic' },
+    },
+    {
+      text: 'What happens in this video? List the main moments with timestamps.',
+    },
+  ],
+});
+```
+
+The model's loading steps come back as `custom.processingCall` and `custom.processingResult` parts; keep them in the history for follow-up questions. `response.usage.custom.toolUseTokens` counts the tokens loaded.
 
 #### Image Understanding
 
@@ -702,9 +736,10 @@ const response = await ai.generate({
 
 ### Available Models
 
-- `gemini-embedding-2-preview` — Latest embedding model with **3072** dimensions; supports multimodal input (text, images, video).
-- `gemini-embedding-2` — Latest stable embedding model with **3072** dimensions; supports multimodal input.
+- `gemini-embedding-2` — Latest stable embedding model with **3072** dimensions; supports multimodal input (text, images, video).
 - `gemini-embedding-001` — Default **3072** dimensions; set **`outputDimensionality`** in embed params (for example **768**, **1536**, or **3072**) when you want a shorter vector.
+
+`gemini-embedding-2-preview` is no longer in the plugin's model list; use `gemini-embedding-2`.
 
 ### Usage
 
@@ -731,7 +766,7 @@ const compact = await ai.embed({
 - `gemini-nano-banana-2.1` - Fast and efficient image generation and editing
 - `gemini-3-pro-image` - State-of-the-art image generation and editing for complex visual tasks
 
-The Imagen models on the Gemini API have been shut down, and `imagen-*` model names fail with an error that points to `gemini-nano-banana-2.1`. Imagen on Vertex AI is not affected; see the [Vertex AI plugin](/docs/integrations/vertex-ai).
+The Imagen models on the Gemini API have been shut down, and `imagen-*` model names fail with an error that points to `gemini-nano-banana-2.1`. Imagen on Vertex AI was also retired, on June 30, 2026, so use the Gemini image models there too; see the [Vertex AI plugin](/docs/integrations/vertex-ai).
 
 ### Usage
 
@@ -747,7 +782,7 @@ const response = await ai.generate({
 const generatedImage = response.media;
 ```
 
-Image settings go in `config.imageConfig`; the type is exported as `GeminiImageConfig`. See [Generating Text and Images (Nano Banana)](#generating-text-and-images-nano-banana) for the options.
+Image settings go in `config.imageConfig`; the type is exported as `GeminiImageConfig` (`ImagenConfig` is no longer exported). See [Generating Text and Images (Nano Banana)](#generating-text-and-images-nano-banana) for the options.
 
 ## Video Models
 
@@ -757,7 +792,7 @@ The Google AI plugin generates video with Gemini Omni. It takes text, images, an
 
 - `gemini-omni-1.1-flash` - Video generation and editing
 
-Gemini Omni replaces the Veo 3.1 preview models on the Gemini API, which shut down on October 22, 2026. Veo on Vertex AI is not affected; see the [Vertex AI plugin](/docs/integrations/vertex-ai).
+Gemini Omni replaces the Veo 3.1 preview models on the Gemini API, which are deprecated and will shut down on October 22, 2026. Veo on Vertex AI is not affected; see the [Vertex AI plugin](/docs/integrations/vertex-ai).
 
 ### Usage
 
@@ -872,7 +907,7 @@ The Google GenAI plugin provides access to text-to-speech capabilities through G
 - `gemini-3.8-flash-tts` - Gemini 3.8 Flash model with TTS
 - `gemini-3.8-flash-lite-tts` - Gemini 3.8 Flash Lite model with TTS
 
-The 2.5 and 3.1 preview TTS models (`gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts`, `gemini-3.1-flash-tts-preview`) are deprecated and shut down on November 17, 2026.
+The 2.5 and 3.1 preview TTS models (`gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts`, `gemini-3.1-flash-tts-preview`) are deprecated and will shut down on November 17, 2026.
 
 ### Usage
 
@@ -1028,15 +1063,15 @@ The following configuration options are available for speech generation:
 
       - **speakingRate** _number_
 
-        Controls the speed of speech. Range: `0.25` to `4.0`, default is `1.0`.
+        Controls the speed of speech. Range: `0.25` to `4.0`, default is `1.0`. Not used by the 3.8 TTS models.
 
       - **pitch** _number_
 
-        Adjusts the pitch of the voice. Range: `-20.0` to `20.0`, default is `0.0`.
+        Adjusts the pitch of the voice. Range: `-20.0` to `20.0`, default is `0.0`. Not used by the 3.8 TTS models.
 
       - **volumeGainDb** _number_
 
-        Controls the volume. Range: `-96.0` to `16.0`, default is `0.0`.
+        Controls the volume. Range: `-96.0` to `16.0`, default is `0.0`. Not used by the 3.8 TTS models.
 
   - **multiSpeakerVoiceConfig** _object_
 
@@ -1048,7 +1083,7 @@ The following configuration options are available for speech generation:
 
       - **speaker** _string_
 
-        The name of the speaker (e.g., "Speaker A") as used in the prompt.
+        The name of the speaker. On the 3.8 TTS models, it matches `metadata.speechMetadata.speaker` on each text part; the deprecated preview models match it against labels in the prompt (e.g., "Speaker A").
 
       - **voiceConfig** _object_
 
@@ -1056,7 +1091,7 @@ The following configuration options are available for speech generation:
 
 **Speech Emphasis**
 
-You can use markdown-style formatting in your prompt to add emphasis:
+With the deprecated preview TTS models, you can use markdown-style formatting in your prompt to add emphasis:
 
 - **Bold text** (`**like this**`) for stronger emphasis.
 - _Italic text_ (`*like this*`) for moderate emphasis.
@@ -1064,6 +1099,8 @@ You can use markdown-style formatting in your prompt to add emphasis:
 ```typescript
 prompt: 'Genkit is an **amazing** Gen AI *library*!';
 ```
+
+The 3.8 TTS models read the text verbatim, so set the delivery with `metadata.speechMetadata.style` instead, as in the basic usage example above.
 
 TTS models automatically detect the input language. Supported languages include `en-US`, `fr-FR`, `de-DE`, `es-US`, `ja-JP`, `ko-KR`, `pt-BR`, `zh-CN`, and [more](https://ai.google.dev/gemini-api/docs/speech-generation#languages).
 

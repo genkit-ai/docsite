@@ -152,6 +152,7 @@ import type {
 type SnapshotLookup = {
   snapshotId?: string;
   sessionId?: string;
+  metadataOnly?: boolean;
   context?: SessionStoreOptions['context'];
 };
 
@@ -189,11 +190,15 @@ class DatabaseSessionStore<S> implements SessionStore<S> {
 
 Here, "latest" means the latest leaf snapshot in the session history. A leaf is a snapshot that no other snapshot references as its parent. If branching exists, the built-in stores either select the most recently created leaf or throw when `rejectBranchingSessions` is enabled.
 
+A lookup can also carry `metadataOnly: true` when the caller needs only the snapshot's status and metadata, such as a `getSnapshot` request sent with `metadataOnly`. The store may then skip loading `state`, which spares reading a large conversation. Returning `state` anyway is still correct, because the runtime drops it from a metadata-only read.
+
 `saveSnapshot()` must be atomic. In a database, wrap the read, `mutator` call, and write in a transaction or use optimistic concurrency with retries. The mutator may return a snapshot to save, return `null` to skip the write, or throw to fail the operation. If your retry logic can call the mutator more than once, keep the mutator invocation free of external side effects.
 
 When `snapshotId` is undefined, the store should assign a new snapshot ID. When a snapshot ID is provided, the store should write that ID even if the mutator returns a different one.
 
-Implement `onSnapshotStateChange()` when detached background work should respond quickly to aborts or when clients should observe status changes without polling. Return an unsubscribe function when the store opens a listener, subscription, or timer. If a custom store omits this method, normal server-managed state still works, but background abort behavior is limited.
+An abort of detached work is two guarded writes through `saveSnapshot()`. The abort request flips a `pending` snapshot to `aborting`, and the background worker's finalize then settles it as `aborted` with the state the run committed. Heartbeats refresh `heartbeatAt` on `pending` and `aborting` snapshots and change nothing else. Each mutator checks the status it starts from, so a store that runs the mutator inside a transaction handles these transitions correctly.
+
+Implement `onSnapshotStateChange()` when detached background work should respond quickly to aborts or when clients should observe status changes without polling. Call back whenever a save changes a snapshot's status: the runtime stops detached work when it sees `aborting`, and `waitForSnapshot` returns as soon as the snapshot settles. Return an unsubscribe function when the store opens a listener, subscription, or timer. If a custom store omits this method, normal server-managed state still works, but background abort behavior is limited.
 
 ## Production guidance
 

@@ -64,21 +64,23 @@ Genkit Monitoring in the Firebase console, or you can export them to any
 Genkit traces every run without explicit configuration. Under `genkit start`,
 Genkit sends its spans straight to the Developer UI's telemetry server, with no
 OpenTelemetry SDK on that path, so you can analyze a flow step by step with its
-inputs, outputs, and timing. Logs written through the Genkit logger show up in
-the Developer UI next to the span that produced them.
+inputs, outputs, and timing. Logs written through the Genkit logger at or
+above its level show up in the Developer UI next to the span that produced
+them.
 
 Everywhere else, Genkit reports its spans through pluggable instrumentation.
 The default provider creates OpenTelemetry spans that carry `genkit:*`
 attributes. Nothing leaves the process until an OpenTelemetry SDK is started,
 directly or through a plugin such as `enableFirebaseTelemetry()`.
 
-Metrics travel a separate path. Genkit records metric families for feature,
-flow, action, generate, and tool activity, including `genkit/flow/latency` and
-the token counters `genkit/ai/generate/input/tokens` and
-`genkit/ai/generate/output/tokens`. The full table is in
+Metrics travel a separate path. Genkit itself records no metrics. The Firebase
+and Google Cloud plugins derive metric families for feature, path, generate,
+and engagement activity from Genkit's spans, including
+`genkit/feature/latency` and the token counters
+`genkit/ai/generate/input/tokens` and `genkit/ai/generate/output/tokens`. The
+full table is in
 [Telemetry collection](/docs/observability/telemetry-collection). The Developer
-UI does not display metrics: they only leave the process once an exporting
-plugin such as the Firebase plugin is installed. The
+UI does not display metrics. The
 [OpenTelemetry GenAI instrumentation](/docs/observability/otel-genai-semantic-conventions)
 records the spec's token usage and duration metrics instead.
 
@@ -180,7 +182,9 @@ logger.setLogLevel('debug');
 
 Under `genkit start`, records written through this logger inside a flow are
 also sent to the Developer UI, attached to the span that was active when they
-were written.
+were written. Only records at or above the logger's level are sent, and the
+default level is `info`, so set it to `debug`, as above, to see debug records
+in the Developer UI too.
 
 ## Choose the instrumentation provider
 
@@ -195,9 +199,10 @@ import { configureInstrumentation } from 'genkit/tracing';
 configureInstrumentation(new GenAiInstrumentation());
 ```
 
-Under `genkit start`, the Developer UI's provider always runs first, whatever
-you configure. `@genkit-ai/otel` is the ready-made provider for the
-OpenTelemetry GenAI semantic conventions; see
+Under `genkit start`, the Developer UI's provider runs first, whatever you
+configure. The one exception is `--experimental-use-otel`, a flag in Genkit CLI
+releases later than 1.44.1, which turns that provider off. `@genkit-ai/otel` is
+the ready-made provider for the OpenTelemetry GenAI semantic conventions; see
 [OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
 
 :::caution
@@ -257,10 +262,13 @@ The contract:
   once `next` settles, `output`, `state`, and `isFailureSource`.
   `isFailureSource` is true only on the span where an error originated, so a
   backend that counts failures counts each one once.
+- `info.metadata.metadata` holds custom metadata, such as values set with
+  `setCustomMetadataAttribute`. Read it once `next` settles.
 - `info.labels` carries the span's Genkit attributes, such as `genkit:type`,
   and any telemetry labels.
-- `setMetadata` on the context receives the custom attributes set on the span
-  during the run, for example with `setCustomMetadataAttribute`.
+- `setMetadata` on the context receives the attributes written with
+  `span.setAttribute` or `span.setAttributes` on the span passed to a
+  `runInNewSpan` callback.
 - Errors from `next` must be rethrown unchanged.
 
 </Lang>
@@ -393,9 +401,9 @@ alone and warns instead, so set that handler's level rather than calling
 | `GENKIT_TELEMETRY_SERVER` | a base URL, for example `http://localhost:4033` | empty | Where records are posted. `genkit start` sets it. When it is empty, the CLI supplies the address at runtime instead. |
 
 :::note[Coming from the JS SDK]
-`GENKIT_OTEL_ENABLE_LOGS` reads the opposite way in Go: JS treats it as an
-opt-in and stays silent until you set it, Go treats it as an opt-out and
-exports by default.
+Genkit JS 1.42 and later no longer read `GENKIT_OTEL_ENABLE_LOGS`; earlier JS
+releases treated it as an opt-in and stayed silent until you set it. Go treats
+it as an opt-out and exports by default.
 :::
 
 ### What survives the trip

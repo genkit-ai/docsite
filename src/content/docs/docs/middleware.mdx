@@ -173,7 +173,7 @@ const response = await ai.generate({
 
 ### 6. Agents middleware (`agents`)
 
-Lets an orchestrator delegate to sub-agents. It adds one `delegate_to_<agent>` tool per configured agent and lists the agents in the system prompt. With `async: true`, delegations can run in the background, and the `continue_task` tool picks up failed, aborted, or finished sub-agent tasks.
+Lets an orchestrator delegate to sub-agents. It adds one `delegate_to_<agent>` tool per configured agent and lists the agents in the system prompt. The `continue_task` tool picks up failed, aborted, or finished tasks of sub-agents that have a session store. With `async: true`, delegations can also run in the background.
 
 ```typescript
 import { agents } from '@genkit-ai/middleware';
@@ -237,12 +237,10 @@ const active = resolveCompressedHistory(response.messages);
 
 Compression runs when the estimated tokens, or the input tokens the model reported for the previous call, exceed `maxInputTokens`, or when the conversation holds more than `maxMessages` messages. The strategies run in order:
 
-1. Any single tool response over `maxToolResponseChars` is cut with a `[TRUNCATED: ...]` marker. This cap applies on every turn, whether or not compression is triggered.
-2. `deduplicateToolResponses` replaces older duplicate tool responses with a short notice.
-3. `toolResponses` truncates older tool responses, leaving the newest tool messages intact.
-4. `maxMessages` drops older non-system messages, keeping the history starting on a user turn.
-5. `summarize` has a model fold older messages into a summary, unless the cheaper strategies already saved `skipSummarizationThreshold` of the context and brought it under budget.
-6. If the context is still over budget and nothing was summarized, older non-system messages are dropped down to `preserveRecent`, with a notice telling the model that context was removed.
+1. `deduplicateToolResponses` replaces older duplicate tool responses with a short notice.
+2. `toolResponses` truncates older tool responses, leaving the newest tool messages intact. The same pass cuts any single tool response over `maxToolResponseChars` with a `[TRUNCATED: ...]` marker. That cap applies on every turn, whether or not compression is triggered.
+3. `summarize` has a model fold older messages into a summary, sized so that the system messages, the summary, and the kept messages fit within `maxMessages`. It is skipped when the cheaper strategies already saved `skipSummarizationThreshold` of the context and brought it under budget.
+4. Only if nothing was summarized, older non-system messages are dropped, keeping the history starting on a user turn: down to `maxMessages`, or down to `preserveRecent` if the context is still over budget. By default a notice tells the model that context was removed.
 
 **The model gets a view, the history keeps the transcript.** By default (`preserveOriginalMessages: true`), compression state is recorded in message metadata under `contextCompression` rather than replacing messages. Later turns build on earlier compactions, so compression carries across `generate()` calls and agent sessions as long as you pass the history forward. A history that the Go middleware compressed resolves the same way.
 
@@ -251,7 +249,7 @@ Compression runs when the estimated tokens, or the input tokens the model report
 **Configuration options:**
 
 - `maxInputTokens` (optional): Compress when the context exceeds this many tokens (default: `Infinity`).
-- `maxMessages` (optional): Compress when the conversation holds more than this many messages, and keep at most this many.
+- `maxMessages` (optional): Compress when the conversation holds more than this many messages, and trim it back to this many. The newest turn is always kept, even when the system messages and the truncation notice already fill the cap.
 - `preserveRecent` (optional): How many of the newest non-system messages are kept when older ones are dropped, and the default window for `summarize` (default: 4).
 - `preserveSystem` (optional): Always keep system messages (default: `true`).
 - `maxToolResponseChars` (optional): Hard cap on the characters of any one tool response, applied on every turn (default: 400000). `<= 0` or `Infinity` disables it.

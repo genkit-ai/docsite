@@ -140,7 +140,26 @@ Use `input.message` for the current user message. The custom handler is not pass
 
 ## Failure and recovery
 
-If the per-turn callback throws, the runtime marks the turn as failed, emits a failed turn end, and resolves the invocation with `finishReason: 'failed'`. For client-managed agents, the response carries the last-good state. For server-managed agents, the response carries the last-good snapshot ID. This lets clients retry without preserving partial failed-turn mutations.
+If the per-turn callback throws, the runtime ends the turn, emits its turn end, and resolves the invocation with `finishReason: 'failed'`, or `'aborted'` when the caller stopped the run. By default the turn rolls back. For client-managed agents, the response carries the last-good state. For server-managed agents, the response carries the last-good snapshot ID. This lets clients retry without preserving partial failed-turn mutations.
+
+To keep the work a failed turn already did, throw `CommittedTurnError` from `genkit/beta` instead. The runner commits the session as the callback left it and reports it as the resume point. With a session store, it saves that state as a `failed` snapshot (`aborted` when the caller stopped the run) with the error on it; without one, the response carries that state. Throw it only when the session is at a point the turn can continue from.
+
+A client retries a committed turn by sending an input with no message and no resume; see [Resume after a failure or a stop](/docs/agents/errors#resume-after-a-failure-or-a-stop). The runner passes that input to the callback as is, so handle it by running the turn again on the conversation already in the session:
+
+```ts
+import { CommittedTurnError } from 'genkit/beta';
+
+await sess.run(async (input) => {
+  // No message and no resume: a retry of a committed turn.
+  const retry = !input.message && !input.resume;
+  try {
+    await runSteps(sess, { retry, abortSignal });
+  } catch (e) {
+    // Commit the steps that finished so the client can retry from here.
+    throw new CommittedTurnError(e);
+  }
+});
+```
 
 ## Streaming custom data
 
