@@ -2,6 +2,7 @@
 title: OpenTelemetry GenAI semantic conventions
 description: Export Genkit telemetry that follows the OpenTelemetry GenAI semantic conventions, including gen_ai.* spans, client metrics, and opt-in message content capture.
 supportedLanguages:
+  - js
   - go
   - dart
 ---
@@ -48,6 +49,19 @@ wherever Genkit implements them.
 
 Both are tagged only with operation name, model, and provider, so cardinality
 stays low.
+
+<Lang lang="js">
+
+**Everything else in the trace.** Tool calls can be emitted as `execute_tool`
+spans, and every other Genkit action type gets a generic span named after the
+action, so the trace tree stays connected rather than showing model calls as
+orphans. Generic spans carry `genkit.action.type`, kept outside the reserved
+`gen_ai.*` namespace so GenAI-aware backends do not try to render Genkit
+payloads as spec content. Telemetry labels become span attributes, and
+custom metadata set with `setCustomMetadataAttribute` is written as
+`genkit:metadata:<key>`.
+
+</Lang>
 
 <Lang lang="dart">
 
@@ -147,6 +161,76 @@ no-op and can stay wired up in builds that do not export. And it is independent
 of the built-in dev provider, which posts directly to the Genkit telemetry
 server without an OpenTelemetry dependency, so both can be active at once and
 export to separate pipelines.
+
+</Lang>
+
+<Lang lang="js">
+
+## Setup
+
+The instrumentation lives in the
+[`@genkit-ai/otel`](https://www.npmjs.com/package/@genkit-ai/otel) package:
+
+```bash
+npm i @genkit-ai/otel @opentelemetry/sdk-node
+```
+
+Your application owns the OpenTelemetry SDK. Start it, register the GenAI
+instrumentation with `configureInstrumentation`, then create Genkit:
+
+```ts
+import { googleAI } from '@genkit-ai/google-genai';
+import { GenAiInstrumentation } from '@genkit-ai/otel';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { genkit } from 'genkit';
+import { configureInstrumentation } from 'genkit/tracing';
+
+// With no arguments, NodeSDK configures traces, metrics, and logs from the
+// standard OTEL_* env vars, defaulting to OTLP http/protobuf on localhost:4318.
+const sdk = new NodeSDK();
+sdk.start();
+
+configureInstrumentation(new GenAiInstrumentation({ emitToolSpans: true }));
+
+const ai = genkit({ plugins: [googleAI()] });
+
+const { text } = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Explain OpenTelemetry in one sentence.',
+});
+console.log(text);
+
+await sdk.shutdown(); // Flushes spans, metrics, and logs.
+```
+
+Point it at a collector with the usual environment variables, no code change:
+
+```bash
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+Some properties to know before you deploy:
+
+- **It replaces the default encoding.** `configureInstrumentation` replaces
+  Genkit's default OpenTelemetry provider, which writes the `genkit:*`
+  attributes.
+- **The Developer UI keeps working.** Under `genkit start`, the Developer UI's
+  own provider runs first, whatever you configure, so it keeps showing
+  Genkit's traces next to this export. To preview in the Developer UI what
+  this export looks like instead, start with
+  `genkit start --experimental-use-otel -- <your command>`.
+- **Without an SDK, it does nothing.** When no OpenTelemetry SDK is registered,
+  `@opentelemetry/api` returns non-recording spans and no-op instruments, so
+  the instrumentation can stay wired up in builds that do not export. The
+  first span logs one warning that nothing is exported.
+
+:::caution[Do not combine with the Firebase or Google Cloud telemetry plugins]
+`enableFirebaseTelemetry()` and `enableGoogleCloudTelemetry()` build their
+metrics and logs from the `genkit:*` attributes that this instrumentation
+replaces, so their Genkit metrics and logs stop, without an error. Use one or
+the other.
+:::
 
 </Lang>
 
@@ -311,6 +395,27 @@ and falls back to `NO_CONTENT`.
 
 </Lang>
 
+<Lang lang="js">
+
+In JavaScript, the modes are the string values `'NO_CONTENT'`, `'SPAN_ONLY'`,
+`'EVENT_ONLY'`, and `'SPAN_AND_EVENT'`:
+
+```ts
+configureInstrumentation(
+  new GenAiInstrumentation({ contentCapturingMode: 'SPAN_ONLY' }), // May contain PII.
+);
+```
+
+Left unset, the value comes from the
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment variable using
+the same tokens. An explicit option overrides it, and an unrecognized token logs
+one warning and falls back to `NO_CONTENT`. With `emitToolSpans`, content also
+covers tool call arguments and results (`gen_ai.tool.call.arguments`,
+`gen_ai.tool.call.result`). Inline `data:` media longer than 128 characters is
+replaced with `<header>,<omitted N bytes>` to stay within attribute size limits.
+
+</Lang>
+
 <Lang lang="go">
 
 In Go, the modes are the `otelgenai.ContentCapturingMode` constants
@@ -370,6 +475,29 @@ OTelLog.currentLevel = LogLevel.fatal; // or set OTEL_LOG_LEVEL=fatal
 The [`otel_jaeger` sample](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/otel_jaeger)
 is a runnable end-to-end setup: traces to Jaeger, metrics to a collector debug
 log, with a script that downloads and runs both without Docker.
+
+</Lang>
+
+<Lang lang="js">
+
+## Options
+
+`new GenAiInstrumentation(options)` accepts:
+
+| Option                         | Default          | What it does                                                                                                                       |
+| ------------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `contentCapturingMode`         | env, else `NO_CONTENT` | Where spec-shaped `gen_ai.*` message content is recorded.                                                                    |
+| `captureActionIO`              | `false`          | Records raw Genkit input and output as `genkit.input` / `genkit.output` on every span. A debugging aid, independent of `contentCapturingMode`. May contain PII. |
+| `emitToolSpans`                | `false`          | `execute_tool` spans for tool actions.                                                                                             |
+| `emitMetrics`                  | `true`           | Emits the token usage and operation duration metrics.                                                                              |
+| `scopeName`                    | `genkit-genai`   | Instrumentation scope for the tracer, meter, and logger.                                                                           |
+| `tracer`, `meter`, `logger`    | the globals      | Explicit OpenTelemetry instruments, for when you do not want the global providers.                                                 |
+
+## Try it
+
+The [`otel` sample](https://github.com/genkit-ai/genkit/tree/main/js/testapps/otel)
+is a runnable end-to-end setup: traces to Jaeger and metrics to a collector,
+with a script that downloads and runs both without Docker.
 
 </Lang>
 

@@ -171,6 +171,97 @@ const response = await ai.generate({
 - `statuses` (optional): An array of `StatusName` values that should trigger a fallback (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']`).
 - `isolateConfig` (optional): If true, the fallback model will not inherit the original request's configuration (default: false).
 
+### 6. Agents middleware (`agents`)
+
+Lets an orchestrator delegate to sub-agents. It adds one `delegate_to_<agent>` tool per configured agent and lists the agents in the system prompt. With `async: true`, delegations can run in the background, and the `continue_task` tool picks up failed, aborted, or finished sub-agent tasks.
+
+```typescript
+import { agents } from '@genkit-ai/middleware';
+
+const orchestrator = ai.defineAgent({
+  name: 'orchestrator',
+  system: 'Delegate research to the researcher and coding to the coder.',
+  use: [agents({ agents: ['researcher', 'coder'], async: true })],
+});
+```
+
+See [Multi-agent delegation](/docs/agents/multi-agent) for the options, background delegation, and task continuation.
+
+### 7. Artifacts middleware (`artifacts`)
+
+Gives the model `read_artifact` and `write_artifact` tools over the session's artifacts, and lists the current artifacts in the system prompt each turn. Pass `readonly: true` to provide only `read_artifact`, for example on an orchestrator that reads what its sub-agents produced.
+
+```typescript
+import { artifacts } from '@genkit-ai/middleware';
+
+const builder = ai.defineAgent({
+  name: 'builder',
+  system: 'You are a code generator. Use write_artifact to create files.',
+  use: [artifacts()],
+});
+```
+
+### 8. Context compression middleware (`contextCompression`)
+
+Keeps a conversation inside a token budget through long chats and tool loops. When the context grows past `maxInputTokens`, the middleware compresses what the model receives, cheapest strategy first, while the history you get back keeps every message.
+
+```typescript
+import { genkit } from 'genkit';
+import { contextCompression, resolveCompressedHistory } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Research this topic thoroughly.',
+  tools: [searchTool],
+  use: [
+    contextCompression({
+      maxInputTokens: 80000,
+      deduplicateToolResponses: { matchBy: 'name-and-input' },
+      toolResponses: { maxChars: 2000, preserveRecent: 2 },
+      summarize: {
+        model: googleAI.model('gemini-flash-lite-latest'),
+        preserveRecent: 6,
+      },
+    }),
+  ],
+});
+
+// The full transcript, with compression state in message metadata:
+console.log(response.messages.length);
+
+// The messages the model actually received:
+const active = resolveCompressedHistory(response.messages);
+```
+
+Compression runs when the estimated tokens, or the input tokens the model reported for the previous call, exceed `maxInputTokens`, or when the conversation holds more than `maxMessages` messages. The strategies run in order:
+
+1. Any single tool response over `maxToolResponseChars` is cut with a `[TRUNCATED: ...]` marker. This cap applies on every turn, whether or not compression is triggered.
+2. `deduplicateToolResponses` replaces older duplicate tool responses with a short notice.
+3. `toolResponses` truncates older tool responses, leaving the newest tool messages intact.
+4. `maxMessages` drops older non-system messages, keeping the history starting on a user turn.
+5. `summarize` has a model fold older messages into a summary, unless the cheaper strategies already saved `skipSummarizationThreshold` of the context and brought it under budget.
+6. If the context is still over budget and nothing was summarized, older non-system messages are dropped down to `preserveRecent`, with a notice telling the model that context was removed.
+
+**The model gets a view, the history keeps the transcript.** By default (`preserveOriginalMessages: true`), compression state is recorded in message metadata under `contextCompression` rather than replacing messages. Later turns build on earlier compactions, so compression carries across `generate()` calls and agent sessions as long as you pass the history forward. A history that the Go middleware compressed resolves the same way.
+
+**Order.** List `contextCompression` after middleware that adds context (`filesystem`, `skills`, `artifacts`, `agents`) so it accounts for what they add.
+
+**Configuration options:**
+
+- `maxInputTokens` (optional): Compress when the context exceeds this many tokens (default: `Infinity`).
+- `maxMessages` (optional): Compress when the conversation holds more than this many messages, and keep at most this many.
+- `preserveRecent` (optional): How many of the newest non-system messages are kept when older ones are dropped, and the default window for `summarize` (default: 4).
+- `preserveSystem` (optional): Always keep system messages (default: `true`).
+- `maxToolResponseChars` (optional): Hard cap on the characters of any one tool response, applied on every turn (default: 400000). `<= 0` or `Infinity` disables it.
+- `deduplicateToolResponses` (optional): `matchBy` is `'name-and-input'` (default) or `'name-only'`; `keepRecent` is how many of the newest responses per group stay intact (default: 1); `notice` replaces the default notice.
+- `toolResponses` (optional): `maxChars` is the most characters an older tool response keeps; `preserveRecent` is how many of the newest tool messages stay intact (default: 2).
+- `summarize` (optional): `model` (required) writes the summaries; `preserveRecent` is how many of the newest messages stay out of the summary (default: the top-level `preserveRecent` when set, 6 otherwise); `prompt` replaces the default prompt, with `{conversation}` standing in for the messages to summarize.
+- `skipSummarizationThreshold` (optional): Skip `summarize` when the cheaper strategies saved at least this fraction (`0..1`) of the context and brought it under `maxInputTokens`.
+- `insertTruncationNotice` / `truncationNotice` (optional): Whether to insert a notice when messages are dropped (default: `true`), and its text.
+- `preserveOriginalMessages` (optional): Keep the original messages in `request.messages` and `response.messages` (default: `true`). Set to `false` to overwrite them with the compressed view.
+
 ## Building your own custom middleware
 
 You can implement your own custom middleware to extend Genkit's functionality. Genkit provides a `generateMiddleware` helper to create structured middleware with configuration schemas.

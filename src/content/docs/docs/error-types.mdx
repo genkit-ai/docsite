@@ -23,6 +23,54 @@ SHOULD capture all other Error types and instead report them as an internal erro
 This adds a layer of security to your application by ensuring that internal details of your application
 do not leak to attackers.
 
+## Get failures on the response with `throwOnError: false`
+
+By default, `generate()` throws when something fails: a model error, a tool error, a blocked
+response, output that does not match the schema, or the `maxTurns` limit. In a tool loop that
+throws away the rounds that already finished.
+
+Set `throwOnError: false` to get the failure back on the response instead, together with the
+conversation up to the last completed tool round. You can then retry from there without repeating
+the tool calls that already ran:
+
+```ts
+const opts = {
+  model: googleAI.model('gemini-flash-latest'),
+  tools: [getWeather],
+  throwOnError: false,
+};
+
+let res = await ai.generate({ ...opts, prompt: 'What should I wear in Tokyo today?' });
+
+if (res.finishReason === 'failed' || res.finishReason === 'aborted') {
+  console.warn(res.error?.status, res.error?.message);
+  // res.messages ends at a turn seam, so it is safe to send again.
+  res = await ai.generate({ ...opts, messages: res.messages });
+}
+```
+
+A response that reports a failure works like this:
+
+- `error` holds the classified failure: a `status` (such as `INTERNAL`), a `message`, and the
+  original error's `details`. `finishMessage` has the same text.
+- `finishReason` is `failed` when something broke (a model call, a tool, a middleware hook) and
+  `aborted` when the caller stopped the loop: the `abortSignal` fired, the model call was cancelled
+  or timed out, or `maxTurns` was reached.
+- There is usually no `message`, so `text` is empty and `output` is `null`. The exceptions are
+  blocked responses, responses without a message, and output that fails schema validation: those
+  keep the model's own message and finish reason beside `error`.
+- `messages` never ends on a tool request that nothing answered, because no provider accepts that.
+  A failed tool discards the whole round it was part of, and is reported as `INTERNAL` with the
+  message `tool "<name>" failed`.
+- Text streamed before the failure has already reached `onChunk`.
+
+Errors that happen before the request is resolved, such as an unknown model or tool or invalid
+options, still throw, because there is no response to return.
+
+Code that does not set `throwOnError` gets the same errors as before. Agents use the same
+mechanism to save failed turns as resume points; see
+[Agent error handling](/docs/agents/errors).
+
 </Lang>
 
 <Lang lang="go">

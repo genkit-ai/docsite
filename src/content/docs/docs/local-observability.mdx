@@ -51,7 +51,40 @@ a provider that follows the OTel GenAI semantic conventions; see
 
 </Lang>
 
-<Lang lang="js python">
+<Lang lang="js">
+
+Genkit records a trace of every flow, action, and step it runs. During
+development, the Genkit Developer UI shows these traces so you can debug a flow
+step by step. In production, the Firebase plugin sends traces and metrics to
+Genkit Monitoring in the Firebase console, or you can export them to any
+[OpenTelemetry](https://opentelemetry.io/) backend.
+
+## Tracing & metrics
+
+Genkit traces every run without explicit configuration. Under `genkit start`,
+Genkit sends its spans straight to the Developer UI's telemetry server, with no
+OpenTelemetry SDK on that path, so you can analyze a flow step by step with its
+inputs, outputs, and timing. Logs written through the Genkit logger show up in
+the Developer UI next to the span that produced them.
+
+Everywhere else, Genkit reports its spans through pluggable instrumentation.
+The default provider creates OpenTelemetry spans that carry `genkit:*`
+attributes. Nothing leaves the process until an OpenTelemetry SDK is started,
+directly or through a plugin such as `enableFirebaseTelemetry()`.
+
+Metrics travel a separate path. Genkit records metric families for feature,
+flow, action, generate, and tool activity, including `genkit/flow/latency` and
+the token counters `genkit/ai/generate/input/tokens` and
+`genkit/ai/generate/output/tokens`. The full table is in
+[Telemetry collection](/docs/observability/telemetry-collection). The Developer
+UI does not display metrics: they only leave the process once an exporting
+plugin such as the Firebase plugin is installed. The
+[OpenTelemetry GenAI instrumentation](/docs/observability/otel-genai-semantic-conventions)
+records the spec's token usage and duration metrics instead.
+
+</Lang>
+
+<Lang lang="python">
 
 Genkit provides a robust set of built-in observability features, including
 tracing and metrics collection powered by
@@ -144,6 +177,91 @@ import { logger } from 'genkit/logging';
 // Set the desired log level
 logger.setLogLevel('debug');
 ```
+
+Under `genkit start`, records written through this logger inside a flow are
+also sent to the Developer UI, attached to the span that was active when they
+were written.
+
+## Choose the instrumentation provider
+
+`configureInstrumentation` from `genkit/tracing` sets the provider that
+receives every Genkit span, and replaces the default OpenTelemetry provider.
+Call it once, at startup, before you create Genkit:
+
+```ts
+import { GenAiInstrumentation } from '@genkit-ai/otel';
+import { configureInstrumentation } from 'genkit/tracing';
+
+configureInstrumentation(new GenAiInstrumentation());
+```
+
+Under `genkit start`, the Developer UI's provider always runs first, whatever
+you configure. `@genkit-ai/otel` is the ready-made provider for the
+OpenTelemetry GenAI semantic conventions; see
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
+
+:::caution
+`enableFirebaseTelemetry()` and `enableGoogleCloudTelemetry()` read the
+`genkit:*` attributes that only the default provider writes. Replacing it
+quietly stops their Genkit metrics and logs.
+:::
+
+## Write your own provider
+
+A provider implements `Instrumentation`. Its `runInNewSpan` wraps the
+operation like middleware: it opens a span in its backend, calls `next`
+exactly once, returns its result, and closes the span. `next` takes an
+OpenTelemetry span and a `GenkitSpanContext` with the provider's own ids. A
+provider that is not OpenTelemetry-based can hand it a non-recording span and
+empty ids, and Genkit uses the ids of another provider in the chain. This
+example uses `@opentelemetry/api` (`npm i @opentelemetry/api`) only to build
+that placeholder span:
+
+```ts
+import { INVALID_SPAN_CONTEXT, trace } from '@opentelemetry/api';
+import {
+  configureInstrumentation,
+  type Instrumentation,
+  type InstrumentationNext,
+  type InstrumentationSpanInfo,
+} from 'genkit/tracing';
+
+class TimingInstrumentation implements Instrumentation {
+  async runInNewSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: InstrumentationNext<T>
+  ): Promise<T> {
+    const { name, path } = info.metadata;
+    const start = performance.now();
+    try {
+      return await next(trace.wrapSpanContext(INVALID_SPAN_CONTEXT), {
+        traceId: '',
+        spanId: '',
+        setMetadata() {},
+      });
+    } finally {
+      // metadata.state is 'success' or 'error' once next settles.
+      console.log(
+        `${path ?? name}: ${info.metadata.state} in ${Math.round(performance.now() - start)}ms`
+      );
+    }
+  }
+}
+
+configureInstrumentation(new TimingInstrumentation());
+```
+
+The contract:
+
+- `info.metadata` describes the span: `name`, `path`, `isRoot`, `input`, and,
+  once `next` settles, `output`, `state`, and `isFailureSource`.
+  `isFailureSource` is true only on the span where an error originated, so a
+  backend that counts failures counts each one once.
+- `info.labels` carries the span's Genkit attributes, such as `genkit:type`,
+  and any telemetry labels.
+- `setMetadata` on the context receives the custom attributes set on the span
+  during the run, for example with `setCustomMetadataAttribute`.
+- Errors from `next` must be rethrown unchanged.
 
 </Lang>
 
