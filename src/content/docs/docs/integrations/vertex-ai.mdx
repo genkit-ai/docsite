@@ -161,12 +161,14 @@ import { vertexAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   plugins: [
-    vertexAI(), // Default location (see Interactions API below)
+    vertexAI(), // Default: us-central1; Interactions API and Lyria 3 models use global
     // vertexAI({ location: 'global' }),      // Global endpoint
     // vertexAI({ location: 'us-central1' }), // Regional endpoint (not for Interactions API models)
   ],
 });
 ```
+
+Models are served from different locations, so check a model's location before you choose one for the plugin. Current Gemini models, including the ones on `generateContent` such as `gemini-3.5-flash` and `gemini-3.1-pro-preview`, as well as the Gemini image, text-to-speech, Omni, and Lyria models, are served from `global` (some also from the `us` and `eu` multi-regions), not from `us-central1`. Veo 3.1 is served only from `us-central1`, and `virtual-try-on-001` and every embedder except `gemini-embedding-2` are regional only. Gemini, Veo, and Lyria models accept a per-request `config.location` that overrides the plugin's; embedders always use the plugin's location. See [Gemini Enterprise Agent Platform locations](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations).
 
 **Authentication Methods:**
 
@@ -202,7 +204,7 @@ The following Gemini models are registered for use with the Gemini Enterprise pl
 
 Newer Gemini models (such as `gemini-4-argon` and `gemini-3.8-flash`), Gemini Omni video models, and any Gemini model the plugin does not list (including the `-latest` aliases) go to the Interactions API. Older models (such as `gemini-3.5-flash`, `gemini-3.1-pro-preview`, and the Gemini 2.5 family), image models, text-to-speech models, and tuned model endpoints stay on `generateContent`. `text`, `reasoning`, `media`, tool calls, streaming, and usage work the same on both; `response.raw` has a different shape (a `GeminiInteraction` with a `steps[]` timeline). Some `generateContent` options don't apply: `thinkingConfig.thinkingBudget` is dropped with a warning (use `thinkingLevel`), and `videoMetadata` on media parts is ignored. Unlike the Google AI plugin, `safetySettings` and `labels` are supported on these models.
 
-The Interactions API is available on the `global` location (and on the `us` and `eu` multi-regions with CMEK), and in Express mode. If you do not set a location (no `vertexAI({ location })`, no `GCLOUD_LOCATION`, no `config.location`), these models use `global` and `generateContent` models use `us-central1`. A location you set is used as is, so a regional location such as `us-central1` makes these models fail; use `global` or leave the location unset. Interactions are not stored by default; set `config: { store: true }` (or `vertexAI({ store: true })`) to store them and continue a conversation from the previous response's messages.
+The Interactions API is available on the `global` location (and on the `us` and `eu` multi-regions with CMEK), and in Express mode. If you do not set a location (no `vertexAI({ location })`, no `GCLOUD_LOCATION`, no `config.location`), these models use `global` and `generateContent` models use `us-central1`, where current Gemini models aren't served, so give those a `global` location. A location you set is used as is, so a regional location such as `us-central1` makes these models fail; use `global` or leave the location unset. Interactions are not stored by default; set `config: { store: true }` (or `vertexAI({ store: true })`) to store them and continue a conversation from the previous response's messages.
 
 ### Basic Usage
 
@@ -215,7 +217,7 @@ const ai = genkit({
 });
 
 const response = await ai.generate({
-  model: vertexAI.model('gemini-3.1-pro-preview'),
+  model: vertexAI.model('gemini-3.8-flash'),
   prompt: 'Explain Gemini Enterprise in simple terms.',
 });
 
@@ -228,7 +230,7 @@ You can specify the `payGo` option to use Flex or Priority routing in Gemini Ent
 
 ```typescript
 const response = await ai.generate({
-  model: vertexAI.model('gemini-3.5-flash'),
+  model: vertexAI.model('gemini-3.8-flash'),
   prompt: 'Explain Gemini Enterprise in simple terms.',
   config: {
     payGo: 'priority', // Can be 'priority', 'priority-only', 'flex', or 'flex-only'
@@ -259,6 +261,7 @@ const response = await ai.generate({
       },
     },
   ],
+  config: { location: 'global' }, // gemini-3.5-flash isn't served from us-central1
 });
 ```
 
@@ -270,6 +273,8 @@ const response = await ai.generate({
 - `multimodalembedding@001` - Text, image, and video (1408 dimensions)
 - `gemini-embedding-001` - Text (3072 dimensions)
 - `gemini-embedding-2` - Text, image, and video (3072 dimensions); a document's text and media parts are embedded together, and `taskType` and `title` are ignored
+
+Embedders run in the plugin's location. `gemini-embedding-2` is served from `global` and the `us` and `eu` multi-regions; the other embedders are served from regions such as `us-central1`, not from `global`.
 
 ```typescript
 const embeddings = await ai.embed({
@@ -392,7 +397,7 @@ Generate high-quality music and audio clips.
 - `lyria-3-clip-preview`
 - `lyria-002` (Legacy)
 
-The Lyria 3 models use the Interactions API and are available only on the `global` location: if you don't set a location they use `global`, and a regional location you set makes them fail.
+The Lyria 3 models use the Interactions API and are available only on the `global` location: if you don't set a location they use `global`, and a regional location you set makes them fail. `lyria-002` is also served only from `global`, but it doesn't switch to `global` on its own, so set `config: { location: 'global' }` for it unless the plugin already uses `global`.
 
 **Usage:**
 
@@ -411,7 +416,7 @@ const audioMedia = response.media;
 - `gemini-3.8-flash-tts`
 - `gemini-3.8-flash-lite-tts`
 
-The text is read verbatim, so put delivery instructions in the part's `metadata.speechMetadata.style`. Choose a voice with `speechConfig.voiceConfig.voice` (a prebuilt voice name or a voice ID); the Google AI plugin's `prebuiltVoiceConfig: { voiceName }` shape also works. Text-to-speech models use `generateContent` and are served from the `global` location, so set `vertexAI({ location: 'global' })` or `config: { location: 'global' }`; without a location, `generateContent` models use `us-central1`.
+The text is read verbatim, so put delivery instructions in the part's `metadata.speechMetadata.style`. Choose a voice with `speechConfig.voiceConfig.voice` (a prebuilt voice name or a voice ID); the Google AI plugin's `prebuiltVoiceConfig: { voiceName }` shape also works. Text-to-speech models use `generateContent` and are served only from `global`, so the sample sets `location: 'global'`.
 
 ```typescript
 const response = await ai.generate({
@@ -442,6 +447,7 @@ const response = await ai.generate({
   model: vertexAI.model('gemini-3.1-pro-preview'),
   prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
   config: {
+    location: 'global', // gemini-3.1-pro-preview is served only from global
     thinkingConfig: {
       thinkingLevel: 'HIGH', // Or 'LOW' or 'MEDIUM'
       includeThoughts: true,
