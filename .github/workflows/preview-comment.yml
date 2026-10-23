@@ -64,7 +64,9 @@ jobs:
             let prNumber = null;
             if (checkRunPayload.pull_requests && checkRunPayload.pull_requests.length > 0) {
               prNumber = checkRunPayload.pull_requests[0].number;
-            } else {
+            }
+
+            if (!prNumber) {
               const pulls = await github.rest.repos.listPullRequestsAssociatedWithCommit({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -72,6 +74,28 @@ jobs:
               });
               if (pulls.data && pulls.data.length > 0) {
                 prNumber = pulls.data[0].number;
+              }
+            }
+
+            // For forked PRs, check_run.pull_requests is empty and listPullRequestsAssociatedWithCommit
+            // does not find unmerged fork commits. Fallback to matching open PR head SHAs or parsing the preview URL.
+            if (!prNumber) {
+              const openPulls = await github.paginate(github.rest.pulls.list, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100,
+              });
+              const matchingPr = openPulls.find((pr) => pr.head.sha === checkRunPayload.head_sha);
+              if (matchingPr) {
+                prNumber = matchingPr.number;
+              }
+            }
+
+            if (!prNumber) {
+              const prUrlMatch = previewUrl.match(/--pr-(\d+)-/);
+              if (prUrlMatch) {
+                prNumber = parseInt(prUrlMatch[1], 10);
               }
             }
 
