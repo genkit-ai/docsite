@@ -73,8 +73,80 @@ The middleware can discover agent descriptions from action metadata, or you can 
 - **`historyLength`** sets how many recent conversation messages are forwarded to sub-agents.
 - **`maxDelegations`** limits delegation calls in one orchestrator turn.
 - **`artifactStrategy`** controls whether sub-agent artifacts are merged into the parent session.
+- **`async`** enables [background delegation](#delegate-in-the-background).
+- **`maxWaitSeconds`** caps how long one `wait_for_background_tasks` call blocks, whatever timeout the model asks for.
 
 When history is forwarded to client-managed sub-agents, the middleware includes recent messages in the sub-agent state. For server-managed sub-agents, history is not forwarded as client state because those agents own their server-side session.
+
+## Delegate in the background
+
+By default a delegation blocks the orchestrator's turn until the sub-agent finishes. With `async: true`, every delegation tool also accepts `background: true`. A background delegation starts the sub-agent as a [detached task](/docs/agents/background) and returns a task ID right away, so the orchestrator can keep working and collect the result later.
+
+```ts
+import { agents, retry } from '@genkit-ai/middleware';
+import { InMemorySessionStore } from 'genkit/beta';
+
+const logAnalyst = ai.defineAgent({
+  name: 'logAnalyst',
+  description: 'Reads service logs and reports what they show.',
+  store: new InMemorySessionStore(), // required for background work
+  tools: [readLogs],
+});
+
+const deployHistorian = ai.defineAgent({
+  name: 'deployHistorian',
+  description: 'Lists recent deploys and what changed in each.',
+  store: new InMemorySessionStore(),
+  tools: [listDeploys],
+});
+
+const commander = ai.defineAgent({
+  name: 'commander',
+  system:
+    'Start investigations in the background, post a status update while they run, then collect the results.',
+  tools: [postStatus],
+  maxTurns: 20,
+  use: [
+    agents({ agents: ['logAnalyst', 'deployHistorian'], async: true }),
+    retry(),
+  ],
+});
+```
+
+`async` adds three tools for managing background tasks:
+
+| Tool                        | What it does                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `check_background_tasks`    | Reports the current status of the given tasks without waiting.                                   |
+| `wait_for_background_tasks` | Waits until the tasks settle. Accepts `timeoutSeconds` and `waitFor: "first"`.                   |
+| `abort_background_tasks`    | Stops the given tasks without waiting. A running task reports `aborting`.                        |
+
+A stopped task later settles as `aborted` with the progress it saved, and `wait_for_background_tasks` collects it. A task that had already finished or expired is left alone and reports its status.
+
+A task ID has the form `<agent>:<snapshotId>` and comes back in the delegation tool's result, so it lives in the conversation history. An orchestrator rebuilt from that history can still collect the result. Background delegation requires a sub-agent with a session store. A launch on a store-less agent is refused, and the orchestrator is told to delegate synchronously instead.
+
+Background work adds tool rounds (launch, post, wait, post, wait again), so raise `maxTurns` on the orchestrator.
+
+## Continue a task
+
+A delegation to a sub-agent with a session store leaves a handle behind when it settles, whether it ran in the background or not: the result carries a `taskId` and a `status` of `completed`, `failed`, or `aborted`. The `continue_task` tool picks the task up from that handle:
+
+```
+continue_task  { taskId, instructions?, background? }
+```
+
+- **Failed or aborted:** continues from the sub-agent's last saved progress. Without `instructions`, it retries as it stood. With them, it steers the retry.
+- **Completed:** takes follow-up `instructions` inside the sub-agent's own session. It is refused without them, since an empty retry would only repeat the finished work.
+- **Expired** (its background worker is presumed dead): stops the stale worker first, then continues from the last snapshot committed before the background run started. A fresh background delegation has no such snapshot, so it is refused and the orchestrator is told to delegate again. It is also refused when the sub-agent's store cannot signal a running worker to stop.
+- **Pending or aborting:** refused, with a pointer to the wait or check tool.
+
+A sub-agent run that stopped on an interrupt cannot be continued, since continuing it would mean answering the interrupt. A synchronous result carries no `taskId`, and `continue_task` refuses a background task that stopped on one. The orchestrator should delegate a more self-contained task instead.
+
+`background` is accepted only with `async: true`. A continuation counts against `maxDelegations`. When every configured sub-agent is client-managed, the tool is hidden from the model.
+
+Task handles are scoped to the conversation. The background-task tools and `continue_task` accept only task IDs that this conversation's delegations and continuations returned, so text that reaches the model cannot point them at another conversation's task. The sub-agent's own `getSnapshot`, `waitForSnapshot`, and `abort` routes are not scoped, so in multi-tenant deployments treat snapshot IDs as secrets where those routes are exposed.
+
+Only an explicitly set, non-empty `toolPrefix` namespaces these shared tools: `toolPrefix: 'research'` gives `research_continue_task`. The default `delegate_to` prefix does not, so the shared tools keep the bare names shown above. Two `agents()` instances in one call therefore need distinct, explicit prefixes. Otherwise both register `continue_task`, whether or not `async` is set, and the call is rejected for duplicate tool names.
 
 ## Stream delegation progress
 
@@ -101,7 +173,7 @@ for await (const chunk of turn.stream) {
 
 ## Interrupts and failures
 
-Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as retrying, choosing another specialist, or asking the user for clarification.
+Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as continuing the task with `continue_task`, choosing another specialist, or asking the user for clarification. An interrupted sub-agent run cannot be continued; the orchestrator has to delegate a more self-contained task.
 
 ## Artifacts from sub-agents
 

@@ -39,6 +39,10 @@ app.post(
   expressHandler(reportAgent.getSnapshotDataAction),
 );
 app.post(
+  '/api/reportAgent/waitForSnapshot',
+  expressHandler(reportAgent.waitForSnapshotAction),
+);
+app.post(
   '/api/reportAgent/abort',
   expressHandler(reportAgent.abortAgentAction),
 );
@@ -46,7 +50,7 @@ app.post(
 
 The runtime writes a `pending` snapshot and refreshes its heartbeat while work runs. If the heartbeat becomes stale, reads surface the snapshot as `expired`.
 
-
+The `waitForSnapshot` route is optional. With it, a `remoteAgent` client follows a background task in one request that holds until the task settles. Without it, the client falls back to polling `getSnapshot`. One request holds for at most `maxSnapshotWaitMs` (set on `defineAgent`) and then answers with the snapshot as it stands, and the client asks again.
 
 ## Detach from a turn
 
@@ -70,22 +74,30 @@ for await (const snapshot of task.poll({ intervalMs: 1000 })) {
   renderStatus(snapshot.status);
 
   if (snapshot.status === 'completed') {
-    renderMessages(snapshot.state.messages);
+    renderMessages(snapshot.state?.messages ?? []);
   }
 }
 ```
 
-Use `wait()` when the caller can block:
+Use `wait()` when the caller can block. The wait happens next to the store, so there is no polling loop on your side:
 
 ```ts
-const finalSnapshot = await task.wait({ intervalMs: 1000 });
+const finalSnapshot = await task.wait();
 
 if (finalSnapshot.status === 'failed') {
   showError(finalSnapshot.error);
 }
 ```
 
-Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+Bound the wait with an abort signal. When it fires, `wait()` rejects with the signal's reason and the task keeps running:
+
+```ts
+const snap = await task.wait({ abortSignal: AbortSignal.timeout(30_000) });
+```
+
+Without a `DetachedTask` handle, `reportAgent.waitForSnapshot(snapshotId)` does the same from a snapshot ID. It resolves `undefined` for a snapshot that does not exist, where `task.wait()` throws.
+
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired`. A `failed`, `aborted`, or `expired` task still resolves with its snapshot, so inspect `status` and `error`.
 
 Use `poll()` for UI progress because it lets you render every status change. Use `wait()` for server code, tests, or short-lived command-line tools where blocking is acceptable. Store the pending snapshot ID before navigating away from the page so another client session can reconnect.
 
@@ -102,7 +114,9 @@ if (snapshot?.status === 'completed') {
 }
 ```
 
-Only completed snapshots can be resumed.
+`completed`, `failed`, and `aborted` snapshots can be resumed. A `failed` or `aborted` snapshot holds the conversation up to the last completed tool round, so `chat.send({})` re-runs the turn from there without repeating finished tool calls. See [Resume after a failure or a stop](/docs/agents/errors#resume-after-a-failure-or-a-stop). `pending` and `aborting` snapshots are rejected until they settle.
+
+To read status without the conversation, for example for a task list, send `metadataOnly: true` in the body of the `getSnapshot` route. The response has no `state`.
 
 ## Abort work
 
@@ -116,7 +130,7 @@ Or abort directly from the agent:
 await reportAgent.abort(snapshotId);
 ```
 
-Abort flips a pending snapshot to `aborted`. The background worker observes the status change and cancels the work.
+Abort flips a pending snapshot to `aborting` and resolves with the status the snapshot had before, so `pending` for a task that was still running. The background worker observes the status change, stops, and settles the snapshot as `aborted` with the state it had committed. `task.wait()` resolves once it settles, and the `aborted` snapshot can be resumed.
 </Lang>
 
 <Lang lang="go">

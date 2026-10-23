@@ -22,7 +22,7 @@ Genkit agents are built around conversations that continue across turns. A sessi
 
 The JavaScript client exposes a high-level interface for driving an agent across turns.
 
-- **`AgentApi`** is the agent handle that `remoteAgent()` returns. You call `chat()`, `loadChat()`, `getSnapshot()`, and `abort()` on it; the per-turn methods live on the `AgentChat` that `chat()` returns.
+- **`AgentAPI`** is the agent handle that `remoteAgent()` returns. You call `chat()`, `loadChat()`, `getSnapshot()`, `waitForSnapshot()`, and `abort()` on it; the per-turn methods live on the `AgentChat` that `chat()` returns.
 - **`AgentChat`** is a stateful conversation. It sends normal turns, streams turns, resumes interrupts, detaches work, and tracks the next-turn state, including the session ID, for you.
 - **`AgentTurn`** represents one in-flight streaming turn. It gives you a stream, a final response, and an abort helper.
 - **`AgentResponse`** is the completed turn, with text, tool requests, interrupts, finish reason, snapshot ID, custom state, artifacts, and raw output.
@@ -59,6 +59,20 @@ await chat.send('What did we discuss last time?');
 ```
 
 When both `sessionId` and `snapshotId` are supplied, the snapshot selects the exact resume point and the session ID acts as an ownership guard.
+
+## Pass context to an in-process agent
+
+An agent from `ai.defineAgent()` accepts call options as the second argument to `chat()` and `loadChat()`. Use `context` to pass auth or other request data to the agent's tools and middleware:
+
+```ts
+const chat = weatherAgent.chat({}, { context: { auth: { uid: 'alice' } } });
+await chat.send('Weather in Tokyo?');
+
+// A per-call `context` replaces the bound one entirely; the two are not merged.
+await chat.send('And in Paris?', { context: { auth: { uid: 'bob' } } });
+```
+
+Options bound on `chat()` apply to every call on that chat, including detached tasks it starts, so auth carries through background work. `remoteAgent()` does not take `context`, because over HTTP the server derives it from the request; TypeScript rejects it at compile time.
 
 ## Restore a full chat
 
@@ -109,11 +123,11 @@ const res = await turn.response;
 console.log(res.finishReason);
 ```
 
-You can also call `turn.abort()`. Foreground aborts return an `aborted` response when cancellation is observed.
+You can also call `turn.abort()`. Foreground aborts return an `aborted` response when cancellation is observed. For an in-process agent, the chat keeps the turns that finished before the stop, so `chat.send({})` continues from there. With `remoteAgent`, the abort cancels the HTTP request and the chat stays at its previous snapshot; reload the session with `loadChat({ sessionId })` before you continue.
 
 ## Failed turns
 
-When a turn fails after the invocation starts, the client throws `AgentError`. The error carries the last-good state, snapshot ID, and response object when available.
+When a turn fails after the invocation starts, the client throws `AgentError`. The error carries the resume point and the response object when available: `err.snapshotId` for a server-managed agent, or the full state at `err.response.raw.state` for a client-managed one (`err.state` holds only the custom state). When the failed turn committed its completed tool rounds, the chat has already adopted that resume point, so `chat.send({})` retries the turn. See [Resume after a failure or a stop](/docs/agents/errors#resume-after-a-failure-or-a-stop).
 
 ```ts
 import { AgentError } from 'genkit/beta/client';

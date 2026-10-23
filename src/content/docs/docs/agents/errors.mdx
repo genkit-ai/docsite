@@ -21,9 +21,9 @@ Genkit agent failures have different recovery paths depending on when they happe
 ## Failure categories
 
 - **Init misuse** throws before a turn starts. Fix the caller, such as by not sending `state` to a store-backed agent.
-- **Failed turns** throw `AgentError` with `response`, `status`, `details`, `state`, and `snapshotId`. Resume from the last-good state or snapshot.
-- **Foreground aborts** resolve with `finishReason: 'aborted'`. Let the user retry or revise the request.
-- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Show the status, inspect snapshot error details, and retry from a completed snapshot when possible.
+- **Failed turns** throw `AgentError` with `response`, `status`, `details`, `state`, and `snapshotId`. The turn keeps the conversation up to its last completed tool round, so you can retry from there (see [Resume after a failure or a stop](#resume-after-a-failure-or-a-stop)).
+- **Foreground aborts** resolve with `finishReason: 'aborted'`. An in-process chat moves to the resume point the stop left; a `remoteAgent` chat stays at its previous snapshot (see [Resume after a failure or a stop](#resume-after-a-failure-or-a-stop)). Let the user retry or revise the request.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Show the status, inspect snapshot error details, and resume from the `failed` or `aborted` snapshot.
 - **Domain-level tool problems** should be structured tool output when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
 ## Handle failed turns
@@ -67,6 +67,62 @@ try {
   showFailure(err);
 }
 ```
+
+## Resume after a failure or a stop
+
+A failed turn commits the conversation it had at the last turn seam: the messages the turn started from plus every completed round of tool requests and tool responses. With a session store, that conversation is saved as a `failed` snapshot. A run the caller stopped (through an abort signal, a timeout, or `maxTurns`) is saved the same way as an `aborted` snapshot. Both are resume points, so a retry does not repeat the tool calls that already finished.
+
+Send an input with neither a message nor a resume to run the turn again on the committed conversation. Only a turn that committed can be re-run this way. A failure before the turn committed anything leaves the chat at its previous resume point without the new message, so send the message again instead. With a session store, a committed turn is one that moved the snapshot ID. Open an existing session with `loadChat()` rather than `chat({ sessionId })`, so `chat.snapshotId` is set before the turn:
+
+```ts
+const before = chat.snapshotId;
+try {
+  await chat.send('Book the full itinerary.');
+} catch (err) {
+  if (!(err instanceof AgentError)) throw err;
+  if (err.snapshotId && err.snapshotId !== before) {
+    // The turn committed: run it again from where it failed.
+    await chat.send({});
+  } else {
+    // Nothing was committed: send the message again.
+    await chat.send('Book the full itinerary.');
+  }
+}
+```
+
+A client-managed agent has no snapshot ID. A model or tool failure usually commits there too, and the chat adopts the committed state, so check whether `err.response.raw.state?.messages` grew past what the chat had before the turn.
+
+An attached run that you stop resolves instead of throwing. For an in-process agent, such as one from `ai.defineAgent()`, the chat adopts the snapshot the stop left:
+
+```ts
+const ac = new AbortController();
+const res = await chat.send('Book it.', { abortSignal: ac.signal }); // ac.abort() elsewhere
+
+if (res.finishReason === 'aborted') {
+  // chat.snapshotId names where the run stopped.
+  await chat.send({});
+}
+```
+
+With `remoteAgent`, stopping the run cancels the HTTP request, so the chat never sees how the run ended and stays at its previous snapshot. Reload the session's latest snapshot with `agent.loadChat({ sessionId })` before you retry.
+
+From another process, load the failed or aborted snapshot by ID and continue:
+
+```ts
+// The err.snapshotId or chat.snapshotId you saved earlier.
+const chat = await agent.loadChat({ snapshotId: savedSnapshotId });
+await chat.send('Try again, but skip the hotel.');
+```
+
+A few rules worth knowing:
+
+- A failure that happens before the turn commits anything rolls back. No snapshot records it, and the previous committed snapshot stays the resume point.
+- `err.status` is the model's own status for a model error and `INTERNAL` for a failed tool.
+- An empty input on a fresh conversation is rejected with `INVALID_ARGUMENT`, because there is nothing to re-run.
+- `pending` and `aborting` snapshots cannot be resumed yet. Wait for them to settle first.
+- A custom agent built with `defineCustomAgent` commits a failed turn only when its turn handler throws `CommittedTurnError`; see [Failure and recovery](/docs/agents/custom-orchestration#failure-and-recovery). It receives the empty input as is, and has to handle it.
+
+The same behavior is available on a single `generate()` call with `throwOnError: false`; see [Error types](/docs/error-types).
 
 ## Tool exceptions
 

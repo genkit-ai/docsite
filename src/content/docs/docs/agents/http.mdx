@@ -37,6 +37,11 @@ app.post(
 );
 
 app.post(
+  '/api/weatherAgent/waitForSnapshot',
+  expressHandler(weatherAgent.waitForSnapshotAction),
+);
+
+app.post(
   '/api/weatherAgent/abort',
   expressHandler(weatherAgent.abortAgentAction),
 );
@@ -44,7 +49,7 @@ app.post(
 app.listen(8080);
 ```
 
-The primary endpoint handles normal and streaming turns. The snapshot endpoint reads by `snapshotId` or `sessionId`. The abort endpoint takes `{ snapshotId }`.
+The primary endpoint handles normal and streaming turns. The snapshot endpoint reads by `snapshotId` or `sessionId`, and accepts `metadataOnly: true` to skip the conversation state. The wait endpoint takes the same body shape, but requires `snapshotId` and ignores `metadataOnly`. It holds until the snapshot settles, up to the agent's `maxSnapshotWaitMs` (25 seconds by default), then answers with the snapshot as it stands. `remoteAgent` uses it for `task.wait()` and falls back to polling `getSnapshot` when it is not mounted. The abort endpoint takes `{ snapshotId }`.
 
 </Lang>
 
@@ -258,6 +263,12 @@ Go mounts one more companion, **`POST /agents/{name}/waitForSnapshot`**, on ever
 
 </Lang>
 
+<Lang lang="js">
+
+JavaScript has one more optional companion, **`POST /api/{name}/waitForSnapshot`**, served from the agent's `waitForSnapshotAction` (see [Express routes](#express-routes) for its body and limit). A client that gets a `pending` or `aborting` snapshot back sends the request again, so keep `maxSnapshotWaitMs` under the shortest request or idle timeout of the proxies between the client and the server. The abort route needs only a session store, but running work stops only when the store implements `onSnapshotStateChange()`; see [Session stores](/docs/agents/session-stores).
+
+</Lang>
+
 Every route uses the standard Genkit HTTP envelope. The turn input goes in `data`, and session initialization goes in the optional `init`. Omit `init` to start a fresh conversation, or include `sessionId`, `snapshotId`, or `state` to continue one.
 
 ```sh
@@ -425,7 +436,7 @@ curl -X POST http://localhost:8080/agents/chat/abort \
 
 Both take the `snapshotId` a previous turn returned at `result.snapshotId`. See [Background execution](/docs/agents/background).
 
-<Lang lang="go">
+<Lang lang="js go">
 
 Block until a detached run settles, or read where it stands without its conversation:
 
@@ -440,6 +451,16 @@ curl -X POST http://localhost:8080/agents/chat/getSnapshot \
   -H 'content-type: application/json' \
   -d '{"data":{"snapshotId":"9f2a41d6-0c2b-4f0e-8a7a-3f9d1c6b2e40","metadataOnly":true}}'
 ```
+
+</Lang>
+
+<Lang lang="js">
+
+An abort answers with the status the snapshot had before the abort, so `pending` for a run that was still going, and flips the row to `aborting`. Call `waitForSnapshot` until the row settles to learn how the run ended.
+
+</Lang>
+
+<Lang lang="go">
 
 An abort answers `aborting` for a run that was still going. Call `waitForSnapshot` until the row settles to learn how the run ended.
 
@@ -601,6 +622,7 @@ Options:
 
 - **`url`** is required and sends normal and streaming turns.
 - **`getSnapshotUrl`** defaults to `${url}/getSnapshot` and loads saved snapshots for server-managed agents.
+- **`waitForSnapshotUrl`** defaults to `${url}/waitForSnapshot`. `task.wait()` and `agent.waitForSnapshot()` use it to block on the server, and fall back to polling `getSnapshotUrl` when the route is not mounted.
 - **`abortUrl`** defaults to `${url}/abort` and cancels detached background turns.
 - **`headers`** can be a static object or an async function called for each request. Use the function form when tokens rotate or are fetched from the current frontend session.
 - **`stateManagement`** explicitly declares `server` or `client` state. The client otherwise infers the mode from responses.
@@ -619,6 +641,32 @@ for await (const chunk of turn.stream) {
 
 const res = await turn.response;
 ```
+
+## Custom transports
+
+`remoteAgent()` is `createAgentAPI(remoteAgentTransport(options))`. To reach an agent over something other than HTTP streaming, such as a WebSocket, a callable function, or a queue, implement `AgentTransport` and wrap it with `createAgentAPI`. You get the same `AgentAPI` as `remoteAgent()` returns, so `chat()`, `loadChat()`, `getSnapshot()`, `waitForSnapshot()`, and `abort()` work, along with `chat.detach()` and `task.wait()`. The transport's own options type becomes the per-chat and per-call options. In this sketch, `socket` stands in for your own connection and `WeatherState` for your agent's state type:
+
+```ts
+import { createAgentAPI, type AgentTransport } from 'genkit/beta/client';
+
+type SocketOptions = { requestId?: string };
+
+const transport: AgentTransport<SocketOptions> = {
+  runTurn(input, init, { abortSignal, requestId }) {
+    // Start the turn; return its chunk stream and a promise for its output.
+    const call = socket.startTurn({ input, init, requestId, abortSignal });
+    return { stream: call.chunks, output: call.result };
+  },
+  getSnapshot: (lookup, opts) => socket.getSnapshot(lookup, opts?.requestId),
+  abort: (snapshotId, opts) => socket.abort(snapshotId, opts?.requestId),
+};
+
+// Pass both type arguments: createAgentAPI<State>(t) alone resets the options to `never`.
+const agent = createAgentAPI<WeatherState, SocketOptions>(transport);
+const chat = agent.chat({}, { requestId: 'req-42' });
+```
+
+To decorate HTTP calls (logging, retries), wrap `remoteAgentTransport(options)` instead of starting from scratch. `waitForSnapshot` on the transport is optional; without it, waits poll `getSnapshot`.
 
 </Lang>
 
@@ -716,7 +764,7 @@ The remote client calls the primary endpoint with streamed action transport. It 
 
 </Lang>
 
-When using server-managed state, make sure the same auth and tenant checks apply to the primary, snapshot, and abort endpoints. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
+When using server-managed state, make sure the same auth and tenant checks apply to the primary endpoint and every companion endpoint. Snapshot IDs are powerful because they can reveal conversation history. Treat them like conversation-scoped credentials, and verify that the caller is allowed to read or abort the requested session.
 
 For client-managed agents, the remote client sends the full state back to the primary endpoint. That keeps the server stateless, but request size grows with conversation history and artifacts. Prefer server-managed routes for long-running chat experiences or background tasks.
 
