@@ -42,7 +42,29 @@ type LanguageBlockNode = {
   children: LanguageBlockNode[];
 };
 
+function getCodeSpans(source: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const fenceRegex = /^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
+  for (const match of source.matchAll(fenceRegex)) {
+    if (match.index !== undefined) {
+      spans.push([match.index, match.index + match[0].length]);
+    }
+  }
+  const inlineRegex = /`[^`\n]+`/g;
+  for (const match of source.matchAll(inlineRegex)) {
+    if (match.index !== undefined) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (!spans.some(([s, e]) => start >= s && start < e)) {
+        spans.push([start, end]);
+      }
+    }
+  }
+  return spans;
+}
+
 function parseLanguageBlocks(source: string): LanguageBlockNode[] {
+  const codeSpans = getCodeSpans(source);
   const tagRegex = /<(\/?)(Lang)\b([^>]*)>/g;
   const stack: Array<LanguageBlockNode & { tagName: string }> = [];
   const roots: LanguageBlockNode[] = [];
@@ -53,6 +75,10 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
     const isClosing = closingSlash === '/';
     const tagStart = match.index;
     const tagEnd = match.index + fullTag.length;
+
+    if (codeSpans.some(([s, e]) => tagStart >= s && tagStart < e)) {
+      continue;
+    }
 
     if (!isClosing) {
       const langMatch = attrs.match(
@@ -325,7 +351,11 @@ function stripLeadingEsm(content: string): string {
       depth = 0;
     }
 
-    for (const ch of line) {
+    const codeOnly = line.replace(
+      /\/\*[\s\S]*?\*\/|\/\/.*$|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+      '',
+    );
+    for (const ch of codeOnly) {
       if (ch === '(' || ch === '{' || ch === '[') depth++;
       else if (ch === ')' || ch === '}' || ch === ']') depth--;
     }
