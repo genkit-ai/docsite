@@ -58,15 +58,13 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
       const langMatch = attrs.match(
         /\blang\s*=\s*(?:"([^"]+)"|'([^']+)'|\{([^}]+)\})/i,
       );
-      if (!langMatch) {
-        continue;
-      }
-      const rawLangs = langMatch[1] || langMatch[2] || langMatch[3] || '';
-      const langs = rawLangs
-        .replace(/[\[\]'"\s]+/g, ' ')
-        .split(/[\s,]+/)
-        .map((value) => normalizeLanguage(value.trim()))
-        .filter(Boolean);
+      const langs = langMatch
+        ? (langMatch[1] || langMatch[2] || langMatch[3] || '')
+            .replace(/[\[\]'"\s]+/g, ' ')
+            .split(/[\s,]+/)
+            .map((value) => normalizeLanguage(value.trim()))
+            .filter(Boolean)
+        : [];
       const node: LanguageBlockNode & { tagName: string } = {
         langs,
         openStart: tagStart,
@@ -266,10 +264,10 @@ export async function processRawContent(
 
 function inlineExportedJsxConstants(content: string): string {
   const constRegex =
-    /^export\s+const\s+(\w+)\s*=\s*\(\s*([\s\S]*?)\s*\);?\s*$/gm;
+    /^export\s+const\s+(\w+)\s*=\s*(?:\(\s*(<[\s\S]*?>)\s*\)|(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\4>|<[A-Za-z][\w.-]*\b[^>]*\/>))\s*;?\s*$/gm;
   const constants = new Map<string, string>();
   for (const match of content.matchAll(constRegex)) {
-    const jsx = match[2].trim();
+    const jsx = (match[2] ?? match[3] ?? '').trim();
     if (jsx.startsWith('<')) {
       constants.set(match[1], jsx);
     }
@@ -277,7 +275,8 @@ function inlineExportedJsxConstants(content: string): string {
   if (constants.size === 0) {
     return content;
   }
-  const fenceRegex = /(^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$)/gm;
+  const fenceRegex =
+    /(^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$)/gm;
   return content
     .split(fenceRegex)
     .map((chunk, index) => {
@@ -307,7 +306,12 @@ function stripLeadingEsm(content: string): string {
     const trimmed = line.trim();
 
     if (!inEsm) {
-      if (trimmed === '') {
+      if (
+        trimmed === '' ||
+        trimmed.startsWith('//') ||
+        (trimmed.startsWith('{/*') && trimmed.endsWith('*/}')) ||
+        (trimmed.startsWith('<!--') && trimmed.endsWith('-->'))
+      ) {
         i++;
         continue;
       }

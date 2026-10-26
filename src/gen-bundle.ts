@@ -62,7 +62,10 @@ function resolveDescription(
 }
 
 function stripCodeFences(markdown: string): string {
-  return markdown.replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, '');
+  return markdown.replace(
+    /^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm,
+    '',
+  );
 }
 
 function stripCodeFencesAndInlineCode(markdown: string): string {
