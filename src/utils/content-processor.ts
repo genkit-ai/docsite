@@ -309,7 +309,7 @@ function stripLeadingEsm(content: string): string {
         continue;
       }
       if (
-        !/^(?:import\s+(?:[\w*{]|['"])|export\s+(?:(?:const|let|var|function|default|class|type|interface)\b|\{))/.test(
+        !/^(?:import\s+(?:[\w*{]|['"])|export\s+(?:(?:const|let|var|function|default|class|type|interface)\b|[\{*]))/.test(
           trimmed,
         )
       )
@@ -324,11 +324,11 @@ function stripLeadingEsm(content: string): string {
     }
     i++;
 
-    // Statement ends when depth is balanced AND the line terminates with ; or a from-clause
-    // (optionally followed by a trailing // or /* */ comment).
+    // Statement ends when depth is balanced AND the line terminates with ;, a from-clause,
+    // or a complete expression token (optionally followed by a trailing // or /* */ comment).
     if (
       depth <= 0 &&
-      /(?:;|from\s+['"][^'"]+['"]\??(?:raw)?['"]?\s*;?)\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)?\s*$/.test(
+      /(?:;|from\s+['"][^'"]+['"]\??(?:raw)?['"]?\s*;?|[\w'"`}\])])\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)?\s*$/.test(
         line,
       )
     ) {
@@ -398,9 +398,11 @@ async function resolveCodeExpression(
   expr = expr.trim();
 
   // Case 0: string/template literal inside braces, e.g. code={"..."} or code={`...`}
-  const strLiteralMatch = expr.match(/^(['"`])([\s\S]*)\1$/);
+  const strLiteralMatch = expr.match(
+    /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`)$/,
+  );
   if (strLiteralMatch) {
-    return strLiteralMatch[2];
+    return strLiteralMatch[1] ?? strLiteralMatch[2] ?? strLiteralMatch[3];
   }
 
   // Case 1: bare identifier — must be a `?raw` import.

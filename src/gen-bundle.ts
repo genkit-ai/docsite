@@ -126,7 +126,11 @@ function validateBundle(documents: Record<string, Doc>): void {
       );
     }
     const bodyAfterTitle = prose.replace(/^#[^\n]*\n+/, '');
-    if (/^\s*(?:import\s+|export\s+const\s+)/.test(bodyAfterTitle)) {
+    if (
+      /^\s*(?:import\s+(?:[\w*{]|['"])|export\s+(?:(?:const|let|var|function|default|class|type|interface)\b|[\{*]))/.test(
+        bodyAfterTitle,
+      )
+    ) {
       errors.push(
         `${key}: text contains unstripped leading ESM import/export statement`,
       );
