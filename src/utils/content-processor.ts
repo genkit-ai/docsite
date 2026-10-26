@@ -266,10 +266,13 @@ export async function processRawContent(
 
 function inlineExportedJsxConstants(content: string): string {
   const constRegex =
-    /^export\s+const\s+(\w+)\s*=\s*\(\s*\n([\s\S]*?)\n\);\s*$/gm;
+    /^export\s+const\s+(\w+)\s*=\s*\(\s*([\s\S]*?)\s*\);?\s*$/gm;
   const constants = new Map<string, string>();
   for (const match of content.matchAll(constRegex)) {
-    constants.set(match[1], match[2].trim());
+    const jsx = match[2].trim();
+    if (jsx.startsWith('<')) {
+      constants.set(match[1], jsx);
+    }
   }
   if (constants.size === 0) {
     return content;
