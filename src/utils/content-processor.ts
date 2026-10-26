@@ -55,12 +55,16 @@ function parseLanguageBlocks(source: string): LanguageBlockNode[] {
     const tagEnd = match.index + fullTag.length;
 
     if (!isClosing) {
-      const langMatch = attrs.match(/\blang\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const langMatch = attrs.match(
+        /\blang\s*=\s*(?:"([^"]+)"|'([^']+)'|\{([^}]+)\})/i,
+      );
       if (!langMatch) {
         continue;
       }
-      const langs = (langMatch[1] || langMatch[2] || '')
-        .split(/\s+/)
+      const rawLangs = langMatch[1] || langMatch[2] || langMatch[3] || '';
+      const langs = rawLangs
+        .replace(/[\[\]'"\s]+/g, ' ')
+        .split(/[\s,]+/)
         .map((value) => normalizeLanguage(value.trim()))
         .filter(Boolean);
       const node: LanguageBlockNode & { tagName: string } = {
@@ -270,14 +274,23 @@ function inlineExportedJsxConstants(content: string): string {
   if (constants.size === 0) {
     return content;
   }
-  let result = content;
-  for (const [name, jsx] of constants) {
-    result = result.replace(
-      new RegExp(`^\\{\\s*${name}\\s*\\}$`, 'gm'),
-      () => jsx,
-    );
-  }
-  return result;
+  const fenceRegex = /(^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$)/gm;
+  return content
+    .split(fenceRegex)
+    .map((chunk, index) => {
+      if (index % 2 === 1) {
+        return chunk;
+      }
+      let replaced = chunk;
+      for (const [name, jsx] of constants) {
+        replaced = replaced.replace(
+          new RegExp(`\\{\\s*${name}\\s*\\}`, 'g'),
+          () => jsx,
+        );
+      }
+      return replaced;
+    })
+    .join('');
 }
 
 function stripLeadingEsm(content: string): string {

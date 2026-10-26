@@ -65,12 +65,13 @@ function stripCodeFences(markdown: string): string {
   return markdown.replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, '');
 }
 
+function stripCodeFencesAndInlineCode(markdown: string): string {
+  return stripCodeFences(markdown).replace(/`[^`\n]+`/g, '');
+}
+
 function extractHeadersOutsideCodeFences(markdown: string): string {
-  return (
-    stripCodeFences(markdown)
-      .match(/^#{1,6}\s+.*\n/gm)
-      ?.join('') ?? ''
-  );
+  const matches = stripCodeFences(markdown).match(/^#{1,6}\s+.*/gm);
+  return matches ? `${matches.join('\n')}\n` : '';
 }
 
 function isSourceDocFile(relPath: string): boolean {
@@ -113,7 +114,7 @@ function validateBundle(documents: Record<string, Doc>): void {
       errors.push(`${key}: invalid lang "${doc.lang}"`);
     }
 
-    const prose = stripCodeFences(doc.text);
+    const prose = stripCodeFencesAndInlineCode(doc.text);
     if (/<(Lang|Code|CopyMarkdownButton)\b/.test(prose)) {
       errors.push(
         `${key}: text contains unexpanded MDX component (<Lang>, <Code>, or <CopyMarkdownButton>)`,
