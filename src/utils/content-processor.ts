@@ -205,7 +205,7 @@ export function filterContentByLanguage(
   );
 
   // Strip any leading ESM imports/exports that were nested inside the opening <Lang> block.
-  const h1Match = filteredContent.match(/^(# [^\n]+\n+)/);
+  const h1Match = filteredContent.match(/^(\s*# [^\n]+\n+)/);
   if (h1Match) {
     const heading = h1Match[1];
     const body = stripLeadingEsm(filteredContent.slice(heading.length));
@@ -290,10 +290,10 @@ export async function processRawContent(
 
 function inlineExportedJsxConstants(content: string): string {
   const constRegex =
-    /^export\s+const\s+(\w+)\s*=\s*(?:\(\s*(<[\s\S]*?>)\s*\)|(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\4>|<[A-Za-z][\w.-]*\b[^>]*\/>))\s*;?\s*$/gm;
+    /^export\s+const\s+(\w+)\s*=\s*(?:\(\s*(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\3>|<[A-Za-z][\w.-]*\b[^>]*\/>)\s*\)|(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\5>|<[A-Za-z][\w.-]*\b[^>]*\/>))\s*;?\s*$/gm;
   const constants = new Map<string, string>();
   for (const match of content.matchAll(constRegex)) {
-    const jsx = (match[2] ?? match[3] ?? '').trim();
+    const jsx = (match[2] ?? match[4] ?? '').trim();
     if (jsx.startsWith('<')) {
       constants.set(match[1], jsx);
     }
