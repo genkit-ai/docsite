@@ -529,7 +529,9 @@ function extractStringAttr(attrs: string, name: string): string | null {
 }
 
 function extractBraceAttr(attrs: string, name: string): string | null {
-  const regex = new RegExp(`\\b${name}\\s*=\\s*\\{([^}]*)\\}`);
+  const regex = new RegExp(
+    `\\b${name}\\s*=\\s*\\{((?:"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`|[^}"'\`])*)\\}`,
+  );
   const m = attrs.match(regex);
   return m ? m[1].trim() : null;
 }

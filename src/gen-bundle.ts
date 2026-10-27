@@ -146,10 +146,14 @@ function validateBundle(documents: Record<string, Doc>): void {
       .sort()
       .map((k) => {
         const d = documents[k];
-        return (
-          ` - FilePath: ${k}\n   Title: ${d.title}\n` +
-          (d.description ? `   Description: ${d.description}\n` : '')
-        );
+        let summary = ` - FilePath: ${k}\n   Title: ${d.title}\n`;
+        if (d.description) {
+          summary += `   Description: ${d.description}\n`;
+        }
+        if (d.headers) {
+          summary += `   Headers:\n     ${d.headers.split('\n').join('\n     ')}\n`;
+        }
+        return summary;
       })
       .join('\n');
     const byteLength = Buffer.byteLength(indexPayload, 'utf8');
@@ -167,19 +171,27 @@ function validateBundle(documents: Record<string, Doc>): void {
   }
 }
 
-async function indexDocs(dir: string, lang: string) {
+async function indexDocs(dir: string): Promise<Record<string, Doc>> {
   const allFiles = await readdir(dir, { recursive: true });
   const docFiles = allFiles.filter(isSourceDocFile);
-  const documents: Record<string, Omit<Doc, 'lang'>> = {};
+  const byLang: Record<string, Record<string, Doc>> = {
+    js: {},
+    go: {},
+    dart: {},
+    python: {},
+  };
 
   for (const file of docFiles) {
     const fullPath = path.resolve(dir, file);
     const markdown = await readFile(fullPath, { encoding: 'utf8' });
     const { frontmatter } = extractFrontmatterAndBody(markdown);
-    const supportedLanguages = Array.isArray(frontmatter.supportedLanguages)
+    const rawSupported = Array.isArray(frontmatter.supportedLanguages)
       ? frontmatter.supportedLanguages
       : [...LANGUAGES];
-    if (!supportedLanguages.includes(lang)) {
+    const supportedLanguages = LANGUAGES.filter((lang) =>
+      rawSupported.includes(lang),
+    );
+    if (supportedLanguages.length === 0) {
       continue;
     }
 
@@ -194,18 +206,27 @@ async function indexDocs(dir: string, lang: string) {
     const title = frontmatter.title || normalizedFileName;
 
     const baseContent = await processRawContent(markdown, title, fullPath);
-    const text = filterContentByLanguage(baseContent, lang);
-    const headers = extractHeadersOutsideCodeFences(text);
 
-    documents[normalizedFileName] = {
-      text,
-      url: isLanguageAgnostic
-        ? `https://genkit.dev/docs/${slugPath}/`
-        : `https://genkit.dev/docs/${lang}/${slugPath}/`,
-      title,
-      description: resolveDescription(frontmatter.description, lang),
-      headers,
-    };
+    for (const lang of supportedLanguages) {
+      const text = filterContentByLanguage(baseContent, lang);
+      const headers = extractHeadersOutsideCodeFences(text);
+
+      byLang[lang][`${lang}/${normalizedFileName}`] = {
+        text,
+        url: isLanguageAgnostic
+          ? `https://genkit.dev/docs/${slugPath}/`
+          : `https://genkit.dev/docs/${lang}/${slugPath}/`,
+        title,
+        description: resolveDescription(frontmatter.description, lang),
+        headers,
+        lang,
+      };
+    }
+  }
+
+  const documents: Record<string, Doc> = {};
+  for (const lang of LANGUAGES) {
+    Object.assign(documents, byLang[lang]);
   }
   return documents;
 }
@@ -220,16 +241,7 @@ export function extractFrontmatterAndBody(source: string) {
 }
 
 async function main() {
-  const documents: Record<string, Doc> = {};
-  for (const lang of LANGUAGES) {
-    const allDocs = await indexDocs('src/content/docs/docs', lang);
-    for (const doc of Object.keys(allDocs)) {
-      documents[`${lang}/${doc}`] = {
-        ...allDocs[doc],
-        lang,
-      };
-    }
-  }
+  const documents = await indexDocs('src/content/docs/docs');
   validateBundle(documents);
   await writeFile(
     `public/docs-bundle-experimental.json`,
