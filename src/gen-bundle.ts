@@ -17,157 +17,239 @@
 import { readdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import { parse } from 'yaml';
-import { rewriteInternalDocsLinks } from './utils/docs-link-routing.js';
+import {
+  filterContentByLanguage,
+  processRawContent,
+} from './utils/content-processor.js';
 
-export const FRONTMATTER_AND_BODY_REGEX = /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
+const LANGUAGES = ['js', 'go', 'dart', 'python'] as const;
+const GENERATED_LANG_DIRS = new Set<string>(LANGUAGES);
+const MAX_LANG_INDEX_BYTES = 60 * 1024; // 60 KB cap for MCP list_genkit_docs index per language
 
-async function main() {
-	const documents: Record<string, Doc> = {};
-	for (const lang of ['js', 'go', 'dart', 'python']) {
-		const allDocs = await indexDocs('src/content/docs/docs', lang);
-		for (const doc of Object.keys(allDocs)) {
-			documents[`${lang}/${doc}`] = {
-				...allDocs[doc],
-				lang,
-			};
-		}
-	}
-	await writeFile(`public/docs-bundle-experimental.json`, JSON.stringify(documents, undefined, 2));
-}
+export const FRONTMATTER_AND_BODY_REGEX =
+  /^---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$/;
 
 interface Doc {
-	title: string;
-	description?: string;
-	text: string;
-	url: string;
-	headers: string;
-	lang: string;
+  title: string;
+  description?: string;
+  text: string;
+  url: string;
+  headers: string;
+  lang: string;
 }
 
-async function indexDocs(dir: string, lang: string) {
-	const allFiles = await readdir(dir, { recursive: true });
-	const docFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
-	const documents: Record<string, Omit<Doc, 'lang'>> = {};
-
-	for (const file of docFiles) {
-		const markdown = await readFile(path.resolve(dir, file), { encoding: 'utf8' });
-		const { frontmatter, body } = await extractFrontmatterAndBody(markdown);
-		const supportedLanguages = Array.isArray(frontmatter.supportedLanguages)
-			? frontmatter.supportedLanguages
-			: ['js', 'go', 'dart', 'python'];
-		if (!supportedLanguages.includes(lang)) {
-			continue;
-		}
-		const headers = body.match(/^#.*\n/gm)?.join('') ?? '';
-		const normalizedFileName = file.endsWith('.mdx') ? file.substring(0, file.length - 1) : file;
-		const slugPath = normalizedFileName.substring(0, normalizedFileName.lastIndexOf('.'));
-		const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
-
-		documents[normalizedFileName] = {
-			text: renderContent(file, body, frontmatter.title || normalizedFileName, lang),
-			url: isLanguageAgnostic
-				? `https://genkit.dev/docs/${slugPath}/`
-				: `https://genkit.dev/docs/${lang}/${slugPath}/`,
-			title: frontmatter.title || normalizedFileName,
-			description: frontmatter.description,
-			headers,
-		};
-	}
-	return documents;
+function resolveDescription(
+  description: unknown,
+  lang: string,
+): string | undefined {
+  if (typeof description === 'string') {
+    return description;
+  }
+  if (
+    description &&
+    typeof description === 'object' &&
+    !Array.isArray(description)
+  ) {
+    const record = description as Record<string, unknown>;
+    if (typeof record[lang] === 'string') {
+      return record[lang] as string;
+    }
+    if (typeof record.default === 'string') {
+      return record.default;
+    }
+  }
+  return undefined;
 }
 
-const LLM_SUMMARY_REGEX = /<LLMSummary>([\s\S]*?)<\/LLMSummary>/;
-const FRONTMATTER_REGEX = /^---\s*[\s\S]*?---/;
+function stripCodeFences(markdown: string): string {
+  return markdown.replace(
+    /^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm,
+    '',
+  );
+}
 
-function renderContent(file: string, rawContent: string, title: string, lang: string) {
-	if (file.endsWith('.mdx')) {
-		// Strip out content for other languages
-		rawContent = rawContent.replace(
-			/<Lang\s+lang="([^"]+)"[^>]*>([\s\S]*?)<\/Lang>/g,
-			(match, blockLang, content) => {
-				const languages = String(blockLang)
-					.split(/\s+/)
-					.map((value) => value.trim())
-					.filter(Boolean);
-				if (languages.includes(lang)) {
-					return content;
-				}
-				return '';
-			},
-		);
+function stripCodeFencesAndInlineCode(markdown: string): string {
+  return stripCodeFences(markdown).replace(/`[^`\n]+`/g, '');
+}
 
-		// --- Check for <LLMs> tag ---
-		const llmMatch = rawContent.match(LLM_SUMMARY_REGEX);
+function extractHeadersOutsideCodeFences(markdown: string): string {
+  const matches = stripCodeFences(markdown).match(/^#{1,6}\s+.*/gm);
+  return matches ? `${matches.join('\n')}\n` : '';
+}
 
-		if (llmMatch && llmMatch[1]) {
-			// Apply standard frontmatter/import removal to the *entire* raw content
-			let fullProcessedContent = rawContent.replace(LLM_SUMMARY_REGEX, '').replace(FRONTMATTER_REGEX, '').trim();
-			const fullLines = fullProcessedContent.split('\n');
-			let fullFirstNonImportIndex = 0;
-			for (let i = 0; i < fullLines.length; i++) {
-				const trimmedLine = fullLines[i].trim();
-				if (trimmedLine.startsWith('import ')) {
-					fullFirstNonImportIndex = i + 1;
-				} else if (trimmedLine === '') {
-					fullFirstNonImportIndex = i + 1;
-				} else {
-					break;
-				}
-			}
-			fullProcessedContent = fullLines.slice(fullFirstNonImportIndex).join('\n').trim();
-			fullProcessedContent = `# ${title}\n\n${fullProcessedContent}`; // Prepend title
-			return rewriteInternalDocsLinks(fullProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
-				context: 'gen-bundle',
-				warnOnUnresolved: true,
-			});
-		} else {
-			// --- Case 2: <LLMs> tag NOT found ---
-			// Apply standard processing:
+function isSourceDocFile(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  if (GENERATED_LANG_DIRS.has(segments[0])) {
+    return false;
+  }
+  if (segments.some((s) => s.startsWith('_') || s === 'README.md')) {
+    return false;
+  }
+  return normalized.endsWith('.md') || normalized.endsWith('.mdx');
+}
 
-			// 2a. Remove frontmatter block
-			let standardProcessedContent = rawContent.replace(FRONTMATTER_REGEX, '').trim();
+function validateBundle(documents: Record<string, Doc>): void {
+  const errors: string[] = [];
 
-			// 2b. Remove ONLY leading import statements
-			const lines = standardProcessedContent.split('\n');
-			let firstNonImportIndex = 0;
-			for (let i = 0; i < lines.length; i++) {
-				const trimmedLine = lines[i].trim();
-				if (trimmedLine.startsWith('import ')) {
-					// Still in the import block, mark next line as potential start of content
-					firstNonImportIndex = i + 1;
-				} else if (trimmedLine === '') {
-					// Empty line, potentially between imports, mark next line as potential start
-					firstNonImportIndex = i + 1;
-				} else {
-					// Found the first non-empty, non-import line, stop searching
-					break;
-				}
-			}
-			// Keep lines from the first non-import line onwards
-			standardProcessedContent = lines.slice(firstNonImportIndex).join('\n').trim();
+  for (const [key, doc] of Object.entries(documents)) {
+    if (/^(js|go|dart|python)\/(js|go|dart|python)\//.test(key)) {
+      errors.push(`${key}: duplicate language prefix in document key`);
+    }
+    if (typeof doc.title !== 'string' || !doc.title.trim()) {
+      errors.push(`${key}: title must be a non-empty string`);
+    }
+    if (doc.description !== undefined && typeof doc.description !== 'string') {
+      errors.push(
+        `${key}: description must be a string or undefined (got ${typeof doc.description})`,
+      );
+    }
+    if (typeof doc.text !== 'string' || !doc.text.trim()) {
+      errors.push(`${key}: text must be a non-empty string`);
+    }
+    if (typeof doc.url !== 'string' || !doc.url.trim()) {
+      errors.push(`${key}: url must be a non-empty string`);
+    }
+    if (typeof doc.headers !== 'string') {
+      errors.push(`${key}: headers must be a string`);
+    }
+    if (!LANGUAGES.includes(doc.lang as (typeof LANGUAGES)[number])) {
+      errors.push(`${key}: invalid lang "${doc.lang}"`);
+    }
 
-			// 2c. Prepend H1 title
-			standardProcessedContent = `# ${title}\n\n${standardProcessedContent}`;
-			return rewriteInternalDocsLinks(standardProcessedContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
-				context: 'gen-bundle',
-				warnOnUnresolved: true,
-			});
-		}
-	}
-	rawContent = `# ${title}\n\n${rawContent}`; // Prepend title
-	return rewriteInternalDocsLinks(rawContent, lang as 'js' | 'go' | 'dart' | 'python', undefined, {
-		context: 'gen-bundle',
-		warnOnUnresolved: true,
-	});
+    const prose = stripCodeFencesAndInlineCode(doc.text);
+    if (/<(Lang|Code|CopyMarkdownButton)\b/.test(prose)) {
+      errors.push(
+        `${key}: text contains unexpanded MDX component (<Lang>, <Code>, or <CopyMarkdownButton>)`,
+      );
+    }
+    if (/^\{\s*[A-Za-z_$][\w$]*\s*\}$/m.test(prose)) {
+      errors.push(
+        `${key}: text contains unexpanded JSX expression placeholder`,
+      );
+    }
+    const bodyAfterTitle = prose.replace(/^#[^\n]*\n+/, '');
+    if (
+      /^\s*(?:import\s+(?:[\w*{]|['"])|export\s+(?:(?:const|let|var|function|default|class|type|interface)\b|[\{*]))/.test(
+        bodyAfterTitle,
+      )
+    ) {
+      errors.push(
+        `${key}: text contains unstripped leading ESM import/export statement`,
+      );
+    }
+  }
+
+  for (const lang of LANGUAGES) {
+    const indexPayload = Object.keys(documents)
+      .filter((k) => k.startsWith(`${lang}/`))
+      .sort()
+      .map((k) => {
+        const d = documents[k];
+        let summary = ` - FilePath: ${k}\n   Title: ${d.title}\n`;
+        if (d.description) {
+          summary += `   Description: ${d.description}\n`;
+        }
+        if (d.headers) {
+          summary += `   Headers:\n     ${d.headers.split('\n').join('\n     ')}\n`;
+        }
+        return summary;
+      })
+      .join('\n');
+    const byteLength = Buffer.byteLength(indexPayload, 'utf8');
+    if (byteLength > MAX_LANG_INDEX_BYTES) {
+      errors.push(
+        `Index payload for "${lang}" is ${(byteLength / 1024).toFixed(1)} KB, exceeding ${MAX_LANG_INDEX_BYTES / 1024} KB limit`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `docs-bundle validation failed with ${errors.length} error(s):\n- ${errors.join('\n- ')}`,
+    );
+  }
+}
+
+async function indexDocs(dir: string): Promise<Record<string, Doc>> {
+  const allFiles = await readdir(dir, { recursive: true });
+  const docFiles = allFiles.filter(isSourceDocFile);
+  const byLang: Record<string, Record<string, Doc>> = {
+    js: {},
+    go: {},
+    dart: {},
+    python: {},
+  };
+
+  for (const file of docFiles) {
+    const fullPath = path.resolve(dir, file);
+    const markdown = await readFile(fullPath, { encoding: 'utf8' });
+    const { frontmatter } = extractFrontmatterAndBody(markdown);
+    const rawSupported = Array.isArray(frontmatter.supportedLanguages)
+      ? frontmatter.supportedLanguages
+      : [...LANGUAGES];
+    const supportedLanguages = LANGUAGES.filter((lang) =>
+      rawSupported.includes(lang),
+    );
+    if (supportedLanguages.length === 0) {
+      continue;
+    }
+
+    const normalizedFileName = file
+      .replace(/\\/g, '/')
+      .replace(/\.mdx$/, '.md');
+    const slugPath = normalizedFileName.slice(
+      0,
+      normalizedFileName.lastIndexOf('.'),
+    );
+    const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
+    const title = frontmatter.title || normalizedFileName;
+
+    const baseContent = await processRawContent(markdown, title, fullPath);
+
+    for (const lang of supportedLanguages) {
+      const text = filterContentByLanguage(baseContent, lang);
+      const headers = extractHeadersOutsideCodeFences(text);
+
+      byLang[lang][`${lang}/${normalizedFileName}`] = {
+        text,
+        url: isLanguageAgnostic
+          ? `https://genkit.dev/docs/${slugPath}/`
+          : `https://genkit.dev/docs/${lang}/${slugPath}/`,
+        title,
+        description: resolveDescription(frontmatter.description, lang),
+        headers,
+        lang,
+      };
+    }
+  }
+
+  const documents: Record<string, Doc> = {};
+  for (const lang of LANGUAGES) {
+    Object.assign(documents, byLang[lang]);
+  }
+  return documents;
 }
 
 export function extractFrontmatterAndBody(source: string) {
-	const match = source.match(FRONTMATTER_AND_BODY_REGEX);
-	if (match) {
-		const [, frontmatter, body] = match;
-		return { frontmatter: parse(frontmatter), body };
-	}
-	return { frontmatter: {}, body: '' };
+  const match = source.match(FRONTMATTER_AND_BODY_REGEX);
+  if (match) {
+    const [, frontmatter, body] = match;
+    return { frontmatter: parse(frontmatter), body };
+  }
+  return { frontmatter: {}, body: '' };
 }
 
-main();
+async function main() {
+  const documents = await indexDocs('src/content/docs/docs');
+  validateBundle(documents);
+  await writeFile(
+    `public/docs-bundle-experimental.json`,
+    JSON.stringify(documents, undefined, 2),
+  );
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
