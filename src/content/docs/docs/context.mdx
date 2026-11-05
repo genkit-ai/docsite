@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../components/Lang.astro';
@@ -481,3 +482,139 @@ not, which is the usual reason a background task cannot see the caller.
   handler options go
 
 </Lang>
+
+<Lang lang="python">
+
+Genkit separates model input from execution context:
+
+- **Model input**: Information the LLM reasons over (prompts, user questions, tool arguments).
+- **Execution context**: Side-channel operational data (authenticated user IDs, tenant scopes, auth tokens, tracing metadata) that your tools, flows, and middleware require, but which should never leak into model prompts or public tool schema declarations.
+
+Context is passed explicitly to `ai.generate()` or flows and propagates automatically to tools invoked during generation.
+
+## Consuming context in tools
+
+To access execution context within a tool, declare a `ctx: ToolContext` parameter. Genkit injects the active context at runtime without adding it to the model's function declaration parameters:
+
+```python
+from genkit import Genkit, ToolContext
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+# 1. Define a tool that reads the caller tenant from context
+@ai.tool(description='Retrieve customer invoice records.')
+async def get_invoice(invoice_id: str, ctx: ToolContext) -> dict[str, object]:
+    auth = ctx.context or {}
+    tenant_id = auth.get('tenant_id')
+
+    # Query scoped strictly to the authenticated tenant
+    return {
+        'invoice_id': invoice_id,
+        'tenant_id': tenant_id,
+        'status': 'PAID',
+        'amount': 450.00,
+    }
+
+
+# 2. Pass execution context when calling generate
+async def run_inquiry() -> None:
+    response = await ai.generate(
+        prompt='Check the status of invoice INV-2024-001.',
+        tools=[get_invoice],
+        context={'tenant_id': 'tenant_acme_corp', 'user_id': 'usr_42'},
+    )
+    print(response.text)
+    # => Invoice INV-2024-001 is PAID with an amount of $450.00.
+```
+
+## Consuming context in flows
+
+Flows access the same execution context through `ctx: FlowContext`. Any context passed when running the flow propagates downstream to tools called within that flow:
+
+```python
+from genkit import FlowContext, Genkit
+
+ai = Genkit()
+
+
+# 1. Access context in a flow
+@ai.flow()
+async def process_account_deletion(account_id: str, ctx: FlowContext) -> str:
+    auth = ctx.context or {}
+    caller_role = auth.get('role')
+
+    if caller_role != 'admin':
+        raise PermissionError('Admin privileges required to delete accounts.')
+
+    return f'Account {account_id} scheduled for deletion.'
+
+
+# 2. Run flow with context passed directly
+async def execute() -> None:
+    result = await process_account_deletion(
+        'acc-99',
+        context={'role': 'admin', 'user_id': 'admin_alice'},
+    )
+    print(result)
+    # => Account acc-99 scheduled for deletion.
+```
+
+## Resolving context from HTTP requests (FastAPI)
+
+When serving flows over HTTP using `genkit-fastapi`, use `context_dependency` to extract authentication headers and map them into the action context:
+
+```python
+from fastapi import FastAPI, Header, HTTPException
+from genkit_fastapi import serve_flow
+
+from genkit import Genkit, ToolContext
+
+ai = Genkit()
+
+
+# 1. Resolve auth header into context dict
+async def resolve_auth_context(
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Missing or invalid bearer token.')
+
+    token = authorization.removeprefix('Bearer ')
+    return {'tenant_id': 'tenant_acme', 'token': token}
+
+
+# 2. Define tool accessing the resolved context
+@ai.tool(description='Lookup company balance.')
+async def get_balance(ctx: ToolContext) -> dict[str, object]:
+    tenant_id = (ctx.context or {}).get('tenant_id')
+    return {'tenant_id': tenant_id, 'balance': 12500.00}
+
+
+# 3. Define flow consuming the tool
+@ai.flow()
+async def check_financials() -> str:
+    response = await ai.generate(
+        prompt='What is our current balance?',
+        tools=[get_balance],
+    )
+    return response.text
+
+
+# 4. Mount flow with context dependency
+app = FastAPI()
+app.include_router(
+    serve_flow(check_financials, context_dependency=resolve_auth_context),
+    prefix='/api',
+)
+```
+
+## Learn more
+
+- [Tool calling](/docs/tool-calling) — tool parameters and schemas
+- [FastAPI tutorial](/docs/backend-frameworks/fastapi) — mounting flows and handling auth
+- [Agents over HTTP](/docs/agents/http) — tenant-scoped session stores and agent context dependencies
+
+</Lang>
+
