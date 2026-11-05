@@ -1950,15 +1950,15 @@ The following features documented in other languages are not yet fully supported
 
 <Lang lang="python">
 
-The `genkit-google-genai` package provides the `GoogleAI` plugin for accessing Google's generative AI models via the Google Gemini API using API key authentication.
+The `genkit-google-genai` package provides the `GoogleAI` plugin for calling Google's generative models through the Gemini Developer API using an API key.
 
-The plugin supports a wide range of capabilities:
+Supported model families:
 
-- **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks
-- **Embedding Models**: Text and multimodal embeddings
-- **Image Models**: Imagen for generation and Gemini for image analysis
-- **Video Models**: Veo for video generation
-- **Speech Models**: Gemini TTS for text-to-speech generation
+- **Language models**: Gemini and Gemma models (`GoogleAI.gemini(...)`, `GoogleAI.gemma(...)`)
+- **Embedding models**: Text and multimodal embeddings (`GoogleAI.embedder(...)`)
+- **Image models**: Gemini native image generation and editing (`GoogleAI.gemini_image(...)`)
+- **Video models**: Veo background video generation (`GoogleAI.veo(...)`)
+- **Speech models**: Gemini text-to-speech (`GoogleAI.gemini_tts(...)`)
 
 ## Installation
 
@@ -1974,48 +1974,75 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+)
+```
+
+`GoogleAI` also accepts direct network options (replacing `http_options`):
+
+```python
+import httpx
+from genkit_google_genai import GoogleAI
+
+plugin = GoogleAI(
+    headers={'X-Client-App': 'checkout'},
+    timeout=30.0,  # Seconds (float)
+    max_retries=2,  # Retries after the initial attempt
+    http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'),
 )
 ```
 
 ### Authentication
 
-Requires a Gemini API Key from [Google AI Studio](https://aistudio.google.com/apikey). Provide via:
+Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) and configure it in one of three ways:
 
-1. **Environment variable**: Set `GEMINI_API_KEY`
-2. **Plugin configuration**: Pass `api_key` when initializing the plugin:
+1. **Environment variable**: Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+2. **Plugin initialization**: Pass `api_key` to `GoogleAI`:
 
 ```python
 ai = Genkit(
-    plugins=[GoogleAI(api_key='your-api-key')],
+    plugins=[GoogleAI(api_key=os.environ['GEMINI_API_KEY'])],
 )
 ```
 
-3. **Per-request**: Override the API key (or pass other provider-specific options) in the `config` passed to `generate()`:
+3. **Per-request override**: Pass the key in `context={'secrets': {'api_key': ...}}`. Genkit keeps `context` out of span attributes so tenant keys do not leak into traces:
 
 ```python
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
-    prompt='Your prompt here',
-    config={
-        'api_key': 'different-api-key',
-    },
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    prompt='Summarize this order receipt.',
+    context={'secrets': {'api_key': tenant_api_key}},
 )
 ```
 
-This is useful for multi-tenant apps or routing requests to different keys. Model `config` also accepts additional provider-specific fields without strict schema errors.
+Do not pass `api_key` inside `config`—doing so raises `GenkitError` with `status='INVALID_ARGUMENT'`.
+
+### Strict Config Validation and `extra`
+
+Each model family validates `config` against its typed Pydantic schema (`GeminiConfig`, `GeminiImageConfig`, `GeminiTtsConfig`, `GemmaConfig`, `VeoConfig`, `EmbeddingConfig`). Unknown top-level keys raise `GenkitError(status='INVALID_ARGUMENT')`. To forward newly released `GenerateContentConfig` fields before `genkit-google-genai` adds dedicated attributes, pass them in `extra`:
+
+```python
+from genkit_google_genai import GeminiConfig
+
+response = await ai.generate(
+    model=GoogleAI.gemini('gemini-3.8-flash'),
+    prompt='Draft a release checklist.',
+    config=GeminiConfig(
+        temperature=0.2,
+        extra={'media_resolution': 'MEDIA_RESOLUTION_LOW'},
+    ),
+)
+```
 
 ## Language Models
 
 ### Available Models
 
-**Gemini 3 Series** - Latest models with state-of-the-art reasoning and multimodal capabilities:
-
-- `gemini-3.8-flash` - Most intelligent Flash model, engineered for complex reasoning, coding, and agentic workflows
-- `gemini-3.1-pro-preview` - Preview of Gemini 3.1 Pro, for complex tasks
-- `gemini-3.5-flash-lite` - Fastest, most cost-effective model for high-throughput execution
-- `gemini-3.1-flash-image` - Fast and efficient image generation and editing
-- `gemini-3-pro-image` - State-of-the-art image generation and editing for complex visual tasks
+- `gemini-3.8-flash` — High-intelligence Flash model for reasoning, coding, and agentic tool loops
+- `gemini-3.1-pro-preview` — Preview Pro model for complex reasoning
+- `gemini-3.5-flash-lite` — High-throughput, low-latency model
+- `gemini-3.1-flash-image` — Fast native image generation and editing
+- `gemini-3-pro-image` — High-fidelity image generation and editing
 
 ### Basic Usage
 
@@ -2025,122 +2052,137 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 response = await ai.generate(
-    prompt='Explain how neural networks learn in simple terms.',
+    prompt='Explain how B-tree indexes reduce disk reads.',
 )
 print(response.text)
 
-# Non-text parts (images, audio, etc.)
 for media in response.media:
     print(f'Media type: {media.content_type}')
 
-# Usage may include thinking and context-cache token counts on supported models
-print(response.usage.thoughts_tokens)
-print(response.usage.cached_content_tokens)
+if response.usage:
+    print(response.usage.thoughts_tokens)
+    print(response.usage.cached_content_tokens)
 ```
 
 ### Structured Output
 
-Gemini models support structured output generation using Pydantic schemas:
+Pass a Pydantic `BaseModel` to `output_schema` to enforce JSON schema decoding and parse the response into `response.output`:
 
 ```python
 from pydantic import BaseModel, Field
 
-class Character(BaseModel):
-    """An RPG character."""
-    name: str = Field(description='Character name')
-    bio: str = Field(description='Character backstory')
-    age: int = Field(description='Character age')
+class MenuDish(BaseModel):
+    name: str = Field(description='Dish name')
+    allergens: list[str] = Field(description='Common allergens present')
+    price_cents: int = Field(description='Price in US cents')
 
 response = await ai.generate(
-    prompt='Generate a profile for a fictional fantasy character',
-    output_schema=Character,
+    prompt='Create a seasonal tartine dish for a cafe menu.',
+    output_schema=MenuDish,
 )
-print(response.output)  # Character instance
+dish: MenuDish = response.output
+print(dish.name, dish.price_cents)
 ```
 
 ### Thinking and Reasoning
 
-Gemini 2.5+ models use an internal thinking process for complex reasoning:
+Configure thinking directly on `GeminiConfig`:
 
 ```python
+from genkit_google_genai import GeminiConfig
+
 response = await ai.generate(
-    prompt='Solve this logic puzzle: ...',
-    config={
-        'thinking_config': {
-            'include_thoughts': True,
-        }
-    },
+    model=GoogleAI.gemini('gemini-3.8-flash'),
+    prompt='Find the minimum number of weighings to isolate one counterfeit coin among 12.',
+    config=GeminiConfig(
+        thinking_level='HIGH',  # 'MINIMAL', 'LOW', 'MEDIUM', or 'HIGH'
+        include_thoughts=True,
+    ),
 )
+print(response.reasoning)
 print(response.text)
 ```
 
 ### Google Search Grounding
 
-Enable Google Search to provide answers with current information:
+Set `google_search=True` on `GeminiConfig` to ground responses with Google Search:
 
 ```python
+from genkit_google_genai import GeminiConfig
+
 response = await ai.generate(
-    prompt='What are the top tech news stories this week?',
-    config={'google_search_retrieval': True},
+    prompt='What changed in the latest Python minor release?',
+    config=GeminiConfig(google_search=True),
 )
 print(response.text)
 ```
 
-### Safety Settings
+### Tool Choice
 
-Configure safety settings to control content filtering:
+Pass `tool_choice` directly to `ai.generate()` (`'auto'`, `'required'`, or `'none'`) rather than inside `GeminiConfig`:
 
 ```python
 response = await ai.generate(
-    prompt='Your prompt here',
-    config={
-        'safety_settings': [
-            {
-                'category': 'HARM_CATEGORY_HATE_SPEECH',
-                'threshold': 'BLOCK_MEDIUM_AND_ABOVE',
-            },
-            {
-                'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                'threshold': 'BLOCK_MEDIUM_AND_ABOVE',
-            },
+    prompt='Look up order #4821.',
+    tools=[lookup_order],
+    tool_choice='required',
+)
+```
+
+### Safety Settings
+
+```python
+from genkit_google_genai import GeminiConfig, SafetySetting
+
+response = await ai.generate(
+    prompt='Review this user comment for policy compliance.',
+    config=GeminiConfig(
+        safety_settings=[
+            SafetySetting(
+                category='HARM_CATEGORY_HATE_SPEECH',
+                threshold='BLOCK_MEDIUM_AND_ABOVE',
+            ),
+            SafetySetting(
+                category='HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold='BLOCK_MEDIUM_AND_ABOVE',
+            ),
         ],
-    },
+    ),
 )
 ```
 
 ### Multimodal Input
 
-#### Image Understanding
+Construct multimodal prompt parts with `Part.from_text()` and `Part.from_media()`:
 
 ```python
 import base64
-from genkit import Part, TextPart, MediaPart, Media
+from pathlib import Path
+from genkit import Part
 
-# From file
-with open('image.jpg', 'rb') as f:
-    image_data = base64.b64encode(f.read()).decode()
+image_b64 = base64.b64encode(Path('receipt.jpg').read_bytes()).decode('ascii')
 
 response = await ai.generate(
     prompt=[
-        Part(root=TextPart(text='Describe what is in this image')),
-        Part(root=MediaPart(media=Media(url=f'data:image/jpeg;base64,{image_data}', content_type='image/jpeg'))),
+        Part.from_text('Extract the line items from this receipt.'),
+        Part.from_media(f'data:image/jpeg;base64,{image_b64}', content_type='image/jpeg'),
     ],
 )
 ```
 
-#### Video Understanding
+For video or audio URLs:
 
 ```python
-from genkit import Part, TextPart, MediaPart, Media
+from genkit import Part
 
 response = await ai.generate(
     prompt=[
-        Part(root=TextPart(text='What happens in this video?')),
-        Part(root=MediaPart(media=Media(url='https://example.com/video.mp4', content_type='video/mp4'))),
+        Part.from_text('Summarize the key steps shown in this clip.'),
+        Part.from_media('https://example.com/demo.mp4', content_type='video/mp4'),
     ],
 )
 ```
@@ -2149,176 +2191,170 @@ response = await ai.generate(
 
 ### Available Models
 
-- `gemini-embedding-001` — Default **3072** dimensions; pass **`output_dimensionality`** in **`options`** on **`embed`** / **`embed_many`** (for example **768**, **1536**, or **3072**) when you want a shorter vector.
-- `text-embedding-004` — **768** dimensions in typical use.
+- `gemini-embedding-001` — Default **3072** dimensions; pass `output_dimensionality` in `config` on `embed()` or `embed_many()` (for example `768`, `1536`, or `3072`) to truncate vectors.
+- `gemini-embedding-2` — Default **3072** dimensions with text, image, and video input support.
+- `text-embedding-004` — **768** dimensions.
 
 ### Usage
 
 ```python
-embeddings = await ai.embed(
-    embedder='googleai/text-embedding-004',
-    content='Machine learning models process data to make predictions.',
-)
-print(embeddings)
+from genkit_google_genai import EmbeddingConfig, GoogleAI
 
-# gemini-embedding-001: default 3072, or request a shorter embedding (size indexes to match)
-gemini_embeddings = await ai.embed(
-    embedder='googleai/gemini-embedding-001',
-    content='Machine learning models process data to make predictions.',
-    options={'output_dimensionality': 768},
+embeddings = await ai.embed(
+    embedder=GoogleAI.embedder('gemini-embedding-001'),
+    content='Espresso extraction depends on grind size, dose, and water temperature.',
+    config=EmbeddingConfig(
+        task_type='RETRIEVAL_DOCUMENT',
+        output_dimensionality=768,
+    ),
 )
-print(gemini_embeddings)
+print(len(embeddings[0].embedding))
+# => 768
 ```
 
 ## Image Models
 
-### Available Models
+Imagen models are retired in `genkit-google-genai` (`GoogleAI.imagen()` raises `INVALID_ARGUMENT`). Use Gemini native image models via `GoogleAI.gemini_image()` and `GeminiImageConfig`:
 
-**Imagen 4 Series**:
-
-- `imagen-4.0-generate-001` - Standard quality
-- `imagen-4.0-ultra-generate-001` - Ultra-high quality
-- `imagen-4.0-fast-generate-001` - Fast generation
-
-**Imagen 3 Series**:
-
-- `imagen-3.0-generate-002`
+- `gemini-3.1-flash-image` — Fast image generation and editing
+- `gemini-3-pro-image` — High-detail image generation and composition
+- `gemini-2.5-flash-image` — General-purpose native image generation
 
 ### Usage
 
 ```python
+from genkit_google_genai import GeminiImageConfig, GoogleAI
+
 response = await ai.generate(
-    model='googleai/imagen-3.0-generate-002',
-    prompt='A serene Japanese garden with cherry blossoms and a koi pond.',
-    config={
-        'number_of_images': 4,
-        'aspect_ratio': '16:9',
-    },
+    model=GoogleAI.gemini_image('gemini-3.1-flash-image'),
+    prompt='A sunlit sourdough bakery counter with loaves on cooling racks.',
+    config=GeminiImageConfig(
+        aspect_ratio='16:9',
+        image_size='2K',  # '512', '1K', '2K', or '4K'
+    ),
 )
 
-# Access generated images (response.media is a list)
 for media in response.media:
-    print(f'Generated image: {media.url}')
+    print(f'Generated image ({media.content_type}): {media.url[:60]}...')
 ```
 
 ## Video Models (Veo)
 
-Veo models generate videos from text prompts using the background model pattern
-(long-running operations that can take minutes).
+Veo models run exclusively as background models via `ai.generate_operation()` and `ai.check_operation()` (`ai.generate()` does not block on multi-minute video renders).
 
 ### Available Models
 
-- `veo-2.0-generate-001` - Veo 2.0
-- `veo-3.0-generate-001` - Veo 3.0
-- `veo-3.1-generate-001` - Veo 3.1 with native audio
+- `veo-3.1-generate-preview` — Veo 3.1 high-fidelity video generation with audio
+- `veo-3.1-fast-generate-preview` — Faster Veo 3.1 generation
+- `veo-3.1-lite-generate-preview` — Lightweight Veo 3.1 generation
 
 ### Usage
 
 ```python
 import asyncio
-
 from genkit import ModelResponse
-from genkit_google_genai import VeoVersion
+from genkit_google_genai import GoogleAI, VeoConfig
 
-# Start video generation (returns an Operation)
-response = await ai.generate(
-    model=f'googleai/{VeoVersion.VEO_2_0}',
-    prompt='A majestic dragon soaring over a mystical forest at dawn.',
-    config={
-        'aspect_ratio': '16:9',
-    },
+# 1. Start the background video generation operation
+operation = await ai.generate_operation(
+    model=GoogleAI.veo('veo-3.1-fast-generate-preview'),
+    prompt='Aerial shot of coastal cliffs at sunrise with ocean mist.',
+    config=VeoConfig(
+        aspect_ratio='16:9',
+        resolution='720p',
+    ),
 )
 
-# Video generation returns an operation that needs to be polled
-operation = response.operation
-if operation:
-    # Poll until complete
-    while not operation.done:
-        operation = await ai.check_operation(operation)
-        await asyncio.sleep(5)  # Wait between polls
+# 2. Poll until completion
+while not operation.done:
+    await asyncio.sleep(5)
+    operation = await ai.check_operation(operation)
 
-    if operation.error:
-        print(f'Error: {operation.error.message}')
-    else:
-        result = ModelResponse.model_validate(operation.output)
-        for media in result.media:
-            print(f'Video URL: {media.url}')
+# 3. Read the completed ModelResponse
+if operation.error:
+    print(f'Error: {operation.error}')
+elif operation.output:
+    result = ModelResponse.model_validate(operation.output)
+    for media in result.media:
+        print(f'Video URL: {media.url}')
 ```
 
-**Configuration Options:**
+**`VeoConfig` Options:**
 
-- `aspect_ratio`: `"16:9"` or `"9:16"`
-- `negative_prompt`: Text to discourage in generation
-- `person_generation`: `"dont_allow"`, `"allow_adult"`, `"allow_all"`
-- `duration_seconds`: Video length (Veo 2 only, 5-8 seconds)
+- `aspect_ratio`: `'16:9'` or `'9:16'`
+- `resolution`: `'720p'`, `'1080p'`, or `'4k'`
+- `duration_seconds`: Clip length in seconds (`4`–`8`)
+- `negative_prompt`: Elements to exclude from the video
+- `person_generation`: `'dont_allow'`, `'allow_adult'`, or `'allow_all'`
+- `number_of_videos`: Number of videos to generate (`1`–`4`)
+- `seed`: Integer seed for reproducible generation
 
 ## Speech Models (TTS)
 
-Gemini TTS models convert text to natural-sounding speech.
+Gemini TTS models synthesize single-speaker or multi-speaker audio using `GoogleAI.gemini_tts()` and `GeminiTtsConfig`.
 
 ### Available Models
 
-- `gemini-3.1-flash-tts-preview` - Gemini 3.1 Flash model with TTS (recommended)
-- `gemini-2.5-flash-preview-tts` - Flash model with TTS
-- `gemini-2.5-pro-preview-tts` - Pro model with TTS
+- `gemini-3.1-flash-tts-preview` — Gemini 3.1 Flash TTS (recommended)
+- `gemini-2.5-flash-preview-tts` — Gemini 2.5 Flash TTS
+- `gemini-2.5-pro-preview-tts` — Gemini 2.5 Pro TTS
 
 ### Usage
 
 ```python
+from genkit_google_genai import GeminiTtsConfig, GoogleAI
+
+# Single-speaker synthesis
 response = await ai.generate(
-    model='googleai/gemini-3.1-flash-tts-preview',
-    prompt='Say that Genkit is an amazing AI framework',
-    config={
-        'speech_config': {
-            'voice_config': {
-                'prebuilt_voice_config': {
-                    'voice_name': 'Kore',
-                }
-            }
-        }
-    },
+    model=GoogleAI.gemini_tts('gemini-3.1-flash-tts-preview'),
+    prompt='Order 42 is ready for pickup at the counter.',
+    config=GeminiTtsConfig(
+        voice='Kore',
+        language_code='en-US',
+    ),
 )
 
-# Extract audio (response.media is a list)
 if response.media:
-    audio_data = response.media[0].url
-    print(f'Audio generated: {audio_data[:50]}...')
+    print(f'Audio ({response.media[0].content_type}): {response.media[0].url[:50]}...')
 ```
 
-**Available Voices**: Puck, Charon, Kore, Fenrir, Aoede, Zephyr, Algenib, and [more](https://ai.google.dev/gemini-api/docs/speech-generation#voices).
-
-**Voice Configuration Options:**
-
-- `voice_name`: Name of the prebuilt voice
-- `speaking_rate`: Speed of speech (0.25 to 4.0)
-- `pitch`: Voice pitch (-20.0 to 20.0)
-- `volume_gain_db`: Volume (-96.0 to 16.0)
-
-## Context caching
-
-Gemini 2.5 and newer models automatically cache common content prefixes (minimum 1024 tokens for Flash, 2048 for Pro), providing a significant token discount on cached tokens.
+For multi-speaker dialogue, pass `speakers` mapping speaker labels in the prompt to voice names (mutually exclusive with `voice`):
 
 ```python
-# Structure prompts with consistent content at the beginning
-base_context = 'You are a helpful cook... (large context) ...' * 50
+response = await ai.generate(
+    model=GoogleAI.gemini_tts('gemini-3.1-flash-tts-preview'),
+    prompt='Host: Welcome back.\nChef: Today we are roasting fennel.',
+    config=GeminiTtsConfig(
+        speakers={'Host': 'Kore', 'Chef': 'Puck'},
+    ),
+)
+```
 
-# First request — prefix may be cached by Gemini
+**Available Voices**: `Puck`, `Charon`, `Kore`, `Fenrir`, `Aoede`, `Zephyr`, `Algenib`, and [more](https://ai.google.dev/gemini-api/docs/speech-generation#voices).
+
+## Context Caching
+
+Gemini models automatically cache shared prompt prefixes, reporting cache hits on `response.usage.cached_content_tokens`:
+
+```python
+base_context = 'Reference manual: ...' * 500
+
 await ai.generate(
-    model='googleai/gemini-flash-latest',
-    prompt=f'{base_context}\n\nTask 1...',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    prompt=f'{base_context}\n\nSummarize section 1.',
 )
 
-# Second request with the same prefix — eligible for a cache hit
-await ai.generate(
-    model='googleai/gemini-flash-latest',
-    prompt=f'{base_context}\n\nTask 2...',
+cached_response = await ai.generate(
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    prompt=f'{base_context}\n\nSummarize section 2.',
 )
+print(cached_response.usage.cached_content_tokens)
 ```
 
 ## Next Steps
 
-- Learn about [generating content](/docs/models) to understand how to use these models effectively
-- Explore [creating flows](/docs/flows) to build structured AI workflows
-- To use Gemini at enterprise scale see the [Gemini Enterprise plugin](/docs/integrations/vertex-ai)
+- Learn about [generating content](/docs/models)
+- Explore [creating flows](/docs/flows)
+- For IAM-authenticated Google Cloud workloads, see the [Gemini Enterprise plugin](/docs/integrations/vertex-ai)
 
 </Lang>

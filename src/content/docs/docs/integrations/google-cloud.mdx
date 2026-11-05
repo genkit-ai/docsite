@@ -222,16 +222,11 @@ set automatically. Running in other environments requires setting up
 
 <Lang lang="python">
 
-Note: Logging is facilitated by Genkit Python's structured logging (via
-[structlog](https://www.structlog.org/)). The Google Cloud plugin injects
-trace/span fields into log events so Cloud Logging can correlate logs with Cloud
-Trace. (Cloud Logging ingestion itself typically happens automatically in Google
-Cloud runtimes like Cloud Run.)
+The `genkit-google-cloud` package exports OpenTelemetry traces and GenAI client metrics to Cloud Trace and Cloud Monitoring. Genkit Python's structured logger (`get_logger()`) attaches trace and span context automatically so Cloud Logging entries correlate with Cloud Trace spans on Google Cloud runtimes such as Cloud Run.
 
 ## Prerequisites
 
-If you want to locally run flows that use this plugin, you need the
-[Google Cloud CLI tool](https://cloud.google.com/sdk/docs/install) installed.
+To export telemetry from a local machine, install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and configure Application Default Credentials.
 
 ## Installation
 
@@ -241,44 +236,38 @@ uv add genkit-google-cloud
 
 ## Configuration
 
-To enable exporting to Google Cloud Tracing and Monitoring, import
-`enable_google_cloud_telemetry()` and call it during initialization. After calling it, your
-telemetry gets automatically exported.
+Call `enable_google_cloud_telemetry()` during application startup:
 
 ```python
 from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(project='your-google-cloud-project')
 ```
+
+All parameters on `enable_google_cloud_telemetry()` are keyword-only and optional:
+
+- **`project`**: Google Cloud project ID. When omitted, resolves from `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, or Application Default Credentials (`FIREBASE_PROJECT_ID` is not read).
+- **`credentials`**: Explicit `google.auth.credentials.Credentials` object; defaults to Application Default Credentials.
+- **`sampler`**: Custom OpenTelemetry `Sampler` for trace sampling.
+- **`force_dev_export`**: Set to `True` to export traces and metrics while running under `genkit start` (in dev mode, export is skipped unless `force_dev_export=True`). Run `gcloud auth application-default login` first when testing locally.
+- **`disable_metrics`**: If `True`, skips Cloud Monitoring metric export.
+- **`disable_traces`**: If `True`, skips Cloud Trace span export.
+- **`metric_export_interval_ms`**: Export interval in milliseconds (defaults to `5000` in dev and `300000` in production; must be at least `5000`).
+- **`metric_export_timeout_ms`**: Per-export timeout in milliseconds.
+
+### Prompt and Response Redaction
+
+`enable_google_cloud_telemetry()` installs `GenAiInstrumentation` (from `genkit-otel`) with prompt, system instruction, tool argument/result, and model response capture disabled by default (`NO_CONTENT`), while the local Genkit Developer UI still receives full unredacted spans independently. To opt in to exporting message content, set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` to `SPAN_ONLY`, `EVENT_ONLY`, or `SPAN_AND_EVENT`.
+
+### Firestore Session Store (Experimental)
+
+`genkit-google-cloud` also provides an experimental `FirestoreSessionStore` under `genkit_google_cloud.exp` (`uv add 'genkit-google-cloud[firestore]'`):
 
 ```python
-enable_google_cloud_telemetry(project_id="your-google-cloud-project")
+from genkit_google_cloud.exp import FirestoreSessionStore
+
+store = FirestoreSessionStore(collection='genkit_sessions')
 ```
-
-You must specify the Google Cloud project to which you want to export telemetry
-data. There are also some optional parameters:
-
-- `project_id`: (Required) Your Google Cloud project ID.
-- `force_dev_export`: Export telemetry data even when running in a dev environment
-  (such as when using `genkit start` or `genkit flow:run`). This is a quick way
-  to test your integration and send your first events for monitoring in Google
-  Cloud.
-
-  If you use this option, you also need to make your Cloud credentials available
-  locally:
-
-```bash
-gcloud auth application-default login
-```
-
-- `metric_export_interval_ms`: Metrics export interval (in milliseconds).
-- `log_input_and_output`: If `True`, disables PII redaction and preserves inputs/outputs
-  in traces and logs (use with caution).
-- `disable_metrics`: If `True`, metrics are not exported.
-- `disable_traces`: If `True`, traces are not exported.
-
-The plugin requires your Google Cloud project credentials. If you're running
-your flows from a Google Cloud environment (Cloud Run, etc), the credentials are
-set automatically. Running in other environments requires setting up
-[Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc).
 
 </Lang>
 
@@ -347,7 +336,7 @@ dimension keys are `modelName`, `featureName`, `path`, `status`, `error`,
 
 </Lang>
 
-<Lang lang="js python">
+<Lang lang="js">
 
 Common dimensions include:
 
@@ -386,6 +375,15 @@ Common dimensions include:
 | genkit/ai/generate/input_images      | flow_path, model, temperature, topK, topP                            |
 | genkit/ai/generate/output_images     | flow_path, model, temperature, topK, topP                            |
 | genkit/ai/generate/latency           | flow_path, model, temperature, topK, topP, error_code, error_message |
+
+</Lang>
+
+<Lang lang="python">
+
+In Python, `enable_google_cloud_telemetry()` exports the standard [OpenTelemetry GenAI semantic convention](/docs/observability/otel-genai-semantic-conventions) histograms via `genkit-otel` (under `workload.googleapis.com/` in Cloud Monitoring) rather than `genkit/*` metrics:
+
+- **`gen_ai.client.token.usage`** (unit `{token}`): Input and output token counts per model operation, distinguished by `gen_ai.token.type` (`input` or `output`), along with `gen_ai.operation.name`, `gen_ai.provider.name` (for example `gcp.gemini`, `gcp.vertex_ai`, `openai`, `anthropic`), and `gen_ai.request.model`.
+- **`gen_ai.client.operation.duration`** (unit `s`): End-to-end duration of each model call in seconds, carrying `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, and `error.type` on failed calls.
 
 </Lang>
 

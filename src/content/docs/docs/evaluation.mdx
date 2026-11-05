@@ -8,6 +8,7 @@ supportedLanguages:
   - dart
 ---
 
+import { Aside } from '@astrojs/starlight/components';
 import Lang from '../../../components/Lang.astro';
 import ThemeImage from '../../../components/ThemeImage.astro';
 
@@ -1467,6 +1468,13 @@ its own test set will happily write questions the source text does not answer.
 
 <Lang lang="python">
 
+<Aside type="caution" title="Evaluator APIs in Genkit Python 0.13">
+  Genkit Python 0.13 is the last release shipping the current evaluator APIs
+  (`genkit.evaluator`, `ai.define_evaluator()`, and `ai.evaluate()`) and the
+  `genkit-evaluators` package (`genkit<1`) ahead of a cross-SDK evaluation
+  redesign in 1.0.
+</Aside>
+
 ## Quick start
 
 ### Setup
@@ -1475,7 +1483,7 @@ its own test set will happily write questions the source text does not answer.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
 ```python
-from genkit import Genkit, Document
+from genkit import Document, Genkit
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
@@ -1503,7 +1511,7 @@ async def qa_flow(input: QAInput) -> QAOutput:
     fact_docs = await dummy_retrieve(input.query)
 
     response = await ai.generate(
-        model='googleai/gemini-flash-latest',
+        model=GoogleAI.gemini('gemini-flash-latest'),
         prompt=f'Answer this question with the given context: {input.query}',
         docs=fact_docs,
     )
@@ -1646,113 +1654,103 @@ Genkit supports additional evaluators through plugins, like the Gemini Enterpris
 
 ### Custom evaluators
 
-You can extend Genkit to support custom evaluation by defining your own evaluator functions. An evaluator can use an LLM as a judge, perform programmatic (heuristic) checks, or call external APIs to assess the quality of a response.
-
-You define a custom evaluator using the `ai.define_evaluator()` method. The callback function for the evaluator can contain any logic you need.
-
-Here's an example of a custom evaluator that uses an LLM to check for "deliciousness":
+Define custom heuristic or LLM-as-judge evaluators with `ai.define_evaluator()`. Each per-datapoint callback receives a `BaseDataPoint` and optional `options` dict and returns an `EvaluatorResponse` containing one or more `Score` entries:
 
 ```python
 from genkit import Genkit
-from genkit_google_genai import GoogleAI
 from genkit.evaluator import (
-    BaseEvalDataPoint,
-    EvalFnResponse,
+    BaseDataPoint,
+    EvaluatorResponse,
     Score,
-    EvalStatusEnum,
+    ScoreDetails,
+    ScoreStatus,
 )
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 
 async def food_evaluator(
-    datapoint: BaseEvalDataPoint,
+    datapoint: BaseDataPoint,
     options: dict[str, object] | None = None,
-) -> EvalFnResponse:
+) -> EvaluatorResponse:
     """Determines if an output is a delicious food item."""
     if not datapoint.output or not isinstance(datapoint.output, str):
-        raise ValueError("String output is required for food evaluation")
+        raise ValueError('String output is required for food evaluation')
 
-    # You can use an LLM as a judge for more complex evaluations.
     response = await ai.generate(
-        model='googleai/gemini-flash-latest',
-        prompt=f'Is the following food delicious? Respond with "yes", "no", or "maybe". Food: {datapoint.output}',
-    )
-
-    # You can also perform any custom logic in the evaluator.
-    # if "marmite" in datapoint.output:
-    #     handle_marmite()
-    # or...
-    # score = await my_api.evaluate(
-    #     type='deliciousness',
-    #     value=datapoint.output
-    # )
-
-    return EvalFnResponse(
-        test_case_id=datapoint.test_case_id,
-        evaluation=Score(
-            score=response.text,
-            status=EvalStatusEnum.PASS,
-            details={'reasoning': f'LLM judged: {response.text}'},
+        model=GoogleAI.gemini('gemini-flash-latest'),
+        prompt=(
+            'Is the following food delicious? Respond with "yes", "no", or "maybe". '
+            f'Food: {datapoint.output}'
         ),
+    )
+    verdict = response.text.strip()
+
+    return EvaluatorResponse(
+        test_case_id=datapoint.test_case_id or '',
+        evaluation=[
+            Score(
+                score=verdict,
+                status=ScoreStatus.PASS,
+                details=ScoreDetails(reasoning=f'LLM judged: {verdict}'),
+            ),
+        ],
     )
 
 ai.define_evaluator(
-    name='custom/foodEvaluator',
+    'byo/food_evaluator',
+    food_evaluator,
     display_name='Food Evaluator',
     definition='Determines if an output is a delicious food item.',
-    fn=food_evaluator,
 )
 ```
 
-You can then use this custom evaluator just like any other Genkit evaluator. You
-can use them with your datasets in the Dev UI or with the CLI in the `eval:run`
-or `eval:flow` commands:
+Run your custom evaluator from the Developer UI or with the CLI `eval:run` and `eval:flow` commands:
 
 ```bash
-genkit eval:flow myFlow --input myDataset.json --evaluators=custom/foodEvaluator
+genkit eval:flow qa_flow --input myDataset.json --evaluators=byo/food_evaluator
 ```
 
 ### Running evaluations programmatically
 
-You can also run evaluations directly in your code using `ai.evaluate()`:
+Run a registered evaluator directly from Python with `ai.evaluate()`, which returns `list[EvaluatorResponse]`:
 
 ```python
 import asyncio
 from genkit import Genkit
+from genkit.evaluator import BaseDataPoint, EvaluatorResponse
 from genkit_google_genai import GoogleAI
-from genkit.evaluator import BaseEvalDataPoint, EvalResponse
 
 ai = Genkit(plugins=[GoogleAI()])
 
-# ... define your evaluator ...
+# ... register byo/food_evaluator with ai.define_evaluator() ...
 
-async def run_evaluation() -> EvalResponse:
+async def run_evaluation() -> list[EvaluatorResponse]:
     dataset = [
-        BaseEvalDataPoint(
+        BaseDataPoint(
             test_case_id='test-1',
-            input='What is the capital of France?',
-            output='The capital of France is Paris.',
-            context=['France is a country in Europe. Paris is its capital.'],
+            input='Recommend a comforting soup.',
+            output='Roasted tomato bisque with sourdough croutons.',
         ),
-        BaseEvalDataPoint(
+        BaseDataPoint(
             test_case_id='test-2',
-            input='What color is the sky?',
-            output='The sky is blue during the day.',
-            context=['The sky appears blue due to light scattering.'],
+            input='Recommend a light dessert.',
+            output='Lemon panna cotta with fresh berries.',
         ),
     ]
 
-    result = await ai.evaluate(
-        evaluator='custom/foodEvaluator',
+    results = await ai.evaluate(
+        evaluator='byo/food_evaluator',
         dataset=dataset,
+        config={},
         eval_run_id='my-eval-run',
     )
 
-    for item in result.model_dump(exclude_none=True):
-        print(f'Test case: {item["test_case_id"]}')
-        print(f'Score: {item["evaluation"]}')
+    for row in results:
+        for score in row.evaluation:
+            print(f'Test case {row.test_case_id}: {score.score} ({score.status})')
 
-    return result
+    return results
 
 asyncio.run(run_evaluation())
 ```
@@ -1998,7 +1996,7 @@ async def synthesize_questions(input: SynthesizeInput) -> SynthesizeOutput:
     questions = []
     for chunk in chunks:
         response = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt=f'Generate one question about the following text: {chunk}',
         )
         questions.append(Question(query=response.text))

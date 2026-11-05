@@ -1393,7 +1393,7 @@ supported. In addition:
 
 ### Defining tools
 
-Use the Genkit instance's `tool()` decorator to write tool definitions:
+Use `@ai.tool()` on an `async def` function to register a tool:
 
 ```python
 from genkit import Genkit
@@ -1402,7 +1402,7 @@ from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 class GetWeatherInput(BaseModel):
@@ -1411,20 +1411,39 @@ class GetWeatherInput(BaseModel):
 @ai.tool()
 async def get_weather(input: GetWeatherInput) -> str:
     """Gets the current weather in a given location."""
-    # Here, we would typically make an API call or database query. For this
-    # example, we just return a fixed value.
     return f'The current weather in {input.location} is 63°F and sunny.'
 ```
 
 The tool name defaults to the function name and the description defaults to the
-docstring (though both can optionally be overridden using `name` and `description`
-parameters in `@ai.tool()`); the input schema comes from the type hints. Choose
-a clear function name and write a descriptive docstring—they're what the model
-uses to decide when to call the tool.
+docstring (override either via `name=` and `description=` on `@ai.tool()`).
+Genkit derives the input and output schemas from the function's type
+annotations. Tools must be `async` functions.
+
+To read request context or stream progress chunks back to the caller, add a
+second `ctx: ToolContext` parameter (`ctx.context`, `ctx.send_chunk(...)`). To
+return media or extra content parts alongside structured data, return a
+`MultipartToolResponse`:
+
+```python
+from genkit import MultipartToolResponse, Part, ToolContext
+
+@ai.tool()
+async def render_chart(input: GetWeatherInput, ctx: ToolContext[str]) -> MultipartToolResponse:
+    """Renders a forecast chart for a location."""
+    ctx.send_chunk(f'Rendering chart for {input.location}...')
+    return MultipartToolResponse(
+        output={'location': input.location, 'status': 'rendered'},
+        content=[
+            Part.from_media(url='https://example.com/chart.png', content_type='image/png'),
+        ],
+    )
+```
 
 ### Using tools
 
-Include defined tools in your prompts to generate content.
+Pass registered tools (or their names) to `generate()`, `define_prompt()`, or
+`.prompt` files. Control whether the model must call a tool via
+`tool_choice` (`'auto'`, `'required'`, or `'none'`).
 
 **Using `generate()`:**
 
@@ -1432,6 +1451,7 @@ Include defined tools in your prompts to generate content.
 response = await ai.generate(
     prompt='What is the weather in Baltimore?',
     tools=[get_weather],
+    tool_choice='auto',
 )
 ```
 
@@ -1460,10 +1480,10 @@ input:
 What is the weather in {{location}}?
 ```
 
-Then you can execute the prompt in your code as follows:
+Then execute the prompt in code:
 
 ```python
-# assuming prompt file is named weatherPrompt.prompt
+# Assuming the prompt file is named weatherPrompt.prompt
 weather_prompt = ai.prompt('weatherPrompt')
 
 response = await weather_prompt({'location': 'Baltimore'})
@@ -1471,45 +1491,36 @@ response = await weather_prompt({'location': 'Baltimore'})
 
 ### Streaming and tool calling
 
-When combining tool calling with streaming, chunks are `ModelResponseChunk` values.
-Use `chunk.text` for text deltas, and inspect `chunk.content` for tool parts:
+When combining tool calling with streaming, chunks are `ModelResponseChunk`
+values. Read `chunk.text` for text deltas and inspect `part.tool_request` and
+`part.tool_response` on `chunk.content`:
 
 ```python
-result = ai.generate_stream(
+async with ai.generate_stream(
     prompt='What is the weather in Baltimore?',
     tools=[get_weather],
-)
+) as result:
+    async for chunk in result.stream:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+        for part in chunk.content:
+            if part.tool_request is not None:
+                req = part.tool_request
+                print(f'\n[tool request] {req.name}({req.input})')
+            if part.tool_response is not None:
+                res = part.tool_response
+                print(f'\n[tool response] {res.name} -> {res.output}')
 
-async for chunk in result.stream:
-    if chunk.text:
-        print(chunk.text, end='', flush=True)
-    for part in chunk.content:
-        if part.root.tool_request is not None:
-            req = part.root.tool_request
-            print(f'\n[tool request] {req.name}({req.input})')
-        if part.root.tool_response is not None:
-            res = part.root.tool_response
-            print(f'\n[tool response] {res.name} -> {res.output}')
-
-response = await result.response
+    response = await result.response
 ```
 
 ### Limiting tool call iterations with `max_turns`
 
-When working with tools that might trigger multiple sequential calls, you can control resource usage and prevent runaway execution using the `max_turns` parameter. This sets a hard limit on how many back-and-forth interactions the model can have with your tools in a single generation cycle.
-
-**Why use `max_turns`?**
-
-- **Cost Control**: Prevents unexpected API usage charges from excessive tool calls
-- **Performance**: Ensures responses complete within reasonable timeframes
-- **Safety**: Guards against infinite loops in complex tool interactions
-- **Predictability**: Makes your application behavior more deterministic
-
-The default value is 5 turns, which works well for most scenarios. Each "turn" represents one complete cycle where the model can make tool calls and receive responses.
+Bound how many back-and-forth tool cycles `ai.generate()` runs in a single call
+with `max_turns`. The default limit is `50` turns. Lower it when you want
+tighter cost or latency budgets on multi-step agents:
 
 **Example: Web Research Agent**
-
-Consider a research agent that might need to search multiple times to find comprehensive information:
 
 ```python
 from pydantic import BaseModel, Field
@@ -1520,49 +1531,71 @@ class WebSearchInput(BaseModel):
 @ai.tool()
 async def web_search(input: WebSearchInput) -> str:
     """Search the web for current information."""
-    # Simulate web search API call
     return f'Search results for "{input.query}": [relevant information here]'
 
 response = await ai.generate(
     prompt=(
-        'Research the latest developments in quantum computing, including recent breakthroughs, '
-        'key companies, and future applications.'
+        'Research recent breakthroughs in fault-tolerant quantum computing, '
+        'key hardware approaches, and near-term applications.'
     ),
     tools=[web_search],
-    max_turns=8,  # Allow up to 8 research iterations
+    max_turns=8,
 )
 ```
 
-**Example: Financial Calculator**
+**Example: Portfolio Valuation**
 
 ```python
+from typing import Literal
 from pydantic import BaseModel, Field
 
-class CalculatorInput(BaseModel):
-    expression: str = Field(description='Mathematical expression to evaluate')
+class ArithmeticInput(BaseModel):
+    operation: Literal['add', 'subtract', 'multiply', 'divide']
+    a: float = Field(description='First operand')
+    b: float = Field(description='Second operand')
 
 @ai.tool()
-async def calculator(input: CalculatorInput) -> float:
-    """Perform mathematical calculations."""
-    # Safe evaluation of mathematical expressions
-    return eval(input.expression)  # In production, use a safe math parser
+async def calculate(input: ArithmeticInput) -> float:
+    """Perform exact arithmetic on two numbers."""
+    if input.operation == 'add':
+        return input.a + input.b
+    if input.operation == 'subtract':
+        return input.a - input.b
+    if input.operation == 'multiply':
+        return input.a * input.b
+    if input.b == 0:
+        raise ValueError('Division by zero')
+    return input.a / input.b
 
 response = await ai.generate(
     prompt=(
-        'Calculate the total value of my portfolio: 100 shares of AAPL, 50 shares of GOOGL, and '
-        '200 shares of MSFT. Also calculate what percentage each holding represents.'
+        'Calculate the total value of 100 shares at $225.50, 50 shares at $178.20, '
+        'and 200 shares at $415.00, and compute the percentage weight of each position.'
     ),
-    tools=[calculator],
-    max_turns=12,  # Multiple calculation steps needed
+    tools=[calculate],
+    max_turns=12,
 )
 ```
 
 **What happens when `max_turns` is reached?**
 
-When the limit is reached, Genkit stops the tool-calling loop and raises an
-error from the generate path (today: `GenerationResponseError`). That type is
-not a `GenkitError` subclass, so `except GenkitError` will not catch it—catch
-the exception around your `generate` / `generate_stream` call instead.
+`ai.generate()` does not raise an exception when it hits `max_turns`. Instead,
+it stops the loop and returns a `ModelResponse` with
+`response.finish_reason == FinishReason.ABORTED` and `response.error` set to a
+`Failure` with `reason == ErrorReason.MAX_TURNS_EXCEEDED`. All completed turns
+stay in `response.messages`, so you can inspect partial progress or continue the
+conversation in another `ai.generate()` call:
+
+```python
+from genkit import ErrorReason, FinishReason
+
+if (
+    response.finish_reason == FinishReason.ABORTED
+    and response.error
+    and response.error.reason == ErrorReason.MAX_TURNS_EXCEEDED
+):
+    print(f'Stopped after max_turns ({len(response.messages)} messages recorded)')
+```
 
 ### Pause the tool loop by using interrupts
 
@@ -1574,18 +1607,20 @@ to, for example:
 - Confirm a potentially risky action with the user.
 - Request out-of-band approval for an action.
 
-**Interrupts** are special tools that can halt the loop and return control
-to your code so that you can handle more advanced scenarios. Visit the
-[interrupts guide](/docs/interrupts) to learn how to use them.
+**Interrupts** halt the tool loop when a tool raises `Interrupt(...)` and return
+control to your caller so you can resume with `interrupt.respond()` or
+`interrupt.restart()`. Visit the [interrupts guide](/docs/interrupts) to learn
+how to use them.
 
 ### Explicitly handling tool calls
 
-If you want full control over this tool-calling loop, for example to
-apply more complicated logic, set the `return_tool_requests` parameter to `True`.
-Now it's your responsibility to ensure all of the tool requests are fulfilled:
+If you want full control over the tool-calling loop, set
+`return_tool_requests=True`. `ai.generate()` returns immediately with any
+`Part` items containing `tool_request` in `response.tool_requests`, and you
+supply `Part.from_tool_response(...)` messages on the next turn:
 
 ```python
-from genkit import Message, Part, Role, ToolResponse, ToolResponsePart
+from genkit import Message, Part, Role
 
 response = await ai.generate(
     prompt="What's the weather like in Baltimore?",
@@ -1594,20 +1629,19 @@ response = await ai.generate(
 )
 
 while response.tool_requests:
-    tool_parts = []
-    for req in response.tool_requests:
-        if req.tool_request.name != 'get_weather':
-            raise ValueError(f'Unexpected tool: {req.tool_request.name}')
-        output = await get_weather(GetWeatherInput(**req.tool_request.input))
+    tool_parts: list[Part] = []
+    for part in response.tool_requests:
+        req = part.tool_request
+        assert req is not None
+        if req.name != 'get_weather':
+            raise ValueError(f'Unexpected tool: {req.name}')
+        req_input = req.input if isinstance(req.input, dict) else {}
+        output = await get_weather(GetWeatherInput(**req_input))
         tool_parts.append(
-            Part(
-                root=ToolResponsePart(
-                    tool_response=ToolResponse(
-                        name=req.tool_request.name,
-                        ref=req.tool_request.ref,
-                        output=output,
-                    )
-                )
+            Part.from_tool_response(
+                name=req.name,
+                output=output,
+                ref=req.ref,
             )
         )
 
@@ -1623,21 +1657,31 @@ while response.tool_requests:
 
 ## Extending tool capabilities with MCP
 
-The [Model Context Protocol (MCP)](/docs/model-context-protocol) provides a powerful way to extend your tool-calling capabilities by connecting to external MCP servers. With MCP, you can:
+Use the `genkit-mcp` package (`define_mcp_client` or `define_mcp_host`) to connect to stdio [Model Context Protocol (MCP)](/docs/model-context-protocol) servers and expose their tools as Genkit tool actions:
 
-- **Access pre-built tools** from the MCP ecosystem without implementing them yourself
-- **Connect to external services** like databases, APIs, and file systems
-- **Share tools** between different AI applications
-- **Build extensible workflows** that leverage community-maintained tools
+```python
+from genkit_mcp import define_mcp_client
 
-MCP tools work seamlessly with Genkit's tool-calling system, allowing you to mix custom tools with external MCP tools in the same generation request.
+mcp_client = define_mcp_client(
+    ai,
+    'everything',
+    command='npx',
+    args=['-y', '@modelcontextprotocol/server-everything'],
+)
+
+response = await ai.generate(
+    prompt='Echo "hello".',
+    tools=[get_weather, 'everything:tool/*'],
+)
+```
+
+MCP tools work alongside local `@ai.tool()` functions in the same `ai.generate()` request.
 
 ## Next steps
 
-- Learn about [Model Context Protocol (MCP)](/docs/model-context-protocol) to extend your tool capabilities with external servers
-- Explore [interrupts](/docs/interrupts) to pause tool execution for user interaction
-- See [retrieval-augmented generation (RAG)](/docs/rag) for handling large amounts of contextual information
-- Check out [multi-agent systems](/docs/multi-agent) for coordinating multiple AI agents with tools
-- Browse the [tool calling example](https://github.com/genkit-ai/genkit/tree/main/js/testapps/tool-calling) for a complete implementation
+- Learn about [Model Context Protocol (MCP)](/docs/model-context-protocol) to connect external tool servers
+- Explore [interrupts](/docs/interrupts) to pause tool execution for user approval or input
+- See [retrieval-augmented generation (RAG)](/docs/rag) for document indexing and retrieval
+- Browse the [Python samples](https://github.com/genkit-ai/genkit/tree/main/py/samples) for runnable end-to-end examples
 
 </Lang>

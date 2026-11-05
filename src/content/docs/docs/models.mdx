@@ -2544,7 +2544,7 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 async def main() -> None:
@@ -2579,18 +2579,20 @@ Run the script again and you'll get a different output.
 The preceding code sample sent the generation request to the default model,
 which you specified when you configured the Genkit instance.
 
-You can also specify a model for a single `generate()` call:
+You can also specify a model for a single `generate()` call using a typed `ModelRef` helper or a `'provider/model'` string:
 
 ```python
 result = await ai.generate(
     prompt='Invent a menu item for a pirate themed restaurant.',
-    model='googleai/gemini-pro-latest',
+    model=GoogleAI.gemini('gemini-pro-latest'),
 )
 ```
 
-A model string identifier looks like `providerid/modelid`, where the provider ID
-(in this case, `googleai`) identifies the plugin, and the model ID is a
-plugin-specific string identifier for a specific version of a model.
+A model string identifier looks like `providerid/modelid` (for example,
+`'googleai/gemini-pro-latest'`), where the provider ID identifies the plugin and
+the model ID identifies a specific model version. Typed helpers like
+`GoogleAI.gemini(...)` produce a `ModelRef` paired with that model family's
+config schema.
 
 These examples also illustrate an important point: when you use
 `generate()` to make generative AI model calls, changing the model you want to
@@ -2622,35 +2624,37 @@ result = await ai.generate(
 
 ### Model parameters
 
-The `generate()` function takes a `config` parameter, through which you can
-specify optional settings that control how the model generates content:
+Pass generation settings through `config` using the model plugin's typed config class (such as `GeminiConfig`) or a dict whose keys match that schema. Unknown keys in `config` raise `GenkitError` (`INVALID_ARGUMENT`):
 
 ```python
+from genkit_google_genai import GeminiConfig
+
 result = await ai.generate(
     prompt='Invent a menu item for a pirate themed restaurant.',
-    config={
-      'max_output_tokens': 400,
-      'stop_sequences': ['<end>', '<fin>'],
-      'temperature': 1.2,
-      'top_p': 0.4,
-      'top_k': 50,
-    },
+    config=GeminiConfig(
+        max_output_tokens=400,
+        stop_sequences=['<end>', '<fin>'],
+        temperature=1.2,
+        top_p=0.4,
+        top_k=50,
+    ),
 )
 ```
 
-You can also pass a per-request API key, provider-specific options, and middleware on a single call. The `config` object allows extra fields for provider-specific parameters, and `use` takes middleware instances (see [middleware](/docs/middleware)):
+Pass per-request API keys in `context={'secrets': {'api_key': ...}}` (never in `config`), pass unmodeled provider parameters via `extra={...}`, and attach middleware instances via `use` (see [middleware](/docs/middleware)):
 
 ```python
+from genkit_google_genai import GeminiConfig, GoogleAI
 from genkit_middleware import Retry
 
 result = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello',
-    config={
-        'api_key': 'YOUR_API_KEY',
-        'temperature': 0.5,
-        'provider_specific_option': 'value',
-    },
+    config=GeminiConfig(
+        temperature=0.5,
+        extra={'provider_specific_option': 'value'},
+    ),
+    context={'secrets': {'api_key': 'YOUR_API_KEY'}},
     use=[Retry()],
 )
 ```
@@ -2807,55 +2811,33 @@ for media in result.media:
 
 #### Handling errors
 
-Note in the prior example that the `output` property can be `None`. This can
-happen when the model fails to generate output that conforms to the schema.
-The best strategy for dealing with such errors will depend on your exact use
-case, but here are some general hints:
+When the model truncates output or emits JSON that fails schema validation, `ai.generate()` does not raise. Instead, `result.output` is `None`, `result.text` retains the raw model text, and `result.error` holds a `Failure` with `reason == ErrorReason.INVALID_OUTPUT` (see [error types](/docs/error-types)):
 
-- **Try a different model**. For structured output to succeed, the model must be
-  capable of generating output in JSON. The most powerful LLMs, like Gemini and
-  Claude, are versatile enough to do this; however, smaller models, such as some
-  of the local models you would use with Ollama, might not be able to generate
-  structured output reliably unless they have been specifically trained to do
-  so.
+```python
+from genkit import ErrorReason
 
-- **Retry the generate() call**. If the model you've chosen only rarely fails to
-  generate conformant output, you can treat the error as you would treat a
-  network error, and simply retry the request using some kind of incremental
-  back-off strategy.
+if result.output is None:
+    if result.error and result.error.reason == ErrorReason.INVALID_OUTPUT:
+        print(f'Schema validation failed: {result.error.message}')
+```
+
+Two practical ways to recover:
+
+- **Use a larger model**. Smaller models, such as some local models served through Ollama, often fail to emit JSON that matches a strict schema.
+- **Retry `generate()`**. If schema failures are rare, retry with backoff or pass the validation error back in a follow-up turn.
 
 ### Streaming
 
-When generating large amounts of text, you can improve the experience for your
-users by presenting the output as it's generated&mdash;streaming the output. A
-familiar example of streaming in action can be seen in most LLM chat apps: users
-can read the model's response to their message as it's being generated, which
-improves the perceived responsiveness of the application and enhances the
-illusion of chatting with an intelligent counterpart.
-
-In Genkit, you can stream output using the `generate_stream()` method. It
-returns an object with a `stream` async iterator and an awaitable `response` (for
-the final complete response):
+Stream tokens as they arrive with `ai.generate_stream()`. It returns a `ModelStreamResponse` exposing an async `stream` iterator and an awaitable `response` future. Use `async with` so breaking out of the loop early stops the underlying generation:
 
 ```python
-result = ai.generate_stream(
-  prompt='Suggest a complete menu for a pirate themed restaurant.',
-)
-```
+async with ai.generate_stream(
+    prompt='Suggest a complete menu for a pirate themed restaurant.',
+) as result:
+    async for chunk in result.stream:
+        print(chunk.text, end='', flush=True)
 
-You can use the `stream` iterator to iterate over the streaming output of the
-request as it's generated:
-
-```python
-async for chunk in result.stream:
-    print(chunk.text)
-```
-
-You can also get the complete output of the request, as you can with a
-non-streaming request:
-
-```python
-complete_text = (await result.response).text
+    complete_text = (await result.response).text
 ```
 
 Streaming also works with structured output:
@@ -2943,12 +2925,12 @@ simple text prompt to `generate`, pass a list consisting of a media part and a
 text part:
 
 ```python
-from genkit import Part, MediaPart, Media, TextPart
+from genkit import Part
 
 result = await ai.generate(
     prompt=[
-      Part(root=MediaPart(media=Media(url='https://example.com/photo.jpg', content_type='image/jpeg'))),
-      Part(root=TextPart(text='Compose a poem about this image.')),
+        Part.from_media(url='https://example.com/photo.jpg', content_type='image/jpeg'),
+        Part.from_text('Compose a poem about this image.'),
     ],
 )
 ```
@@ -2959,20 +2941,19 @@ example:
 
 ```python
 import base64
-from genkit import Part, MediaPart, Media, TextPart
+from pathlib import Path
+from genkit import Part
 
-# Assume read_file is defined elsewhere to read image bytes
-# def read_file(path):
-#     with open(path, 'rb') as f:
-#         return f.read()
-
-image_bytes = read_file('image.jpg')
-base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8') # Decode bytes to string
+image_bytes = Path('image.jpg').read_bytes()
+base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8')
 
 result = await ai.generate(
     prompt=[
-      Part(root=MediaPart(media=Media(url=f'data:image/jpeg;base64,{base64_encoded_image}', content_type='image/jpeg'))),
-      Part(root=TextPart(text='Compose a poem about this image.')),
+        Part.from_media(
+            url=f'data:image/jpeg;base64,{base64_encoded_image}',
+            content_type='image/jpeg',
+        ),
+        Part.from_text('Compose a poem about this image.'),
     ],
 )
 ```

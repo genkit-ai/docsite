@@ -182,7 +182,7 @@ from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 class MenuSuggestionInput(BaseModel):
@@ -257,10 +257,10 @@ All examples in this documentation use Schematic-based schemas to follow these b
 
 <Lang lang="python">
 
-You can define schemas using Pydantic models. While you can use primitive types directly as input and output parameters, it's considered best practice to use Pydantic model-based schemas for these reasons:
+You can define schemas using Pydantic models. While you can use primitive types directly as input and output parameters, prefer Pydantic model schemas:
 
-- **Better developer experience**: Model-based schemas provide a better experience in the Developer UI by giving you labeled input fields.
-- **Future-proof API design**: Model-based schemas allow for easy extensibility in the future. You can add new fields to your input or output schemas without breaking existing clients, which is a core principle of robust API design.
+- **Better developer experience**: Model-based schemas render labeled input fields in the Developer UI.
+- **Backward-compatible evolution**: Adding optional fields to a Pydantic input or output model preserves wire compatibility for existing callers.
 
 </Lang>
 
@@ -396,9 +396,11 @@ class MenuItemSchema(BaseModel):
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> MenuItemSchema:
     """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
-      prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output_schema=MenuItemSchema,
+        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
+        output_schema=MenuItemSchema,
     )
+    if response.output is None:
+        raise RuntimeError(f'Response did not satisfy schema: {response.error}')
     return response.output
 ```
 
@@ -536,10 +538,12 @@ class FormattedMenuOutput(BaseModel):
 async def menu_suggestion_flow(input: MenuSuggestionInput) -> FormattedMenuOutput:
     """Generate a menu item suggestion based on a theme."""
     response = await ai.generate(
-      prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-      output_schema=MenuItemSchema,
+        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
+        output_schema=MenuItemSchema,
     )
-    output: MenuItemSchema = response.output
+    if response.output is None:
+        raise RuntimeError(f'Response did not satisfy schema: {response.error}')
+    output = response.output
     return FormattedMenuOutput(
         formatted_menu_item=f'**{output.dishname}**: {output.description}'
     )
@@ -581,6 +585,12 @@ final response = await menuSuggestionFlow(
 
 ```python
 response = await menu_suggestion_flow(MenuSuggestionInput(theme='bistro'))
+
+# Or call .run() with keyword options for trace metadata or chunk callbacks:
+action_result = await menu_suggestion_flow.run(
+    MenuSuggestionInput(theme='bistro'),
+    context={'uid': 'user-123'},
+)
 ```
 
 </Lang>
@@ -985,8 +995,8 @@ final menuSuggestionFlow = ai.defineFlow(
 <Lang lang="python">
 
 ```python
+from genkit import FlowContext
 from pydantic import BaseModel, Field
-from genkit import ActionRunContext
 
 class MenuSuggestionInput(BaseModel):
     theme: str = Field(description='Restaurant theme')
@@ -996,31 +1006,29 @@ class MenuOutput(BaseModel):
     menu_item: str = Field(description='Generated menu item')
 
 @ai.flow()
-async def menu_suggestion_flow(input: MenuSuggestionInput, ctx: ActionRunContext) -> MenuOutput:
+async def menu_suggestion_flow(
+    input: MenuSuggestionInput,
+    ctx: FlowContext[str],
+) -> MenuOutput:
     """Generate a menu item suggestion based on a theme."""
-    stream_response = ai.generate_stream(
-      prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
-    )
+    async with ai.generate_stream(
+        prompt=f'Invent a menu item for a {input.theme} themed restaurant.',
+    ) as stream_response:
+        async for chunk in stream_response.stream:
+            ctx.send_chunk(chunk.text)
 
-    async for chunk in stream_response.stream:
-        ctx.send_chunk(chunk.text)
+        final_response = await stream_response.response
 
     return MenuOutput(
         theme=input.theme,
-        menu_item=(await stream_response.response).text
+        menu_item=final_response.text,
     )
 ```
 
-The second parameter to your flow definition is called "side channel". It
-provides features such as request context and the `send_chunk` callback.
-The `send_chunk` callback takes a single parameter. Whenever data becomes
-available within your flow, send the data to the output stream by calling
-this function.
-
-In the above example, the values streamed by the flow are directly coupled to
-the values streamed by the `generate_stream()` call inside the flow. Although this is
-often the case, it doesn't have to be: you can output values to the stream using
-the callback as often as is useful for your flow.
+The optional second parameter `ctx: FlowContext[ChunkT]` exposes per-request
+context (`ctx.context`) and `ctx.send_chunk(...)`. Call `ctx.send_chunk(...)`
+whenever your flow has an incremental chunk to emit—either forwarding chunks
+from `ai.generate_stream()` or emitting custom progress updates between steps.
 
 </Lang>
 
@@ -1108,25 +1116,22 @@ final output = await response.output;
 
 <Lang lang="python">
 
-Streaming flows are also callable, but they immediately return a response object
-rather than a promise. Flow's `stream` method returns the stream async iterable,
-which you can iterate over the streaming output of the flow as it's generated.
+`flow.stream()` returns a `StreamResponse` exposing an async `stream` iterator
+and an awaitable `response` future. Use `async with` so breaking out of the
+loop early cancels the underlying flow run cleanly:
 
 ```python
-stream_response = menu_suggestion_flow.stream(MenuSuggestionInput(theme='bistro'))
-async for chunk in stream_response.stream:
-    print(chunk)
+async with menu_suggestion_flow.stream(
+    MenuSuggestionInput(theme='bistro')
+) as stream_response:
+    async for chunk in stream_response.stream:
+        print(chunk)
+
+    print(await stream_response.response)
 ```
 
-You can also get the complete output of the flow, as you can with a
-non-streaming flow. The final response is a future that you can `await` on.
-
-```python
-print(await stream_response.response)
-```
-
-Note that the streaming output of a flow might not be the same type as the
-complete output.
+Note that the streamed chunk type (`FlowContext[ChunkT]`) does not have to
+match the flow's final return type.
 
 </Lang>
 
@@ -1502,7 +1507,7 @@ from pydantic import BaseModel, Field
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 class MenuQuestionInput(BaseModel):
@@ -1888,7 +1893,7 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 app = FastAPI()
@@ -1923,7 +1928,7 @@ To attach per-request context (auth, tenancy, and so on), pass a FastAPI depende
 
 ```python
 from fastapi import Header
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 async def user_context(authorization: str = Header(...)) -> dict[str, object]:
     return {'uid': authorization.removeprefix('Bearer ').strip()}
@@ -1931,7 +1936,7 @@ async def user_context(authorization: str = Header(...)) -> dict[str, object]:
 @ai.flow()
 async def menu_suggestion_flow(
     input: MenuSuggestionInput,
-    ctx: ActionRunContext,
+    ctx: FlowContext,
 ) -> MenuSuggestionOutput:
     """Generate a menu item suggestion based on a theme."""
     uid = (ctx.context or {}).get('uid')
@@ -1986,7 +1991,7 @@ You can also use the Genkit web client library to call flows from web applicatio
 
 <Lang lang="python">
 
-- [FastAPI tutorial](/docs/backend-frameworks/fastapi) (`serve_flow` / `serve_agent`)
+- [FastAPI tutorial](/docs/backend-frameworks/fastapi) (`serve_flow`, plus experimental `serve_agent` in `genkit_fastapi.exp`)
 - [Deploy to any platform](/docs/deployment/any-platform)
 
 </Lang>

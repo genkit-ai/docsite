@@ -185,7 +185,7 @@ async def lookup_order(input: OrderInput) -> str:
     return await get_order_status(input.order_id)
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt="Where's my order #1042?",
     tools=[lookup_order],
 )`,

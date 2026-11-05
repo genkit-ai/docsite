@@ -214,22 +214,33 @@ await genkit.serve(
 
 ## FastAPI routes
 
-Serve agents over HTTP with `serve_agent()` from `genkit_fastapi`. The turn route is always mounted. `/getSnapshot` and `/abort` are mounted only when the agent has a session store—without one, those paths are not registered and return 404.
+Serve agents over HTTP with `serve_agent()` from `genkit_fastapi.exp`. The turn route is always mounted. `/getSnapshot` and `/abort` are mounted only when the agent has a session store—without one, those paths are not registered and return 404.
 
 ```python
-from fastapi import FastAPI, Header
-from genkit_fastapi import serve_agent
-from genkit_google_cloud import FirestoreSessionStore
+from fastapi import FastAPI, Header, HTTPException
 
+from genkit.exp import Genkit
+from genkit_fastapi.exp import serve_agent
+from genkit_google_cloud.exp import FirestoreSessionStore
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
 app = FastAPI()
 
-async def user_context(authorization: str = Header(...)) -> dict[str, object]:
-    # Validate the token and load the user in a real app.
-    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+async def user_context(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Missing bearer token.')
+    token = authorization.removeprefix('Bearer ').strip()
+    if not token:
+        raise HTTPException(status_code=401, detail='Empty bearer token.')
+    # Verify the token signature/claims and load the caller identity in production.
+    return {'uid': token}
+
 
 weather_agent = ai.define_agent(
     name='weatherAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You help with weather questions.',
     store=FirestoreSessionStore(),
 )
@@ -245,7 +256,7 @@ The turn endpoint handles both streaming and non-streaming requests. The snapsho
 
 ### Request context
 
-`context_dependency` is a FastAPI dependency that returns a dict. Genkit threads that dict into the action as context on the turn, snapshot, and abort routes, so auth and other request-scoped values resolve once through FastAPI's `Depends` graph. Tools and custom orchestration read the same map from turn context.
+`context_dependency` is a FastAPI dependency that returns a dict. Genkit threads that dict into the action as context on the turn, snapshot, and abort routes, so auth and other request-scoped values resolve once through FastAPI's `Depends` graph. Tools and custom orchestration read the same map from `ctx.context`. For custom ASGI or Starlette integrations outside `genkit_fastapi`, `genkit.web` provides `RequestData` and wire-envelope helpers (`wants_stream`, `to_sse`, `result_json`, `error_json`, `error_sse`, `error_status`).
 
 </Lang>
 
@@ -466,6 +477,12 @@ An abort answers `aborting` for a run that was still going. Call `waitForSnapsho
 
 </Lang>
 
+<Lang lang="python">
+
+An abort answers with the snapshot's status before the abort (`pending` if the turn was still running, or its terminal status if it already settled) and transitions a running snapshot to `aborted`.
+
+</Lang>
+
 ## Failure tiers
 
 Failures arrive at two different levels:
@@ -490,6 +507,12 @@ Content-Type: application/json
 Sending `state` to a store-backed agent, or a `sessionId` to a client-managed one, fails with `FAILED_PRECONDITION` (400). An unknown `snapshotId` fails with `NOT_FOUND` (404).
 
 Outside the dev environment, an error not built with `status.PublicErrorf` goes out with the generic message for its status, so hosts, queries, and credentials in error text stay in the server log. A served agent applies the same rule to the `error` of a failed turn and to the errors in the snapshots its `getSnapshot` and `waitForSnapshot` routes return. Errors about the caller's own input, such as an invalid message, a resume that does not match the history, or a snapshot from another session, keep their text. The store and in-process callers always see the full text. Only `genkit.Handler`, and so `Route.Handler`, applies this rule: an agent you call from a handler of your own returns its errors unchanged. See [Error types](/docs/error-types/).
+
+</Lang>
+
+<Lang lang="python">
+
+`serve_agent()` (and `genkit.web` helpers such as `error_json`, `error_sse`, and `error_status`) redacts unhandled exceptions and internal `GenkitError` instances to HTTP 500 `{"status": "INTERNAL", "message": "Internal Error"}` so internal hostnames, stack traces, and credentials stay in server logs. State-management init errors (`AgentInitError`) subclass `PublicError` (`from genkit import PublicError`) and return their 4xx status and message directly. Raise `PublicError` (for example, `raise PublicError('PERMISSION_DENIED', 'Not allowed to read this session.')`) inside state transforms or custom handlers—or FastAPI's `HTTPException` inside `context_dependency`—when a status and message are intended for the HTTP caller.
 
 </Lang>
 
@@ -716,10 +739,10 @@ final res = await turn.response;
 
 <Lang lang="python">
 
-`remote_agent()` from `genkit.agent` creates a client with the same chat surface as a local agent.
+`remote_agent()` from `genkit.exp.agent` creates an `AgentClient` with the same chat surface as a local agent.
 
 ```python
-from genkit.agent import remote_agent
+from genkit.exp.agent import remote_agent
 
 agent = remote_agent(
     url='http://localhost:8080/api/weatherAgent',
@@ -729,15 +752,19 @@ agent = remote_agent(
 chat = agent.chat()
 res = await chat.send('Weather in Tokyo?')
 print(res.text)
+# => Tokyo is 72°F and sunny.
 ```
 
 Options:
 
 - **`url`** is required and sends normal and streaming turns.
-- Snapshot and abort companions default to `{url}/getSnapshot` and `{url}/abort`.
-- **`headers`** can be a static mapping or a callable resolved per request for rotating auth tokens.
-- **`state_management`** declares `'server'` or `'client'` state.
-- **`state_schema`** optionally types custom state on the client.
+- **`state_management`** is required and declares `'server'` or `'client'` state.
+- **`get_snapshot_url`** and **`abort_url`** default to `f'{url}/getSnapshot'` and `f'{url}/abort'`.
+- **`headers`** accepts a static mapping or a sync/async callable resolved per request for rotating auth tokens.
+- **`state_schema`** optionally validates custom state on the client as a Pydantic model.
+- **`timeout`** sets the per-request timeout in seconds (defaults to `60.0`; pass `None` to disable).
+
+To connect over a custom protocol or wrap HTTP transport calls, implement `AgentTransport` (or subclass `HttpAgentTransport`) and pass it to `AgentClient` from `genkit.exp.agent`.
 
 ## Stream a turn
 
@@ -758,9 +785,15 @@ res = await turn.response
 
 ## Client behavior
 
-<Lang lang="js dart python">
+<Lang lang="js dart">
 
 The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground aborts, applies streamed custom-state patches, and throws `AgentError` for failed turns.
+
+</Lang>
+
+<Lang lang="python">
+
+The remote client calls the primary endpoint with streamed action transport. It resolves dynamic headers per request, supports foreground cancellation, applies streamed custom-state patches, returns an `AgentResponse` with `finish_reason == AgentFinishReason.FAILED` and `res.error` for failed turns, and raises `GenkitError` on HTTP 4xx/5xx or transport failures.
 
 </Lang>
 

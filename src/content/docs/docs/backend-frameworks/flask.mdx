@@ -50,10 +50,10 @@ uv add "flask[async]" flask-cors genkit genkit-google-genai genkit-flask
 
 These packages include:
 
-- **`flask`**: The Flask web framework.
+- **`flask[async]`**: Flask 3.1+ with async view support.
 - **`genkit`**: Core Genkit SDK for Python.
-- **`genkit-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`genkit-flask`**: Helper that exposes Genkit flows as Flask routes, including server-sent events for streaming.
+- **`genkit-google-genai`**: Model plugin for Google's Gemini models (`genkit-flask` does not bundle model plugins, so install your provider explicitly).
+- **`genkit-flask`**: Adapter that exposes Genkit flows as Flask routes, including Server-Sent Events for streaming.
 
 ### Configure a model API key
 
@@ -90,13 +90,13 @@ from flask import Flask
 from flask_cors import CORS
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 from genkit_flask import genkit_flask_handler
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 app = Flask(__name__)
@@ -144,7 +144,7 @@ async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleItem]:
 class RecipeIngredient(BaseModel):
     name: str
     quantity: str
-    on_sale: bool
+    on_sale: bool = Field(serialization_alias='onSale')
 
 
 class Recipe(BaseModel):
@@ -161,8 +161,11 @@ class BargainChefInput(BaseModel):
 
 @app.post('/bargainChefFlow')
 @genkit_flask_handler(ai)
-@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
-async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
     today = datetime.now().strftime('%A')
 
     stream_response = ai.generate_stream(
@@ -176,7 +179,7 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+        config=GeminiConfig(temperature=0.7, thinking_level='MINIMAL'),
     )
 
     async for chunk in stream_response.stream:
@@ -195,11 +198,44 @@ if __name__ == '__main__':
 
 A few details are worth noting:
 
-- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
-- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
-- **Describe the recipe shape:** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
-- **Define the flow:** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
-- **The three stacked decorators:** These wire everything up. `@ai.flow(name='bargainChefFlow', chunk_type=Recipe)` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
+- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))` initializes the SDK and sets a typed Gemini model reference as the default model.
+- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
+- **Describe the recipe shape:** `Recipe` is a Pydantic model passed as `output_schema` so Genkit instructs the model to emit matching JSON and parses each streamed chunk against it. `serialization_alias='onSale'` serializes `on_sale` as camelCase `onSale` over JSON and SSE while keeping snake_case in Python.
+- **Define the flow:** `bargain_chef_flow` calls `ai.generate_stream`, forwards each partial `Recipe` (`chunk.output`) via `ctx.send_chunk` (typed by `ctx: FlowContext[Recipe]`), and awaits `stream_response.response` for the validated result. Return `response.output` (or `response.text`), never a raw `ModelResponse`, whose `request` field carries your system prompt, tools, and message history.
+- **The three stacked decorators:** `@ai.flow(name='bargainChefFlow')` registers the flow, `@genkit_flask_handler(ai)` adapts it into a Flask view named after the flow (so multiple served flows in one Flask app do not collide on endpoint names) that handles JSON requests and Server-Sent Events, and `@app.post('/bargainChefFlow')` mounts it on a route.
+
+### Attach request context and handle auth errors
+
+Pass `context_provider=` to `@genkit_flask_handler` to validate credentials and populate `ctx.context` before the flow runs. `RequestData` (`from genkit.web import RequestData`) exposes `req.method`, lowercased `req.headers`, `req.input`, and the underlying Flask `request` proxy on `req.request`.
+
+Served handlers redact internal `GenkitError`s and unhandled exceptions to HTTP `500` (`{"status": "INTERNAL", "message": "Internal Error"}`). Raise `PublicError` (`from genkit import PublicError`)—or Flask's `abort(401)`, which passes through untouched—when the HTTP caller should receive an explicit status code and message, such as `401` for `'UNAUTHENTICATED'` or `403` for `'PERMISSION_DENIED'`:
+
+```python
+from genkit import FlowContext, PublicError
+from genkit.web import RequestData
+from genkit_flask import genkit_flask_handler
+
+
+# 1. Validate request headers and populate ctx.context
+async def auth_context(req: RequestData) -> dict[str, object]:
+    auth_header = req.headers.get('authorization') or ''
+    token = auth_header.removeprefix('Bearer ').strip()
+    if not token:
+        raise PublicError('UNAUTHENTICATED', 'Missing bearer token')
+    return {'uid': token}
+
+
+# 2. Read ctx.context inside the served flow
+@app.post('/bargainChefFlow')
+@genkit_flask_handler(ai, context_provider=auth_context)
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
+    uid = (ctx.context or {}).get('uid')
+    ...
+```
 
 ### Check the project layout
 
@@ -230,7 +266,7 @@ Start the Flask server:
 uv run python main.py
 ```
 
-The server listens on `http://127.0.0.1:8080`. Send a request with a craving and the flow will pick today's sale list, propose a recipe, and stream the partial recipe back to the client field by field, title first, then description, then ingredients (with `on_sale=true` on the ones the model picked from the tool), then steps.
+The server listens on `http://127.0.0.1:8080`. Send a request with a craving and the flow will pick today's sale list, propose a recipe, and stream the partial recipe back to the client field by field, title first, then description, then ingredients (with `"onSale": true` on the ones the model picked from the tool), then steps.
 
 ## Test and inspect the app
 

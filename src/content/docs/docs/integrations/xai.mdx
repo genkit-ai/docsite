@@ -278,7 +278,7 @@ are handled the same way for every plugin in this family. See the
 
 <Lang lang="python">
 
-xAI (Grok) is available through the OpenAI-compatible plugin in `genkit-openai`, including vision models.
+xAI (Grok) models run through the OpenAI-compatible `OpenAI` plugin in `genkit-openai`.
 
 ## Installation
 
@@ -288,178 +288,158 @@ uv add genkit-openai
 
 ## Configuration
 
-Point `OpenAI` at xAI's API:
+Point `OpenAI` at xAI's API endpoint and pass your API key from the [xAI console](https://console.x.ai/):
 
 ```python
+import os
 from genkit import Genkit
 from genkit_openai import OpenAI
-import os
 
 ai = Genkit(
     plugins=[
         OpenAI(
             base_url='https://api.x.ai/v1',
-            api_key=os.getenv('XAI_API_KEY'),
+            api_key=os.environ['XAI_API_KEY'],
         ),
     ],
 )
 ```
 
-Get an API key from your [xAI account settings](https://console.x.ai/) and pass it as `api_key=` when you initialize the plugin—for example from the `XAI_API_KEY` environment variable. Don't embed API keys directly in code.
+Override the key per call with `context={'secrets': {'api_key': tenant_key}}`.
 
 ## Usage
 
-Use the `openai_model()` helper to reference a Grok model.
+Reference Grok models with the `'openai/<model-id>'` prefix:
 
 ```python
-from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
 import os
+from genkit import Genkit
+from genkit_openai import OpenAI
 
 ai = Genkit(
-    plugins=[OpenAI(base_url='https://api.x.ai/v1', api_key=os.getenv('XAI_API_KEY'))],
+    plugins=[
+        OpenAI(
+            base_url='https://api.x.ai/v1',
+            api_key=os.environ['XAI_API_KEY'],
+        )
+    ],
 )
 
 @ai.flow()
 async def grok_flow(subject: str) -> str:
-    """Generate a fun fact using Grok.
-
-    Args:
-        subject: The subject to generate a fact about.
-
-    Returns:
-        A fun fact about the subject.
-    """
     response = await ai.generate(
-        model=openai_model('grok-4.3'),
-        prompt=f'tell me a fun fact about {subject}',
+        model='openai/grok-4.3',
+        prompt=f'Give one surprising engineering fact about {subject}.',
     )
     return response.text
 ```
 
-## Advanced usage
-
-The xAI plugin supports various advanced features for building sophisticated applications.
+## Advanced Usage
 
 **Available Models:**
 
-The xAI plugin provides access to several Grok models:
+- **Language & Vision**: `grok-4.3` (general chat, coding, and multimodal vision) and `grok-4.20` variants for reasoning workloads. See the [xAI models documentation](https://docs.x.ai/developers/models) for the current list.
 
-- **Language Models**: `grok-4.3` (most intelligent and fastest, recommended for chat and coding), plus the `grok-4.20` reasoning and multi-agent variants for reasoning and enterprise workloads. See the [xAI models documentation](https://docs.x.ai/developers/models) for the full current list.
-- **Vision and Image Generation**: `grok-4.3` provides multimodal vision understanding, and `grok-image` handles image generation
-
-**Tool Calling:**
-
-Grok models support tool calling, allowing them to use functions you define:
+### Tool Calling
 
 ```python
 from pydantic import BaseModel, Field
 
 class WeatherInput(BaseModel):
-    """Input for weather tool."""
     location: str = Field(description='City name')
 
 @ai.tool()
 async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
-    # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
 
 response = await ai.generate(
-    model=openai_model('grok-4.3'),
+    model='openai/grok-4.3',
     prompt="What's the weather like in Austin?",
     tools=[get_weather],
+    tool_choice='auto',
 )
 ```
 
-**Streaming:**
-
-The plugin supports streaming responses for real-time output:
+### Streaming
 
 ```python
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 @ai.flow()
-async def streaming_story(name: str, ctx: ActionRunContext) -> str:
-    """Generate a story with streaming output."""
+async def streaming_story(topic: str, ctx: FlowContext[str]) -> str:
     stream_response = ai.generate_stream(
-        model=openai_model('grok-4.3'),
-        prompt=f'Write a short story about {name}',
+        model='openai/grok-4.3',
+        prompt=f'Write a short dispatch about {topic}.',
     )
     async for chunk in stream_response.stream:
         ctx.send_chunk(chunk.text)
     return (await stream_response.response).text
 ```
 
-**Vision Capabilities:**
+### Vision Capabilities
 
-Use the Grok Vision model to analyze images:
+Construct multimodal prompts with `Part.from_text()` and `Part.from_media()`:
 
 ```python
-from genkit import Part, TextPart, MediaPart, Media
+from genkit import Part
 
-image_url = 'https://example.com/photo.jpg'
+image_url = 'https://example.com/diagram.jpg'
 
 response = await ai.generate(
-    model=openai_model('grok-4.3'),
+    model='openai/grok-4.3',
     prompt=[
-        Part(root=TextPart(text='What do you see in this image?')),
-        Part(root=MediaPart(media=Media(url=image_url, content_type='image/jpeg'))),
+        Part.from_text('List the services shown in this architecture diagram.'),
+        Part.from_media(image_url, content_type='image/jpeg'),
     ],
 )
 ```
 
-**Structured Output:**
-
-Generate structured data using Pydantic models:
+### Structured Output
 
 ```python
 from pydantic import BaseModel, Field
 
 class MovieRecommendation(BaseModel):
-    """A movie recommendation."""
     title: str = Field(description='Movie title')
     year: int = Field(description='Release year')
     genre: str = Field(description='Primary genre')
-    reason: str = Field(description='Why this movie is recommended')
-
-preferences = 'sci-fi and heist movies'
+    reason: str = Field(description='Why this movie fits the request')
 
 response = await ai.generate(
-    model=openai_model('grok-4.3'),
-    prompt=f'Recommend a movie for someone who likes: {preferences}',
+    model='openai/grok-4.3',
+    prompt='Recommend a heist film with practical effects.',
     output_schema=MovieRecommendation,
 )
-movie = response.output  # Typed as MovieRecommendation
+movie: MovieRecommendation = response.output
 ```
 
-### Passthrough configuration
+### Forwarding xAI-Specific Parameters with `extra`
 
-You can pass configuration options that are not defined in the plugin's custom configuration schema. This permits you to access new models and features without having to update your Genkit version.
+`OpenAIConfig` rejects undeclared top-level keys with `GenkitError(status='INVALID_ARGUMENT')`. Pass xAI-specific request fields inside `extra`:
 
 ```python
-from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
 import os
+from genkit import Genkit
+from genkit_openai import OpenAI, OpenAIConfig
 
 ai = Genkit(
     plugins=[
         OpenAI(
             base_url='https://api.x.ai/v1',
-            api_key=os.getenv('XAI_API_KEY')
+            api_key=os.environ['XAI_API_KEY'],
         )
     ],
 )
 
 response = await ai.generate(
-    prompt='Tell me a cool story',
-    model=openai_model('grok-new'),  # hypothetical new model
-    config={
-        'new_feature_parameter': ...,  # hypothetical config needed for new model
-    },
+    model='openai/grok-4.3',
+    prompt='Summarize recent benchmark results.',
+    config=OpenAIConfig(
+        temperature=0.3,
+        extra={'search_parameters': {'mode': 'auto'}},
+    ),
 )
 ```
-
-Genkit passes this configuration as-is to the xAI API giving you access to the new model features. Note that the field name and types are not validated by Genkit and should match the xAI API specification to work.
 
 </Lang>

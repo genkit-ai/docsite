@@ -1136,7 +1136,7 @@ Vector Search in Gemini Enterprise is a retriever plugin in `github.com/firebase
 
 <Lang lang="python">
 
-The unified Google GenAI plugin provides access to models via the Gemini Enterprise API using the `VertexAI` initializer:
+The `genkit-google-genai` package provides access to Gemini Enterprise (Vertex AI) models through the `VertexAI` plugin, and `genkit-vertexai` provides `ModelGarden` for partner models on Vertex AI.
 
 ## Basic Model Access
 
@@ -1154,20 +1154,19 @@ from genkit_google_genai import VertexAI
 
 ai = Genkit(
     plugins=[
-        VertexAI(location='global'),  # Global endpoint (current Gemini models)
-        # VertexAI(location='us-central1'),  # Regional endpoint (current Gemini models aren't served here)
+        VertexAI(location='global'),  # Global endpoint for Gemini 3 models
     ],
 )
 ```
 
+`VertexAI` also accepts direct network options (`headers`, `timeout` in seconds, `max_retries`, `http_client_factory`) in place of `http_options`.
+
 **Authentication Methods:**
 
-- **Application Default Credentials (ADC):** The standard method for most Gemini Enterprise use cases, especially in production. It uses the credentials from the environment (e.g., service account on GCP, user credentials from `gcloud auth application-default login` locally). This method requires a Google Cloud Project with billing enabled and the Gemini Enterprise API (`aiplatform.googleapis.com`) enabled.
-- **Gemini Enterprise Express Mode:** A streamlined way to try out many Gemini Enterprise features using just an API key, without needing to set up billing or full project configurations. This is ideal for quick experimentation and has generous free tier quotas. [Learn More about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
+- **Application Default Credentials (ADC):** Standard IAM authentication for production GCP workloads and local `gcloud auth application-default login` sessions. Requires a Google Cloud project with billing and `aiplatform.googleapis.com` enabled.
+- **Gemini Enterprise Express Mode:** API-key access for quick prototyping without full project setup. [Learn more about Express Mode](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
 
 ```python
-# Using Gemini Enterprise Express Mode (easy to start; some limitations).
-# Get an API key from the Gemini Enterprise Express Mode setup.
 import os
 
 from genkit import Genkit
@@ -1180,19 +1179,19 @@ ai = Genkit(
 )
 ```
 
-_Note: When using Express Mode, you typically omit `project` and `location` on `VertexAI` (see the [Express Mode docs](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview))._CLOUD_LOCATION`/`GCLOUD_LOCATION` or falls back to `us-central1`, where current Gemini models aren't served (see the [Express Mode docs](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview))._
+_Note: In Express Mode, omit `project` and `location` on `VertexAI`. With ADC, if `location` is omitted and neither `GOOGLE_CLOUD_LOCATION` nor `GCLOUD_LOCATION` is set, `VertexAI` defaults to `us-central1` (where Gemini 3 models are not served—pass `location='global'` instead)._
 
 ### Available Models
 
-**Gemini 3 Series** - Latest models with state-of-the-art reasoning and multimodal capabilities:
+**Gemini 3 Series:**
 
-- `gemini-3.8-flash` - Most intelligent Flash model, engineered for complex reasoning, coding, and agentic workflows
-- `gemini-3.1-pro-preview` - Preview of the most capable model for complex reasoning and problem solving
-- `gemini-3.5-flash-lite` - Fastest, most cost-effective model for high-throughput execution
-- `gemini-3.1-flash-image` - Fast and efficient image generation and editing
-- `gemini-3-pro-image` - State-of-the-art image generation and editing for complex visual tasks
+- `gemini-3.8-flash` — High-intelligence Flash model for reasoning, coding, and agentic workflows
+- `gemini-3.1-pro-preview` — Preview Pro model for complex reasoning
+- `gemini-3.5-flash-lite` — High-throughput, low-latency model
+- `gemini-3.1-flash-image` — Fast native image generation and editing
+- `gemini-3-pro-image` — High-fidelity image generation and editing
 
-These models aren't served in `us-central1`. Configure `VertexAI(location='global')`. `gemini-3.8-flash`, `gemini-3.5-flash-lite`, and `gemini-3.1-flash-image` are also served in the `us` and `eu` multi-regions; `gemini-3.1-pro-preview` and `gemini-3-pro-image` are `global` only. To change the location for a single Gemini request, pass `config={'location': 'global'}`.
+Configure `VertexAI(location='global')` for Gemini 3 models. `gemini-3.8-flash`, `gemini-3.5-flash-lite`, and `gemini-3.1-flash-image` are also served in the `us` and `eu` multi-regions (`project` is required for multi-region endpoints); `gemini-3.1-pro-preview` and `gemini-3-pro-image` are `global` only. Override the location for a single Gemini call with `GeminiConfig(location='global')`.
 
 ### Basic Usage
 
@@ -1205,8 +1204,8 @@ ai = Genkit(
 )
 
 response = await ai.generate(
-    model='vertexai/gemini-3.8-flash',
-    prompt='Explain Gemini Enterprise in simple terms.',
+    model=VertexAI.gemini('gemini-3.8-flash'),
+    prompt='Explain Gemini Enterprise IAM authentication in two sentences.',
 )
 
 print(response.text)
@@ -1215,193 +1214,152 @@ print(response.text)
 ### Text Embedding
 
 ```python
+from genkit_google_genai import EmbeddingConfig, VertexAI
+
 embeddings = await ai.embed(
-    embedder='vertexai/text-embedding-005',
-    content='Embed this text.',
+    embedder=VertexAI.embedder('text-embedding-005'),
+    content='Embed this support ticket.',
 )
 ```
 
 :::note[Embedding vector sizes]
-Size Vector Search indexes (and any application-side buffers) to the **length of vectors your app actually produces**. **`gemini-embedding-001`** and **`gemini-embedding-2`** default to **3072** dimensions; pass **`output_dimensionality`** in **`options`** on **`embed`** / **`embed_many`** to use a shorter vector (Google documents common choices such as **768**, **1536**, or **3072**). Example:
+Size Vector Search indexes to the vector length your app requests. `gemini-embedding-001` defaults to **3072** dimensions; pass `output_dimensionality` in `config` on `embed()` or `embed_many()` (for example `768`, `1536`, or `3072`) to truncate vectors:
 
 ```python
 embeddings = await ai.embed(
-    embedder='vertexai/gemini-embedding-001',
+    embedder=VertexAI.embedder('gemini-embedding-001'),
     content='Your text here.',
-    options={'output_dimensionality': 768},
+    config=EmbeddingConfig(output_dimensionality=768),
 )
 ```
 
-**`vertexai/text-embedding-005`** and **`vertexai/text-multilingual-embedding-002`** typically use **768** dimensions. Embedders always use the plugin's `location`; `gemini-embedding-2` is served from `global`, `us`, and `eu`, but not from `us-central1`. See [Embedding models](/docs/integrations/google-genai#embedding-models) and the [Gemini embedding documentation](https://ai.google.dev/gemini-api/docs/embeddings).
+`vertexai/text-embedding-005` and `vertexai/text-multilingual-embedding-002` produce **768** dimensions, and `vertexai/multimodalembedding@001` defaults to **1408** dimensions (`128`, `256`, `512`, or `1408`). Embedders always use the plugin's `location`.
 :::
 
 ### Image Generation
 
+Imagen models are retired in `genkit-google-genai` (`VertexAI.imagen()` raises `INVALID_ARGUMENT`). Use Gemini native image models via `VertexAI.gemini_image()` and `GeminiImageConfig`:
+
 ```python
+from genkit_google_genai import GeminiImageConfig, VertexAI
+
 response = await ai.generate(
-    model='vertexai/gemini-3.1-flash-image',
-    prompt='A beautiful watercolor painting of a castle in the mountains.',
+    model=VertexAI.gemini_image('gemini-3.1-flash-image'),
+    prompt='A watercolor architectural sketch of a mountain train station.',
+    config=GeminiImageConfig(
+        aspect_ratio='16:9',
+        image_size='2K',
+    ),
 )
 
 if response.media:
     generated_image = response.media[0].url
 ```
 
+Vertex AI also supports Virtual Try-On (`VertexAI.virtual_try_on('virtual-try-on-001')` with `VirtualTryOnConfig`) and Veo background video generation (`await ai.generate_operation(model=VertexAI.veo('veo-3.1-fast-generate-001'), ...)` with `VeoConfig`).
+
 ### Thinking Config
 
-#### Thinking Level (Gemini 3.0)
+#### Thinking Level (Gemini 3)
+
+Pass `thinking_level` directly on `GeminiConfig`:
 
 ```python
+from genkit_google_genai import GeminiConfig, VertexAI
+
 response = await ai.generate(
-    model='vertexai/gemini-3.1-pro-preview',
-    prompt='what is heavier, one kilo of steel or one kilo of feathers',
-    config={
-        'thinking_config': {
-            'thinking_level': 'HIGH',  # Or 'LOW' or 'MEDIUM'
-        },
-    },
+    model=VertexAI.gemini('gemini-3.1-pro-preview'),
+    prompt='What is heavier, one kilo of steel or one kilo of feathers?',
+    config=GeminiConfig(
+        thinking_level='HIGH',  # 'MINIMAL', 'LOW', 'MEDIUM', or 'HIGH'
+    ),
 )
 ```
 
 #### Thinking Budget
 
-Gemini 2.5 models were retired on October 20, 2026. For Gemini 3 models, prefer `thinking_level` (above); Gemini 4 Argon rejects `thinking_budget`.
+Prefer `thinking_level` on Gemini 3 models. Where token budgets are supported, pass `thinking_budget` and `include_thoughts` directly on `GeminiConfig`:
 
 ```python
-message = (await ai.generate(
-    model='vertexai/gemini-3.8-flash',
-    prompt='what is heavier, one kilo of steel or one kilo of feathers',
-    config={
-        'thinking_config': {
-            'thinking_budget': 1024,
-            'include_thoughts': True,
-        },
-    },
-)).message
+from genkit_google_genai import GeminiConfig, VertexAI
+
+response = await ai.generate(
+    model=VertexAI.gemini('gemini-3.8-flash'),
+    prompt='What is heavier, one kilo of steel or one kilo of feathers?',
+    config=GeminiConfig(
+        thinking_budget=1024,
+        include_thoughts=True,
+    ),
+)
+message = response.message
 ```
 
 ## Enterprise Features (Python)
 
-The following advanced features are available in Python. Note that some features require additional plugin packages:
-
 ### Installation for Advanced Features
 
-**Core Gemini Enterprise features** (included in `genkit-google-genai`):
+**Core Gemini Enterprise features** (`genkit-google-genai`):
 
 ```bash
 uv add genkit-google-genai
 ```
 
-**Model Garden** (separate package):
+**Model Garden** (`genkit-vertexai` with publisher extras):
 
 ```bash
-uv add genkit-vertexai
+# Install the extra matching the publisher(s) you call:
+uv add 'genkit-vertexai[anthropic]'         # Claude on Vertex AI
+uv add 'genkit-vertexai[openai]'            # Llama, Mistral, and OpenAI-compatible endpoints
+uv add 'genkit-vertexai[anthropic,openai]'  # Both
 ```
 
-If you want to locally run flows that use these plugins, you also need the [Google Cloud CLI tool](https://cloud.google.com/sdk/docs/install) installed.
+Installing bare `genkit-vertexai` without `[anthropic]` or `[openai]` installs neither SDK client, and model calls raise `GenkitError(status='FAILED_PRECONDITION')`.
 
-### Configuration for Advanced Features
+### Project, Location, and ADC Configuration
 
 ```python
 from genkit import Genkit
 from genkit_google_genai import VertexAI
 
 ai = Genkit(
-    plugins=[VertexAI(location='global')],
+    plugins=[VertexAI(project='your-gcp-project', location='global')],
 )
 ```
 
-The plugin requires you to specify your Google Cloud project ID, the [region](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) to which you want to make Gemini Enterprise API requests, and your Google Cloud project credentials.
-
-- You can specify your Google Cloud project ID either by setting `project` in the `VertexAI()` configuration or by setting the `GCLOUD_PROJECT` environment variable. If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), `GCLOUD_PROJECT` is automatically set to the project ID of the environment.
-- You can specify the API location either by setting `location` in the `VertexAI()` configuration or by setting the `GOOGLE_CLOUD_LOCATION` (or `GCLOUD_LOCATION`) environment variable. If neither is set, the plugin uses `us-central1`, which doesn't serve current Gemini models; use `global` for those. For a single Gemini request you can override the location with `config={'location': 'global'}`. Embedders and evaluators always use the plugin location, and evaluators require a regional location such as `us-central1`.
-- To provide API credentials, you need to set up Google Cloud Application Default Credentials.
-  1. To specify your credentials:
-     - If you're running your flow from a Google Cloud environment (Cloud Functions, Cloud Run, and so on), this is set automatically.
-     - On your local dev environment, do this by running:
-
-```bash
-gcloud auth application-default login --project YOUR_PROJECT_ID
-```
-
-     - For other environments, see the [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) docs.
-
-1. In addition, make sure the account is granted the `roles/aiplatform.user` IAM role. See the Gemini Enterprise [access control](https://cloud.google.com/vertex-ai/generative-ai/docs/access-control) docs.
+- **Project ID**: Pass `project=` to `VertexAI()` or set `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`.
+- **Location**: Pass `location=` to `VertexAI()` or set `GOOGLE_CLOUD_LOCATION` / `GCLOUD_LOCATION` (defaults to `us-central1`). Override per Gemini request with `GeminiConfig(location='global')`.
+- **Credentials**: Configure Application Default Credentials (`gcloud auth application-default login --project YOUR_PROJECT_ID` locally, or an attached service account with `roles/aiplatform.user` on GCP).
 
 ### Grounding
 
-This plugin supports grounding Gemini text responses using [Google Search](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/ground-gemini#web-ground-gemini).
-
-Important: Gemini Enterprise charges a fee for grounding requests in addition to the cost of making LLM requests. See the [Gemini Enterprise pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing) page and be sure you understand grounding request pricing before you use this feature.
-
-Example:
+Set `google_search=True` on `GeminiConfig` to ground responses with [Google Search](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/ground-gemini#web-ground-gemini) (see [Gemini Enterprise pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing) for grounding charges):
 
 ```python
+from genkit_google_genai import GeminiConfig, VertexAI
+
 ai = Genkit(
     plugins=[VertexAI(location='global')],
 )
 
-await ai.generate(
-    model='vertexai/gemini-3.8-flash',
-    prompt='What are the latest developments in quantum computing?',
-    config={
-        'google_search_retrieval': True,
-    }
+response = await ai.generate(
+    model=VertexAI.gemini('gemini-3.8-flash'),
+    prompt='What are the latest developments in fault-tolerant quantum computing?',
+    config=GeminiConfig(google_search=True),
 )
 ```
 
 ### Context Caching
 
-The Gemini Enterprise Genkit plugin supports **Context Caching**, which allows models to reuse previously cached content to optimize token usage when dealing with large pieces of content. This feature is especially useful for conversational flows or scenarios where the model references a large piece of content consistently across multiple requests.
-
-#### How to Use Context Caching
-
-To enable context caching, ensure your model supports it. For example, `gemini-3.8-flash` is a generation 3 model that supports context caching. Note that context caching cannot be combined with tool calls or system prompts in the same request.
-
-You can define a caching mechanism in your application like this:
+Use `metadata={'cache': {'ttl_seconds': ...}}` on a message to cache large prompt prefixes across requests (cannot be combined with tool calls or system prompts in the same request):
 
 ```python
-from genkit import Message, Part, TextPart, Role
+from pathlib import Path
+from genkit import Genkit, Message, Part, Role
+from genkit_google_genai import VertexAI
 
 ai = Genkit(
     plugins=[VertexAI(location='global')],
 )
-
-llm_response = await ai.generate(
-    messages=[
-        Message(
-            role=Role.USER,
-            content=[Part(root=TextPart(text='Here is the relevant text from War and Peace.'))],
-        ),
-        Message(
-            role=Role.MODEL,
-            content=[
-                Part(root=TextPart(text="Based on War and Peace, here is some analysis of Pierre Bezukhov's character.")),
-            ],
-            metadata={
-                'cache': {
-                    'ttl_seconds': 300,  # Cache this message for 5 minutes
-                },
-            },
-        ),
-    ],
-    model='vertexai/gemini-3.8-flash',
-    prompt="Describe Pierre's transformation throughout the novel.",
-)
-```
-
-In this setup:
-
-- **`messages`**: Allows you to pass conversation history.
-- **`metadata.cache.ttl_seconds`**: Specifies the time-to-live (TTL) for caching a specific response.
-
-#### Example: Leveraging Large Texts with Context
-
-For applications referencing long documents, such as _War and Peace_ or _Lord of the Rings_, you can structure your queries to reuse cached contexts:
-
-```python
-from pathlib import Path
-from genkit import Message, Part, TextPart, Role
 
 text_content = Path('path/to/war_and_peace.txt').read_text()
 
@@ -1409,121 +1367,104 @@ llm_response = await ai.generate(
     messages=[
         Message(
             role=Role.USER,
-            content=[Part(root=TextPart(text=text_content))],  # Include the large text as context
+            content=[Part.from_text(text_content)],
         ),
         Message(
             role=Role.MODEL,
-            content=[
-                Part(root=TextPart(text='This analysis is based on the provided text from War and Peace.')),
-            ],
+            content=[Part.from_text('This analysis is based on the provided text from War and Peace.')],
             metadata={
                 'cache': {
-                    'ttl_seconds': 300,  # Cache the response to avoid reloading the full text
+                    'ttl_seconds': 300,  # Cache prefix for 5 minutes
                 },
             },
         ),
     ],
-    model='vertexai/gemini-3.8-flash',
+    model=VertexAI.gemini('gemini-3.8-flash'),
     prompt='Analyze the relationship between Pierre and Natasha.',
 )
 ```
 
-**Supported models**: `gemini-3.8-flash`
-
 ### Model Garden Integration
 
-Access third-party models through Model Garden in Gemini Enterprise using the `genkit-vertexai` package (`ModelGarden`). The plugin requires a Google Cloud project ID: pass `project_id`, or set `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`. Model IDs must use the publisher-qualified names shown in the Google Cloud console (for example `meta/...` for Llama, `anthropic/...` for Claude in Model Garden). Pass them to `model_garden_name()` so Genkit resolves the action as `modelgarden/<model-id>`. Each model is called in the plugin's `location` (default `us-central1`, or `GOOGLE_CLOUD_LOCATION` / `GOOGLE_CLOUD_REGION`). Partner models are served in different locations, so pass `model_locations={'<model-id>': '<location>'}` to pin individual models.
+Import `ModelGarden` directly from `genkit_vertexai` and reference partner models as `'modelgarden/<publisher>/<model-id>'` strings:
 
-**Installation:**
+- Pass `project=` (or set `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`) and `location=` (defaults to `us-central1`, or `GOOGLE_CLOUD_LOCATION` / `GOOGLE_CLOUD_REGION`).
+- Pin per-model regions with `model_locations={'<publisher>/<model-id>': '<location>'}`.
+- `ModelGarden` authenticates exclusively with Google Cloud Application Default Credentials (`credentials=` or environment ADC). Passing a per-request `api_key` in `context={'secrets': ...}` raises `GenkitError(status='INVALID_ARGUMENT')`.
 
-```bash
-uv add genkit-vertexai
-```
+#### Llama (Meta) and OpenAI-Compatible Models
 
-#### Llama (Meta) models
+Requires `uv add 'genkit-vertexai[openai]'`:
 
 ```python
 from genkit import Genkit
-from genkit_vertexai.model_garden import ModelGarden, model_garden_name
+from genkit_vertexai import ModelGarden
 
 ai = Genkit(
     plugins=[
         ModelGarden(
-            project_id='my-gcp-project',
+            project='my-gcp-project',
             location='us-east5',
         ),
     ],
 )
 
 response = await ai.generate(
-    model=model_garden_name('meta/llama-4-maverick-17b-128e-instruct-maas'),
-    prompt='Write a function that adds two numbers together',
+    model='modelgarden/meta/llama-4-maverick-17b-128e-instruct-maas',
+    prompt='Write a Python function that merges two sorted lists.',
 )
 ```
 
-Llama 4 Scout (`meta/llama-4-scout-17b-16e-instruct-maas`) is also served from `us-east5`. The older `meta/llama-3.1-405b-instruct-maas` and `meta/llama-3.2-90b-vision-instruct-maas` IDs in the Python SDK registry are no longer served. Always confirm the exact model resource name for your project in the [Model Garden](https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models) console.
+Llama 4 Scout (`modelgarden/meta/llama-4-scout-17b-16e-instruct-maas`) is also served from `us-east5`. Other OpenAI-compatible Model Garden publishers (such as Mistral) use the same `'modelgarden/<publisher>/<model-id>'` naming. Confirm exact model IDs and regions in the [Model Garden console](https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models).
 
-#### Anthropic (Claude) models in Model Garden
+#### Anthropic (Claude) Models in Model Garden
 
-Claude in Model Garden uses `anthropic/...` model IDs. Version strings often include dates or `@` — use the exact ID from the console:
+Requires `uv add 'genkit-vertexai[anthropic]'`:
 
 ```python
 from genkit import Genkit
-from genkit_vertexai.model_garden import ModelGarden, model_garden_name
+from genkit_vertexai import ModelGarden
 
 ai = Genkit(
     plugins=[
         ModelGarden(
-            project_id='my-gcp-project',
+            project='my-gcp-project',
             location='global',
+            model_locations={
+                'meta/llama-4-maverick-17b-128e-instruct-maas': 'us-east5',
+            },
         ),
     ],
 )
 
 response = await ai.generate(
-    model=model_garden_name('anthropic/claude-haiku-4-5@20251001'),
-    prompt='What should I do when I visit Melbourne?',
+    model='modelgarden/anthropic/claude-haiku-4-5@20251001',
+    prompt='Plan a two-day architecture walking tour in Melbourne.',
 )
 ```
 
-#### Other OpenAI-compatible Model Garden endpoints
-
-For additional publishers (for example Mistral), use the same `model_garden_name()` pattern with the full Model Garden model ID. Models not in the built-in registry still resolve via the generic OpenAI-compatible Model Garden path.
-
-Gemini Enterprise provides access to various third-party models through Model Garden. Consult the [Model Garden documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/model-garden/explore-models) for the full list of supported models and their capabilities.
-
 ### Evaluation Metrics
 
-Genkit provides evaluation metrics through the Gemini Enterprise plugin (`VertexAI`) automatically when a project is configured:
+:::caution[Deprecated in 0.13]
+Genkit Python's evaluator actions and `ai.evaluate()` are deprecated in `0.13.0` and will be removed in `1.0.0`. Note that `ai.evaluate()` returns a `list` of `EvalFnResponse` items rather than a wrapper object.
+:::
+
+When `project` is configured on `VertexAI` with a regional `location` (such as `us-central1`, not `global`, `us`, or `eu`), the plugin registers Vertex AI evaluation metrics (`BLEU`, `ROUGE`, `FLUENCY`, `SAFETY`, `GROUNDEDNESS`, `SUMMARIZATION_QUALITY`, `SUMMARIZATION_HELPFULNESS`, `SUMMARIZATION_VERBOSITY`):
 
 ```python
 from genkit import Genkit
 from genkit_google_genai import VertexAI
 
-# Evaluators are automatically registered when a project ID is provided.
-# The evaluation service needs a regional location (not 'global', 'us', or 'eu').
 ai = Genkit(
     plugins=[VertexAI(project='your-project-id', location='us-central1')],
 )
 ```
 
-Available built-in metrics from the Gemini Enterprise plugin include:
-
-- **BLEU**: Translation quality
-- **ROUGE**: Summarization quality
-- **Fluency**: Text fluency
-- **Safety**: Content safety
-- **Groundedness**: Factual accuracy
-- **Summarization Quality/Helpfulness/Verbosity**: Summary evaluation
-
-See the [evaluation documentation](/docs/evaluation) for more details on implementing comprehensive evaluation workflows.
-
 ## Next Steps
 
-- Learn about [generating content](/docs/models) to understand how to use these models effectively
-- Explore [evaluation](/docs/evaluation) to leverage Gemini Enterprise evaluation metrics
+- Learn about [generating content](/docs/models)
 - See [RAG](/docs/rag) to implement retrieval-augmented generation
 - Check out [creating flows](/docs/flows) to build structured AI workflows
-- For simple API key access, see the [Google AI plugin](/docs/integrations/google-genai)
+- For API key access via Google AI Studio, see the [Google Generative AI plugin](/docs/integrations/google-genai)
 
 </Lang>

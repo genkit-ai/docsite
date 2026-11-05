@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -105,6 +106,33 @@ A few mapping rules are specific to Go:
 - Inline media is never captured. A `data:` URI becomes a spec `blob` part with
   its modality, MIME type, and estimated size, and remote media becomes a `uri`
   part.
+
+</Lang>
+
+<Lang lang="python">
+
+**Everything else in the trace.** Tool calls can be emitted as
+`execute_tool <name>` spans (`gen_ai.operation.name = 'execute_tool'`,
+`gen_ai.tool.name`, `gen_ai.tool.type = 'function'`), and every other Genkit
+action receives an `INTERNAL` span named after the action carrying
+`genkit.action.type` so flows, retrievers, and model calls form a single trace
+tree. Metadata attached through `SpanContext.set_metadata` is written under
+`genkit:metadata:<key>`.
+
+Python-specific mapping details:
+
+- **`error.type`**: Set to the Python exception class name (`type(exc).__name__`,
+  such as `GenkitError` or `ValidationError`).
+- **Tool interrupts**: Raising `Interrupt` inside a tool or flow sets
+  `genkit.interrupted = True` on the span without marking an error status.
+- **Request configuration**: Both Python `snake_case` (`top_p`, `top_k`,
+  `max_output_tokens`, `stop_sequences`, `frequency_penalty`,
+  `presence_penalty`, `candidate_count`) and wire `camelCase` config fields on
+  Pydantic models or `dict` configs map onto `gen_ai.request.*`.
+- **Inline media truncation**: When content capture is enabled, `data:` URI
+  payloads longer than 128 characters are shortened to
+  `<header>,<omitted N bytes>` so base64 blobs do not blow past attribute size
+  limits.
 
 </Lang>
 
@@ -369,6 +397,86 @@ other.
 
 </Lang>
 
+<Lang lang="python">
+
+## Setup
+
+Install `genkit-otel` together with the OpenTelemetry SDK and OTLP exporter:
+
+```bash
+uv add genkit-otel opentelemetry-sdk opentelemetry-exporter-otlp
+```
+
+Your application owns the OpenTelemetry SDK providers. Register `TracerProvider`
+and `MeterProvider`, install `GenAiInstrumentation` via
+`configure_instrumentation` from `genkit.telemetry`, and then construct
+`Genkit`:
+
+```python
+import asyncio
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from genkit import Genkit
+from genkit.telemetry import configure_instrumentation
+from genkit_google_genai import GoogleAI
+from genkit_otel import GenAiInstrumentation
+
+# 1. Register global OpenTelemetry trace and metric providers (reads OTEL_* env vars)
+tracer_provider = TracerProvider()
+tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(tracer_provider)
+
+meter_provider = MeterProvider(
+    metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter())]
+)
+metrics.set_meter_provider(meter_provider)
+
+# 2. Configure GenAI semantic convention instrumentation before Genkit()
+configure_instrumentation(GenAiInstrumentation(emit_tool_spans=True))
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+async def main() -> None:
+    response = await ai.generate(prompt='Explain OpenTelemetry in one sentence.')
+    print(response.text)
+    tracer_provider.shutdown()
+    meter_provider.shutdown()
+
+
+asyncio.run(main())
+```
+
+Configure the destination collector with standard OpenTelemetry environment
+variables:
+
+```bash
+export OTEL_SERVICE_NAME=order-assistant
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+Key runtime behaviors in Python:
+
+- **Developer UI isolation**: Under `genkit start`, the Developer UI HTTP
+  exporter runs in its own pipeline alongside `GenAiInstrumentation`, so local
+  traces in the Developer UI continue working unchanged.
+- **No-op without an SDK**: If no `TracerProvider` is recording, spans and
+  metrics become no-ops and the first span logs a single warning.
+- **Composes with `genkit-google-cloud`**: Unlike the JavaScript and Go plugins,
+  Python's `enable_google_cloud_telemetry()` uses `GenAiInstrumentation` under
+  the hood (`is_instrumented_by(GenAiInstrumentation)`). If you call
+  `configure_instrumentation(GenAiInstrumentation(...))` **before**
+  `enable_google_cloud_telemetry()`, Google Cloud telemetry reuses your
+  configured `GenAiInstrumentation` (while still redacting content attributes on
+  spans exported to Cloud Trace).
+
+</Lang>
+
 ## Capturing message content
 
 Prompts and responses can contain PII, so content capture is off by default.
@@ -437,6 +545,32 @@ Left unset, the value comes from the
 overrides it, and an unrecognized token logs one warning and falls back to
 `NO_CONTENT`. In the log record, content is carried as structured map and slice
 values; on the span, as JSON strings.
+
+</Lang>
+
+<Lang lang="python">
+
+In Python, `ContentCapturingMode` (`from genkit_otel import ContentCapturingMode`)
+accepts the literal strings `'NO_CONTENT'`, `'SPAN_ONLY'`, `'EVENT_ONLY'`, and
+`'SPAN_AND_EVENT'`:
+
+```python
+from genkit.telemetry import configure_instrumentation
+from genkit_otel import GenAiInstrumentation
+
+configure_instrumentation(
+    GenAiInstrumentation(content_capturing_mode='SPAN_ONLY')  # May contain PII
+)
+```
+
+When `content_capturing_mode=None` (the default), `GenAiInstrumentation` reads
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (case-insensitive); an
+unrecognized environment value logs one warning and falls back to
+`'NO_CONTENT'`, whereas passing an unrecognized string directly to
+`content_capturing_mode=` raises `ValueError`. Passing `'NO_CONTENT'` explicitly
+overrides the environment variable as a hard PII opt-out. When
+`emit_tool_spans=True`, content capture also records `gen_ai.tool.call.arguments`
+and `gen_ai.tool.call.result`.
 
 </Lang>
 
@@ -526,3 +660,38 @@ is a runnable end-to-end setup: traces to Jaeger and metrics to a collector,
 with a script that downloads and runs both without Docker.
 
 </Lang>
+
+<Lang lang="python">
+
+## Options
+
+`GenAiInstrumentation` (`from genkit_otel import GenAiInstrumentation`) accepts
+keyword-only arguments:
+
+- **`content_capturing_mode`** (`ContentCapturingMode | None`, default reads
+  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`, else `'NO_CONTENT'`):
+  Controls where `gen_ai.*` message and tool content is recorded.
+- **`capture_action_io`** (`bool`, default `False`): Records raw JSON-encoded
+  Genkit action inputs and outputs on every span under `genkit.input` and
+  `genkit.output`, independent of `content_capturing_mode`. May contain PII.
+- **`emit_tool_spans`** (`bool`, default `False`): Emits `execute_tool <name>`
+  spans for tool calls.
+- **`emit_metrics`** (`bool`, default `True`): Emits `gen_ai.client.token.usage`
+  and `gen_ai.client.operation.duration`.
+- **`scope_name`** (`str`, default `'genkit-genai'`): OpenTelemetry
+  instrumentation scope name used when resolving the tracer, meter, and event
+  logger.
+- **`tracer`**, **`meter`**, **`otel_logger`** (`Tracer | None`, `Meter | None`,
+  `OtelEventLogger | None`, defaults resolve lazily from global OpenTelemetry
+  providers): Explicit OpenTelemetry instruments when isolating telemetry from
+  process-global providers. `GenAiInstrumentation.CONTENT_ATTRIBUTES` exposes
+  the `frozenset[str]` of content attribute keys for custom redacting exporters.
+
+## Try it
+
+The [`otel-jaeger` sample](https://github.com/genkit-ai/genkit/tree/main/py/samples/otel-jaeger)
+provides a runnable setup exporting Python GenAI traces and metrics to Jaeger
+and an OpenTelemetry collector.
+
+</Lang>
+

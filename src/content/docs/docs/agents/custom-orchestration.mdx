@@ -447,72 +447,96 @@ If the per-turn callback throws an exception, the runtime marks the turn as fail
 
 ## When to use a custom agent
 
-Use `define_custom_agent()` when you need full control over the turn logic:
+Use `ai.define_custom_agent()` on `genkit.exp.Genkit` when you need direct control over turn execution:
 
-- Running multiple model calls sequentially inside a single user turn.
-- Choosing models, prompts, or tools dynamically at runtime.
-- Implementing custom loops (for example planner-executor or self-correction).
-- Emitting status updates or artifacts during a turn.
+- Running multiple model calls (for example planner → executor → verifier) inside one user turn.
+- Selecting models, prompts, or tools dynamically per turn.
+- Streaming custom status patches (`sess.update_custom(...)`) and artifacts (`sess.add_artifacts(...)`) between steps.
 
 ## Runtime contract
 
-A custom agent receives a `SessionRunner` and an `ActionRunContext`:
+A custom agent function receives `(sess: SessionRunner, ctx: AgentContext)` and returns `AgentResult` from `genkit.exp.agent`:
 
 ```python
-from genkit import ActionRunContext
-from genkit.agent import AgentResult, SessionRunner
+from genkit.exp import Genkit
+from genkit.exp.agent import AgentContext, AgentResult, SessionRunner
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
 
 
-async def my_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    # Custom logic...
+async def custom_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
+    # Drive turns via await sess.run(handle_turn), then return await sess.result().
     ...
 
 
 custom_agent = ai.define_custom_agent(
-    name='myAgent',
-    fn=my_agent_fn,
+    name='customAgent',
+    fn=custom_fn,
 )
 ```
 
-- **`sess`** (the `SessionRunner`) manages the session's active turns, messages, custom state, and artifacts.
-- **`ctx`** (the `ActionRunContext`) provides `send_chunk(...)` to stream chunks back to the client, along with abort signaling and ambient request context.
+- **`sess` (`SessionRunner`)**: Manages the turn loop (`run`, `result`), history (`get_messages`, `add_messages`, `set_messages`), typed custom state (`get_custom`, `update_custom`), and session outputs (`get_artifacts`, `add_artifacts`).
+- **`ctx` (`AgentContext`)**: Provides `ctx.send_chunk(AgentStreamChunk(...))` to stream chunks to the client and `ctx.context` for ambient request metadata. Server-side cancellation unwinds the coroutine via standard `asyncio.CancelledError` rather than an abort signal attribute.
+- **`turn_ctx` (`TurnContext`)**: Passed into `handle_turn(inp, turn_ctx)` with `turn_ctx.turn_index`, `turn_ctx.snapshot_id` (pre-reserved before `handle_turn` runs when a `store` is configured so external workspace state can key on it), and `turn_ctx.parent_snapshot_id`.
 
-Call `await sess.run(handle_turn)` to process each input turn, then `return await sess.result()`. The runner appends the user input to the message history automatically. For server-managed agents, `turn_ctx.snapshot_id` is reserved beforehand so external state can match the snapshot.
+Call `await sess.run(handle_turn)` to process incoming user turns (or resumes), then `return await sess.result()`. `SessionRunner` appends the incoming user message to session history automatically before invoking `handle_turn`.
 
 ## Multi-step example
 
-This simplified custom agent streams a model reply while keeping session history and a store:
+This custom agent streams a model response while updating typed custom state and recording a markdown artifact in a store-backed session:
 
 ```python
-from genkit import ActionRunContext, FinishReason, Message
-from genkit.agent import (
+from pydantic import BaseModel
+
+from genkit import FinishReason, Part
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
+    Artifact,
     InMemorySessionStore,
     SessionRunner,
     TurnContext,
     TurnResult,
 )
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
 
 
-async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
+class CoderState(BaseModel):
+    turns_completed: int = 0
+
+
+async def custom_coder_fn(sess: SessionRunner[CoderState], ctx: AgentContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
         history = await sess.get_messages()
-        messages = [Message(m) for m in history] if history else None
 
-        stream_resp = ai.generate_stream(
-            model='googleai/gemini-flash-latest',
-            system='Concise coding assistant.',
-            messages=messages,
+        stream = ai.generate_stream(
+            model=GoogleAI.gemini('gemini-flash-latest'),
+            system='Concise Python coding assistant.',
+            messages=history or None,
         )
-        async for chunk in stream_resp.stream:
+        async for chunk in stream.stream:
             ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-        res = await stream_resp.response
+        res = await stream.response
         if res.message:
             await sess.add_messages([res.message])
+
+        await sess.update_custom(
+            lambda prev: CoderState(turns_completed=(prev.turns_completed if prev else 0) + 1)
+        )
+        await sess.add_artifacts([
+            Artifact(
+                name=f'turn-{turn_ctx.turn_index}.md',
+                parts=[Part.from_text(res.text)],
+            )
+        ])
 
         finish = (
             AgentFinishReason.STOP
@@ -525,15 +549,17 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
     return await sess.result()
 
 
-agent = ai.define_custom_agent(
+custom_coder = ai.define_custom_agent(
     name='customCoder',
     fn=custom_coder_fn,
+    state_schema=CoderState,
     store=InMemorySessionStore(),
 )
 ```
 
 ## Failure and recovery
 
-If the per-turn callback raises, the runtime marks the turn as failed and the client raises `AgentError`. The response carries the last-good state or snapshot ID so you can retry without continuing from a broken partial state.
+- **Per-turn callback failure**: If `handle_turn` raises an exception, `sess.run()` catches it, stops the turn loop, records a `failed` snapshot (when a store is configured), and resolves the turn with `finish_reason == AgentFinishReason.FAILED` and `res.error` (`Failure` with `.status`, `.message`, and `.details`). `chat.send()` does **not** raise on a failed turn; it rolls back the optimistic user prompt and keeps `chat.snapshot_id` / `chat.state` on the last `completed` turn so the caller can inspect `res.error` and retry cleanly.
+- **Transport or initialization failure**: Calls that fail before producing any turn result (such as a dropped HTTP connection or state-management mismatch) raise `GenkitError` (or `AgentInitError`, a `GenkitError` subclass) with `e.status`, `e.message`, and `e.__cause__`.
 
 </Lang>

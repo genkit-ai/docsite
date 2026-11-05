@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -25,9 +26,9 @@ A surface rides on its own data part channel within the Genkit streaming respons
 
 - The server middleware emits Genkit data parts carrying the MIME type `application/a2ui+json`.
 - The part's `data` payload is an object `{"envelopes": [...]}` wrapping an array of A2UI envelope messages, such as `createSurface`, `updateComponents`, and `updateDataModel`.
-- This follows the A2A binding of the A2UI specification, so emitted envelopes are byte-compatible across the JavaScript, Go, and Dart plugins, and can be consumed by standard `@a2ui/*` web renderers or Flutter [`genui`](https://pub.dev/packages/genui).
+- This follows the A2A binding of the A2UI specification, so emitted envelopes are byte-compatible across the JavaScript, Go, Dart, and Python packages, and can be consumed by standard `@a2ui/*` web renderers or Flutter [`genui`](https://pub.dev/packages/genui).
 
-Because the wire protocol is completely decoupled from the server language, an agent written in Go, JavaScript/TypeScript, or Dart can stream to a web frontend or Flutter client without compatibility hurdles.
+Because the wire protocol is completely decoupled from the server language, an agent written in Go, JavaScript/TypeScript, Dart, or Python can stream to a web frontend or Flutter client without compatibility hurdles.
 
 ## Server: Add the middleware
 
@@ -334,9 +335,110 @@ Pass configuration options to `a2ui(...)`:
 
 </Lang>
 
+<Lang lang="python">
+
+### Install the server package
+
+Add `genkit-a2ui` alongside your core Genkit packages:
+
+```bash
+uv add genkit genkit-a2ui genkit-google-genai genkit-fastapi genkit-middleware
+```
+
+### Configure the agent
+
+Pass `Surfaces()` from `genkit_a2ui` in the agent's `use` list. When configured without arguments, `Surfaces()` defaults to the bundled `'basic'` catalog.
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
+from genkit_a2ui import Surfaces
+from genkit_fastapi.exp import serve_agent
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Retry
+
+ai = Genkit(plugins=[GoogleAI()])
+
+
+class WeatherInput(BaseModel):
+    city: str
+
+
+class WeatherOutput(BaseModel):
+    city: str
+    temp_c: float
+    condition: str
+    humidity: int
+
+
+@ai.tool()
+async def get_weather(input: WeatherInput) -> WeatherOutput:
+    """Gets current weather conditions for a city."""
+    return WeatherOutput(
+        city=input.city,
+        temp_c=22.0,
+        condition='Partly cloudy',
+        humidity=55,
+    )
+
+
+ui_agent = ai.define_agent(
+    name='uiAgent',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system=(
+        'You are an interactive assistant that can render rich UI surfaces. '
+        'Prefer rendering an A2UI surface whenever a visual display is clearer than plain prose, '
+        'such as weather forecasts, comparisons, lists, forms, or interactive cards. '
+        'Keep prose brief and place the primary information in the UI components.'
+    ),
+    tools=[get_weather],
+    use=[Retry(max_retries=3), Surfaces()],
+    store=InMemorySessionStore(),
+)
+
+app = FastAPI()
+app.include_router(serve_agent(ui_agent), prefix='/api')
+# Routes: /api/uiAgent, /api/uiAgent/getSnapshot, /api/uiAgent/abort
+```
+
+`Surfaces()` also works with standalone `ai.generate()` calls. Use `envelopes_from_parts()` to extract emitted A2UI envelopes from message or stream chunk parts, and `is_a2ui_part()` to test individual parts:
+
+```python
+from genkit_a2ui import Surfaces, envelopes_from_parts
+
+response = await ai.generate(
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='You help users. Render UI when it is clearer than prose.',
+    prompt='Show me the current weather in Tokyo.',
+    use=[Surfaces()],
+)
+
+for envelope in envelopes_from_parts(response.message.content if response.message else None):
+    print(envelope)
+```
+
+`Surfaces` keeps per-turn streaming parser state. When pairing with middleware that re-runs the model (such as `Retry` or `Fallback` from `genkit_middleware`), place that middleware ahead of `Surfaces` (`use=[Retry(max_retries=3), Surfaces()]`) so each attempt starts with a fresh parser.
+
+Passing `Surfaces()` directly in `use` requires no plugin registration. To make the middleware and bundled catalog discoverable by name in the Developer UI and in `.prompt` files (`use: [a2ui]`), call `ai.define_middleware(Surfaces)` and `register_basic_catalog(ai)` at startup.
+
+### Options
+
+Pass configuration keyword arguments directly to `Surfaces(...)` (validated by `SurfacesConfig`):
+
+- **`catalog`** (default `'basic'`): Catalog ID resolved from the Genkit registry on each call.
+- **`instructions`** (default `'system'`): Where catalog capabilities are injected. Set to `'system'` to append to the system message, or `'none'` to omit prompt injection.
+- **`validation`** (default `'warn'`; also accepts alias `'validate'`): Envelope validation policy. `'warn'` logs malformed fences and drops them; `'strict'` raises `A2uiParseError`, which fails the turn (`finish_reason == 'failed'`); `'off'` passes parsed JSON objects through unchecked. See [The trust boundary and security](#the-trust-boundary-and-security).
+- **`surface_id`** (default fresh UUID): Surface ID assignment policy. Defaults to minting a UUID per surface; pass a fixed string to reuse a single live surface.
+- **`version`** (default `'v0.9'`): Protocol version stamped on emitted envelopes (`'v0.9'` or `'v0.9.1'`).
+
+</Lang>
+
 ## Client: Render surfaces
 
-Because A2UI emits standardized JSON envelopes over HTTP, client-side rendering is completely decoupled from your backend language. A web frontend or Flutter client can interact seamlessly with a backend written in TypeScript, Go, or Dart.
+Because A2UI emits standardized JSON envelopes over HTTP, client-side rendering is completely decoupled from your backend language. A web frontend or Flutter client connects directly to a backend written in TypeScript, Go, Dart, or Python.
 
 <Tabs syncKey="client-lang">
 
@@ -852,6 +954,58 @@ final dashboardAgent = ai.defineAgent(
 
 </Lang>
 
+<Lang lang="python">
+
+Load a catalog from a JSON file with `load_catalog_file()`, or construct an `A2uiCatalog` in memory and register it with `load_catalog()`:
+
+```python
+from genkit_a2ui import (
+    A2uiCatalog,
+    A2uiCatalogComponent,
+    Surfaces,
+    load_catalog,
+    load_catalog_file,
+    register_basic_catalog,
+)
+
+# Option 1: Load from a JSON file (returns the parsed A2uiCatalog)
+file_catalog = load_catalog_file(ai, './catalogs/dashboard.json')
+
+# Option 2: Build in memory (optionally extending the bundled basic catalog)
+basic_catalog = register_basic_catalog(ai)
+dashboard_catalog = A2uiCatalog(
+    id='https://example.com/catalogs/dashboard.json',
+    components=(
+        *basic_catalog.components,
+        A2uiCatalogComponent(
+            name='MetricCard',
+            description='Displays a key metric with a title, numeric value, and trend indicator.',
+            props='title: string (required); value: string|number (required); trend?: up|down|neutral.',
+        ),
+    ),
+)
+load_catalog(ai, dashboard_catalog)
+```
+
+`genkit_a2ui` keys registered catalogs in the Genkit registry by `catalog.id`. Pass that ID to `Surfaces()`:
+
+```python
+dashboard_agent = ai.define_agent(
+    name='dashboardAgent',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='You generate executive dashboards using MetricCards and structured layouts.',
+    use=[
+        Surfaces(
+            catalog=dashboard_catalog.id,
+            validation='strict',
+        ),
+    ],
+    store=InMemorySessionStore(),
+)
+```
+
+</Lang>
+
 ### Register matching widgets on the client
 
 The client application must register a matching catalog renderer under the exact same catalog ID and support the corresponding component names:
@@ -952,6 +1106,15 @@ A2UI operates as a specialized data channel within the Genkit runtime:
 - [Sessions and state](/docs/agents/state/) covers Dart session stores and history.
 - [Define agents](/docs/agents/define/) covers agent definitions and tools in Dart.
 - Explore the [`a2ui` testapp](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/a2ui) for a complete runnable Flutter + Shelf sample.
+
+</Lang>
+
+<Lang lang="python">
+
+- [Serve agents over HTTP](/docs/agents/http/) covers FastAPI route mounting with `serve_agent()` and client connectivity.
+- [Middleware](/docs/middleware/) covers composition order and built-in middleware such as `Retry` and `Fallback`.
+- [Run and stream agents](/docs/agents/run/) covers reading streamed chunks and responses.
+- [Define agents](/docs/agents/define/) covers agent definitions, tools, and session stores in Python.
 
 </Lang>
 

@@ -37,6 +37,8 @@ tiers. Specific pricing can be found at the following links:
 - [Cloud Trace Pricing](https://cloud.google.com/trace#pricing)
 - [Cloud Monitoring Pricing](https://cloud.google.com/stackdriver/pricing#monitoring-pricing-summary)
 
+<Lang lang="js go">
+
 ## Metrics
 
 The Firebase telemetry plugin collects a number of different metrics to support
@@ -56,7 +58,7 @@ log payload. You can filter or group on it, but you cannot change it.
 Features are the top-level entry-point to your Genkit code. In most cases, this
 will be a flow. Otherwise, this will be the top-most span in a trace.
 
-<Lang lang="js python">
+<Lang lang="js">
 
 | Name                    | Type      | Description             |
 | ----------------------- | --------- | ----------------------- |
@@ -88,7 +90,7 @@ Each feature metric contains the following dimensions:
 
 Actions represent a generic step of execution within Genkit.
 
-<Lang lang="js python">
+<Lang lang="js">
 
 Unique failing execution paths are tracked instead:
 
@@ -168,7 +170,7 @@ model specific dimensions that make debugging and configuration tuning easier.
 
 </Lang>
 
-<Lang lang="go python">
+<Lang lang="go">
 
 | Name                                 | Type      | Description                                |
 | ------------------------------------ | --------- | ------------------------------------------ |
@@ -471,3 +473,99 @@ supported way to do it, and applications may use it, not just plugins. See
 option reference.
 
 </Lang>
+
+</Lang>
+
+<Lang lang="python">
+
+In Python (`genkit-google-cloud`), `enable_google_cloud_telemetry()` installs
+`GenAiInstrumentation` (from `genkit-otel`) unless one is already configured,
+exporting [OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions)
+directly to Google Cloud Observability rather than legacy `genkit/feature/*` or
+`[genkit] Input[...]` formats.
+
+## Metrics
+
+`genkit-google-cloud` exports the two OpenTelemetry GenAI client histograms via
+`CloudMonitoringMetricsExporter` (converting delta temporality to cumulative
+with non-overlapping start timestamps for Cloud Monitoring):
+
+- **`gen_ai.client.token.usage`**: Histogram of input and output token counts,
+  split by `gen_ai.token.type` (`input` or `output`) and tagged with
+  `gen_ai.operation.name` (`chat`), `gen_ai.request.model`, and
+  `gen_ai.provider.name` (when known).
+- **`gen_ai.client.operation.duration`**: Histogram of model call latency in
+  seconds for both succeeded and failed requests, tagged with
+  `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.provider.name`, and
+  `error.type` (`type(exc).__name__` on failure).
+
+Python 0.13 does not emit `genkit/feature/*`, `genkit/action/*`, or
+`genkit/ai/generate/*` counters.
+
+## Traces
+
+Every Genkit execution produces a connected trace tree exported to Cloud Trace:
+
+- **Model spans (`chat <model>`)**: `CLIENT` spans carrying
+  `gen_ai.operation.name = 'chat'`, `gen_ai.provider.name` (for example
+  `gcp.gemini`, `gcp.vertex_ai`, `openai`, `anthropic`), `gen_ai.request.model`,
+  configured `gen_ai.request.*` parameters (`temperature`, `top_p`, `top_k`,
+  `max_tokens`, `stop_sequences`, `frequency_penalty`, `presence_penalty`,
+  `seed`, `choice.count`), `gen_ai.output.type` (`json` or `text`),
+  `gen_ai.usage.*` token counts (`input_tokens`, `output_tokens`,
+  `reasoning.output_tokens`, `cache_read.input_tokens`),
+  `gen_ai.response.finish_reasons`, and `error.type` on failure.
+- **Tool spans (`execute_tool <name>`)**: `INTERNAL` spans emitted when
+  `GenAiInstrumentation(emit_tool_spans=True)` is configured prior to
+  `enable_google_cloud_telemetry()`, carrying
+  `gen_ai.operation.name = 'execute_tool'`, `gen_ai.tool.name`, and
+  `gen_ai.tool.type = 'function'`.
+- **Flow and generic action spans (`<action_name>`)**: `INTERNAL` spans carrying
+  `genkit.action.type` (such as `flow`, `util`, or `retriever`) so model calls
+  nest under their enclosing flows. If a tool or flow raises `Interrupt`, the
+  span records `genkit.interrupted = True` without marking an error.
+- **Cloud Trace export adjustments**: `GcpAdjustingTraceExporter` rewrites `:`
+  in attribute keys to `/` (for example `genkit:metadata:foo` becomes
+  `genkit/metadata/foo`), marks spans with `StatusCode.ERROR` using
+  `/http/status_code = '599'` so Cloud Trace highlights failed spans, and pads
+  zero-width spans to a 1-microsecond minimum duration.
+
+## Logs
+
+- **Trace-correlated structured logs**: `enable_google_cloud_telemetry()` adds a
+  `structlog` processor to `genkit.get_logger()` that stamps
+  `logging.googleapis.com/trace` (`projects/<project-id>/traces/<trace-id>`),
+  `logging.googleapis.com/spanId`, and `logging.googleapis.com/trace_sampled`
+  (`'1'` or `'0'`) onto every log event emitted inside an active span.
+- **Opt-in prompt and response events**: By default (`NO_CONTENT`), Python
+  writes **no** prompt or model response text to Cloud Logging. If you opt in by
+  configuring `GenAiInstrumentation(content_capturing_mode='EVENT_ONLY')` (or
+  `'SPAN_AND_EVENT'`) before calling `enable_google_cloud_telemetry()`,
+  `GenAiInstrumentation` emits `gen_ai.client.inference.operation.details` OTel
+  log records exported to Cloud Logging under log name `genkit`.
+
+## Sensitive data
+
+- **Cloud Trace never stores Genkit prompt or reply content**: Before spans
+  leave the process for Cloud Trace, `GcpAdjustingTraceExporter` replaces
+  `gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`,
+  `gen_ai.tool.call.result`, `genkit.input`, `genkit.output`, `genkit:input`,
+  `genkit:output`, `genkit:metadata:interrupt`, and `genkit:metadata:resumed`
+  with `'<redacted>'`.
+- **Genkit span exception details are redacted in Cloud Trace**: Because
+  `str(exc)` (for example a Pydantic `ValidationError`) can quote prompt or tool
+  payloads, spans created by Genkit (`genkit-genai` scope or `genkit*`
+  attributes) also have their error status description, `exception.message`, and
+  `exception.stacktrace` replaced with `'<redacted>'`, while preserving
+  `error.type` and `exception.type`.
+- **Non-Genkit spans keep their attributes and errors**: Spans created by HTTP
+  frameworks, database drivers, application code, or other OpenTelemetry
+  libraries pass through with their attributes and exception messages intact.
+- **Custom exporters receive unredacted content when configured**: Setting
+  `content_capturing_mode='SPAN_ONLY'` or `capture_action_io=True` delivers
+  unredacted attributes to custom `SpanExporter`s attached to your
+  `TracerProvider`, while Cloud Trace still receives `'<redacted>'`.
+
+</Lang>
+

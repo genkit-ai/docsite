@@ -114,6 +114,7 @@ const DOCS_SIDEBAR = [
       { label: "Overview", slug: "docs/overview" },
       { label: "Get started", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
+      { label: "Migrating from 0.12 to 0.13", slug: "docs/migrating-from-0-12" },
     ],
   },
   {

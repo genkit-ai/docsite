@@ -1869,286 +1869,621 @@ topics:
 
 <Lang lang="python">
 
-Genkit's capabilities are designed to be extended by plugins. Genkit plugins are
-configurable modules that can provide models, retrievers, indexers, embedders,
-evaluators, and more (the exact action kinds vary by language SDK). You've already seen plugins in action just by using Genkit:
+Plugins extend Genkit with models, background models, embedders, evaluators, middleware, and telemetry instrumentation. An application registers plugins when constructing `Genkit`:
 
 ```python
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
 
+# 1. Register plugins and set a default model
 ai = Genkit(
     plugins=[GoogleAI()],
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 ```
 
-The Google GenAI plugin takes configuration (such as the user's API key) and
-registers a variety of new models, embedders, and more with the Genkit registry.
-The registry powers Genkit's local UI for running and inspecting models,
-prompts, and more as well as serves as a lookup service for named actions at
-runtime.
+The registry resolves named actions (`'googleai/gemini-flash-latest'`) on demand and exposes capability metadata and configuration schemas to the Developer UI.
 
-## Creating a Plugin
+## Namespace layout
 
-Python plugins follow a simple pattern. A plugin is a class that:
+Every symbol in Genkit Python has one canonical import path so plugin code imports only the protocol layer it implements:
 
-1. Inherits from `Plugin` base class
-2. Has a `name` class attribute for the plugin identifier
-3. Implements three async methods: `init()`, `resolve()`, and `list_actions()`
+- **`genkit`**: Runtime entry point, turn payloads, errors, and trace-linked logging (`Genkit`, `Message`, `Role`, `Part`, `Media`, `Document`, `ModelResponse`, `ModelResponseChunk`, `FinishReason`, `Embedding`, `Operation`, `GenkitError`, `ErrorReason`, `Failure`, `get_logger`).
+- **`genkit.plugin_api`**: Plugin base class, action carriers, config base, and transport helpers (`Plugin`, `Action`, `ActionKind`, `BackgroundAction`, `DynamicActionProvider`, `GenkitConfig`, `StatusName`, `StrEnum`, `provider_error`, `loop_local_client`, `GENKIT_USER_AGENT`, `is_dev_environment`, `to_json_schema`).
+- **`genkit.model`**: Model actions, references, capabilities, and request/config types (`Model`, `BackgroundModel`, `ModelRef`, `ModelContext`, `ModelRequest`, `ModelConfig`, `ModelInfo`, `ModelSupports`, `ModelStage`, `ConstrainedSupport`, `GenerationUsage`, `OutputConfig`, `ToolDefinition`, `ToolRequest`, `ToolResponse`).
+- **`genkit.embedder`**: Embedder actions and references (`Embedder`, `EmbedderRef`, `EmbedRequest`, `EmbedResponse`, `EmbedderInfo`, `EmbedderSupports`).
+- **`genkit.evaluator`**: Evaluator actions and scoring types (`Evaluator`, `BatchEvaluator`, `EvaluatorRef`, `BaseDataPoint`, `EvaluatorRequest`, `EvaluatorResponse`, `Score`, `ScoreDetails`, `ScoreStatus`).
+- **`genkit.middleware`**: Middleware base class and hook parameters (`Middleware`, `MiddlewareContext`, `GenerateHookParams`, `ModelHookParams`, `ToolHookParams`).
+- **`genkit.formats`**: Output formatters (`Formatter`, `FormatterConfig`, `FormatHandler`).
+- **`genkit.telemetry`**: Span instrumentation protocol and hooks (`Instrumentation`, `DisposableInstrumentation`, `FlushableInstrumentation`, `SpanContext`, `SpanMetadata`, `SpanNext`, `configure_instrumentation`, `run_in_new_span`).
 
-### Basic Plugin Structure
+## Creating a plugin
 
-```python
-from os import environ
-from genkit import Action, ActionKind, Plugin
-from genkit.plugin_api import ActionMetadata
+A plugin subclasses `Plugin` from `genkit.plugin_api`, sets a unique `name` namespace, accepts keyword-only configuration in `__init__`, and implements `init()`, `resolve()`, and `list_actions()` (plus optional `list_middleware()`). Plugins construct and return unregistered action objects (`Model`, `BackgroundModel`, `Embedder`, `Evaluator`); the framework registers them in the caller's `Genkit` instance.
 
-class MyPlugin(Plugin):
-    """A custom Genkit plugin."""
+### Lifecycle hooks and naming rules
 
-    name = 'my-plugin'  # Plugin namespace
+- **`init(self) -> Sequence[Action | BackgroundAction[Any, Any]]`**: Runs lazily once per plugin instance on first use. Return actions to register upfront, or return `[]` when resolving models and embedders on demand through `resolve()`.
+- **`resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None`**: Runs when an application looks up `{plugin.name}/{rest}` and no action is registered under that key yet. Genkit strips **one** `{plugin.name}/` prefix and passes `rest` as `name` verbatim. Do not strip prefixes inside `resolve()`—provider IDs frequently contain slashes (such as `'openai/gpt-4o'` on an OpenRouter gateway or `'endpoints/123'`). Pass `name` upstream unchanged and construct the action with `f'{self.name}/{name}'`. Return `None` to decline.
+- **`list_actions(self) -> Sequence[Action | BackgroundAction[Any, Any]]`**: Returns unregistered `Action` or `BackgroundAction` instances for Developer UI discovery, each named `f'{self.name}/{local_name}'`.
+- **`list_middleware(self) -> Sequence[type[Middleware]]`**: Optional synchronous hook called during `Genkit(...)` construction. Registers `Middleware` subclasses under `cls.name` so `.prompt` files and the Developer UI can reference them.
 
-    def __init__(self, api_key: str | None = None):
-        """Initialize plugin with configuration.
+### Minimal working plugin
 
-        Args:
-            api_key: API key for the service. Can also use
-                MY_PLUGIN_API_KEY environment variable.
-        """
-        self.api_key = api_key or environ.get('MY_PLUGIN_API_KEY')
-        if not self.api_key:
-            raise ValueError(
-                'API key required. Set MY_PLUGIN_API_KEY or pass api_key parameter.'
-            )
-
-    async def init(self) -> list[Action]:
-        """One-time initialization called lazily on first use.
-
-        Returns:
-            List of Action instances to pre-register (optional).
-        """
-        # Return empty list for lazy loading, or pre-register actions
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """Resolve an action by type and name.
-
-        Args:
-            action_type: The kind of action (MODEL, EMBEDDER, etc.).
-            name: The fully namespaced name (e.g., 'my-plugin/my-model').
-
-        Returns:
-            Action instance if found, None otherwise.
-        """
-        if action_type == ActionKind.MODEL:
-            return self._create_model_action(name)
-        return None
-
-    async def list_actions(self) -> list[ActionMetadata]:
-        """List available actions for dev UI discovery.
-
-        Returns:
-            List of ActionMetadata describing available actions.
-        """
-        return [
-            ActionMetadata(action_type=ActionKind.MODEL, name='my-plugin/my-model'),
-        ]
-
-    def _create_model_action(self, name: str) -> Action:
-        """Create and return a model action."""
-        # Model implementation
-        pass
-```
-
-### Plugin Options Guidance
-
-For any plugin option that requires a secret value, such as API keys, you should
-offer both an option and a default environment variable to configure it. This
-lets your plugin take advantage of the secret-management features offered by
-many hosting providers.
-
-## Building Plugin Features
-
-A single plugin can activate many new things within Genkit. For example, the
-Google GenAI plugin activates several new models as well as embedders.
-
-### Model Plugins
-
-Genkit model plugins add one or more generative AI models to the Genkit
-registry. A model represents any generative model that is capable of receiving a
-prompt as input and generating text, media, or data as output.
-
-#### Defining a Model
+This self-contained plugin exposes a model with typed configuration, streaming support, and a static `ModelRef` helper:
 
 ```python
-from os import environ
+import os
+from typing import Literal, TypeAlias
 
-from genkit import Action, ActionKind, ActionRunContext, Plugin
-from genkit.model import ModelConfig, ModelRequest, ModelResponse, model_action_metadata
-from genkit.plugin_api import ActionMetadata, to_json_schema
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import (
+    ConstrainedSupport,
+    GenerationUsage,
+    Model,
+    ModelConfig,
+    ModelContext,
+    ModelInfo,
+    ModelRef,
+    ModelRequest,
+    ModelStage,
+    ModelSupports,
+)
+from genkit.plugin_api import Action, ActionKind, Plugin
 
-class MyModelPlugin(Plugin):
-    """Plugin that provides a custom model."""
+KnownBistroModel: TypeAlias = Literal['chef-1', 'chef-1-mini']
 
-    name = 'my-provider'
 
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or environ.get('MY_API_KEY')
-        if not self.api_key:
-            raise ValueError('API key required')
+# 1. Extend ModelConfig with flat provider options
+class BistroConfig(ModelConfig):
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
+    cuisine_style: Literal['french', 'japanese', 'mediterranean'] | None = None
 
-    async def init(self) -> list[Action]:
-        """Initialize plugin.
 
-        Returns:
-            Empty list for lazy loading via resolve().
-        """
-        return []
+# 2. Subclass Plugin with keyword-only configuration and a typed ref helper
+class BistroAI(Plugin):
+    name = 'bistro'
 
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """Resolve an action by type and name.
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        self._api_key = api_key or os.environ.get('BISTRO_API_KEY')
+        self._base_url = base_url or 'https://api.bistro.example.com/v1'
 
-        Args:
-            action_type: The kind of action to resolve.
-            name: The fully namespaced name (e.g., 'my-provider/my-model').
-
-        Returns:
-            Action instance if found, None otherwise.
-        """
-        if action_type != ActionKind.MODEL:
-            return None
-
-        return self._create_model_action(name)
-
-    async def list_actions(self) -> list[ActionMetadata]:
-        """List available models for dev UI.
-
-        Returns:
-            List of ActionMetadata for available models.
-        """
-        return [
-            model_action_metadata(
-                name=f'{self.name}/my-model',
-                info={
-                    'label': 'My Custom Model',
-                    'supports': {
-                        'multiturn': True,
-                        'media': False,
-                        'tools': False,
-                        'systemRole': True,
-                        'output': ['text'],
-                    },
-                },
-                config_schema=ModelConfig,
-            )
-        ]
-
-    def _create_model_action(self, name: str) -> Action:
-        """Create an Action object for the model.
-
-        Args:
-            name: The fully namespaced model name.
-
-        Returns:
-            Action object for the model.
-        """
-        async def generate(
-            request: ModelRequest,
-            ctx: ActionRunContext,
-        ) -> ModelResponse:
-            """Generate a response from the model.
-
-            Args:
-                request: The generation request containing messages and config.
-                ctx: The action run context.
-
-            Returns:
-                A ModelResponse with the model's output.
-            """
-            # Transform Genkit request to your API format
-            api_request = self._to_api_request(request)
-
-            # Call your model API
-            api_response = await self._call_api(api_request)
-
-            # Transform API response to Genkit format
-            return self._to_genkit_response(api_response)
-
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=generate,
-            metadata={
-                'model': {
-                    'supports': {
-                        'multiturn': True,
-                        'media': False,
-                        'tools': False,
-                        'systemRole': True,
-                        'output': ['text'],
-                    },
-                    'customOptions': to_json_schema(ModelConfig),
-                },
-            },
+    @classmethod
+    def chat(
+        cls,
+        name: KnownBistroModel | str,
+        *,
+        config: BistroConfig | None = None,
+    ) -> ModelRef[BistroConfig]:
+        local = name.removeprefix(f'{cls.name}/')
+        return ModelRef(
+            name=f'{cls.name}/{local}',
+            config_schema=BistroConfig,
+            config=config,
         )
 
-    def _to_api_request(self, request: ModelRequest) -> dict:
-        """Convert Genkit request to API format."""
-        # Implementation depends on your API
-        pass
+    async def init(self) -> list[Action]:
+        return []
 
-    async def _call_api(self, request: dict) -> dict:
-        """Call your model's API."""
-        # Implementation depends on your API
-        pass
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        if action_type == ActionKind.MODEL:
+            return self._create_model(name)
+        return None
 
-    def _to_genkit_response(self, response: dict) -> ModelResponse:
-        """Convert API response to Genkit format."""
-        # Implementation depends on your API
-        pass
+    async def list_actions(self) -> list[Action]:
+        return [self._create_model(model_id) for model_id in ('chef-1', 'chef-1-mini')]
+
+    def _create_model(self, name: str) -> Model:
+        async def generate(request: ModelRequest[BistroConfig], ctx: ModelContext) -> ModelResponse:
+            secrets = ctx.context.get('secrets') or {}
+            key = secrets.get('api_key') if isinstance(secrets, dict) else None
+            if not (key or self._api_key):
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        'BistroAI needs an API key: set BISTRO_API_KEY, pass BistroAI(api_key=...), '
+                        "or pass context={'secrets': {'api_key': ...}}."
+                    ),
+                )
+
+            style = request.config.cuisine_style if request.config else None
+            prefix = f'[{style}] ' if style else ''
+            prompt_text = request.messages[-1].text if request.messages else ''
+            reply_text = f'{prefix}Smoked Salmon Tartine ({name}): {prompt_text}'
+
+            if ctx.is_streaming:
+                ctx.send_chunk(
+                    ModelResponseChunk(
+                        role=Role.MODEL,
+                        content=[Part(text=reply_text)],
+                    )
+                )
+
+            return ModelResponse(
+                message=Message(role=Role.MODEL, content=[Part(text=reply_text)]),
+                finish_reason=FinishReason.STOP,
+                usage=GenerationUsage(
+                    input_tokens=len(prompt_text.split()),
+                    output_tokens=len(reply_text.split()),
+                    total_tokens=len(prompt_text.split()) + len(reply_text.split()),
+                ),
+            )
+
+        return Model(
+            f'{self.name}/{name}',
+            generate,
+            config_schema=BistroConfig,
+            info=ModelInfo(
+                label=f'Bistro - {name}',
+                stage=ModelStage.STABLE,
+                supports=ModelSupports(
+                    multiturn=True,
+                    system_role=True,
+                    media=False,
+                    tools=True,
+                    tool_choice=True,
+                    output=['text', 'json'],
+                    constrained=ConstrainedSupport.ALL,
+                ),
+            ),
+        )
+
+
+# 3. Register and call the plugin
+async def main() -> None:
+    ai = Genkit(plugins=[BistroAI(api_key='sk-demo')])
+    res = await ai.generate(
+        model=BistroAI.chat('chef-1', config=BistroConfig(cuisine_style='french')),
+        prompt='Suggest a lunch special.',
+    )
+    print(res.text)
+    # => [french] Smoked Salmon Tartine (chef-1): Suggest a lunch special.
 ```
 
-#### Model Capabilities
+### Constructor conventions
 
-The `supports` dict declares what features the model supports:
+Follow consistent keyword-only constructor names across plugins:
 
-| Capability   | Description                                   |
-| ------------ | --------------------------------------------- |
-| `multiturn`  | Supports multi-turn conversations             |
-| `media`      | Accepts media input (images, audio, etc.)     |
-| `tools`      | Supports function/tool calling                |
-| `systemRole` | Supports system messages                      |
-| `output`     | List of output types: 'text', 'media', 'json' |
+- **`api_key: str | None = None`**: Read from an environment variable fallback (such as `OPENAI_API_KEY`) when omitted. Defer raising `FAILED_PRECONDITION` until request execution so applications supplying per-request keys via `context={'secrets': {'api_key': ...}}` can initialize `Plugin()` without a process-wide key.
+- **`base_url: str | None = None`**: Override the upstream endpoint on HTTP or local-server plugins (such as `Ollama(base_url='http://gpu-box:11434')` or `OpenAI(base_url='https://openrouter.ai/api/v1')`).
+- **`project: str | None = None` and `location: str | None = None`**: Cloud project and region identifiers on GCP-backed plugins.
 
-## Publishing a Plugin
+## Model plugins
 
-Genkit plugins can be published as normal Python packages on PyPI. Official
-plugins use the `genkit-{name}` package name (import as `genkit_{name}`). Include
-relevant keywords in your `pyproject.toml`:
+### Typed configuration (`ModelConfig` and `GenkitConfig`)
+
+Model config classes inherit from `ModelConfig` (`from genkit.model import ModelConfig`), which itself extends `GenkitConfig` (`from genkit.plugin_api import GenkitConfig`). Non-model actions (such as embedders and evaluators) subclass `GenkitConfig` directly.
+
+`GenkitConfig` solves the mismatch between Python SDK kwargs and Genkit's cross-language wire format:
+
+- Callers write `snake_case` keyword arguments (`max_output_tokens=512`), while `.prompt` files and the Developer UI send `camelCase` JSON (`maxOutputTokens`). Both validate (`validate_by_name=True`, `validate_by_alias=True`), and unknown keys raise `ValidationError` (`extra='forbid'`).
+- Calling `request.config.model_dump(exclude_none=True)` returns `snake_case` keys ready for Python provider SDKs. When nested inside `ModelRequest` for trace export, `GenkitConfig` serializes to `camelCase` with `None` fields omitted automatically.
+- `ModelConfig` defines the shared generation knobs (`version`, `temperature`, `max_output_tokens`, `top_k`, `top_p`, `stop_sequences`) plus `extra: dict[str, Any] | None = None` for undeclared provider body fields. Narrow numeric bounds via `common_field_bounds = {'temperature': (0.0, 2.0)}` rather than redeclaring inherited fields.
+- Annotate your model function's first parameter as `request: ModelRequest[YourConfig]` and pass `config_schema=YourConfig` to `Model(...)`. Genkit validates call-time dicts and typed config instances before your handler runs.
+
+### Declaring capabilities (`ModelInfo` and `ModelSupports`)
+
+Pass `info=ModelInfo(...)` to `Model(...)` so Genkit can validate requests before calling your provider and render accurate controls in the Developer UI:
+
+- **`multiturn: bool`**: Accepts multi-message conversation history.
+- **`system_role: bool`**: Accepts `Role.SYSTEM` messages.
+- **`media: bool`**: Accepts `Part(media=Media(...))` inputs.
+- **`tools: bool`**: Supports function/tool calling.
+- **`tool_choice: bool`**: Honors `request.tool_choice` (`'auto'`, `'required'`, `'none'`).
+- **`output: list[str]`**: Output modalities the model produces, such as `['text', 'json']` or `['media']`.
+- **`content_type: list[str]`**: MIME types emitted for media outputs.
+- **`constrained: ConstrainedSupport`**: Native JSON Schema enforcement level—`ConstrainedSupport.NONE`, `ConstrainedSupport.ALL`, or `ConstrainedSupport.NO_TOOLS` (native schema enforcement unless tools are also present). When `request.output.constrained` is `True` and `request.output.json_schema` is set, wire the schema into your provider's native structured-output parameter; when `False`, Genkit has already injected schema instructions into the prompt.
+- **`long_running: bool`**: Reserved for background models; `BackgroundModel` sets this automatically, and `Model` rejects `long_running=True`.
+
+### Streaming, tool calls, and usage accounting
+
+Model handlers receive `(request: ModelRequest[Cfg], ctx: ModelContext)` and return a `ModelResponse`:
+
+- **Streaming**: Check `ctx.is_streaming`. Emit incremental deltas via `ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(text=delta)]))`. Genkit does not build the final response from chunks—always return the complete `ModelResponse` at the end of `generate()`.
+- **Tool requests and responses**: Convert `request.tools` (`list[ToolDefinition]`, carrying `name`, `description`, `input_schema`, `output_schema`) into your provider's tool declarations. Emit model tool calls as `Part(tool_request=ToolRequest(name=call_name, ref=call_id, input=call_args))`. On the next turn, Genkit sends `Role.TOOL` messages containing `part.tool_response` (`ToolResponse` with `name`, `ref`, `output`, and optional multimodal `content`).
+- **Token usage**: Populate `GenerationUsage` on `ModelResponse.usage`. Follow the cross-provider accounting contract: `input_tokens` includes `cached_content_tokens` and `cache_write_tokens`, while `output_tokens` and `thoughts_tokens` are disjoint and sum with `input_tokens` to `total_tokens`.
+
+```python
+from genkit import FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import GenerationUsage, ModelContext, ModelRequest, ToolRequest
+
+
+async def generate_with_tools(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+    # 1. Inspect tool definitions supplied by the caller
+    declared_tools = [
+        {
+            'name': tool.name,
+            'description': tool.description,
+            'parameters': tool.input_schema,
+        }
+        for tool in (request.tools or [])
+    ]
+
+    # 2. Emit a tool call part when the upstream model requests a function execution
+    if declared_tools and request.messages[-1].role == Role.USER:
+        return ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        tool_request=ToolRequest(
+                            name=declared_tools[0]['name'],
+                            ref='call_01',
+                            input={'dish': 'almond croissant'},
+                        )
+                    )
+                ],
+            ),
+            finish_reason=FinishReason.STOP,
+            usage=GenerationUsage(input_tokens=42, output_tokens=14, total_tokens=56),
+        )
+
+    # 3. Read tool results from Role.TOOL messages on the follow-up turn
+    tool_outputs = [
+        part.tool_response.output
+        for msg in request.messages
+        if msg.role == Role.TOOL
+        for part in msg.content
+        if part.tool_response is not None
+    ]
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(text=f'Verified: {tool_outputs}')]),
+        finish_reason=FinishReason.STOP,
+    )
+```
+
+### Static action references (`ModelRef` and `EmbedderRef`)
+
+Expose `@classmethod` helpers named after the model family (without a `_model` suffix, such as `GoogleAI.gemini(...)`, `OpenAI.gpt(...)`, `Anthropic.claude(...)`, and `GoogleAI.embedder(...)`). Type the model ID parameter as `Literal[...] | str` so known IDs autocomplete in IDEs while newly released provider IDs work immediately without upgrading the plugin package.
+
+### Background models (`BackgroundModel`)
+
+Long-running generation endpoints (such as video synthesis or asynchronous research jobs) return a poll handle instead of blocking on a single HTTP request. Construct `BackgroundModel` (`from genkit.model import BackgroundModel`) with `start`, `check`, and optional `cancel` coroutines and return it from `init()`, `resolve()`, and `list_actions()`. Genkit registers the start, check, and cancel actions together so `ai.generate_operation()`, `ai.check_operation()`, and `ai.cancel_operation()` route handles automatically.
+
+```python
+from genkit import FinishReason, Media, Message, ModelResponse, Operation, Part, Role
+from genkit.model import BackgroundModel, ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
+
+
+# 1. Implement start, check, and optional cancel handlers returning Operation
+async def start_render(request: ModelRequest[ModelConfig], ctx: ModelContext) -> Operation:
+    return Operation(id='render-job-901', done=False, metadata={'prompt': request.messages[-1].text})
+
+
+async def check_render(op: Operation[ModelResponse], ctx: ModelContext) -> Operation:
+    return Operation(
+        id=op.id,
+        done=True,
+        output=ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(media=Media(url='https://cdn.bistro.example.com/risotto.mp4', content_type='video/mp4'))],
+            ),
+            finish_reason=FinishReason.STOP,
+        ),
+    )
+
+
+async def cancel_render(op: Operation[ModelResponse], ctx: ModelContext) -> Operation:
+    return Operation(id=op.id, done=True, metadata={'cancelled': True})
+
+
+# 2. Build BackgroundModel to return from Plugin.init, resolve, or list_actions
+video_model = BackgroundModel(
+    'bistro/plated-video-1',
+    start=start_render,
+    check=check_render,
+    cancel=cancel_render,
+    config_schema=ModelConfig,
+    info=ModelInfo(
+        label='Bistro - Plated Video 1',
+        supports=ModelSupports(media=True, output=['media']),
+    ),
+)
+```
+
+## Transport, credentials, errors, and logging
+
+### Event-loop-local clients and `GENKIT_USER_AGENT`
+
+Async HTTP transports (`httpx.AsyncClient`, `AsyncOpenAI`, `AsyncAnthropic`) bind connection pools to the event loop they first run on. Sharing one client instance across multiple event loops (common in test suites, serverless workers, or `ai.run_main()` calls) fails with cross-loop errors.
+
+Decorate your client factory method or function with `@loop_local_client` (`from genkit.plugin_api import loop_local_client`) and include `GENKIT_USER_AGENT` (`from genkit.plugin_api import GENKIT_USER_AGENT`) in outbound headers. `@loop_local_client` caches one client per `(plugin_instance, event_loop)` when applied to a method, or one per `event_loop` at module scope:
+
+```python
+import httpx
+from genkit.plugin_api import GENKIT_USER_AGENT, Plugin, loop_local_client
+
+
+class BistroTransportPlugin(Plugin):
+    name = 'bistro-http'
+
+    def __init__(self, *, base_url: str = 'https://api.bistro.example.com') -> None:
+        self._base_url = base_url
+
+    # 1. One pooled AsyncClient per (plugin instance, running event loop)
+    @loop_local_client
+    def _http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            headers={'User-Agent': GENKIT_USER_AGENT},
+            timeout=60.0,
+        )
+
+    async def init(self) -> list:
+        return []
+
+    async def resolve(self, action_type, name):
+        return None
+
+    async def list_actions(self) -> list:
+        return []
+```
+
+Do not close a `@loop_local_client` client inside individual requests; its lifecycle matches the event loop.
+
+### Per-request credentials (`ctx.context['secrets']`)
+
+`ModelRequest.config` is serialized into trace spans and the Developer UI, so Genkit rejects `api_key` and `apiKey` inside `config` (and `config.extra`) with `INVALID_ARGUMENT`. Per-request tenant credentials travel in `context={'secrets': {'api_key': '...'}}`, which Genkit redacts from exported trace attributes.
+
+Read per-request keys from `ctx.context.get('secrets')` inside your handler. When a per-request key is present, pass it via per-request headers or construct and close a short-lived client (`async with httpx.AsyncClient(...) as client:`) so one caller's bearer token never mutates the shared `@loop_local_client` pool.
+
+### Classifying provider errors (`provider_error`)
+
+`Retry` and `Fallback` middleware inspect `GenkitError.status` and `GenkitError.retry_after_ms` to decide whether to retry a transient `429`/`503` or fail fast on a `400`/`401`. Catch upstream SDK or HTTP exceptions at your provider boundary and raise `provider_error(...)` (`from genkit.plugin_api import provider_error`):
+
+```python
+import httpx
+from genkit.plugin_api import provider_error
+
+
+async def call_upstream(client: httpx.AsyncClient, payload: dict) -> dict:
+    try:
+        response = await client.post('/v1/chat/completions', json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as exc:
+        # Maps 400 -> INVALID_ARGUMENT, 401 -> UNAUTHENTICATED,
+        # 429 -> RESOURCE_EXHAUSTED, 503 -> UNAVAILABLE, other 5xx -> INTERNAL,
+        # and parses Retry-After (seconds or HTTP-date) into retry_after_ms.
+        raise provider_error(
+            exc,
+            http_status=exc.response.status_code,
+            headers=exc.response.headers,
+        ) from exc
+```
+
+Errors built with `provider_error` preserve their status in-process for `Retry` and `Fallback` middleware, while served HTTP flows redact upstream provider failures as `500 Internal Error` so an expired server API key is never misreported to end users as a caller `401`.
+
+### Trace-linked logging (`get_logger`)
+
+Acquire module loggers with `get_logger(__name__)` (`from genkit import get_logger`) instead of `logging.getLogger`:
+
+```python
+from genkit import get_logger
+
+logger = get_logger(__name__)
+logger.debug('Probed provider capabilities', model='chef-1', supports_tools=True)
+```
+
+Log entries correlate with the active span and surface in the Developer UI trace view.
+
+## Embedders, evaluators, middleware, and telemetry
+
+### Embedders (`Embedder`)
+
+Construct `Embedder` (`from genkit.embedder import Embedder, EmbedderInfo, EmbedderRef, EmbedderSupports, EmbedRequest, EmbedResponse`) and return one `Embedding` (`from genkit import Embedding`) per input `Document` in `request.input`. Annotating `request: EmbedRequest[YourEmbedConfig]` validates `request.options` against `YourEmbedConfig`:
+
+```python
+from genkit import Embedding
+from genkit.embedder import (
+    Embedder,
+    EmbedderInfo,
+    EmbedderRef,
+    EmbedderSupports,
+    EmbedRequest,
+    EmbedResponse,
+)
+from genkit.plugin_api import GenkitConfig
+
+
+# 1. Define typed embedder options
+class MenuEmbedConfig(GenkitConfig):
+    dimensions: int = 3
+
+
+# 2. Implement the embedder handler reading doc.text and request.options
+async def embed_menu_items(request: EmbedRequest[MenuEmbedConfig]) -> EmbedResponse:
+    width = request.options.dimensions
+    vectors = [
+        Embedding(embedding=[float(len(doc.text) % (i + 2)) for i in range(width)])
+        for doc in request.input
+    ]
+    return EmbedResponse(embeddings=vectors)
+
+
+# 3. Build the unregistered Embedder action and matching EmbedderRef helper
+menu_embedder = Embedder(
+    'bistro/menu-embed-1',
+    embed_menu_items,
+    config_schema=MenuEmbedConfig,
+    info=EmbedderInfo(
+        label='Bistro - Menu Embedder',
+        dimensions=3,
+        supports=EmbedderSupports(input=['text'], multilingual=True),
+    ),
+)
+
+menu_embedder_ref = EmbedderRef(
+    name='bistro/menu-embed-1',
+    config_schema=MenuEmbedConfig,
+    config=MenuEmbedConfig(dimensions=3),
+)
+```
+
+### Evaluators (`Evaluator` and `BatchEvaluator`)
+
+Plugins that score outputs construct `Evaluator` (runs per row over `BaseDataPoint`) or `BatchEvaluator` (runs once over the full `EvaluatorRequest` and returns `list[EvaluatorResponse]`):
+
+```python
+from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorResponse, Score, ScoreDetails, ScoreStatus
+
+
+async def check_nut_free(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
+    text = str(datapoint.output or '').lower()
+    safe = not any(nut in text for nut in ('peanut', 'walnut', 'almond'))
+    return EvaluatorResponse(
+        test_case_id=datapoint.test_case_id or '',
+        evaluation=[
+            Score(
+                score=safe,
+                status=ScoreStatus.PASS if safe else ScoreStatus.FAIL,
+                details=ScoreDetails(reasoning='Checked dish description against tree-nut and peanut terms.'),
+            )
+        ],
+    )
+
+
+allergy_evaluator = Evaluator(
+    'bistro/nut-free',
+    check_nut_free,
+    display_name='Nut-Free Check',
+    definition='Verifies generated dishes contain no peanut or tree-nut ingredients.',
+)
+```
+
+### Middleware plugins (`list_middleware`)
+
+Plugins can ship reusable generation middleware by subclassing `Middleware[Cfg]` (`from genkit.middleware import Middleware, MiddlewareContext, GenerateHookParams, ModelHookParams, ToolHookParams`), setting a path-free `name` attribute, and returning the class from `Plugin.list_middleware()`. Available hooks on `Middleware` are `tools`, `wrap_generate`, `wrap_model`, and `wrap_tool`:
+
+```python
+from collections.abc import Awaitable, Callable
+from pydantic import BaseModel
+
+from genkit import Message, ModelResponse, Part, Role
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.plugin_api import Action, ActionKind, Plugin
+
+
+# 1. Declare a Pydantic config model and Middleware[Cfg] subclass
+class AllergyPolicyConfig(BaseModel):
+    blocked_allergens: list[str] = ['peanut', 'shellfish']
+
+
+class AllergyGuardrail(Middleware[AllergyPolicyConfig]):
+    name = 'bistro_allergy_guardrail'
+    description = 'Injects allergen restrictions before every model call.'
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        banned = ', '.join(self.config.blocked_allergens)
+        notice = Message(role=Role.SYSTEM, content=[Part(text=f'Never suggest dishes containing: {banned}.')])
+        params.request.messages = [notice, *params.request.messages]
+        return await next_fn(params, ctx)
+
+
+# 2. Contribute the middleware class from a Plugin
+class BistroGuardrailsPlugin(Plugin):
+    name = 'bistro-guardrails'
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[Action]:
+        return []
+
+    def list_middleware(self) -> list[type[Middleware]]:
+        return [AllergyGuardrail]
+```
+
+### Telemetry instrumentation (`genkit.telemetry`)
+
+Genkit's core tracing pipeline is backend-agnostic and composes cleanly with the Developer UI collector. To export spans to a tracing backend or OpenTelemetry pipeline, implement the `Instrumentation` protocol (`from genkit.telemetry import Instrumentation, SpanMetadata, SpanNext, configure_instrumentation`, plus optional `FlushableInstrumentation` and `DisposableInstrumentation`) and register it before creating `Genkit()`. Check `is_dev_environment()` (`from genkit.plugin_api import is_dev_environment`) when skipping remote cloud export under `genkit start`:
+
+```python
+from typing import TypeVar
+
+from genkit.plugin_api import is_dev_environment
+from genkit.telemetry import (
+    FlushableInstrumentation,
+    Instrumentation,
+    SpanMetadata,
+    SpanNext,
+    configure_instrumentation,
+)
+
+T = TypeVar('T')
+
+
+class AuditSpanRecorder(Instrumentation, FlushableInstrumentation):
+    def __init__(self) -> None:
+        self.completed_spans: list[tuple[str, str | None]] = []
+
+    async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[T]) -> T:
+        try:
+            return await next()
+        finally:
+            self.completed_spans.append((metadata.name, metadata.action_type))
+
+    def flush(self) -> None:
+        pass
+
+
+def enable_bistro_telemetry(*, force_dev_export: bool = False) -> AuditSpanRecorder | None:
+    if is_dev_environment() and not force_dev_export:
+        return None
+    recorder = AuditSpanRecorder()
+    configure_instrumentation(recorder)
+    return recorder
+```
+
+To open custom child spans inside plugin helpers, call `await run_in_new_span(name, fn, action_type='util', input=...)` from `genkit.telemetry`.
+
+## Publishing a plugin
+
+Publish Python plugins as standard PyPI distributions named `genkit-{name}` with import package `genkit_{name}` and a `py.typed` marker:
 
 ```toml
 [project]
-name = "genkit-my-service"
-description = "Genkit plugin for My Service"
+name = "genkit-bistro"
+version = "0.1.0"
+description = "Genkit plugin for Bistro AI models, embedders, and guardrails"
+requires-python = ">=3.10"
+dependencies = [
+    "genkit>=0.13.0",
+    "httpx>=0.27.0",
+]
 keywords = [
     "genkit",
     "genkit-plugin",
-    "ai",
-    "llm",
+    "genkit-model",
+    "genkit-embedder",
+    "genkit-middleware",
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourorg/genkit-my-service"
+Homepage = "https://github.com/yourorg/genkit-bistro"
 ```
 
-### Recommended Keywords
+Include the PyPI keywords matching the capabilities your package exports:
 
-- `genkit-plugin`: Always include this to indicate it's a Genkit plugin
-- `genkit-model`: If your package provides models
-- `genkit-embedder`: If your package provides embedders
-- `genkit-retriever`: If your package provides retrievers
-- `genkit-indexer`: If your package provides indexers
-- `genkit-evaluator`: If your package provides evaluators
-- `genkit-telemetry`: If your package provides telemetry export
+- **`genkit-plugin`**: Include on every Genkit plugin package.
+- **`genkit-model`**: Provides `Model` or `BackgroundModel` actions.
+- **`genkit-embedder`**: Provides `Embedder` actions.
+- **`genkit-evaluator`**: Provides `Evaluator` or `BatchEvaluator` actions.
+- **`genkit-middleware`**: Contributes `Middleware` classes via `list_middleware()`.
+- **`genkit-telemetry`**: Configures `Instrumentation` or OpenTelemetry exporters.
 
 </Lang>

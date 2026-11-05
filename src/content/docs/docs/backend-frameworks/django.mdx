@@ -130,13 +130,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 from genkit_django import genkit_django_handler
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 
@@ -181,7 +181,7 @@ async def get_ingredients_on_sale(
 class RecipeIngredient(BaseModel):
     name: str
     quantity: str
-    on_sale: bool
+    on_sale: bool = Field(serialization_alias='onSale')
 
 
 class Recipe(BaseModel):
@@ -197,10 +197,10 @@ class BargainChefInput(BaseModel):
 
 
 @genkit_django_handler(ai)
-@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
+@ai.flow(name='bargainChefFlow')
 async def bargain_chef_flow(
     input: BargainChefInput,
-    ctx: ActionRunContext,
+    ctx: FlowContext[Recipe],
 ) -> Recipe:
     today = datetime.now().strftime('%A')
 
@@ -215,7 +215,7 @@ async def bargain_chef_flow(
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+        config=GeminiConfig(temperature=0.7, thinking_level='MINIMAL'),
     )
 
     async for chunk in stream_response.stream:
@@ -230,11 +230,11 @@ async def bargain_chef_flow(
 
 A few details are worth noting before you run the backend:
 
-- **Final output and streamed chunks:** `output_schema` is the complete recipe the flow returns at the end. `chunk_type=Recipe` types the streamed chunks as partial recipes, because early chunks might only include the title or description.
-- **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are defined as Pydantic models, ready for the Django app to import and for Genkit to validate against.
+- **Final output and streamed chunks:** `output_schema=Recipe` validates the final recipe returned at the end and parses partial `Recipe` objects as JSON tokens arrive. Annotating `ctx: FlowContext[Recipe]` types the streamed chunks sent through `ctx.send_chunk`. Return `response.output` (or `response.text`), never a raw `ModelResponse`, whose `request` field carries your system prompt, tools, and message history.
+- **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are Pydantic models validated by Genkit. `serialization_alias='onSale'` serializes `on_sale` as camelCase `onSale` over JSON and SSE while keeping snake_case in Python.
 - **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
-- **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `response` so the HTTP request still resolves with a validated recipe.
-- **The `@genkit_django_handler(ai)` decorator:** Stacked on top of `@ai.flow`, it adapts the flow into an async Django view that parses JSON requests, runs the flow, and emits server-sent events when the client sends `Accept: text/event-stream`. It handles both the streaming and non-streaming responses for you, so there's no request parsing or `StreamingHttpResponse` plumbing to write.
+- **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request resolves with a validated recipe.
+- **The `@genkit_django_handler(ai)` decorator:** Stacked on top of `@ai.flow`, it adapts the flow into a `csrf_exempt` async Django view (requires ASGI, Django 5.0+) that parses `{"data": ...}` requests, runs the flow, and streams Server-Sent Events when the client sends `Accept: text/event-stream` or `?stream=true`.
 
 ### Wire up the URL
 
@@ -248,6 +248,38 @@ urlpatterns = [
 ```
 
 The `@genkit_django_handler` decorator turns `bargain_chef_flow` into a Django view, so you can point a URL straight at it.
+
+### Attach request context and handle auth errors
+
+Pass `context_provider=` to `@genkit_django_handler` to extract caller identity before the flow runs. `RequestData` (`from genkit.web import RequestData`) exposes `req.method`, lowercased `req.headers`, and `req.input` across every web adapter, plus the underlying Django `HttpRequest` on `req.request` (for example, `await req.request.auser()` when using Django session auth).
+
+Served handlers redact internal `GenkitError`s and unhandled exceptions to HTTP `500` (`{"status": "INTERNAL", "message": "Internal Error"}`). Raise `PublicError` (`from genkit import PublicError`) when the HTTP caller should receive an explicit status code and message, such as `401` for `'UNAUTHENTICATED'` or `403` for `'PERMISSION_DENIED'`:
+
+```python
+from genkit import FlowContext, PublicError
+from genkit.web import RequestData
+from genkit_django import genkit_django_handler
+
+
+# 1. Validate request headers and populate ctx.context
+async def auth_context(req: RequestData) -> dict[str, object]:
+    auth_header = req.headers.get('authorization') or ''
+    token = auth_header.removeprefix('Bearer ').strip()
+    if not token:
+        raise PublicError('UNAUTHENTICATED', 'Missing bearer token')
+    return {'uid': token}
+
+
+# 2. Read ctx.context inside the served flow
+@genkit_django_handler(ai, context_provider=auth_context)
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
+    uid = (ctx.context or {}).get('uid')
+    ...
+```
 
 ### Check the project layout
 

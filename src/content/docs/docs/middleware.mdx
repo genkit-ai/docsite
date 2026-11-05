@@ -1462,7 +1462,7 @@ For more complex examples of building custom middleware, you can refer to the so
 The official Genkit middleware for Python is available in the `genkit-middleware` package.
 
 ```bash
-pip install genkit-middleware
+uv add genkit-middleware
 ```
 
 Register the `Middleware` plugin during initialization to expose the built-ins to the Dev UI:
@@ -1474,13 +1474,13 @@ from genkit_middleware import Middleware
 ai = Genkit(
     plugins=[
         Middleware(),
-    ]
+    ],
 )
 ```
 
 ## Available middleware
 
-The `genkit-middleware` package provides several useful middleware options out of the box.
+The `genkit-middleware` package provides several middleware classes out of the box.
 
 ### 1. FileSystem middleware (`Filesystem`)
 
@@ -1490,16 +1490,17 @@ Grants the model access to a root directory by injecting `list_files` and
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Filesystem
 
-ai = Genkit(...)
+ai = Genkit(plugins=[GoogleAI()])
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Create a hello world node app in the workspace',
     use=[
-        Filesystem(root_dir='./workspace', allow_write_access=True)
-    ]
+        Filesystem(root_dir='./workspace', allow_write_access=True),
+    ],
 )
 ```
 
@@ -1514,15 +1515,16 @@ Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Skills
 
-ai = Genkit(...)
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 response = await ai.generate(
     prompt='How do I run tests in this repo?',
     use=[
-        Skills(skill_paths=['./skills'])
-    ]
+        Skills(skill_paths=['./skills']),
+    ],
 )
 ```
 
@@ -1534,11 +1536,12 @@ response = await ai.generate(
 Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, generation finishes interrupted (`FinishReason.INTERRUPTED`) so you can prompt the user for confirmation before resuming.
 
 ```python
-from genkit import FinishReason, Genkit, restart_tool
+from genkit import FinishReason, Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import ToolApproval
 from pydantic import BaseModel, Field
 
-ai = Genkit(...)
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class WriteFileInput(BaseModel):
@@ -1558,16 +1561,15 @@ response = await ai.generate(
     prompt='write a file',
     tools=[write_file_tool],
     use=[
-        ToolApproval(allowed_tools=[])  # Empty list means all tool calls trigger interrupt
+        ToolApproval(allowed_tools=[]),  # Empty list means all tool calls trigger interrupt
     ],
 )
 
 if response.finish_reason == FinishReason.INTERRUPTED:
     interrupt = response.interrupts[0]
 
-    # 2. Ask user for approval, then recreate the tool request with approval
-    approved_part = restart_tool(
-        interrupt=interrupt,
+    # 2. Ask user for approval, then build a restart part with approval metadata
+    approved_part = interrupt.restart(
         resumed_metadata={'tool_approved': True},
     )
 
@@ -1591,20 +1593,21 @@ Automatically retries failed model generations on transient error codes (like `R
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Retry
 
-ai = Genkit(...)
+ai = Genkit(plugins=[GoogleAI()])
 
 response = await ai.generate(
-    model='googleai/gemini-pro-latest',
-    prompt='Heavy reasoning task...',
+    model=GoogleAI.gemini('gemini-pro-latest'),
+    prompt='Analyze quarterly variance across all regional ledgers.',
     use=[
         Retry(
             max_retries=3,
             initial_delay_ms=1000,
-            backoff_factor=2.0
-        )
-    ]
+            backoff_factor=2.0,
+        ),
+    ],
 )
 ```
 
@@ -1622,64 +1625,75 @@ Automatically switches to a different model if the primary model fails on a spec
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Fallback
 
-ai = Genkit(...)
+ai = Genkit(plugins=[GoogleAI()])
 
 response = await ai.generate(
-    model='googleai/gemini-pro-latest',
-    prompt='Try the pro model first...',
+    model=GoogleAI.gemini('gemini-pro-latest'),
+    prompt='Summarize the incident timeline.',
     use=[
         Fallback(
-            models=['googleai/gemini-flash-latest'], # try flash if pro fails
-            statuses=['RESOURCE_EXHAUSTED']
-        )
-    ]
+            models=[GoogleAI.gemini('gemini-flash-latest')],  # try flash if pro fails
+            statuses=['RESOURCE_EXHAUSTED'],
+        ),
+    ],
 )
 ```
 
 **Configuration options:**
-- `models` (required): A list of model names to try in order.
+- `models` (required): A list of model names or `ModelRef` values to try in order.
 - `statuses` (optional): A list of status names that should trigger a fallback (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']`).
 
 ## Building your own custom middleware
 
-You can implement your own custom middleware to extend Genkit's functionality by subclassing `BaseMiddleware`. Registering your subclass with the `@ai.middleware` decorator registers it on the registry so it displays in the Developer UI.
+Implement custom middleware by subclassing `Middleware` from `genkit.middleware` and setting a unique `name` class attribute. Decorating the class with `@ai.middleware` registers it on the Genkit instance so it appears in the Developer UI.
 
-Middleware can intercept different phases of execution by overriding these hooks:
-- `wrap_generate`: Intercepts the high-level generation loop.
-- `wrap_model`: Intercepts the call to the model.
-- `wrap_tool`: Intercepts tool execution.
+Middleware can override four hooks:
+- `tools(self, ctx)`: Injects tools into the generation loop.
+- `wrap_generate(self, params, ctx, next_fn)`: Wraps the outer generation loop.
+- `wrap_model(self, params, ctx, next_fn)`: Wraps each model call.
+- `wrap_tool(self, params, ctx, next_fn)`: Wraps each tool call.
 
-Here is an example of a custom middleware that logs requests and responses:
+Here is a custom middleware that logs model requests and responses:
 
 ```python
 from pydantic import BaseModel
-from genkit import Genkit
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+
+from genkit import Genkit, ModelResponse
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 
 ai = Genkit()
+
 
 class LoggerConfig(BaseModel):
     verbose: bool = False
 
-@ai.middleware(name='logger_middleware')
-class LoggerMiddleware(BaseMiddleware[LoggerConfig]):
-    """Logs requests and responses"""
 
-    async def wrap_model(self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn):
+@ai.middleware
+class LoggerMiddleware(Middleware[LoggerConfig]):
+    name = 'logger_middleware'
+    description = 'Logs requests and responses'
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: MiddlewareContext,
+        next_fn,
+    ) -> ModelResponse:
         if self.config.verbose:
-            print(f"Request: {params.request}")
-        
+            print(f'Request: {params.request}')
+
         resp = await next_fn(params, ctx)
-        
+
         if self.config.verbose:
-            print(f"Response: {resp}")
-        
+            print(f'Response: {resp}')
+
         return resp
 ```
 
-To use it:
+Pass an instance in `use`:
 
 ```python
 response = await ai.generate(
@@ -1689,7 +1703,7 @@ response = await ai.generate(
 )
 ```
 
-For more complex examples of building custom middleware, you can refer to the source code of the built-in middleware in the [Genkit GitHub repository](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-middleware).
+For more examples of custom middleware, see the built-in implementations in [`py/packages/genkit-middleware`](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-middleware).
 
 </Lang>
 

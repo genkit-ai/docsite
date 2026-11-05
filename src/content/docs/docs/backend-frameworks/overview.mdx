@@ -150,6 +150,93 @@ Two deployment settings can truncate a stream that the code handles correctly:
   />
 </CardGrid>
 
+## The HTTP handler contract
+
+`genkit-fastapi`, `genkit-flask`, and `genkit-django` share the same wire protocol built on `genkit.web`:
+
+- **Request body:** `POST` JSON wrapped in `{"data": <flow input>}`, or `{}` when a flow takes no input. Invalid JSON or a missing `data` key returns `400 INVALID_ARGUMENT`. Input validation failures return `400` naming the failing field paths without echoing caller values.
+- **One-shot response:** `application/json` body `{"result": <flow output>}` serialized with camelCase aliases and `None` model fields omitted.
+- **Streaming response:** `text/event-stream` when the request includes `Accept: text/event-stream` or `?stream=true`. Each chunk arrives as `data: {"message": <chunk>}`, followed by a terminal `data: {"result": <output>}` (or `data: {"error": ...}` if the stream fails). When the client disconnects, the adapter closes the async generator and cancels the running flow task immediately.
+- **Return values:** Return `response.text` or `response.output` from served flows, never a raw `ModelResponse`. `ModelResponse.request` contains the system prompt, tool definitions, retrieved documents, and message history, which would be serialized onto the wire.
+
+## Request context and HTTP errors
+
+- **Context providers (`RequestData`):** Pass a `ContextProvider` (`from genkit.web import ContextProvider, RequestData`) via `context_provider=` on `genkit_flask_handler`, `genkit_django_handler`, or `genkit_fastapi_handler` (or use `context_dependency=` on `serve_flow` for FastAPI `Depends`). `RequestData` is non-generic (`req: RequestData`) and exposes `req.method`, lowercased `req.headers` (for example, `req.headers.get('authorization')`), `req.input`, and the framework's native `req.request`. The returned dict populates `ctx.context` on `FlowContext` and `ToolContext`.
+- **Client-safe errors (`PublicError`):** Served handlers redact internal `GenkitError`s, model provider failures, and unhandled exceptions to HTTP `500` with `{"status": "INTERNAL", "message": "Internal Error"}` while logging details server-side. Raise `PublicError(status, message, details)` (`from genkit import PublicError`) when the HTTP caller should receive a specific status code and message, such as `'UNAUTHENTICATED'` (`401`), `'PERMISSION_DENIED'` (`403`), `'NOT_FOUND'` (`404`), or `'INVALID_ARGUMENT'` (`400`).
+
+## Custom routes with `genkit.web`
+
+To wire a flow into another ASGI/WSGI framework or a hand-written route, use the `genkit.web` primitives directly:
+
+```python
+from starlette.requests import Request
+from starlette.responses import Response, StreamingResponse
+
+from genkit import FlowContext, Genkit, PublicError
+from genkit.web import (
+    RequestData,
+    error_json,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
+from genkit_google_genai import GoogleAI
+
+# 1. Initialize Genkit and define a flow
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+@ai.flow()
+async def order_flow(dish: str, ctx: FlowContext[str]) -> str:
+    if not (ctx.context or {}).get('token'):
+        raise PublicError('UNAUTHENTICATED', 'Missing authorization header')
+    ctx.send_chunk(f'Plating {dish}')
+    res = await ai.generate(prompt=f'Confirm 1x {dish} in five words.')
+    return res.text
+
+
+# 2. Extract request context from normalized RequestData
+async def auth(req: RequestData) -> dict[str, object]:
+    return {'token': req.headers.get('authorization')}
+
+
+# 3. Parse body, resolve context, and return SSE or JSON
+async def serve_order(request: Request) -> Response:
+    try:
+        body = await request.json()
+        flow_input = read_body(body)
+        req_data = RequestData(
+            request=request,
+            method=request.method,
+            headers=request.headers.items(),
+            input=flow_input,
+        )
+        ctx = await auth(req_data)
+        if wants_stream(
+            accept=request.headers.get('accept'),
+            stream=request.query_params.get('stream'),
+        ):
+            stream = order_flow.stream(flow_input, context=ctx)
+            return StreamingResponse(to_sse(stream), media_type='text/event-stream')
+        result = await order_flow.run(flow_input, context=ctx)
+        return Response(result_json(result.response), media_type='application/json')
+    except Exception as err:
+        return Response(
+            error_json(err),
+            status_code=error_status(err),
+            media_type='application/json',
+        )
+
+
+# POST /order?stream=true {"data": "pad thai"} (Authorization: Bearer tok_123)
+# => data: {"message":"Plating pad thai"}
+#    data: {"result":"1x pad thai confirmed."}
+# POST /order {"data": "pad thai"} (no Authorization header)
+# => 401 {"message":"Missing authorization header","status":"UNAUTHENTICATED"}
+```
+
 </Lang>
 
 ## After your server is running

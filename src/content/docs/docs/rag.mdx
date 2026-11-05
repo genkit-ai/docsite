@@ -961,43 +961,42 @@ favor of `DefineRetrieverAction`.
 
 <Lang lang="python">
 
-For **Python**, Genkit’s RAG support centers on the shared **[`Document`](/docs/models)** model and **embedders**: use `ai.embed` and `ai.embed_many` with plugin-registered embedder names to produce vectors. Combine those embeddings with your ingestion, storage, and search code, then pass retrieved documents into **`ai.generate(..., docs=...)`** to ground answers.
+For **Python**, Genkit's RAG support centers on the shared **[`Document`](/docs/models)** model and **embedders**: use `ai.embed` and `ai.embed_many` with typed `EmbedderRef` helpers (such as `GoogleAI.embedder(...)` or `VertexAI.embedder(...)`) or `'provider/embedder'` strings to produce vectors. Combine those embeddings with your ingestion, storage, and search code, then pass retrieved documents into **`ai.generate(..., docs=...)`** to ground answers.
 
-RAG is a very broad area and there are many different techniques used to achieve
-the best quality RAG. Conceptually, most pipelines involve:
+Most RAG pipelines cover four steps:
 
-- **Indexing**: add documents to a store (often chunk → embed → upsert vectors).
-- **Embedders**: turn text (or other content) into vectors via a Genkit embedder action.
-- **Retrieval**: fetch relevant chunks for a query (your DB client or search layer).
-- **Generation**: call the model with the user question and retrieved context.
-
-Genkit provides the [`Document`](/docs/models) model and **embedder** actions for turning content into vectors you can use throughout that pipeline.
+- **Indexing**: chunk documents, compute vectors, and upsert them into your store.
+- **Embedders**: convert text or multimodal content into vectors via a Genkit embedder action.
+- **Retrieval**: query your vector database or search layer for matching chunks.
+- **Generation**: call the model with the user question and retrieved `docs`.
 
 ### Ingestion
 
-Typical steps: chunk source text, compute embeddings with `ai.embed` or `ai.embed_many`, then write text + vector + metadata to your database. The following is illustrative only—the storage calls are placeholders for your client library.
+Chunk source text, compute embeddings with `ai.embed` or `ai.embed_many`, and write text, vectors, and metadata to your database. Pass embedder-specific settings with `config=` (for example, `EmbeddingConfig(output_dimensionality=768)`). The storage call below is a placeholder for your client library:
 
 ```python
 from genkit import Document, Genkit
+from genkit.embedder import EmbedderRef
 from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(location='us-central1')])
 
-async def ingest_chunks(chunks: list[Document], embedder: str) -> None:
-    for doc in chunks:
-        embeddings = await ai.embed(embedder=embedder, content=doc)
-        vector = embeddings[0].embedding
-        # await my_vector_db.upsert(text=doc.text, embedding=vector, metadata=doc.metadata)
-        _ = vector  # replace with real persistence
+
+async def ingest_chunks(chunks: list[Document], embedder: str | EmbedderRef) -> None:
+    embeddings = await ai.embed_many(embedder=embedder, content=chunks)
+    for doc, item in zip(chunks, embeddings, strict=True):
+        vector = item.embedding
+        # await my_vector_db.upsert(text=doc.text(), embedding=vector, metadata=doc.metadata)
+        _ = (doc, vector)  # replace with real persistence
 ```
 
 ### Embedders
 
-Use plugin-registered embedder names (for example `vertexai/text-embedding-005`) with `ai.embed` / `ai.embed_many`. Keep the same model for indexing and query embedding when using vector similarity search.
+Reference embedders with plugin helpers such as `GoogleAI.embedder('gemini-embedding-001')` or `VertexAI.embedder('text-embedding-005')`, or pass a registered name string (`'vertexai/text-embedding-005'`). Use the same embedder and dimensionality at index time and query time. To register a custom embedder, implement an async function over `EmbedRequest` (from `genkit.embedder`) and register it with `ai.define_embedder(...)`.
 
 ### Generation with `docs`
 
-Implement search with your datastore (vector search, hybrid search, etc.), producing a `list[Document]`. Pass that list as **`docs`** to **`ai.generate`** so the model can use the context.
+Run your search query to produce a `list[Document]`, then pass that list as `docs` to `ai.generate`:
 
 ```python
 from genkit import Document, Genkit
@@ -1005,22 +1004,24 @@ from genkit_google_genai import VertexAI
 
 ai = Genkit(
     plugins=[VertexAI(location='us-central1')],
-    model='vertexai/gemini-flash-latest',
+    model=VertexAI.gemini('gemini-flash-latest'),
 )
+
 
 async def fetch_context(user_query: str, limit: int = 3) -> list[Document]:
     """Replace with your vector store: embed the query, search, map hits to Documents."""
     embeddings = await ai.embed(
-        embedder='vertexai/text-embedding-005',
+        embedder=VertexAI.embedder('text-embedding-005'),
         content=user_query,
     )
     _query_vector = embeddings[0].embedding
     # rows = await my_vector_db.search(_query_vector, limit=limit)
     # return [Document.from_text(r.text, metadata=r.meta) for r in rows]
     return [
-        Document.from_text('Example: seasonal dessert — fruit tart (contains dairy).'),
-        Document.from_text('Example: allergen note — sorbet is dairy-free.'),
+        Document.from_text('Seasonal dessert: fruit tart (contains dairy).'),
+        Document.from_text('Allergen note: raspberry sorbet is dairy-free and nut-free.'),
     ][:limit]
+
 
 @ai.flow()
 async def qa_flow(query: str) -> str:
@@ -1041,7 +1042,7 @@ print(result)
 
 ### Composing search and prompts
 
-Any async function that returns `list[Document]` can supply context: call databases, APIs, or custom ranking, then pass the result to `generate(docs=...)`. Advanced patterns (reranking, prompt expansion) are ordinary Python code composed around `embed` and `generate`.
+Any async function returning `list[Document]` can supply context: query databases, call search APIs, or rerank results in ordinary Python code before passing `docs` to `ai.generate(...)`.
 
 </Lang>
 

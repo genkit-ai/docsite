@@ -4,6 +4,7 @@ description: This quickstart guide explains how to set up Genkit Monitoring for 
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -56,6 +57,13 @@ and on the Google Cloud Console.
 
    </Lang>
 
+   <Lang lang="python">
+
+   Deploy your flows [with Cloud Run](/docs/deployment/cloud-run) or
+   [to any platform](/docs/deployment/any-platform) that runs a Python ASGI or WSGI server.
+
+   </Lang>
+
 ## Step 1. Add the Firebase plugin
 
 <Lang lang="js">
@@ -88,6 +96,24 @@ Use `firebase.EnableFirebaseTelemetry` if you want the Firebase Genkit
 Monitoring dashboard, and
 [`googlecloud.EnableGoogleCloudTelemetry`](/docs/integrations/google-cloud)
 otherwise. Do not call both.
+:::
+
+</Lang>
+
+<Lang lang="python">
+
+Install the `genkit-google-cloud` package:
+
+```bash
+uv add genkit-google-cloud
+```
+
+:::note[Python uses `genkit-google-cloud` directly]
+Python does not ship a separate Firebase telemetry package. Install
+`genkit-google-cloud` and call `enable_google_cloud_telemetry()` to export
+OpenTelemetry GenAI spans, metrics, and trace-correlated logs to Cloud Trace,
+Cloud Monitoring, and Cloud Logging in the Google Cloud project backing your
+Firebase project.
 :::
 
 </Lang>
@@ -125,6 +151,22 @@ Two environment variables still affect what happens after you call it:
 - `FIREBASE_PROJECT_ID`, then `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT`:
   checked in that order to resolve the destination project when you leave
   `ProjectID` empty.
+
+</Lang>
+
+<Lang lang="python">
+
+No environment variable turns telemetry on automatically in Python. Always call
+`enable_google_cloud_telemetry()` once at application startup.
+
+Environment variables control runtime behavior after that call:
+
+- **`GENKIT_ENV`**: When set to `dev`, Cloud Trace, Cloud Monitoring, and Cloud
+  Logging exporters are skipped unless `force_dev_export=True` is passed.
+- **`GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT`**: Checked in order when
+  `project=` is omitted, falling back to `credentials['project_id']` and finally
+  Application Default Credentials (ADC). `FIREBASE_PROJECT_ID` is not read (if
+  set to a different project, Genkit logs a warning).
 
 </Lang>
 
@@ -208,6 +250,44 @@ The full option list is on
 
 </Lang>
 
+<Lang lang="python">
+
+Call `enable_google_cloud_telemetry()` once at module startup before serving
+requests. Calling it a second time in the same process raises `GenkitError`
+(`FAILED_PRECONDITION`).
+
+```python
+from fastapi import FastAPI
+from genkit import Genkit
+from genkit_fastapi import serve_flow
+from genkit_google_cloud import enable_google_cloud_telemetry
+from genkit_google_genai import GoogleAI
+
+# 1. Attach Cloud Trace, Cloud Monitoring, and Cloud Logging exporters once
+enable_google_cloud_telemetry()
+
+# 2. Initialize Genkit and define a flow
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+@ai.flow()
+async def suggest_menu_item(dietary_preference: str) -> str:
+    response = await ai.generate(
+        prompt=f'Suggest one lunch special for a {dietary_preference} guest.'
+    )
+    return response.text
+
+
+# 3. Expose the flow over FastAPI
+app = FastAPI()
+app.include_router(serve_flow(suggest_menu_item))
+```
+
+See [Advanced configuration](/docs/observability/advanced-configuration) for
+sampling, export intervals, and content capture options.
+
+</Lang>
+
 ## Step 2. Enable the required APIs
 
 Make sure that the following APIs are enabled for your Google Cloud project:
@@ -264,6 +344,26 @@ dashboard.
 
 </Lang>
 
+<Lang lang="python">
+
+1. In your Python code, set `force_dev_export=True` and lower
+   `metric_export_interval_ms` to `5000` (5 seconds, the Google Cloud minimum)
+   so metrics export immediately when testing locally:
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(
+    force_dev_export=True,
+    metric_export_interval_ms=5000,
+)
+```
+
+When `metric_export_interval_ms` is omitted, Genkit uses `5000` ms under
+`GENKIT_ENV=dev` and `300000` ms (5 minutes) in production.
+
+</Lang>
+
 2. Use your service account to authenticate and test your configuration.
 
    :::tip
@@ -290,7 +390,7 @@ gcloud auth application-default login --impersonate-service-account SERVICE_ACCT
    [Troubleshooting](/docs/observability/troubleshooting) guide for steps
    to debug.
 
-<Lang lang="js go">
+<Lang lang="js go python">
 
 ## Step 5. Re-build and deploy code
 
@@ -432,3 +532,87 @@ if tp, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); ok {
 :::
 
 </Lang>
+
+<Lang lang="python">
+
+:::note
+In production, metrics default to a 5-minute export interval
+(`metric_export_interval_ms=300000`), so the first metric batch can take up to
+5 minutes to appear.
+:::
+
+## Correlating logs and user reports to a trace
+
+`enable_google_cloud_telemetry()` adds a `structlog` processor to
+`genkit.get_logger()` that stamps `logging.googleapis.com/trace`,
+`logging.googleapis.com/spanId`, and `logging.googleapis.com/trace_sampled` onto
+every log event emitted inside an active span. You can also read the active
+OpenTelemetry `trace_id` directly to return a support reference to callers:
+
+```python
+from opentelemetry import trace
+from pydantic import BaseModel
+from genkit import Genkit, get_logger
+from genkit_google_genai import GoogleAI
+
+logger = get_logger(__name__)
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+class SupportReply(BaseModel):
+    answer: str
+    trace_id: str
+
+
+# 1. Read the active OTel trace ID and log structured fields correlated to Cloud Trace
+@ai.flow()
+async def answer_billing_question(question: str) -> SupportReply:
+    span_ctx = trace.get_current_span().get_span_context()
+    trace_id = f'{span_ctx.trace_id:032x}' if span_ctx.is_valid else ''
+    logger.info('answering billing question', trace_id=trace_id)
+
+    response = await ai.generate(prompt=f'Answer concisely: {question}')
+    return SupportReply(answer=response.text, trace_id=trace_id)
+```
+
+In Cloud Logging, filter by `trace="projects/<project-id>/traces/<trace-id>"` to
+pull every structured log line emitted during that flow execution.
+
+## Export to any OTLP backend
+
+Python's telemetry pipeline is built on the OpenTelemetry GenAI semantic
+conventions (`genkit-otel`). To export directly to an OTLP collector (Jaeger,
+Grafana Tempo, Honeycomb, Datadog) without Google Cloud, see
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
+
+:::caution[Register your `TracerProvider` BEFORE `enable_google_cloud_telemetry()`]
+If you export to both your own OTLP collector and Google Cloud, set your SDK
+`TracerProvider` (including any `sampler=`) **first**, then call
+`enable_google_cloud_telemetry()` without `sampler=`. Cloud Trace attaches its
+span processor alongside yours on the existing provider:
+
+```python
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Register your SDK TracerProvider (and sampler) first
+provider = TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1)))
+provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(provider)
+
+# 2. Attach Cloud Trace to that same provider (omit sampler= here)
+enable_google_cloud_telemetry(project='my-gcp-project')
+```
+
+Calling `trace.set_tracer_provider(...)` *after* `enable_google_cloud_telemetry()`
+leaves your exporter unused (OpenTelemetry ignores duplicate global provider
+registrations), and passing `sampler=` when a `TracerProvider` is already set
+raises `GenkitError` (`INVALID_ARGUMENT`).
+:::
+
+</Lang>
+

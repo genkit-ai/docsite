@@ -465,16 +465,21 @@ Aborting transitions a running `pending` snapshot to `aborting` while the backgr
 
 ## Server requirements
 
-Configure a store and expose companion endpoints when serving a remote agent:
+Detached background execution requires a store that implements both `SessionStore` and `SnapshotSubscriber` (all three built-in stores — `InMemorySessionStore`, `FileSessionStore`, and `FirestoreSessionStore` — implement both). When serving an agent over HTTP with `serve_agent` from `genkit_fastapi.exp`, companion `/getSnapshot` and `/abort` routes are mounted automatically:
 
 ```python
 from fastapi import FastAPI
-from genkit.agent import FileSessionStore
-from genkit_fastapi import serve_agent
+
+from genkit.exp import Genkit
+from genkit.exp.agent import FileSessionStore
+from genkit_fastapi.exp import serve_agent
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
 
 report_agent = ai.define_agent(
     name='reportAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Create detailed research reports.',
     store=FileSessionStore('.sessions'),
 )
@@ -483,72 +488,96 @@ app = FastAPI()
 app.include_router(serve_agent(report_agent), prefix='/api')
 ```
 
-The runtime writes a `pending` snapshot and refreshes its heartbeat while the background work processes the turn.
+When a client calls `detach()`, the runtime reserves a `pending` snapshot immediately and refreshes its heartbeat while the background task executes the turn.
 
 ## Detach from a turn
 
-Submit a background task from the client using `detach()` on the `AgentChat`:
+Start background work with `await chat.detach(...)`, which returns a `DetachedTask` handle as soon as the `pending` snapshot is recorded:
 
 ```python
-chat = report_agent.chat(session_id='report-123')
-task = await chat.detach('Write the quarterly market report.')
+async def launch_report() -> str:
+    chat = report_agent.chat(session_id='report-123')
+    task = await chat.detach('Write the quarterly market report.')
 
-# Save snapshot_id so you can poll or abort it later
-snapshot_id = task.snapshot_id
+    assert task.snapshot_id is not None
+    return task.snapshot_id
 ```
 
 ## Poll or wait
 
-Use `poll()` to yield status snapshots until the task reaches a terminal status:
+Iterate `task.poll(interval=...)` to observe status updates until the snapshot reaches a terminal status, or call `await task.wait(interval=...)` to block until the final `SessionSnapshot`:
 
 ```python
-from genkit.agent import SnapshotStatus
+from genkit.exp.agent import DetachedTask, SnapshotStatus
 
-async for snapshot in task.poll(interval=1.5):
-    print('Current status:', snapshot.status)
-    if snapshot.status == SnapshotStatus.COMPLETED:
-        print(snapshot.state)
+
+async def monitor_report(task: DetachedTask) -> None:
+    async for snapshot in task.poll(interval=1.5):
+        print('Status:', snapshot.status)
+        if snapshot.status == SnapshotStatus.COMPLETED:
+            print(snapshot.state)
+
+    final_snapshot = await task.wait(interval=1.5)
+    if final_snapshot.status == SnapshotStatus.FAILED and final_snapshot.error:
+        print('Task failed:', final_snapshot.error.message)
 ```
 
-Use `wait()` to block until completion:
-
-```python
-final_snapshot = await task.wait(interval=1.5)
-if final_snapshot.status == SnapshotStatus.FAILED:
-    print('Task failed:', final_snapshot.error.message if final_snapshot.error else None)
-```
-
-Terminal statuses are `completed`, `failed`, `aborted`, and `expired`.
+Terminal statuses are `completed`, `failed`, `aborted`, and `expired` (read-time overlay when a `pending` heartbeat goes stale).
 
 ## Reconnect by snapshot ID
 
-To reconnect and inspect or resume a detached task from a different client process, read the stored snapshot ID and load it:
+A detached turn does not stream its final reply back into the originating in-memory `AgentChat` instance. Before sending a follow-up turn, reload from the store with `load_chat()` (to hydrate the completed state immediately) or open a fresh `chat(session_id=...)` handle (which walks back past any `failed` or `aborted` leaf to the most recent `completed` snapshot):
 
 ```python
-snapshot = await report_agent.get_snapshot(snapshot_id=snapshot_id)
+from genkit.exp.agent import SnapshotStatus
 
-if snapshot and snapshot.status == SnapshotStatus.COMPLETED:
-    chat = await report_agent.load_chat(snapshot_id=snapshot_id)
-    res = await chat.send('Summarize this report.')
-    print(res.text)
+
+async def continue_after_detach(snapshot_id: str) -> None:
+    snapshot = await report_agent.get_snapshot(snapshot_id=snapshot_id)
+
+    if snapshot and snapshot.status == SnapshotStatus.COMPLETED:
+        chat = await report_agent.load_chat(snapshot_id=snapshot_id)
+        res = await chat.send('Summarize the key risks in three bullets.')
+        print(res.text)
 ```
-
-Only completed snapshots can be resumed.
 
 ## Abort work
 
-Cancel a pending task from the client using `task.abort()`:
+Genkit Python distinguishes stopping the client stream from canceling server execution:
+
+- **Client-side detach (`await turn.abort()`)**: Stops reading `chat.send_stream(...)` on the client while the server finishes the turn in the background. Works with or without a session store.
+- **Server-side cancel (`await task.abort()`, `await chat.abort()`, or `await report_agent.abort(snapshot_id)`)**: Requires a `SnapshotSubscriber` store. Marks the `pending` snapshot `aborted`, cancels the running server `asyncio.Task`, and returns the snapshot's **previous** `SnapshotStatus` (for example `SnapshotStatus.PENDING` when canceling in-flight work).
 
 ```python
-await task.abort()
+import asyncio
+
+from genkit.exp.agent import SnapshotStatus
+
+
+@ai.tool(name='collectMetrics', description='Run a multi-step metrics job.')
+async def collect_metrics() -> dict[str, bool]:
+    try:
+        for _ in range(30):
+            await asyncio.sleep(0.5)
+        return {'done': True}
+    finally:
+        # Clean up resources here; asyncio.CancelledError unwinds the task on server abort.
+        pass
+
+
+async def cancel_background_job() -> None:
+    chat = report_agent.chat()
+    task = await chat.detach('Collect metrics and draft the report.')
+    assert task.snapshot_id is not None
+
+    previous_status = await task.abort()
+    print('Previous status:', previous_status)
+    # => SnapshotStatus.PENDING (or terminal status if already settled)
+
+    snap = await report_agent.get_snapshot(snapshot_id=task.snapshot_id)
+    assert snap is not None and snap.status == SnapshotStatus.ABORTED
 ```
 
-Or abort directly by snapshot ID from the agent handle:
-
-```python
-await report_agent.abort(snapshot_id)
-```
-
-Aborting sets the pending snapshot status to `aborted`. The background worker stops the turn when it observes that change. Long-running tools should check `ctx.abort_signal.is_set()` on `ToolRunContext` so they can exit cleanly.
+Tools and custom agents do not poll an abort signal. Server-side `abort()` raises standard `asyncio.CancelledError` at the current `await` point in the running task; use `try ... finally:` for cleanup and always re-raise `asyncio.CancelledError` if you catch it.
 
 </Lang>

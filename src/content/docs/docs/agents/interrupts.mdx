@@ -509,16 +509,19 @@ To prevent client-side spoofing, the runtime validates that every `respond` and 
 
 ## Define an interrupt
 
-- **`ai.define_interrupt()`** for an interrupt-only tool that never performs work by itself and only asks the client for information.
-- **`raise Interrupt(metadata)`** inside a normal tool that can either finish immediately or pause based on runtime conditions.
+Genkit Python supports three ways to pause a turn for external input or approval:
+
+- **`ai.define_interrupt()`**: Registers an interrupt-only tool that always pauses and asks the client to supply a response.
+- **`raise Interrupt(metadata)`**: Pauses conditionally inside a normal `@ai.tool()` function. `Interrupt` subclasses `BaseException` (not `Exception`), so broad `except Exception:` blocks inside tool implementations will not swallow approval pauses.
+- **`ToolApproval` middleware**: Intercepts non-allowlisted tools automatically (`from genkit_middleware import Middleware, ToolApproval`) before they execute.
 
 ```python
 from decimal import Decimal
 
 from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -549,78 +552,116 @@ async def transfer_money(input: TransferMoneyInput) -> str:
 
 banking_agent = ai.define_agent(
     name='bankingAgent',
-    model='googleai/gemini-flash-latest',
-    system='If the user wants to transfer money, ALWAYS use userApproval before transfer_money.',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Always call userApproval before calling transfer_money.',
     tools=[user_approval, transfer_money],
     store=InMemorySessionStore(),
 )
 ```
 
-A normal tool can pause conditionally:
+Inside a normal tool, accept `ctx: ToolContext` from `genkit` to inspect `ctx.is_resumed()` and `ctx.resumed_metadata`:
 
 ```python
-from genkit import Interrupt, ToolRunContext
+from typing import Any
+
+from pydantic import BaseModel
+
+from genkit import Interrupt, ToolContext
+
+
+class RunShellInput(BaseModel):
+    command: str
 
 
 @ai.tool()
-async def run_shell(input: RunShellInput, ctx: ToolRunContext) -> dict:
-    """Run a shell command after a safety check."""
-    if is_risky(input.command) and not (ctx.resumed_metadata or {}).get('tool_approved'):
+async def run_shell(input: RunShellInput, ctx: ToolContext) -> dict[str, Any]:
+    """Run a shell command after checking approval metadata."""
+    if 'rm ' in input.command and not (ctx.resumed_metadata or {}).get('tool_approved'):
         raise Interrupt({
             'command': input.command,
-            'reason': 'The command can modify files.',
+            'reason': 'Command deletes files and requires human approval.',
         })
-    return execute(input.command)
+    return {'command': input.command, 'exit_code': 0}
+```
+
+Or gate existing tools without modifying their bodies by attaching `ToolApproval`:
+
+```python
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Middleware, ToolApproval
+
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
+
+approval_agent = ai.define_agent(
+    name='approvalAgent',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Banking assistant.',
+    tools=[transfer_money],
+    use=[ToolApproval(allowed_tools=[])],  # empty list requires approval on every tool
+    store=InMemorySessionStore(),
+)
 ```
 
 ## Receive interrupts
 
-Interrupted tool requests surface on `res.interrupts` at turn end, and as tool request chunks while streaming.
+Paused tool calls appear as `AgentInterrupt` items on `res.interrupts` at turn end (and as tool request chunks while streaming), and the turn finishes with `AgentFinishReason.INTERRUPTED`:
 
 ```python
-res = await chat.send('Transfer $500 to savings.')
+from genkit.exp.agent import AgentFinishReason
 
-for interrupt in res.interrupts:
-    print(interrupt.name)
-    print(interrupt.input)
+
+async def start_transfer() -> None:
+    chat = banking_agent.chat()
+    res = await chat.send('Transfer $500 to savings.')
+    assert res.finish_reason == AgentFinishReason.INTERRUPTED
+
+    for intr in res.interrupts:
+        print(intr.name, intr.ref, intr.input, intr.metadata)
 ```
 
-When an interrupt occurs, the turn finishes with `finish_reason=AgentFinishReason.INTERRUPTED`.
+Interrupts work with both server-managed stores and client-managed chats (`chat(messages=..., state=..., artifacts=...)`).
 
 ## Respond pattern
 
-Use `respond()` when the client already has the final tool output. Pass the part to `chat.resume(respond=...)` (or `chat.resume_stream(respond=...)` for streaming). The tool does not run again on the server.
+Call `intr.respond(output, metadata=...)` on an `AgentInterrupt` when the client supplies the tool result directly (such as answering `ai.define_interrupt()`). Pass the resulting `Part` list to `chat.resume(respond=...)` or `chat.resume_stream(respond=...)`. The tool function does not re-execute on the server:
 
 ```python
-res = await chat.send('Transfer $500 to savings.')
-approvals = [i for i in res.interrupts if i.name == 'userApproval']
+async def approve_with_response() -> None:
+    chat = banking_agent.chat()
+    res = await chat.send('Transfer $500 to savings.')
+    approvals = [i for i in res.interrupts if i.name == 'userApproval']
 
-if approvals:
-    continued = await chat.resume(
-        respond=[approvals[0].respond({'approved': True, 'feedback': 'Looks good!'})]
-    )
-    print(continued.text)
+    if approvals:
+        continued = await chat.resume(
+            respond=[approvals[0].respond({'approved': True, 'note': 'Confirmed'})]
+        )
+        print(continued.text)
 ```
 
 ## Restart pattern
 
-Use `restart()` when the server-side tool should run again after approval or a corrected request.
+Call `intr.restart(resumed_metadata=...)` when the server-side tool (or `ToolApproval` middleware) should run again after approval:
 
 ```python
-res = await chat.send('Deploy code to production.')
-deploy_interrupts = [i for i in res.interrupts if i.name == 'deployApproval']
+async def approve_with_restart() -> None:
+    chat = approval_agent.chat()
+    res = await chat.send('Transfer $500 to savings.')
 
-if deploy_interrupts:
-    continued = await chat.resume(
-        restart=[deploy_interrupts[0].restart()]
-    )
-    print(continued.text)
+    if res.interrupts:
+        restart_parts = [
+            intr.restart(resumed_metadata={'tool_approved': True})
+            for intr in res.interrupts
+        ]
+        continued = await chat.resume(restart=restart_parts)
+        print(continued.text)
 ```
 
-The restart helper preserves the original tool input and forces the server-side tool function to execute again with those parameters.
+`intr.restart()` preserves the original tool call `ref` and arguments so the server executes the tool with its exact original input and exposes `resumed_metadata` on `ctx.resumed_metadata`.
 
 ## Resume validation
 
-To prevent client-side spoofing, the runtime validates that every `respond` and `restart` entry matches an active paused tool call by name and unique reference ID.
+On `resume()`, the runtime searches history newest-first to match every `respond` and `restart` entry against an active interrupted `tool_request` by `name` and `ref`. For `restart`, it also verifies that the tool arguments match the original paused request, rejecting mismatched or forged payloads with `GenkitError` (`INVALID_ARGUMENT`).
 
 </Lang>

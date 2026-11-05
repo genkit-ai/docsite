@@ -476,12 +476,64 @@ failure, because the HTTP status is 200 either way.
 
 <Lang lang="python">
 
-Genkit knows about two specialized error types: `GenkitError` and `PublicError`.
-`GenkitError` is the base error class for Genkit errors.
-`PublicError` is intended for your code. The separation between these two error types helps you better understand
-where your error is coming from.
+Genkit Python separates exceptions raised across call boundaries into `GenkitError` and `PublicError`, and returns model and tool-loop runtime failures as `Failure` values on `ModelResponse`.
 
-Using `PublicError` allows a web framework handler (e.g. FastAPI, Flask) to know it is safe to return the message in a request. Other kinds of errors will result in a generic 500 message to avoid the possibility of internal exceptions being leaked to attackers.
+## `GenkitError` and `PublicError`
+
+- **`GenkitError`**: Base exception for framework and plugin failures. Carries `.message` (`str`), `.status` (canonical gRPC status string such as `'INVALID_ARGUMENT'`, `'NOT_FOUND'`, `'RESOURCE_EXHAUSTED'`, or `'INTERNAL'`), `.reason` (`ErrorReason | None`), `.details` (`dict`), and the underlying exception on `.__cause__`.
+- **`PublicError(status, message, details=None)`**: Subclass of `GenkitError` for client-safe failures in flows, context providers, and HTTP handlers.
+
+At the HTTP boundary (`genkit-fastapi` and the `error_status` / `error_body` helpers in `genkit.web`), only `PublicError` exposes its status and message to the caller. Any other `GenkitError` or unhandled exception is redacted to `500` (`{"status": "INTERNAL", "message": "Internal Error"}`) so internal details never leak over the wire:
+
+```python
+from genkit import Genkit, PublicError
+
+ai = Genkit()
+
+
+@ai.flow()
+async def lookup_recipe(dish: str) -> str:
+    if not dish.strip():
+        # Returns HTTP 400 with {"status": "INVALID_ARGUMENT", "message": "dish must not be empty"}
+        raise PublicError('INVALID_ARGUMENT', 'dish must not be empty')
+    return f'Recipe for {dish}'
+```
+
+## Failures from `generate()` (`Failure` and `ErrorReason`)
+
+Pre-request resolution errors—such as an unregistered model, unknown `config` keys, or an invalid schema—raise `GenkitError` immediately because no generation turn ran.
+
+Once generation starts, runtime failures (provider errors, tool exceptions, hitting `max_turns`, or invalid structured output) do not raise. Instead, `ai.generate()` and `ai.generate_stream()` resolve to a `ModelResponse` with `response.error` set to a `Failure` (`status`, `message`, `details`, and `.reason`):
+
+- **Model or tool failure**: `response.finish_reason == FinishReason.FAILED`. `response.error.reason` classifies framework causes such as `ErrorReason.TOOL_FAILED` or `ErrorReason.TOOL_NOT_FOUND`. `response.messages` stops at the last completed tool round so you can retry from that turn seam without repeating prior tool calls.
+- **Turn limit reached**: `response.finish_reason == FinishReason.ABORTED` with `response.error.reason == ErrorReason.MAX_TURNS_EXCEEDED`.
+- **Invalid or truncated structured output**: `response.output` is `None` and `response.error.reason == ErrorReason.INVALID_OUTPUT`, while `response.text` retains the raw model text.
+
+```python
+from genkit import ErrorReason, FinishReason, Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+res = await ai.generate(
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    prompt='Check weather in Baltimore.',
+    tools=['get_weather'],
+)
+
+if res.error is not None:
+    print(res.finish_reason, res.error.status, res.error.reason, res.error.message)
+
+    if res.finish_reason in (FinishReason.FAILED, FinishReason.ABORTED):
+        # res.messages ends at the last completed tool round; safe to resume.
+        res = await ai.generate(
+            model=GoogleAI.gemini('gemini-flash-latest'),
+            messages=res.messages,
+            tools=['get_weather'],
+        )
+    elif res.error.reason == ErrorReason.INVALID_OUTPUT:
+        print('Raw non-conforming output:', res.text)
+```
 
 </Lang>
 
