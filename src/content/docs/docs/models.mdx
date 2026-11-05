@@ -120,6 +120,15 @@ dozens of different models and therefore do not export individual model
 references. In these cases, you can only specify a model to `generate()` using
 its string identifier.
 
+Plugins such as Google AI (`googleAI`) and Gemini Enterprise (`vertexAI`) resolve
+unlisted model IDs dynamically the first time a request names them. Any model ID
+that the provider serves works—for example, through `googleAI.model('<model-id>')`
+or `vertexAI.model('<model-id>')`, or as a `'googleai/<model-id>'` or
+`'vertexai/<model-id>'` string identifier—even if the model was released after
+your installed plugin version and does not appear in IDE autocomplete. Each
+plugin's static model catalog provides autocomplete suggestions and default
+capability metadata. That catalog is a starting point, not an allowlist.
+
 These examples also illustrate an important point: when you use
 `generate()` to make generative AI model calls, changing the model you want to
 use is simply a matter of passing a different value to the model parameter. By
@@ -294,6 +303,21 @@ developer UI with the `genkit start` command and it will automatically load all
 of the models defined by the plugins configured in your project. You can quickly
 try different prompts and configuration values without having to repeatedly make
 these changes in code.
+
+#### Model versions and aliases
+
+In the Google AI (`googleAI`) plugin, model aliases such as `gemini-flash-latest` point to the current release of a model family. While aliases are convenient during development and prototyping, model providers periodically update which snapshot an alias references, which can affect latency, cost, and output consistency. Gemini Enterprise (`vertexAI`) does not support `-latest` aliases and always requires a versioned model ID.
+
+For production workloads that require consistent behavior, specify a versioned model ID:
+
+```ts
+const response = await ai.generate({
+  model: googleAI.model('gemini-3.8-flash'),
+  prompt: 'Invent a menu item for a restaurant with a pirate theme.',
+});
+```
+
+Because plugins such as Google AI (`googleAI`) and Gemini Enterprise (`vertexAI`) resolve unlisted model IDs dynamically, specific model versions work directly—for example, by using `googleAI.model('<model-id>')`, `vertexAI.model('<model-id>')`, `'googleai/<model-id>'`, or `'vertexai/<model-id>'`—without requiring updates to the plugin package. Before updating model versions in production, test changes against an [evaluation](/docs/evaluation) dataset.
 
 ### Structured output
 
@@ -2308,6 +2332,27 @@ void main() async {
 
 When you run this brief example, it will print out the output of the `ai.generate()` call, which will usually be Markdown text.
 
+This example uses the `googleAI.gemini()` helper from the plugin to create a
+typed `ModelRef<GeminiOptions>` from a bare model ID (such as
+`'gemini-flash-latest'`, without the `'googleai/'` prefix—passing a prefixed
+string to `googleAI.gemini()` duplicates the prefix). For Gemma and Gemini TTS
+models on the Gemini API, `googleAI.gemma()` and `googleAI.geminiTts()` create
+the corresponding typed references. Because `ai.generate(model: ...)` requires a
+`ModelRef` rather than a raw `String`, wrap a prefixed `'providerid/modelid'`
+string identifier with `modelRef('googleai/gemini-flash-latest')`. Calling
+`modelRef()` directly returns an untyped `ModelRef<dynamic>`, so Dart does not
+statically check the `config` parameter against `GeminiOptions`.
+
+The Google AI (`googleAI`) and Gemini Enterprise (`vertexAI`) plugins resolve
+model IDs dynamically when a request names one. Any Gemini or Gemma
+(`generateContent`) model ID that the provider serves works—for example, by
+using `googleAI.gemini('<model-id>')` or `vertexAI.gemini('<model-id>')` with a
+bare ID, or `modelRef('googleai/<model-id>')` or
+`modelRef('vertexai/<model-id>')` with a prefixed ID—whether or not the model
+is listed in the plugin's internal curated catalog. That catalog enriches known
+models with capability metadata and fallback listing entries. It is a starting
+point, not a limit.
+
 ### System prompts
 
 Some models support providing a _system prompt_, which gives the model
@@ -2345,6 +2390,21 @@ final response = await ai.generate(
   ),
 );
 ```
+
+#### Model versions and aliases
+
+In the Google AI (`googleAI`) plugin, model aliases such as `gemini-flash-latest` point to the current release of a model family. While aliases are convenient during development and prototyping, model providers periodically update which snapshot an alias references, which can affect latency, cost, and output consistency. Gemini Enterprise (`vertexAI`) does not support `-latest` aliases and always requires a versioned model ID.
+
+For production workloads that require consistent behavior, specify a versioned model ID:
+
+```dart
+final response = await ai.generate(
+  model: googleAI.gemini('gemini-3.8-flash'),
+  prompt: 'Invent a menu item for a pirate themed restaurant.',
+);
+```
+
+Because plugins such as Google AI (`googleAI`) and Gemini Enterprise (`vertexAI`) resolve model IDs dynamically, specific model versions work directly—for example, by using `googleAI.gemini('<model-id>')`, `vertexAI.gemini('<model-id>')`, `modelRef('googleai/<model-id>')`, or `modelRef('vertexai/<model-id>')`—without requiring updates to the plugin package. Before updating model versions in production, test changes against an [evaluation](/docs/evaluation) dataset.
 
 ### Structured output
 
@@ -2579,20 +2639,46 @@ Run the script again and you'll get a different output.
 The preceding code sample sent the generation request to the default model,
 which you specified when you configured the Genkit instance.
 
-You can also specify a model for a single `generate()` call using a typed `ModelRef` helper or a `'provider/model'` string:
+You can also specify a model for a single `generate()` call by using a typed
+model reference helper from the plugin:
 
 ```python
 result = await ai.generate(
-    prompt='Invent a menu item for a pirate themed restaurant.',
     model=GoogleAI.gemini('gemini-pro-latest'),
+    prompt='Invent a menu item for a pirate themed restaurant.',
 )
 ```
 
-A model string identifier looks like `providerid/modelid` (for example,
-`'googleai/gemini-pro-latest'`), where the provider ID identifies the plugin and
-the model ID identifies a specific model version. Typed helpers like
-`GoogleAI.gemini(...)` produce a `ModelRef` paired with that model family's
-config schema.
+Typed model reference helpers such as `GoogleAI.gemini('<model-id>')` take
+the bare model ID (the helper adds the `googleai/` namespace automatically) and
+return a `ModelRef[GeminiConfig]` for static type checking of model
+configuration. Each model family has its own helper: `GoogleAI.gemini()`
+for Gemini text and multimodal models, `GoogleAI.gemini_image()` for
+Gemini image models, `GoogleAI.gemini_tts()` for TTS models, and
+`GoogleAI.gemma()` for Gemma models. Passing a model ID from a different
+family raises a `GenkitError` (`INVALID_ARGUMENT`), whereas unrecognized IDs are
+accepted so newly released Gemini models work without a plugin upgrade.
+
+Alternatively, specify the model by using a `'providerid/modelid'` string
+identifier, where the provider prefix (such as `'googleai/'` or `'vertexai/'`)
+is required so Genkit can route the request to the plugin:
+
+```python
+result = await ai.generate(
+    model='googleai/gemini-pro-latest',
+    prompt='Invent a menu item for a pirate themed restaurant.',
+)
+```
+
+Plugins such as Google AI (`GoogleAI`) and Gemini Enterprise (`VertexAI`)
+resolve model IDs dynamically when a request names one. Any model ID that the
+provider serves works—for example, by using `GoogleAI.gemini('<model-id>')`
+or `VertexAI.gemini('<model-id>')` (or the corresponding family helper
+such as `GoogleAI.gemini_image()`), or as a `'googleai/<model-id>'` or
+`'vertexai/<model-id>'` string identifier—even if the model was released after
+your installed plugin version and is not listed in the plugin's static catalog.
+The curated model list provides default capability metadata and type hints. That
+list is a starting point, not an allowlist.
 
 These examples also illustrate an important point: when you use
 `generate()` to make generative AI model calls, changing the model you want to
@@ -2774,6 +2860,21 @@ developer UI with the `genkit start` command and it will automatically load all
 of the models defined by the plugins configured in your project. You can quickly
 try different prompts and configuration values without having to repeatedly make
 these changes in code.
+
+#### Model versions and aliases
+
+In the Google AI (`GoogleAI`) plugin, model aliases such as `gemini-flash-latest` point to the current release of a model family. While aliases are convenient during development and prototyping, model providers periodically update which snapshot an alias references, which can affect latency, cost, and output consistency. Gemini Enterprise (`VertexAI`) does not support `-latest` aliases and always requires a versioned model ID.
+
+For production workloads that require consistent behavior, specify a versioned model ID:
+
+```python
+result = await ai.generate(
+    model=GoogleAI.gemini_model('gemini-3.8-flash'),
+    prompt='Invent a menu item for a pirate themed restaurant.',
+)
+```
+
+Because plugins such as Google AI (`GoogleAI`) and Gemini Enterprise (`VertexAI`) resolve model IDs dynamically, specific model versions work directly—for example, by using `GoogleAI.gemini_model('<model-id>')`, `VertexAI.gemini_model('<model-id>')`, `'googleai/<model-id>'`, or `'vertexai/<model-id>'`—without requiring updates to the plugin package. Before updating model versions in production, test changes against an [evaluation](/docs/evaluation) dataset.
 
 ### Structured output
 
