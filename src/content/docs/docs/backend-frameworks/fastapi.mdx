@@ -181,7 +181,7 @@ async def bargain_chef_flow(
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config=GeminiConfig(temperature=0.7, thinking_level='MINIMAL'),
+        config=GeminiConfig(temperature=0.7, thinking_level='LOW'),
     )
 
     async for chunk in stream_response.stream:
@@ -189,8 +189,8 @@ async def bargain_chef_flow(
             ctx.send_chunk(chunk.output)
 
     response = await stream_response.response
-    if not response.output:
-        raise ValueError('Failed to generate recipe')
+    if response.output is None:
+        raise RuntimeError(f'Recipe generation failed: {response.error}')
     return response.output
 
 
@@ -215,14 +215,15 @@ A few details are worth noting before you run the backend:
 - **Shared Python types:** The Pydantic models (`Recipe`, `RecipeIngredient`, `BargainChefInput`) define the request and response shapes once. `serialization_alias='onSale'` puts camelCase `onSale` on the JSON and SSE wire while keeping snake_case in Python.
 - **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving it a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request resolves with a validated recipe.
+- **Failed generation:** `generate_stream` doesn't raise when the model fails (for example, an overloaded model). The response has no output and carries the failure on `response.error`. The flow raises with that failure, so the client gets a generic `Internal Error` (a 500, or a final `error` event on a streaming request) and your server log records the status and message. See [Error types](/docs/error-types).
 
 ### Expose the flow over HTTP
 
 `serve_flow` returns a FastAPI `APIRouter` you mount with `app.include_router`. By default the route is `POST /<flow name>` (here `/bargainChefFlow`). When the client sends `Accept: text/event-stream` or `?stream=true`, the endpoint streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON. Pass `base_path=` or a router `prefix=` if you want a different URL.
 
-### Attach request context and handle HTTP errors
+### Attach request context
 
-Use `context_dependency` on `serve_flow` to wire FastAPI `Depends` into Genkit. FastAPI resolves the dependency before entering the Genkit handler, and the returned dict becomes `ctx.context` on `FlowContext` and `ToolContext`:
+Use `context_dependency` on `serve_flow` to wire FastAPI `Depends` into Genkit. FastAPI resolves the dependency before the Genkit handler runs, and the returned dict becomes `ctx.context` in the flow and its tools:
 
 ```python
 from fastapi import Header, HTTPException
@@ -240,7 +241,9 @@ app.include_router(
 )
 ```
 
-Inside the flow (or inside a `context_provider` on `@genkit_fastapi_handler`), served handlers redact internal `GenkitError`s and unhandled exceptions to HTTP `500` (`{"status": "INTERNAL", "message": "Internal Error"}`). Raise `PublicError` (`from genkit import PublicError`) when the HTTP caller should receive a specific status code and message, such as `401` (`'UNAUTHENTICATED'`), `403` (`'PERMISSION_DENIED'`), or `404` (`'NOT_FOUND'`):
+Reject a request from a dependency with `HTTPException`; FastAPI sends its own response, here `401 {"detail":"Missing bearer token"}`. A `PublicError` raised in a dependency never reaches Genkit's error handling and becomes a plain-text `500 Internal Server Error`, so raise `PublicError` from the flow or from a `context_provider` instead. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for how other failures map to HTTP statuses.
+
+To read context from the raw request instead of `Depends`, pass a `context_provider` to `@genkit_fastapi_handler`:
 
 ```python
 from genkit import FlowContext, PublicError
@@ -261,6 +264,8 @@ async def auth_provider(req: RequestData) -> dict[str, object]:
 async def custom_chef(prompt: str, ctx: FlowContext) -> str:
     uid = (ctx.context or {}).get('uid')
     res = await ai.generate(prompt=f'Answer for {uid}: {prompt}')
+    if res.error:
+        raise RuntimeError(f'Answer failed: {res.error}')
     return res.text
 ```
 
@@ -288,7 +293,7 @@ async def chef_stream(craving: str, ctx: dict[str, object] = Depends(user_contex
 
 ### Serve an agent over HTTP
 
-Agents and durable session stores are experimental and live under `.exp` namespaces (`genkit.exp`, `genkit_fastapi.exp`, and `genkit_google_cloud.exp`). One `include_router(serve_agent(...))` call mounts the turn route; configuring a [session store](/docs/agents/session-stores) on the agent also mounts `/getSnapshot` and `/abort` (without a store, those paths are not registered and return 404).
+Agents and durable session stores are experimental and live under `.exp` namespaces (`genkit.exp`, `genkit_fastapi.exp`, and `genkit_google_cloud.exp`). `define_agent` is on the experimental `Genkit` class, so in `main.py` change `from genkit import Genkit` to `from genkit.exp import Genkit`. It subclasses the stable class, so the flow code is unchanged. One `include_router(serve_agent(...))` call mounts the turn route; configuring a [session store](/docs/agents/session-stores) on the agent also mounts `/getSnapshot` and `/abort` (without a store, those paths are not registered and return 404).
 
 Install `genkit-google-cloud` for the Firestore-backed store:
 
@@ -297,12 +302,8 @@ uv add genkit-google-cloud
 ```
 
 ```python
-from genkit.exp import Genkit
 from genkit_fastapi.exp import serve_agent
 from genkit_google_cloud.exp import FirestoreSessionStore
-from genkit_google_genai import GoogleAI
-
-ai = Genkit(plugins=[GoogleAI()])
 
 bargain_chef_agent = ai.define_agent(
     name='bargainChefAgent',

@@ -222,7 +222,7 @@ set automatically. Running in other environments requires setting up
 
 <Lang lang="python">
 
-The `genkit-google-cloud` package exports OpenTelemetry traces and GenAI client metrics to Cloud Trace and Cloud Monitoring. Genkit Python's structured logger (`get_logger()`) attaches trace and span context automatically so Cloud Logging entries correlate with Cloud Trace spans on Google Cloud runtimes such as Cloud Run.
+The `genkit-google-cloud` package exports Genkit spans to Cloud Trace and GenAI model-call metrics to Cloud Monitoring. It also attaches a Cloud Logging exporter for OpenTelemetry log records, which carry prompt and response text only if you opt in (see [Prompt and response redaction](#prompt-and-response-redaction)).
 
 ## Prerequisites
 
@@ -236,7 +236,7 @@ uv add genkit-google-cloud
 
 ## Configuration
 
-Call `enable_google_cloud_telemetry()` during application startup:
+Call `enable_google_cloud_telemetry()` once at application startup, before you construct `Genkit`. A second call in the same process raises `GenkitError` with status `FAILED_PRECONDITION`.
 
 ```python
 from genkit_google_cloud import enable_google_cloud_telemetry
@@ -246,27 +246,39 @@ enable_google_cloud_telemetry(project='your-google-cloud-project')
 
 All parameters on `enable_google_cloud_telemetry()` are keyword-only and optional:
 
-- **`project`**: Google Cloud project ID. When omitted, resolves from `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, or Application Default Credentials (`FIREBASE_PROJECT_ID` is not read).
-- **`credentials`**: Explicit `google.auth.credentials.Credentials` object; defaults to Application Default Credentials.
-- **`sampler`**: Custom OpenTelemetry `Sampler` for trace sampling.
-- **`force_dev_export`**: Set to `True` to export traces and metrics while running under `genkit start` (in dev mode, export is skipped unless `force_dev_export=True`). Run `gcloud auth application-default login` first when testing locally.
+- **`project`**: Google Cloud project ID. When omitted, Genkit resolves it from the environment. See [Environment-based configuration](/docs/observability/getting-started/#environment-based-configuration) for the lookup order.
+- **`credentials`**: Service account credentials as a `dict`, for running outside Google Cloud. Defaults to Application Default Credentials.
+- **`sampler`**: OpenTelemetry `Sampler` for the tracer provider this call creates. If your app already registered a `TracerProvider`, set the sampler there instead; passing `sampler=` then raises `INVALID_ARGUMENT`.
+- **`force_dev_export`**: When `GENKIT_ENV=dev` (set by `genkit start`), nothing is exported unless this is `True`. Run `gcloud auth application-default login` first when testing locally.
 - **`disable_metrics`**: If `True`, skips Cloud Monitoring metric export.
-- **`disable_traces`**: If `True`, skips Cloud Trace span export.
-- **`metric_export_interval_ms`**: Export interval in milliseconds (defaults to `5000` in dev and `300000` in production; must be at least `5000`).
-- **`metric_export_timeout_ms`**: Per-export timeout in milliseconds.
+- **`disable_traces`**: If `True`, skips Cloud Trace span export. Model-call metrics still reach Cloud Monitoring.
+- **`metric_export_interval_ms`**: Export interval in milliseconds. Defaults to `5000` in dev and `300000` in production; values below `5000` are raised to `5000`.
+- **`metric_export_timeout_ms`**: Per-export timeout in milliseconds. Defaults to the export interval.
 
-### Prompt and Response Redaction
+### Prompt and response redaction
 
-`enable_google_cloud_telemetry()` installs `GenAiInstrumentation` (from `genkit-otel`) with prompt, system instruction, tool argument/result, and model response capture disabled by default (`NO_CONTENT`), while the local Genkit Developer UI still receives full unredacted spans independently. To opt in to exporting message content, set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` to `SPAN_ONLY`, `EVENT_ONLY`, or `SPAN_AND_EVENT`.
+Cloud Trace never stores prompt or response text. Before export, the plugin replaces content attributes on Genkit spans, and the error message and stack trace on failed Genkit spans, with `<redacted>`. The Developer UI still receives full spans under `genkit start`.
 
-### Firestore Session Store (Experimental)
+The `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment variable controls prompt and response capture. It defaults to `NO_CONTENT`:
 
-`genkit-google-cloud` also provides an experimental `FirestoreSessionStore` under `genkit_google_cloud.exp` (`uv add 'genkit-google-cloud[firestore]'`):
+- **`SPAN_ONLY`**: writes content to span attributes. Cloud Trace still redacts it; only exporters you add yourself receive it.
+- **`EVENT_ONLY`** or **`SPAN_AND_EVENT`**: emits content as OpenTelemetry log events, which the plugin exports to Cloud Logging. Leave these off for workloads that handle personal data.
+
+### Firestore session store (experimental)
+
+`genkit-google-cloud` also provides an experimental `FirestoreSessionStore` under `genkit_google_cloud.exp`. The Firestore client ships with the package, so no extra install is needed. Pass it as an agent's `store` to persist sessions in Firestore. See [Session stores](/docs/agents/session-stores/).
 
 ```python
+from genkit.exp import Genkit
 from genkit_google_cloud.exp import FirestoreSessionStore
+from genkit_google_genai import GoogleAI
 
-store = FirestoreSessionStore(collection='genkit_sessions')
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+agent = ai.define_agent(
+    name='order_assistant',
+    store=FirestoreSessionStore(collection='genkit_sessions'),
+)
 ```
 
 </Lang>
@@ -283,7 +295,17 @@ From the side menu, find 'Logging' and click 'Logs explorer'.
 
 ![Logs Explorer menu item in Cloud Logging](../resources/cloud-ops-logs-explorer-menu.png)
 
+<Lang lang="js go">
+
 You will see all logs that are associated with your deployed flow, including `console.log()`. Any log which has the prefix `[genkit]` is a Genkit-internal log that contains information that may be interesting for debugging purposes. For example, Genkit logs in the format `Config[...]` contain metadata such as the temperature and topK values for specific LLM inferences. Logs in the format `Output[...]` contain LLM responses while `Input[...]` logs contain the prompts. Cloud Logging has robust ACLs that allow fine grained control over sensitive logs.
+
+</Lang>
+
+<Lang lang="python">
+
+You will see the logs your service writes, such as stdout and stderr on Cloud Run. Genkit Python does not write prompt or response logs by default. With `EVENT_ONLY` or `SPAN_AND_EVENT` capture, GenAI content events appear under the `genkit` log name.
+
+</Lang>
 
 :::note
 Prompts and LLM responses are redacted from trace attributes in Cloud Trace.
@@ -380,7 +402,7 @@ Common dimensions include:
 
 <Lang lang="python">
 
-In Python, `enable_google_cloud_telemetry()` exports the standard [OpenTelemetry GenAI semantic convention](/docs/observability/otel-genai-semantic-conventions) histograms via `genkit-otel` (under `workload.googleapis.com/` in Cloud Monitoring) rather than `genkit/*` metrics:
+`enable_google_cloud_telemetry()` exports the standard [OpenTelemetry GenAI semantic convention](/docs/observability/otel-genai-semantic-conventions) histograms via `genkit-otel` (under `workload.googleapis.com/` in Cloud Monitoring) rather than `genkit/*` metrics:
 
 - **`gen_ai.client.token.usage`** (unit `{token}`): Input and output token counts per model operation, distinguished by `gen_ai.token.type` (`input` or `output`), along with `gen_ai.operation.name`, `gen_ai.provider.name` (for example `gcp.gemini`, `gcp.vertex_ai`, `openai`, `anthropic`), and `gen_ai.request.model`.
 - **`gen_ai.client.operation.duration`** (unit `s`): End-to-end duration of each model call in seconds, carrying `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, and `error.type` on failed calls.

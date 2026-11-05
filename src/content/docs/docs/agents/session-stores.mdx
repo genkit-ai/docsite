@@ -692,24 +692,21 @@ Plan retention before launch. Snapshots are full conversation checkpoints, so lo
 
 ## Choose a store
 
-- **In-memory store** (`InMemorySessionStore` from `genkit.exp.agent`): Single-process memory for tests, CLI tools, and local experiments.
-- **File store** (`FileSessionStore` from `genkit.exp.agent`): JSON files on disk for local development and single-host services that survive restarts.
-- **Firestore store** (`FirestoreSessionStore` from `genkit_google_cloud.exp`): Shared Cloud Firestore persistence for multi-instance deployments such as Cloud Run.
-- **Custom store** (`SessionStore` and `SnapshotSubscriber` from `genkit.exp.agent`): Protocol implementation for Postgres, Cloud SQL, Spanner, or Redis.
+- **In-memory store** (`InMemorySessionStore` from `genkit.exp.agent`) for tests, local examples, command-line interfaces, and single-process experiments.
+- **File store** (`FileSessionStore` from `genkit.exp.agent`) for local development, prototypes, and single-host applications where snapshots must persist across process restarts.
+- **Firestore store** (`FirestoreSessionStore` from `genkit_google_cloud.exp`) for production apps where several server instances share sessions.
+- **Custom store** (implementing `SessionStore` from `genkit.exp.agent`) when you need a different shared database such as Cloud SQL, Spanner, Postgres, or Redis.
 
-Attach the store to `ai.define_agent(..., store=...)` or `ai.define_custom_agent(..., store=...)`. When served over HTTP via `genkit_fastapi.exp.serve_agent`, companion `/getSnapshot` and `/abort` routes are mounted automatically when a store is present.
+Configure the store on the agent. The runtime handles reads and writes. With [HTTP serving](/docs/agents/http), `/getSnapshot` and `/abort` are mounted only when a store is configured.
 
 ## Use an in-memory store
 
-`InMemorySessionStore` keeps snapshots in process memory and implements `SnapshotSubscriber` for local detach and abort:
+`InMemorySessionStore` keeps snapshots in local process memory. It is fast and requires no setup.
 
 ```python
-from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
-from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore(reject_ambiguous_session=False)
+store = InMemorySessionStore()
 
 support_agent = ai.define_agent(
     name='supportAgent',
@@ -719,54 +716,44 @@ support_agent = ai.define_agent(
 )
 ```
 
-Set `reject_ambiguous_session=True` if branching from historical snapshots should force callers to resume by explicit `snapshot_id` rather than picking the newest leaf on `session_id`.
+Do not use the in-memory store if session history must survive process restarts or when scaling horizontally across multiple server instances.
+
+Both built-in local stores accept `reject_ambiguous_session=True`. Branching from an earlier snapshot gives a session a second leaf; with this flag set, a `session_id` lookup on a forked session raises instead of picking the newest leaf, so callers must resume by `snapshot_id`.
 
 ## Use a file-backed store
 
-`FileSessionStore` writes one JSON file per snapshot inside a local directory and implements `SnapshotSubscriber` for single-process status watches:
+`FileSessionStore` writes one `<snapshot_id>.json` file per snapshot inside a local directory. This is the standard choice for local development or single-host deployments.
 
 ```python
-from genkit.exp import Genkit
 from genkit.exp.agent import FileSessionStore
-from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()])
-store = FileSessionStore(
-    '.sessions',
-    reject_ambiguous_session=False,
-    max_persisted_chain_length=50,
-)
+store = FileSessionStore('.sessions', max_persisted_chain_length=50)
 
 weather_agent = ai.define_agent(
     name='weatherAgent',
     model=GoogleAI.gemini('gemini-flash-latest'),
-    system='Answer weather questions.',
+    system='You help with weather questions.',
     store=store,
 )
 ```
 
-- **`reject_ambiguous_session`**: Rejects `session_id` lookups when a session has multiple leaves (defaults to `False`).
-- **`max_persisted_chain_length`**: Optional cap on retained ancestor snapshots per linear chain; older ancestors are pruned after new writes settle (defaults to `None`, keeping full history).
+`max_persisted_chain_length` caps how many snapshots of one conversation stay on disk. Once a chain grows past it, each save deletes the oldest turns. Resuming still works, but you cannot rewind or branch past the retained window. Leave it unset to keep the full history.
 
 ## Use a Firestore store
 
-`FirestoreSessionStore` lives in `genkit_google_cloud.exp` (`genkit-google-cloud` package) and implements both `SessionStore` and `SnapshotSubscriber`.
+`FirestoreSessionStore` from `genkit_google_cloud.exp` (`genkit-google-cloud` package) persists snapshots in Cloud Firestore. It is the built-in option for multi-instance production deployments, such as Cloud Run, that share sessions across instances.
 
 ### Storage model
 
-- **Diffs and sharded checkpoints**: Saves each turn as an RFC 6902 JSON Patch diff from its parent and writes a full-state checkpoint every `checkpoint_interval` turns, splitting checkpoints across shard documents so state never hits Firestore's 1 MiB document cap.
-- **Direct document-ID reads**: Resolves sessions via a pointer document plus direct document-ID fetches inside a read transaction, requiring no composite indexes.
-- **Transactional writes**: Commits snapshot documents and session pointers atomically, retrying contended pointer updates up to `transaction_max_attempts` before raising `GenkitError` with status `ABORTED`.
-- **Cross-instance status watches**: Streams status updates via Firestore document watches (`on_snapshot_status_change`), so `task.wait()`, `task.poll()`, and `task.abort()` coordinate across instances without polling loops.
+- **Diffs and sharded checkpoints**: Saves each turn as an RFC 6902 JSON Patch diff from its parent and writes a full-state checkpoint every `checkpoint_interval` turns. Checkpoints split across shard documents, so long sessions stay under Firestore's 1 MiB document limit.
+- **Direct document-ID reads**: Resolves sessions through a pointer document and direct document-ID fetches inside a read transaction. No composite indexes are required.
+- **Transactional writes**: Commits snapshot documents and session pointers atomically, retrying contended pointer updates up to `transaction_max_attempts` times before raising `GenkitError` with status `ABORTED`.
+- **Cross-instance status watches**: Streams status changes through Firestore document watches, so `task.wait()`, `task.poll()`, and `task.abort()` work across instances.
 
 ```python
 from typing import Any
 
-from genkit.exp import Genkit
 from genkit_google_cloud.exp import FirestoreSessionStore
-from genkit_google_genai import GoogleAI
-
-ai = Genkit(plugins=[GoogleAI()])
 
 
 def by_user(context: dict[str, Any] | None = None) -> str:
@@ -782,7 +769,7 @@ store = FirestoreSessionStore(
 
 support_agent = ai.define_agent(
     name='supportAgent',
-    model=GoogleAI.gemini('gemini-pro-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Help customers check order status.',
     store=store,
 )
@@ -790,25 +777,28 @@ support_agent = ai.define_agent(
 
 ### Constructor options
 
-All `FirestoreSessionStore` arguments are keyword-only and fixed at construction:
+All options are keyword-only and optional:
 
-- **`client`**: Explicit `google.cloud.firestore.AsyncClient`. Defaults to Application Default Credentials (or `FIRESTORE_EMULATOR_HOST` when set).
-- **`sync_client`**: Explicit synchronous `google.cloud.firestore.Client` used for realtime document watches. Created lazily per event loop when omitted and closed by `await store.close()`.
-- **`collection`**: Base collection name (defaults to `'genkit-sessions'`). Companion `<collection>-pointers` and `<collection>-shards` collections are derived automatically. Use separate collection names per SDK language.
-- **`snapshot_path_prefix`**: Callable `(context: dict[str, Any] | None) -> str` returning a tenant path segment to isolate session IDs across users (defaults to `'global'`).
-- **`checkpoint_interval`**: Turns between full-state checkpoints (defaults to `25`). Lower values reduce diff re-reads on heartbeats at the cost of larger checkpoint writes.
-- **`shard_size`**: Maximum bytes per checkpoint shard document (defaults to `524288`, 512 KiB).
-- **`transaction_max_attempts`**: Retry budget for contended pointer transactions before raising `GenkitError(status='ABORTED')` (defaults to `5`).
+- **`client`**: Explicit `google.cloud.firestore.AsyncClient`. Defaults to a client using Application Default Credentials, or `FIRESTORE_EMULATOR_HOST` when set.
+- **`sync_client`**: Explicit synchronous `google.cloud.firestore.Client` for document watches. When omitted, the store creates one per event loop and closes it in `await store.close()`.
+- **`collection`**: Base collection name (defaults to `'genkit-sessions'`). The store derives `<collection>-pointers` and `<collection>-shards`. Document formats differ by SDK, so give each SDK its own collection.
+- **`snapshot_path_prefix`**: Function that maps the call context to a tenant path segment, such as the authenticated user ID (defaults to `'global'`).
+- **`checkpoint_interval`**: Turns between full-state checkpoints (defaults to `25`).
+- **`shard_size`**: Maximum bytes per shard document (defaults to 512 KiB).
+- **`transaction_max_attempts`**: Retry budget for contended pointer transactions (defaults to `5`).
 
-## Implement a custom store
+The Firestore store does not prune snapshots, so plan retention for long-running or artifact-heavy conversations as described in [Production guidance](#production-guidance).
 
-Implement the `SessionStore` protocol from `genkit.exp.agent`, and use the exported store helpers (`require_one_selector`, `apply_save`, `SaveFn`, `TERMINAL_STATUSES`, `iterate_statuses`) to preserve runtime invariants:
+## Implement a production store
+
+When the built-in stores do not fit, implement the `SessionStore` protocol from `genkit.exp.agent`. Add `SnapshotSubscriber` when you need detach and abort. The exported helpers keep the runtime's invariants:
 
 ```python
 import asyncio
 from typing import Any
 
 from genkit.exp.agent import (
+    TERMINAL_STATUSES,
     SaveFn,
     SessionSnapshot,
     SessionStore,
@@ -821,7 +811,7 @@ from genkit.exp.agent import (
 )
 
 
-class CustomDatabaseStore(SessionStore[Any], SnapshotSubscriber):
+class DatabaseSessionStore(SessionStore[Any], SnapshotSubscriber):
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
@@ -834,7 +824,7 @@ class CustomDatabaseStore(SessionStore[Any], SnapshotSubscriber):
         context: dict[str, Any] | None = None,
     ) -> SessionSnapshot | None:
         require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
-        # Fetch exact row by snapshot_id, or resolve the latest leaf for session_id.
+        # 1. Load by snapshot_id, or resolve the latest leaf for session_id.
         ...
 
     async def save_snapshot(
@@ -844,47 +834,57 @@ class CustomDatabaseStore(SessionStore[Any], SnapshotSubscriber):
         *,
         context: dict[str, Any] | None = None,
     ) -> SessionSnapshot | None:
-        # Run read -> apply_save -> write atomically inside a lock or DB transaction.
+        # 2. Read, mutate, and write in one transaction (or under a lock).
         async with self._lock:
             existing = await self._read(snapshot_id)
             updated = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if updated is not None:
                 await self._write(snapshot_id, updated)
-                for q in self._subs.get(snapshot_id, ()):
-                    if updated.status is not None:
-                        q.put_nowait(updated.status)
+                self._notify(snapshot_id, updated.status)
             return updated
 
-    def on_snapshot_status_change(
+    async def on_snapshot_status_change(
         self,
         snapshot_id: str,
         *,
         context: dict[str, Any] | None = None,
     ) -> SnapshotStatusStream:
+        # 3. Seed the current status, then stream changes until the snapshot settles.
         queue: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        self._subs.setdefault(snapshot_id, []).append(queue)
+        async with self._lock:
+            current = await self._read(snapshot_id)
+            if current is not None:
+                _push(queue, current.status)
+            self._subs.setdefault(snapshot_id, []).append(queue)
 
-        async def cleanup() -> None:
-            waiters = self._subs.get(snapshot_id)
-            if waiters and queue in waiters:
-                waiters.remove(queue)
+        async def unsubscribe() -> None:
+            self._subs[snapshot_id].remove(queue)
 
-        return iterate_statuses(queue=queue, on_close=cleanup)
+        return iterate_statuses(queue, on_close=unsubscribe)
 
-    async def _read(self, snapshot_id: str) -> SessionSnapshot | None:
-        ...
+    def _notify(self, snapshot_id: str, status: SnapshotStatus | None) -> None:
+        for queue in self._subs.get(snapshot_id, []):
+            _push(queue, status)
 
-    async def _write(self, snapshot_id: str, snapshot: SessionSnapshot) -> None:
-        ...
+    async def _read(self, snapshot_id: str) -> SessionSnapshot | None: ...
+
+    async def _write(self, snapshot_id: str, snapshot: SessionSnapshot) -> None: ...
+
+
+def _push(queue: asyncio.Queue[SnapshotStatus | None], status: SnapshotStatus | None) -> None:
+    queue.put_nowait(status)
+    if status in TERMINAL_STATUSES:
+        queue.put_nowait(None)  # End the stream.
 ```
 
-- **`get_snapshot`**: Enforce `require_one_selector` so callers pass exactly one of `snapshot_id` or `session_id`.
-- **`save_snapshot`**: Must execute atomically inside a database transaction or your own lock (`SessionStore` is a protocol and does not attach a lock attribute). `fn` (`SaveFn`) is a synchronous mutator that may run more than once on transaction retry; `apply_save` stamps `snapshot_id`, `created_at`, and `session_id`, and rejects transitions out of `TERMINAL_STATUSES` (`completed`, `failed`, `aborted`).
-- **`SnapshotSubscriber`**: Implement `on_snapshot_status_change` when you need `chat.detach()`, `task.wait()`, and server-side `abort()`.
+- **`get_snapshot`** fetches a snapshot by exact `snapshot_id` or resolves the latest snapshot for `session_id`. `require_one_selector` rejects calls that pass both or neither.
+- **`save_snapshot`** must be atomic. Run the read, mutator, and write inside one database transaction, or synchronize with a lock. The mutator (`SaveFn`) is synchronous and side-effect free, since stores may call it more than once under contention. `apply_save` runs it, stamps the store fields, and rejects status changes once a snapshot reaches a terminal status (`completed`, `failed`, or `aborted`).
+- **`on_snapshot_status_change`** is an `async def` that returns the stream. The runtime subscribes when a turn detaches and cancels the background work when the snapshot flips to `aborted`. Seed the current status so an abort written before the subscription is not missed, and put `None` after a terminal status so `iterate_statuses` ends the stream. Without `SnapshotSubscriber`, `chat.detach()` and `task.wait()` still work, but `task.abort()` only marks the snapshot `aborted` while the background turn runs to completion.
+- **Multiple instances**: The in-process queues above only see writes made through this store object. To abort a turn running on another instance, feed `_notify` from your database's change stream, such as Postgres `LISTEN`/`NOTIFY`.
 
 ## Production guidance
 
-- **Tenant isolation**: Scope `get_snapshot`, `save_snapshot`, and status subscriptions by authenticated caller identity via `context` (for example `snapshot_path_prefix` on `FirestoreSessionStore`) so a leaked `snapshot_id` cannot read or abort another user's session.
-- **Retention**: Snapshots store full message history and artifacts. Prune or archive aged sessions according to your data retention policy.
+- **Security**: Treat snapshots as sensitive user data. They can contain raw message history, tool results, and personal information. Scope reads, writes, and status subscriptions by the caller identity in `context` (for example with `snapshot_path_prefix` on `FirestoreSessionStore`) so a leaked `snapshot_id` cannot read or abort another user's session.
+- **Payload size**: Because snapshots contain full conversational checkpoints, their size grows over long sessions. Plan database indexes and cleanup or archival routines before launching production systems.
 
 </Lang>

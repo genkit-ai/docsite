@@ -88,27 +88,32 @@ records the spec's token usage and duration metrics instead.
 
 <Lang lang="python">
 
-Genkit records OpenTelemetry traces and metrics for flows, model calls, tools,
-and steps. During local development under `genkit start`, Genkit exports spans
-directly to the Developer UI so you can inspect inputs, outputs, and latency
-step by step. In production, export OpenTelemetry traces and metrics to
-Firebase Genkit Monitoring via `genkit-firebase` or to any OTLP backend.
+Genkit records a trace of every flow, model call, tool, and step it runs.
+During development, the Genkit Developer UI shows these traces so you can debug
+a flow step by step. In production, `genkit-google-cloud` sends traces and
+metrics to Genkit Monitoring, or `genkit-otel` exports them to any
+[OpenTelemetry](https://opentelemetry.io/) backend. See
+[Getting started with Genkit Monitoring](/docs/observability/getting-started).
 
 ## Tracing & metrics
 
-Genkit collects traces and metrics automatically without explicit setup. When
-running under `genkit start`, the Developer UI stores and displays each trace
-with its nested step inputs, outputs, and timing.
+Under `genkit start`, Genkit sends its spans straight to the Developer UI's
+telemetry server, with no OpenTelemetry SDK on that path, so you can analyze a
+flow step by step with its inputs, outputs, and timing. No code change is
+needed.
 
-Metrics travel a separate path. Genkit records metric families for feature,
-flow, action, generate, and tool activity, including `genkit/flow/latency` and
-the token counters `genkit/ai/generate/input/tokens` and
-`genkit/ai/generate/output/tokens`. The full table is in
-[Telemetry collection](/docs/observability/telemetry-collection). The Developer
-UI does not display metrics: they only leave the process once an exporting
-plugin such as the Firebase plugin is installed. In production, Genkit can
-export both traces and metrics to Firebase Genkit Monitoring for further
-analysis.
+Everywhere else, Genkit installs no instrumentation provider, so nothing leaves
+the process until one is configured. `enable_google_cloud_telemetry()` from
+`genkit-google-cloud` configures one. So does passing `GenAiInstrumentation`
+from `genkit-otel` to `configure_instrumentation()` from `genkit.telemetry`.
+
+Metrics travel a separate path. Genkit core records no metrics.
+`GenAiInstrumentation` records the OpenTelemetry GenAI client metrics
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration`, and
+`enable_google_cloud_telemetry()` installs it for you. The Developer UI does
+not display metrics. See
+[Telemetry collection](/docs/observability/telemetry-collection) and
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
 
 </Lang>
 
@@ -673,22 +678,52 @@ few log records; sleep briefly before exit if that matters.
 
 ## Log and export events
 
-Use `get_logger` from `genkit` to emit structured logs. `get_logger` wraps
-[structlog](https://www.structlog.org/) and attaches the active OpenTelemetry
-trace and span IDs to each log record. When running under `genkit start`, log
-events export to the Developer UI alongside their trace spans:
+Log with `get_logger` from `genkit`. It is built on
+[structlog](https://www.structlog.org/): each call takes an event string and
+keyword fields, which are recorded as structured attributes.
 
 ```python
-from genkit import get_logger
+from genkit import Genkit, get_logger
+from genkit_google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 logger = get_logger(__name__)
+
 
 @ai.flow()
 async def generate_menu(theme: str) -> str:
     logger.info('Starting menu generation', theme=theme)
+    # => console: [info] Starting menu generation  theme=Italian
+
+    logger.debug('Calling model', theme=theme)
+    # => console: nothing unless GENKIT_LOG=debug
+
     response = await ai.generate(prompt=f'Suggest a {theme} menu item.')
     return response.text
 ```
+
+### View logs in the Developer UI
+
+Under `genkit start`, records written through this logger inside a flow are
+also sent to the Developer UI, attached to the span that was active when they
+were written. No configuration is needed.
+
+The Developer UI receives every record at debug level and above, independent of
+the console level, so the terminal can stay quiet while debug records land in
+the trace viewer. Export never blocks your code: records are batched and posted
+from a background thread.
+
+Before export, Genkit replaces the value of any field whose name looks like a
+credential, such as `api_key`, `token`, or `password`, with `<redacted>`.
+
+### Environment variables
+
+- **`GENKIT_LOG`**: console level, one of `debug`, `info`, `warn`, `error`,
+  or `critical`. Defaults to `info`. It does not change what the Developer UI
+  receives. If your application configured its own structlog level, Genkit
+  leaves it alone.
+- **`GENKIT_OTEL_ENABLE_LOGS`**: set to `false`, `0`, or `f` to stop sending
+  log records to the Developer UI. Export is on by default.
 
 </Lang>
 

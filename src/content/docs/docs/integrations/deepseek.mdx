@@ -339,19 +339,6 @@ For multi-tenant apps, override the key on individual calls with `context={'secr
 Reference DeepSeek models with the `'openai/<model-id>'` prefix:
 
 ```python
-import os
-from genkit import Genkit
-from genkit_openai import OpenAI
-
-ai = Genkit(
-    plugins=[
-        OpenAI(
-            base_url='https://api.deepseek.com/v1',
-            api_key=os.environ['DEEPSEEK_API_KEY'],
-        )
-    ],
-)
-
 @ai.flow()
 async def deepseek_flow(subject: str) -> str:
     response = await ai.generate(
@@ -361,16 +348,20 @@ async def deepseek_flow(subject: str) -> str:
     return response.text
 ```
 
-**Available Models:**
+**Available models:**
 
-- **`deepseek-v4-flash`**: Fast, low-cost model supporting both thinking and non-thinking modes
-- **`deepseek-v4-pro`**: Flagship reasoning and agentic model
+- **`deepseek-v4-flash`**: Fast, low-cost model
+- **`deepseek-v4-pro`**: Flagship model with the strongest reasoning and agent capabilities
+
+Both support thinking and non-thinking modes. Thinking is on by default.
 
 Prefer the explicit V4 model IDs over legacy `deepseek-chat` and `deepseek-reasoner` aliases.
 
-## Advanced Usage
+## Advanced usage
 
-### Reasoning Model
+### Reasoning model
+
+DeepSeek returns its thinking as `reasoning_content`. Genkit maps it to reasoning parts on the response message, next to the answer text:
 
 ```python
 @ai.flow()
@@ -379,10 +370,16 @@ async def reasoning_flow(problem: str) -> str:
         model='openai/deepseek-v4-pro',
         prompt=f'Solve this problem step by step: {problem}',
     )
+    parts = response.message.content if response.message else []
+    reasoning = ''.join(p.reasoning for p in parts if p.reasoning)
+    print(reasoning)
+    # => Let me work through this step by step...
     return response.text
 ```
 
-### Tool Calling
+Genkit drops reasoning parts when it replays history to DeepSeek on later turns.
+
+### Tool calling
 
 ```python
 from pydantic import BaseModel, Field
@@ -422,7 +419,7 @@ async def streaming_flow(topic: str, ctx: FlowContext[str]) -> str:
     return (await stream_response.response).text
 ```
 
-### Multi-turn Chat
+### Multi-turn chat
 
 ```python
 from genkit import Message, Part, Role
@@ -456,7 +453,9 @@ async def chat_flow() -> str:
     return response2.text
 ```
 
-### Structured Output
+### Structured output
+
+DeepSeek accepts `response_format` type `json_object` but not `json_schema`. For `deepseek*` model IDs, Genkit sends `json_object` and adds your schema to the prompt as a system message. `response.output` is a validated `BookRecommendation` instance.
 
 ```python
 from pydantic import BaseModel, Field
@@ -477,32 +476,23 @@ async def recommend_book(preferences: str) -> BookRecommendation:
     return response.output
 ```
 
-### Forwarding DeepSeek-Specific Parameters with `extra`
+### Forwarding DeepSeek-specific parameters with `extra`
 
-`OpenAIConfig` rejects undeclared top-level keys with `GenkitError(status='INVALID_ARGUMENT')`. Pass DeepSeek-specific request fields inside `extra`:
+`OpenAIConfig` rejects undeclared top-level keys. Pass DeepSeek-specific request fields inside `extra`. This turns thinking off for a quick answer:
 
 ```python
-import os
-from genkit import Genkit
-from genkit_openai import OpenAI, OpenAIConfig
-
-ai = Genkit(
-    plugins=[
-        OpenAI(
-            base_url='https://api.deepseek.com/v1',
-            api_key=os.environ['DEEPSEEK_API_KEY'],
-        )
-    ],
-)
+from genkit_openai import OpenAIConfig
 
 response = await ai.generate(
-    model='openai/deepseek-v4-pro',
-    prompt='Analyze the trade-offs of Raft vs. Multi-Paxos.',
+    model='openai/deepseek-v4-flash',
+    prompt='Summarize the trade-offs of Raft vs. Multi-Paxos in two sentences.',
     config=OpenAIConfig(
-        max_output_tokens=2048,
-        extra={'thinking': {'type': 'enabled'}},
+        max_output_tokens=512,
+        extra={'thinking': {'type': 'disabled'}},
     ),
 )
 ```
+
+Genkit sends `max_output_tokens` as `max_tokens` and merges `extra` into the request body. Keys Genkit builds itself, such as `messages`, `tools`, and `response_format`, are rejected inside `extra` with `INVALID_ARGUMENT`.
 
 </Lang>

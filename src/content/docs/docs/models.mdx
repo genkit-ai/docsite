@@ -2622,9 +2622,32 @@ result = await ai.generate(
 )
 ```
 
+### Multi-turn conversations with messages
+
+For multi-turn conversations, pass the conversation history in `messages`
+instead of `prompt`. Each `Message` has a `role` (`'system'`, `'user'`,
+`'model'`, or `'tool'`) and a list of content parts:
+
+```python
+from genkit import Message, Part
+
+result = await ai.generate(
+    system='You are a helpful travel assistant.',
+    messages=[
+        Message(role='user', content=[Part.from_text('Hello, can you help me plan a trip?')]),
+        Message(role='model', content=[Part.from_text('Of course! Where are you thinking of going?')]),
+        Message(role='user', content=[Part.from_text('I want to visit Japan for two weeks in spring.')]),
+    ],
+)
+```
+
+`result.messages` holds the history plus the model's reply, so you can pass it
+back as `messages` on the next turn. For persistent sessions with automatic
+history management, use [agents](/docs/agents/overview) instead.
+
 ### Model parameters
 
-Pass generation settings through `config` using the model plugin's typed config class (such as `GeminiConfig`) or a dict whose keys match that schema. Unknown keys in `config` raise `GenkitError` (`INVALID_ARGUMENT`):
+Pass generation settings through `config` using the model plugin's typed config class (such as `GeminiConfig`) or a dict whose keys match that schema. Unknown keys in `config` raise `GenkitError` (`INVALID_ARGUMENT`) before the model is called:
 
 ```python
 from genkit_google_genai import GeminiConfig
@@ -2641,7 +2664,7 @@ result = await ai.generate(
 )
 ```
 
-Pass per-request API keys in `context={'secrets': {'api_key': ...}}` (never in `config`), pass unmodeled provider parameters via `extra={...}`, and attach middleware instances via `use` (see [middleware](/docs/middleware)):
+Pass a per-request API key in `context={'secrets': {'api_key': ...}}` (never in `config`), pass request fields the config class doesn't declare via `extra={...}` (the plugin merges them into the request body as-is, so the provider must recognize them), and attach middleware instances via `use` (see [Middleware](/docs/middleware)):
 
 ```python
 from genkit_google_genai import GeminiConfig, GoogleAI
@@ -2649,12 +2672,12 @@ from genkit_middleware import Retry
 
 result = await ai.generate(
     model=GoogleAI.gemini('gemini-flash-latest'),
-    prompt='Hello',
+    prompt='List the allergens in a classic basil pesto.',
     config=GeminiConfig(
         temperature=0.5,
-        extra={'provider_specific_option': 'value'},
+        extra={'generationConfig': {'mediaResolution': 'MEDIA_RESOLUTION_LOW'}},
     ),
-    context={'secrets': {'api_key': 'YOUR_API_KEY'}},
+    context={'secrets': {'api_key': tenant_api_key}},
     use=[Retry()],
 )
 ```
@@ -2799,14 +2822,9 @@ To get structured output from a successful generate call, use the response
 object's `output` property:
 
 ```python
-output = result.output
-```
-
-For multimodal responses, iterate `result.media` (each item is a `Media` value):
-
-```python
-for media in result.media:
-    print(media.content_type)
+menu_item = result.output  # a MenuItemSchema instance, or None on failure
+if menu_item:
+    print(menu_item.name)
 ```
 
 #### Handling errors
@@ -2856,15 +2874,14 @@ class MenuSchema(BaseModel):
     mains: list[MenuItemSchema]
     desserts: list[MenuItemSchema]
 
-result = ai.generate_stream(
-    prompt='Invent a menu item for a pirate themed restaurant.',
+async with ai.generate_stream(
+    prompt='Invent a menu for a pirate themed restaurant.',
     output_schema=MenuSchema,
-)
+) as result:
+    async for chunk in result.stream:
+        print(chunk.output)
 
-async for chunk in result.stream:
-    print(chunk.output)
-
-print((await result.response).output)
+    print((await result.response).output)
 ```
 
 Streaming structured output works a little differently from streaming text: the
@@ -2917,8 +2934,8 @@ conjunction with text prompts that instruct the model to perform some operation
 on the media, such as to caption an image or transcribe an audio recording.
 
 The ability to accept media input and the types of media you can use are
-completely dependent on the model and its API. For example, the Gemini 2.5
-series of models can accept images, video, and audio as prompts.
+completely dependent on the model and its API. For example, Gemini models
+accept images, video, and audio as prompts.
 
 To provide a media prompt to a model that supports it, instead of passing a
 simple text prompt to `generate`, pass a list consisting of a media part and a
@@ -2962,11 +2979,71 @@ All models that support media input support both data URLs and HTTPS URLs. Some
 model plugins add support for other media sources. For example, the Gemini Enterprise (`vertexAI`)
 plugin also lets you use Cloud Storage (`gs://`) URLs.
 
+### Generating media
+
+Image, video, and speech models use the same `generate()` call. Generated media
+arrives in `result.media`, a list of `Media` values with `url` and
+`content_type`. Image and speech models return base64 data URLs:
+
+```python
+import base64
+from pathlib import Path
+
+from genkit_google_genai import GoogleAI
+
+result = await ai.generate(
+    model=GoogleAI.gemini_image('gemini-3.1-flash-image'),
+    prompt='A sunlit sourdough bakery counter with loaves on cooling racks.',
+)
+
+for media in result.media:
+    print(media.content_type)
+    # => image/jpeg
+    _, data = media.url.split(',', 1)
+    Path('bakery.jpg').write_bytes(base64.b64decode(data))
+```
+
+See the [Google Generative AI plugin](/docs/integrations/google-genai) for
+image, video, music, and speech models and their config classes.
+
+### Failed and stopped generations
+
+Problems found before the model is called, such as an unregistered model or an
+unknown `config` key, raise `GenkitError`. Once generation starts,
+`generate()` does not raise: provider errors (such as `UNAVAILABLE` or
+`RESOURCE_EXHAUSTED`), tool failures, and hitting `max_turns` come back on
+`result.error` as a `Failure`, with `result.finish_reason` set to
+`FinishReason.FAILED` or `FinishReason.ABORTED`. Check `result.error` before
+using the result:
+
+```python
+from genkit import FinishReason
+
+result = await ai.generate(prompt='Suggest a dish for a guest with a nut allergy.')
+
+if result.error is None:
+    print(result.text)
+elif result.finish_reason in (FinishReason.FAILED, FinishReason.ABORTED):
+    print(result.error.status, result.error.message)
+    # => UNAVAILABLE This model is currently experiencing high demand. ...
+```
+
+To bound a single Gemini call, set `timeout` in seconds on the config, for
+example `GeminiConfig(timeout=60)`. See [Error types](/docs/error-types) for
+the full rules, including how to resend `result.messages` after a failed tool
+loop.
+
+### Middleware
+
+Middleware wraps `generate()` calls to add behavior such as retries or model
+fallbacks. Pass instances in `use=[...]`. See [Middleware](/docs/middleware)
+for the built-in middleware and how to write your own.
+
 ### Next steps
 
 #### Advanced LLM use
 
-- Many of your users will have interacted with large language models for the first time through chatbots. Although LLMs are capable of much more than simulating conversations, it remains a familiar and useful style of interaction. Even when your users will not be interacting directly with the model in this way, the conversational style of prompting is a powerful way to influence the output generated by an AI model. Read [Multi-turn chats](/docs/chat) to learn how to use Genkit as part of an LLM chat implementation.
+- Many of your users will have interacted with large language models for the first time through chatbots. Although LLMs are capable of much more than simulating conversations, it remains a familiar and useful style of interaction. Read [Agents](/docs/agents/overview) to learn how Genkit manages multi-turn sessions, history, and tools for you.
 - One way to enhance the capabilities of LLMs is to prompt them with a list of ways they can request more information from you, or request you to perform some action on their behalf. This is called _tool calling_ or _function calling_. Models trained to support this feature can respond with specially-formatted responses, which indicate to the calling application that it should take some action and send the result back to the LLM. Read more at the [Tool calling](/docs/tool-calling) page.
 - _Retrieval-augmented generation_ (RAG) is a technique used to introduce domain-specific information into a model's output. It's accomplished by inserting relevant information into a model's prompt before passing it to the model. A complete RAG implementation requires you to bring together several technologies: text embedding generation models, vector databases, and large language models. See the [Retrieval-augmented generation (RAG)](/docs/rag) page to learn how Genkit streamlines the process of coordinating these various elements.
 
@@ -2975,5 +3052,7 @@ plugin also lets you use Cloud Storage (`gs://`) URLs.
 As a software engineer, you're probably accustomed to deterministic systems, where a given input always produces the same output. However, with AI models being probabilistic, the output can vary based on subtle nuances in the input, the model's training data, and even deliberately-introduced randomness via parameters like temperature.
 
 Genkit's _evaluators_ are structured ways to assess the quality of your LLM's responses using a variety of strategies. Read more on the [Evaluation](/docs/evaluation) page.
+
+Genkit Python 0.13 is the last release with evaluators (`ai.define_evaluator()`, `ai.evaluate()`, `genkit.evaluator`) and the `genkit-evaluators` package. Genkit 1.0 cuts evaluators from the 1.0 release; evaluation will return as an additive feature in a later release. To keep using evaluators, pin `genkit==0.13.*`.
 
 </Lang>

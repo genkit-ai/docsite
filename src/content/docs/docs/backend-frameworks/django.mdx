@@ -215,7 +215,7 @@ async def bargain_chef_flow(
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config=GeminiConfig(temperature=0.7, thinking_level='MINIMAL'),
+        config=GeminiConfig(temperature=0.7, thinking_level='LOW'),
     )
 
     async for chunk in stream_response.stream:
@@ -223,8 +223,8 @@ async def bargain_chef_flow(
             ctx.send_chunk(chunk.output)
 
     response = await stream_response.response
-    if not response.output:
-        raise ValueError('Failed to generate recipe')
+    if response.output is None:
+        raise RuntimeError(f'Recipe generation failed: {response.error}')
     return response.output
 ```
 
@@ -234,6 +234,7 @@ A few details are worth noting before you run the backend:
 - **Shared Pydantic types:** `Recipe`, `RecipeIngredient`, and `BargainChefInput` are Pydantic models validated by Genkit. `serialization_alias='onSale'` serializes `on_sale` as camelCase `onSale` over JSON and SSE while keeping snake_case in Python.
 - **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
 - **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving the UI a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request resolves with a validated recipe.
+- **Failed generations:** `ai.generate_stream` doesn't raise when the model call fails, for example when Gemini is overloaded. The response comes back with `output` set to `None` and the cause in `response.error`. The flow raises with that cause so it shows up in your server log, and the client gets a generic `Internal Error`: a `500` response, or an `error` event when streaming. See [Error types](/docs/error-types).
 - **The `@genkit_django_handler(ai)` decorator:** Stacked on top of `@ai.flow`, it adapts the flow into a `csrf_exempt` async Django view (requires ASGI, Django 5.0+) that parses `{"data": ...}` requests, runs the flow, and streams Server-Sent Events when the client sends `Accept: text/event-stream` or `?stream=true`.
 
 ### Wire up the URL
@@ -249,11 +250,13 @@ urlpatterns = [
 
 The `@genkit_django_handler` decorator turns `bargain_chef_flow` into a Django view, so you can point a URL straight at it.
 
-### Attach request context and handle auth errors
+### Attach request context
 
-Pass `context_provider=` to `@genkit_django_handler` to extract caller identity before the flow runs. `RequestData` (`from genkit.web import RequestData`) exposes `req.method`, lowercased `req.headers`, and `req.input` across every web adapter, plus the underlying Django `HttpRequest` on `req.request` (for example, `await req.request.auser()` when using Django session auth).
+Pass `context_provider=` to `@genkit_django_handler` to extract caller identity before the flow runs. The provider receives a `RequestData` (`from genkit.web import RequestData`) with `method`, lowercased `headers`, `input`, and Django's `HttpRequest` on `request`, for example `await req.request.auser()` for session auth.
 
-Served handlers redact internal `GenkitError`s and unhandled exceptions to HTTP `500` (`{"status": "INTERNAL", "message": "Internal Error"}`). Raise `PublicError` (`from genkit import PublicError`) when the HTTP caller should receive an explicit status code and message, such as `401` for `'UNAUTHENTICATED'` or `403` for `'PERMISSION_DENIED'`:
+Raise `PublicError` from the provider or the flow to send a specific status and message, such as `401` for `'UNAUTHENTICATED'`; Django's `PermissionDenied` and `Http404` in the provider also pass through. Any other exception becomes a `500` with a generic body. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full mapping.
+
+Update the decorators on `bargain_chef_flow` in `recipes/views.py`:
 
 ```python
 from genkit import FlowContext, PublicError
@@ -335,9 +338,9 @@ curl -N -X POST http://localhost:8000/bargainChefFlow \
 
 The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
 
-The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them.
+The response arrives as a series of `data:` events. Each `message` event contains the partial recipe accumulated so far, with fields such as `title`, `ingredients`, and `steps` filling in as the model generates them. The last event carries the complete recipe under `result`.
 
-To get a single non-streamed JSON response instead, omit the `Accept` header:
+To get a single non-streamed `{"result": ...}` JSON response instead, omit the `Accept` header:
 
 ```bash
 curl -X POST http://localhost:8000/bargainChefFlow \

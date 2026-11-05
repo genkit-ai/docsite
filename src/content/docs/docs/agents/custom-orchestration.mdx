@@ -447,49 +447,51 @@ If the per-turn callback throws an exception, the runtime marks the turn as fail
 
 ## When to use a custom agent
 
-Use `ai.define_custom_agent()` on `genkit.exp.Genkit` when you need direct control over turn execution:
+Use `ai.define_custom_agent()` on `genkit.exp.Genkit` when the prompt-backed loop does not fit:
 
-- Running multiple model calls (for example planner → executor → verifier) inside one user turn.
-- Selecting models, prompts, or tools dynamically per turn.
-- Streaming custom status patches (`sess.update_custom(...)`) and artifacts (`sess.add_artifacts(...)`) between steps.
+- Several model calls in one user turn, such as a planner followed by an answerer.
+- Models, prompts, or tools chosen per turn by application code.
+- Status updates or artifacts the UI should see between steps.
 
 ## Runtime contract
 
-A custom agent function receives `(sess: SessionRunner, ctx: AgentContext)` and returns `AgentResult` from `genkit.exp.agent`:
+A custom agent function takes a `SessionRunner` and an `AgentContext`, and returns an `AgentResult`. All three come from `genkit.exp.agent`:
 
 ```python
 from genkit.exp import Genkit
-from genkit.exp.agent import AgentContext, AgentResult, SessionRunner
+from genkit.exp.agent import AgentContext, AgentInput, AgentResult, SessionRunner, TurnContext, TurnResult
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 
 
-async def custom_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
-    # Drive turns via await sess.run(handle_turn), then return await sess.result().
-    ...
+async def triage_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
+        ...  # One user turn: call models, update state, stream chunks.
+
+    await sess.run(handle_turn)
+    return await sess.result()
 
 
-custom_agent = ai.define_custom_agent(
-    name='customAgent',
-    fn=custom_fn,
-)
+triage_agent = ai.define_custom_agent(name='triageAgent', fn=triage_fn)
 ```
 
-- **`sess` (`SessionRunner`)**: Manages the turn loop (`run`, `result`), history (`get_messages`, `add_messages`, `set_messages`), typed custom state (`get_custom`, `update_custom`), and session outputs (`get_artifacts`, `add_artifacts`).
-- **`ctx` (`AgentContext`)**: Provides `ctx.send_chunk(AgentStreamChunk(...))` to stream chunks to the client and `ctx.context` for ambient request metadata. Server-side cancellation unwinds the coroutine via standard `asyncio.CancelledError` rather than an abort signal attribute.
-- **`turn_ctx` (`TurnContext`)**: Passed into `handle_turn(inp, turn_ctx)` with `turn_ctx.turn_index`, `turn_ctx.snapshot_id` (pre-reserved before `handle_turn` runs when a `store` is configured so external workspace state can key on it), and `turn_ctx.parent_snapshot_id`.
+- **`sess`** runs the turn loop (`run`, `result`) and exposes history (`get_messages`, `add_messages`, `set_messages`), typed custom state (`get_custom`, `update_custom`), and artifacts (`get_artifacts`, `add_artifacts`).
+- **`ctx`** streams chunks with `ctx.send_chunk(AgentStreamChunk(...))` and carries request metadata in `ctx.context`. There is no abort signal; cancellation arrives as `asyncio.CancelledError` at the next `await`.
+- **`turn_ctx`** carries `turn_index`, `parent_snapshot_id`, and `snapshot_id`. With a `store`, the runner reserves `snapshot_id` before `handle_turn` runs and saves the turn's snapshot under the same ID, so external resources can key on it.
 
-Call `await sess.run(handle_turn)` to process incoming user turns (or resumes), then `return await sess.result()`. `SessionRunner` appends the incoming user message to session history automatically before invoking `handle_turn`.
+`await sess.run(handle_turn)` calls `handle_turn` once per input and returns when the inputs end or a turn fails. The runner appends `inp.message` to history before each call, so read the conversation from `sess.get_messages()`. `sess.result()` returns the last message, the artifacts, and the last turn's finish reason.
+
+`sess.update_custom(...)` streams a `custom_patch` chunk and `sess.add_artifacts(...)` streams an `artifact` chunk, so the client sees both before the turn ends.
 
 ## Multi-step example
 
-This custom agent streams a model response while updating typed custom state and recording a markdown artifact in a store-backed session:
+This research agent plans with one structured call, streams the answer from a second call, and reports progress through custom state:
 
 ```python
 from pydantic import BaseModel
 
-from genkit import FinishReason, Part
+from genkit import FinishReason, GenkitError, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentContext,
@@ -506,60 +508,92 @@ from genkit.exp.agent import (
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
+model = GoogleAI.gemini('gemini-flash-latest')
 
 
-class CoderState(BaseModel):
-    turns_completed: int = 0
+class ResearchPlan(BaseModel):
+    subquestions: list[str]
 
 
-async def custom_coder_fn(sess: SessionRunner[CoderState], ctx: AgentContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
+class ResearchState(BaseModel):
+    status: str = ''
+    subquestions: list[str] = []
+
+
+async def research_fn(sess: SessionRunner[ResearchState], ctx: AgentContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult:
+        # 1. The runner already appended the user message to history.
         history = await sess.get_messages()
+        question = history[-1].text
 
+        # 2. Plan: one structured call splits the question.
+        await sess.update_custom(lambda _: ResearchState(status='Planning'))
+        plan = await ai.generate(
+            model=model,
+            prompt=f'Split this question into three short subquestions: {question}',
+            output_schema=ResearchPlan,
+        )
+        subquestions = plan.output.subquestions if plan.output else [question]
+        await sess.update_custom(lambda _: ResearchState(status='Answering', subquestions=subquestions))
+
+        # 3. Answer: stream the final reply to the client.
         stream = ai.generate_stream(
-            model=GoogleAI.gemini('gemini-flash-latest'),
-            system='Concise Python coding assistant.',
-            messages=history or None,
+            model=model,
+            system='Answer the last question. Cover these subquestions in order: ' + '; '.join(subquestions),
+            messages=history,
         )
         async for chunk in stream.stream:
             ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
-
         res = await stream.response
+        if res.error is not None:
+            # generate returns model failures as values. Raise to fail the turn.
+            raise GenkitError(status=res.error.status, message=res.error.message)
+
+        # 4. Record the reply, a named artifact, and the final status.
         if res.message:
             await sess.add_messages([res.message])
-
-        await sess.update_custom(
-            lambda prev: CoderState(turns_completed=(prev.turns_completed if prev else 0) + 1)
-        )
         await sess.add_artifacts([
-            Artifact(
-                name=f'turn-{turn_ctx.turn_index}.md',
-                parts=[Part.from_text(res.text)],
-            )
+            Artifact(name=f'research-{turn_ctx.snapshot_id}.md', parts=[Part.from_text(res.text)]),
         ])
+        await sess.update_custom(lambda prev: ResearchState(status='Done', subquestions=subquestions))
 
-        finish = (
-            AgentFinishReason.STOP
-            if res.finish_reason == FinishReason.STOP
-            else AgentFinishReason.UNKNOWN
-        )
-        return TurnResult(finish_reason=finish)
+        stopped = res.finish_reason == FinishReason.STOP
+        return TurnResult(finish_reason=AgentFinishReason.STOP if stopped else AgentFinishReason.UNKNOWN)
 
     await sess.run(handle_turn)
     return await sess.result()
 
 
-custom_coder = ai.define_custom_agent(
-    name='customCoder',
-    fn=custom_coder_fn,
-    state_schema=CoderState,
+research_agent = ai.define_custom_agent(
+    name='researchAgent',
+    fn=research_fn,
+    state_schema=ResearchState,
     store=InMemorySessionStore(),
 )
 ```
 
+Call it like any other agent. `state_schema` types `res.state`, and the artifact name matches the saved snapshot:
+
+```python
+chat = research_agent.chat()
+res = await chat.send('Why do sourdough starters need regular feeding?')
+
+print(res.state.status)
+# => Done
+print(res.artifacts[0].name == f'research-{res.snapshot_id}.md')
+# => True
+```
+
 ## Failure and recovery
 
-- **Per-turn callback failure**: If `handle_turn` raises an exception, `sess.run()` catches it, stops the turn loop, records a `failed` snapshot (when a store is configured), and resolves the turn with `finish_reason == AgentFinishReason.FAILED` and `res.error` (`Failure` with `.status`, `.message`, and `.details`). `chat.send()` does **not** raise on a failed turn; it rolls back the optimistic user prompt and keeps `chat.snapshot_id` / `chat.state` on the last `completed` turn so the caller can inspect `res.error` and retry cleanly.
-- **Transport or initialization failure**: Calls that fail before producing any turn result (such as a dropped HTTP connection or state-management mismatch) raise `GenkitError` (or `AgentInitError`, a `GenkitError` subclass) with `e.status`, `e.message`, and `e.__cause__`.
+If `handle_turn` raises, `sess.run()` stops the loop and the turn resolves with `finish_reason == AgentFinishReason.FAILED` and a `Failure` on `res.error`. With a store, the runner saves the turn's partial state and the error as a `failed` snapshot for inspection, but the chat does not resume from it. `chat.send()` returns instead of raising, drops the failed prompt, and stays on the last completed snapshot (or state, without a store), so the caller can retry.
+
+`chat.send()` raises `GenkitError` only when no turn result came back, such as a dropped connection or init misuse. See [Agent error handling](/docs/agents/errors) for both channels.
+
+## Next steps
+
+- [Sessions and state](/docs/agents/state) covers custom state, artifacts, and state transforms.
+- [Background execution](/docs/agents/background) covers detach, pending snapshots, and abort.
+- [Agent error handling](/docs/agents/errors) covers the failure channels a custom agent resolves into.
 
 </Lang>

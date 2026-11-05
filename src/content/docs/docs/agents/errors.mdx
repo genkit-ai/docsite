@@ -446,10 +446,10 @@ if (order == null) {
 
 Python agents separate pre-turn/transport exceptions from in-band turn failures:
 
-- **Init misuse** raises `AgentInitError` (from `genkit.exp.agent`, a subclass of `PublicError` and `GenkitError`) before a turn starts—for example, passing `state` to a store-backed agent or `session_id` to a client-managed agent.
+- **Init misuse** raises `AgentInitError` (from `genkit.exp.agent`, a subclass of `PublicError` and `GenkitError`) before a turn starts—for example, passing `state` to a store-backed agent or `snapshot_id` to a client-managed agent. Both are `FAILED_PRECONDITION`.
 - **Transport and HTTP errors** raise `GenkitError` (`err.status`, `err.message`, `err.details`, `err.reason`, `err.__cause__`) when a call fails before producing a turn result, such as an HTTP 4xx/5xx response or a dropped SSE stream.
 - **Failed turns** do **not** raise an exception. `chat.send()` and `turn.response` return an `AgentResponse` with `res.finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`, `reason`), while `res.message` is `None` and `res.text` is `''`.
-- **Foreground cancellation vs server aborts**: `await turn.abort()` and `asyncio.timeout()` detach the local listener (`await turn.response` raises `asyncio.CancelledError` or `TimeoutError`) while a store-backed server turn continues running. Calling `await task.abort()` or `await chat.abort()` cancels a running store-backed turn on the server and transitions its snapshot to `SnapshotStatus.ABORTED`.
+- **Foreground cancellation vs server aborts**: `await turn.abort()` and `asyncio.timeout()` detach the local listener (`await turn.response` raises `asyncio.CancelledError` or `TimeoutError`) while the server turn keeps running. To stop server-side work, start the turn with `chat.detach()` and call `await task.abort()` on the returned `DetachedTask`; its pending snapshot moves to `SnapshotStatus.ABORTED`. `chat.abort()` aborts the chat's current snapshot, so it only stops work after `detach()`. During a foreground `send()` that snapshot is already `completed`, and the call changes nothing.
 - **Background/detached failures** appear on `SessionSnapshot` (`await agent.get_snapshot(...)`) with `status` set to `SnapshotStatus.FAILED`, `SnapshotStatus.ABORTED`, or `SnapshotStatus.EXPIRED` and `snapshot.error` populated on failures.
 - **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
@@ -457,7 +457,7 @@ Python agents separate pre-turn/transport exceptions from in-band turn failures:
 
 Check `GenkitError` around the call for init or transport failures, and check `res.finish_reason == AgentFinishReason.FAILED` for turn failures.
 
-When a turn fails in band, `AgentChat` rolls back the failed turn's optimistic user message and any partial custom-state patches. On a store-backed agent, the failed turn is recorded as a terminal `failed` snapshot while `chat.snapshot_id` and `res.snapshot_id` remain pinned to the last completed snapshot; on a client-managed agent, `chat.messages` and `chat.state` revert to the pre-turn state (also returned on `res.raw.state`). Calling `chat.send()` again on the same `chat`—or loading `res.snapshot_id` in another process—continues from last-good history.
+When a turn fails in band, `AgentChat` rolls back the failed turn's optimistic user message and any partial custom-state patches. On a store-backed agent, the failed turn is recorded as a terminal `failed` snapshot while `chat.snapshot_id` and `res.snapshot_id` remain pinned to the last completed snapshot; on a client-managed agent, `chat.messages` and `chat.state` revert to the pre-turn state (also returned on `res.raw.state`). Calling `chat.send()` again on the same `chat`—or loading `res.snapshot_id` in another process—continues from last-good history. The `failed` snapshot itself is for inspection only: a turn can resume only from a `completed` snapshot.
 
 ```python
 from genkit import GenkitError
@@ -465,7 +465,7 @@ from genkit.exp.agent import AgentFinishReason, AgentInitError
 
 try:
     res = await chat.send('Look up order 123.')
-except AgentInitError as err:
+except AgentInitError:
     # Caller passed incompatible state/session options before the turn started.
     raise
 except GenkitError as err:
@@ -476,18 +476,15 @@ else:
         print('Turn failed:', res.error.status, res.error.message)
         # => Turn failed: NOT_FOUND Order 123 was not found.
 
-        # `chat` already rolled back to the last completed turn, so you can send directly:
+        # `chat` already rolled back to the last completed turn, so send directly.
+        # From another process, use `await agent.load_chat(snapshot_id=res.snapshot_id)`.
         retry = await chat.send('Try again with order 456.')
-
-        # Or restore from another process using `res.snapshot_id` (server-managed):
-        if res.snapshot_id is not None:
-            recovery_chat = await agent.load_chat(snapshot_id=res.snapshot_id)
-            await recovery_chat.send('Try again with order 456.')
+        print(retry.text)
     else:
         print(res.text)
 ```
 
-For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` carrying `AgentFinishReason.FAILED` and `res.error`. Only transport or HTTP disconnects raise `GenkitError` while iterating `turn.stream`:
+For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` carrying `AgentFinishReason.FAILED` and `res.error`. Only errors that leave no turn result (init misuse, HTTP errors, dropped connections) raise `GenkitError` while iterating `turn.stream`:
 
 ```python
 from genkit import GenkitError
@@ -506,7 +503,7 @@ else:
         show_turn_failure(res.error)
 ```
 
-If a remote HTTP stream drops mid-turn (`err.status` is `'UNAVAILABLE'` or `'DEADLINE_EXCEEDED'`), `chat` rolls back locally, but a store-backed server turn may still finish in the background. Reload with `await agent.load_chat(session_id=...)` (or inspect `await agent.get_snapshot(session_id=...)`) before resending a turn that triggers side-effecting tools.
+If a remote HTTP stream drops mid-turn (`err.status` is `'UNAVAILABLE'` or `'DEADLINE_EXCEEDED'`), `chat` rolls back locally, but a store-backed server turn may still finish in the background. Inspect `await agent.get_snapshot(session_id=...)` before resending a turn that triggers side-effecting tools, then continue with `agent.chat(session_id=...)`, which resumes from the session's last completed snapshot. `await agent.load_chat(session_id=...)` loads the newest snapshot as is, so if the background turn failed, the next `send()` fails with `INVALID_ARGUMENT` (`SNAPSHOT_NOT_RESUMABLE`).
 
 ## Tool exceptions
 
@@ -534,7 +531,9 @@ async def lookup_order(input: LookupOrderInput) -> dict:
     return order
 ```
 
-When serving over HTTP (`serve_agent()` or `genkit.web`), internal `GenkitError` messages are redacted in HTTP error responses so internal details stay in server logs. Raise `PublicError(status, message)` (`from genkit import PublicError`) only when an error status and message are safe to expose to external callers.
+The turn fails with the `GenkitError`'s own status and message, and `res.error.reason` is `ErrorReason.TOOL_FAILED`. Any other exception fails the turn as `INTERNAL` with the message `internal error`; the original text stays in server logs.
+
+When serving over HTTP (`serve_agent()` or `genkit.web`), errors that fail the request, such as init misuse or a raising transform, keep their status and message only if they are a `PublicError`. Anything else goes out as HTTP 500 `INTERNAL` with a generic message. A failed turn is different: the response is HTTP 200, and `error` carries a tool's `GenkitError` status and message unchanged, so keep internal details such as hostnames or query text out of those messages. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full HTTP error model.
 
 When the model can recover (for example, an unknown order ID entered by the user), return structured output instead:
 

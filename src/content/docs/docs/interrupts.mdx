@@ -1315,7 +1315,7 @@ For this use case, register an interrupt tool with `define_interrupt`, or raise
 `Interrupt` from a normal tool when you need to pause conditionally.
 
 ```python
-from genkit import FinishReason, Genkit
+from genkit import Genkit
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
@@ -1362,6 +1362,8 @@ If you've passed one or more interrupts to your generate call, you
 need to check the response for interrupts so that you can handle them:
 
 ```python
+from genkit import FinishReason
+
 # You can check the finish_reason (use the enum for comparisons)
 if response.finish_reason == FinishReason.INTERRUPTED:
     print('Generation interrupted.')
@@ -1504,6 +1506,8 @@ async def transfer_money(input: TransferInput, ctx: ToolContext) -> dict:
 
 ### Restart tools after interruption
 
+The dict passed to `Interrupt(...)` lands on the interrupted part as `interrupt.metadata['interrupt']`. The model's original arguments stay on `interrupt.tool_request.input`.
+
 To restart an interrupted tool, call `interrupt.restart()` on the interrupted `Part` and pass the returned part to `resume_restart` on `ai.generate()`.
 
 `interrupt.restart()` accepts two optional keyword arguments:
@@ -1522,8 +1526,11 @@ messages = response.messages
 if response.interrupts:
     interrupt = response.interrupts[0]
 
-    # Ask the user to confirm the transfer...
-    if user_approved:
+    details = interrupt.metadata['interrupt']
+    # => {'reason': 'confirm_large', 'to_account': 'ABC123', 'amount': 250.0}
+
+    # confirm_transfer stands for your own UI: show details, return True or False.
+    if await confirm_transfer(details):
         # Rerun the tool by passing a restart part to resume_restart
         restart = interrupt.restart(
             resumed_metadata={'approved_by': 'user'},
@@ -1551,8 +1558,8 @@ If you adjust the tool arguments upon restart (for example, asking the user to l
 
 ```python
 # Inside your interrupt-handling loop:
-meta = interrupt.tool_request.input
-adjusted_input = TransferInput(to_account=meta.get('to_account'), amount=100.0)
+requested = interrupt.tool_request.input
+adjusted_input = TransferInput(to_account=requested['to_account'], amount=100.0)
 
 restart = interrupt.restart(
     resumed_metadata={'approved_by': 'user'},
@@ -1578,5 +1585,15 @@ async def transfer_money(input: TransferInput, ctx: ToolContext) -> dict:
         'message': f'Transferred ${input.amount} to {input.to_account}',
     }
 ```
+
+`ctx.original_input` is `None` on a first call and on a restart that kept the input.
+
+## Out-of-band approval
+
+The examples above collect the answer inline. When the answer arrives later from
+a different request, use [agent interrupts](/docs/agents/interrupts): the
+session store holds the paused history, so the resuming request carries only the
+decision. Genkit checks that decision against the stored history and rejects a
+resume that does not match a pending interrupt.
 
 </Lang>

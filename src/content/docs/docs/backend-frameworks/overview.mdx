@@ -152,17 +152,62 @@ Two deployment settings can truncate a stream that the code handles correctly:
 
 ## The HTTP handler contract
 
-`genkit-fastapi`, `genkit-flask`, and `genkit-django` share the same wire protocol built on `genkit.web`:
+`genkit-fastapi`, `genkit-flask`, and `genkit-django` serve a flow with the same wire protocol, built on `genkit.web`:
 
-- **Request body:** `POST` JSON wrapped in `{"data": <flow input>}`, or `{}` when a flow takes no input. Invalid JSON or a missing `data` key returns `400 INVALID_ARGUMENT`. Input validation failures return `400` naming the failing field paths without echoing caller values.
-- **One-shot response:** `application/json` body `{"result": <flow output>}` serialized with camelCase aliases and `None` model fields omitted.
-- **Streaming response:** `text/event-stream` when the request includes `Accept: text/event-stream` or `?stream=true`. Each chunk arrives as `data: {"message": <chunk>}`, followed by a terminal `data: {"result": <output>}` (or `data: {"error": ...}` if the stream fails). When the client disconnects, the adapter closes the async generator and cancels the running flow task immediately.
-- **Return values:** Return `response.text` or `response.output` from served flows, never a raw `ModelResponse`. `ModelResponse.request` contains the system prompt, tool definitions, retrieved documents, and message history, which would be serialized onto the wire.
+- **Request body:** `POST` JSON wrapped in `{"data": <flow input>}`, or `{}` when the flow takes no input. The input is validated against the flow's schema.
+- **One-shot response:** `application/json` body of `{"result": <flow output>}`, serialized with camelCase aliases and `None` model fields omitted.
+- **Streaming response:** `text/event-stream` when the request sends `Accept: text/event-stream` or `?stream=true`. Each event is `data: {"message": <chunk>}`, then a final `data: {"result": <output>}`. When the server closes the stream on a client disconnect, the running flow is cancelled.
+- **Context:** Pass a `ContextProvider` as `context_provider=` to `genkit_fastapi_handler`, `genkit_flask_handler`, or `genkit_django_handler`. It receives a `RequestData` (`from genkit.web import ContextProvider, RequestData`) with `method`, `headers` (lowercased keys), `input`, and the framework's own request object on `request`. The dict it returns becomes `ctx.context` in the flow and its tools. FastAPI's `serve_flow` takes a `Depends`-style `context_dependency=` instead.
+- **Return values:** Return `response.text` or `response.output` from a served flow, not a raw `ModelResponse`. Its `request` field holds the system prompt, tool definitions, retrieved documents, and message history, and would be serialized onto the wire.
 
-## Request context and HTTP errors
+## Errors and timeouts
 
-- **Context providers (`RequestData`):** Pass a `ContextProvider` (`from genkit.web import ContextProvider, RequestData`) via `context_provider=` on `genkit_flask_handler`, `genkit_django_handler`, or `genkit_fastapi_handler` (or use `context_dependency=` on `serve_flow` for FastAPI `Depends`). `RequestData` is non-generic (`req: RequestData`) and exposes `req.method`, lowercased `req.headers` (for example, `req.headers.get('authorization')`), `req.input`, and the framework's native `req.request`. The returned dict populates `ctx.context` on `FlowContext` and `ToolContext`.
-- **Client-safe errors (`PublicError`):** Served handlers redact internal `GenkitError`s, model provider failures, and unhandled exceptions to HTTP `500` with `{"status": "INTERNAL", "message": "Internal Error"}` while logging details server-side. Raise `PublicError(status, message, details)` (`from genkit import PublicError`) when the HTTP caller should receive a specific status code and message, such as `'UNAUTHENTICATED'` (`401`), `'PERMISSION_DENIED'` (`403`), `'NOT_FOUND'` (`404`), or `'INVALID_ARGUMENT'` (`400`).
+The adapters derive the HTTP status with `genkit.web.error_status(e)` and the body with `error_json(e)` (or `error_body(e)` for the dict), using the statuses described in [Error types](/docs/error-types):
+
+- **`PublicError(status, message, details=None)`** (`from genkit import PublicError`) sends its status, message, and details. Raise it from a flow or a context provider when the caller should see why the request failed.
+- **Status codes:** `UNAUTHENTICATED` 401, `PERMISSION_DENIED` 403, `NOT_FOUND` 404, `INVALID_ARGUMENT` / `FAILED_PRECONDITION` / `OUT_OF_RANGE` 400, `ALREADY_EXISTS` / `ABORTED` 409, `RESOURCE_EXHAUSTED` 429, `CANCELLED` 499, `UNIMPLEMENTED` 501, `UNAVAILABLE` 503, `DEADLINE_EXCEEDED` 504, `INTERNAL` / `UNKNOWN` / `DATA_LOSS` 500.
+- **Everything else is a 500.** A plain `GenkitError` of any status, a model provider error, a `ValueError`, or a raw Pydantic `ValidationError` becomes `{"message":"Internal Error","status":"INTERNAL"}`. The full error is logged server-side through Python's `logging`.
+- **Bad requests keep their 400.** A body that isn't valid JSON or isn't wrapped in `{"data": ...}` returns `INVALID_ARGUMENT` with `request body must be valid JSON` or `Flow request must be wrapped in {"data": ...}`. Input that fails the flow's schema names the failing field without echoing its value, such as `Invalid input for flow 'order': qty: Input should be a valid integer, unable to parse string as an integer`.
+- **Framework exceptions pass through a context provider:** FastAPI/Starlette `HTTPException`, Flask `abort(...)`, and Django `PermissionDenied`, `Http404`, and `SuspiciousOperation` keep the framework's own response.
+- **Streaming:** the response has already committed a 200, so a mid-stream failure arrives as a terminal `data: {"error": {"message": ..., "status": ...}}` event instead of a status code, with the same redaction. A custom route that fails before `to_sse` starts can yield `error_sse(e)` for the same frame.
+
+Two deployment settings can truncate a stream that the code handles correctly:
+
+- A WSGI server worker timeout, such as Gunicorn's `--timeout` (30 seconds by default), kills a sync worker mid-response. Raise it above your slowest generation for routes that stream.
+- A reverse proxy that buffers responses holds every event until the flow finishes. Disable response buffering on the streaming route.
+
+### Model failures in a served flow
+
+`ai.generate()` doesn't raise when the model call fails at runtime, such as Gemini returning `UNAVAILABLE`. It returns a `ModelResponse` with `response.error` set and `response.text` empty. Invalid structured output lands on `response.error` the same way. See [Errors from `generate()`](/docs/error-types#errors-from-generate). What the HTTP caller receives depends on what the flow does next:
+
+- **Returns without checking:** 200 with `{"result":""}`.
+- **Raises anything other than `PublicError`**, such as `RuntimeError(response.error.message)`: 500 with `{"message":"Internal Error","status":"INTERNAL"}`.
+- **Raises `PublicError`:** its status and message.
+
+```python
+from genkit import Genkit, PublicError
+from genkit_google_genai import GoogleAI
+
+# 1. Initialize Genkit with a default model
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+@ai.flow()
+async def suggest_dish(cuisine: str) -> str:
+    # 2. A failed model call comes back on response.error, not as an exception
+    response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+
+    # 3. Pick the status and message the caller sees
+    if response.error is not None:
+        raise PublicError('UNAVAILABLE', 'Menu suggestions are busy, try again shortly')
+    return response.text
+
+
+# POST /suggest {"data": "thai"} (Gemini returns UNAVAILABLE)
+# => 503 {"message":"Menu suggestions are busy, try again shortly","status":"UNAVAILABLE"}
+```
+
+Don't forward `response.error.status` unchecked. A rejected server API key or a request your server built wrong would reach the caller as a 4xx, blaming the caller for a server problem.
 
 ## Custom routes with `genkit.web`
 
@@ -205,13 +250,16 @@ async def auth(req: RequestData) -> dict[str, object]:
 # 3. Parse body, resolve context, and return SSE or JSON
 async def serve_order(request: Request) -> Response:
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError as err:
+            raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
         flow_input = read_body(body)
         req_data = RequestData(
             request=request,
             method=request.method,
             headers=request.headers.items(),
-            input=flow_input,
+            input=body.get('data'),
         )
         ctx = await auth(req_data)
         if wants_stream(

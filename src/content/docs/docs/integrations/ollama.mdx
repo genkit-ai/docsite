@@ -361,7 +361,7 @@ See [Generating content](/docs/models) for more information.
 
 <Lang lang="python">
 
-The `genkit-ollama` package connects Genkit to local or remote [Ollama](https://ollama.com/) servers, automatically discovering pulled chat models, vision capabilities, tool support, and embedding models via `/api/tags` and `/api/show`.
+The `genkit-ollama` package connects Genkit to a local or remote [Ollama](https://ollama.com/) server. Any model or embedder the server has pulled resolves as `'ollama/<name>'`, with its tool and vision support read from the server.
 
 ## Prerequisites
 
@@ -381,7 +381,7 @@ uv add genkit-ollama
 
 ## Configuration
 
-`Ollama()` reads `OLLAMA_HOST` when set and otherwise connects to `http://127.0.0.1:11434`. Reference models and embedders as `'ollama/<name>'` strings—no manual model registration list is needed:
+`Ollama()` connects to `OLLAMA_HOST` when it is set, otherwise to `http://127.0.0.1:11434`. There is no model list to register; name any pulled model as `'ollama/<name>'`:
 
 ```python
 from genkit import Genkit
@@ -393,9 +393,9 @@ ai = Genkit(
 )
 ```
 
-### Custom Endpoints and Headers
+### Custom endpoints and headers
 
-Pass `base_url`, `request_headers`, and `timeout` (in seconds) when pointing at a remote or authenticated Ollama deployment:
+Pass `base_url`, `request_headers`, and `timeout` (in seconds) when pointing at a remote or authenticated Ollama deployment. `base_url` is the server root: requests go to `{base_url}/api/chat`, so a URL ending in `/v1` or `/api` raises `ValueError`.
 
 ```python
 import os
@@ -413,7 +413,31 @@ ai = Genkit(
 )
 ```
 
-If the Ollama server cannot be reached at call time, Genkit raises `GenkitError` with `status='UNAVAILABLE'`.
+When `request_headers` sets no `Authorization` header, the Ollama client sends the `OLLAMA_API_KEY` environment variable as a bearer token, so hosted Ollama needs only `Ollama(base_url='https://ollama.com')`. To bill a different key per call, pass `context={'secrets': {'api_key': tenant_key}}` to `ai.generate()`; that key authenticates the call only and stays out of traces.
+
+For a token that expires, pass a callable instead of a dict. It takes no arguments, can be sync or async, and runs before every request, so it should cache the token itself. This one sends a Google ID token to an Ollama server on Cloud Run:
+
+```python
+import asyncio
+
+import google.auth.transport.requests
+import google.oauth2.id_token
+from genkit import Genkit
+from genkit_ollama import Ollama
+
+OLLAMA_URL = 'https://ollama-gpu-abc123.a.run.app'
+credentials = google.oauth2.id_token.fetch_id_token_credentials(OLLAMA_URL)
+
+async def cloud_run_headers() -> dict[str, str]:
+    # Refresh off the event loop, and only when the cached token has expired.
+    if not credentials.valid:
+        await asyncio.to_thread(credentials.refresh, google.auth.transport.requests.Request())
+    return {'Authorization': f'Bearer {credentials.token}'}
+
+ai = Genkit(plugins=[Ollama(base_url=OLLAMA_URL, request_headers=cloud_run_headers)])
+```
+
+An unreachable server doesn't make `ai.generate()` raise. The response comes back with `response.error.status` set to `UNAVAILABLE`, or `DEADLINE_EXCEEDED` when `timeout` runs out. See [Error types](/docs/error-types/).
 
 ## Usage
 
@@ -438,13 +462,25 @@ async def summarize_notes(notes: str) -> str:
     return response.text
 ```
 
-For thinking-capable models (such as `qwen3` or `deepseek-r1`), set `think=True` on `OllamaConfig` to separate reasoning traces onto `response.reasoning`. Pass undeclared Ollama options in `OllamaConfig(extra={...})`.
+For thinking-capable models (such as `qwen3` or `deepseek-r1`), set `think=True` (or `'low'`, `'medium'`, `'high'`) on `OllamaConfig`. The model's thinking comes back as reasoning parts on `response.message.content`, separate from `response.text`.
 
-## Advanced Usage
+`OllamaConfig` rejects unknown keys, so a misspelled `num_ctx` fails instead of running with the default context window. `max_output_tokens` and `stop_sequences` map to Ollama's `num_predict` and `stop`. Pass an Ollama option the class doesn't declare in `OllamaConfig(extra={...})`.
+
+## Model capabilities
+
+The plugin asks the server what each model supports instead of guessing from its name:
+
+- **Listing**: the Dev UI's model list calls `GET /api/tags`. Names containing `embed` become embedders; every other model gets one `POST /api/show`, at most four at a time, each bounded by five seconds or by `timeout` when that is shorter.
+- **Resolving by name**: the first `ai.generate(model='ollama/qwen3')` makes the same `/api/show` call before the request.
+- **Mapping**: the reported `tools` capability sets `supports.tools`, and `vision` sets `supports.media`.
+- **Caching**: results are kept per process, keyed by model name and the digest from `/api/tags`, so a re-pulled model is probed again.
+- **Fallback**: a failed probe (server down, model not pulled, a server too old to report capabilities) advertises every capability and is retried after 30 seconds. The request still goes to `/api/chat`.
+
+## Advanced usage
 
 ### Embeddings
 
-Any pulled embedding model (such as `nomic-embed-text` or `mxbai-embed-large`) resolves automatically under `'ollama/<name>'`:
+Any pulled embedding model, such as `nomic-embed-text`, resolves under `'ollama/<name>'`:
 
 ```python
 from genkit import Genkit
@@ -477,7 +513,7 @@ async def streaming_story(topic: str, ctx: FlowContext[str]) -> str:
     return (await stream_response.response).text
 ```
 
-### Tool Calling
+### Tool calling
 
 Models with tool support (such as `llama3.2`, `qwen3`, and `mistral-nemo`) execute Genkit tools automatically:
 
@@ -502,7 +538,7 @@ async def weather_flow(location: str) -> str:
     return response.text
 ```
 
-### Multimodal Input
+### Multimodal input
 
 Pass images to vision-capable models (such as `llava` or `gemma3`) as `data:` or `http(s):` URLs via `Part.from_media()`. Local filesystem paths are rejected:
 
@@ -517,12 +553,12 @@ response = await ai.generate(
     model='ollama/gemma3',
     prompt=[
         Part.from_text('Describe the components in this diagram.'),
-        Part.from_media(f'data:image/png;base64,{image_b64}', content_type='image/png'),
+        Part.from_media(url=f'data:image/png;base64,{image_b64}', content_type='image/png'),
     ],
 )
 ```
 
-### Structured Output
+### Structured output
 
 ```python
 from pydantic import BaseModel, Field

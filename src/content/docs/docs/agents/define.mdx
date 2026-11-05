@@ -616,7 +616,7 @@ Initialize `Genkit` from `genkit.exp` to access the experimental agent construct
 - **`ai.define_prompt_agent()`** wraps a prompt that already exists (registered with `ai.define_prompt()` or loaded from a Dotprompt file). It keeps prompt copy, model settings, schemas, and tool lists in the prompt layer while the agent adds conversation state and transport.
 - **`ai.define_custom_agent()`** replaces the prompt loop with your own code, allowing multiple model calls in one turn, custom planning loops, direct session control, or custom streaming.
 
-All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs, and can be looked up by name with `ai.agent(name)`. The agent is also a bidirectional action that can be served over HTTP.
+All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs, and can be looked up by name with `await ai.agent(name)`. The agent is also a bidirectional action that can be served over HTTP.
 
 ## Define a prompt-backed agent
 
@@ -678,7 +678,7 @@ weather_agent = ai.define_agent(
 
 ## Tools and current session
 
-Tools can read and update the active session by calling `current_session()` from `genkit.exp`. The session exposes `update_custom(fn)`, `get_messages()`, `add_messages()`, `add_artifacts()`, and related helpers.
+Tools can read and update the active session by calling `current_session()` from `genkit.exp`. It returns `None` outside an agent turn. The session exposes `get_custom()`, `update_custom(fn)`, `get_messages()`, `add_messages()`, `get_artifacts()`, and `add_artifacts()`. Inside the session, custom state is a plain dict: `update_custom(fn)` calls `fn` with the current dict (or `None` on the first write) and stores the dict it returns.
 
 ```python
 from pydantic import BaseModel
@@ -704,21 +704,20 @@ class AddTaskInput(BaseModel):
 @ai.tool()
 async def add_task(input: AddTaskInput) -> TaskItem:
     """Add a new task to the list."""
-    created: TaskItem | None = None
+    sess = current_session()
+    if sess is None:
+        raise RuntimeError('add_task requires an active agent session.')
+
+    created = TaskItem(id=0, title=input.title)
 
     def mutate(custom: dict | None) -> dict:
-        nonlocal created
-        state = custom or {}
-        next_id = state.get('next_id') or state.get('nextId') or 1
-        tasks = list(state.get('tasks') or [])
-        created = TaskItem(id=next_id, title=input.title)
-        tasks.append(created.model_dump())
-        return {'tasks': tasks, 'next_id': next_id + 1}
+        state = TaskState.model_validate(custom or {})
+        created.id = state.next_id
+        state.tasks.append(created)
+        state.next_id += 1
+        return state.model_dump()
 
-    if sess := current_session():
-        await sess.update_custom(mutate)
-    if created is None:
-        raise RuntimeError('add_task requires an active agent session.')
+    await sess.update_custom(mutate)
     return created
 ```
 
@@ -742,7 +741,7 @@ trip_planner_agent = ai.define_prompt_agent(
 )
 ```
 
-The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, the turn fails with an error telling you which prompt name was missing.
+The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, `chat.send()` does not raise: the response comes back with `finish_reason == AgentFinishReason.FAILED` and a `NOT_FOUND` error that names the missing prompt. See [Agent error handling](/docs/agents/errors).
 
 ## Define a custom agent implementation
 
@@ -754,7 +753,7 @@ from genkit.exp.agent import AgentContext, AgentResult, SessionRunner
 
 async def research_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
     # Your own per-turn loop. See Custom orchestration for the full pattern.
-    ...
+    return await sess.result()
 
 
 research_agent = ai.define_custom_agent(

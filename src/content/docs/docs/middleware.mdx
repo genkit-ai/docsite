@@ -1465,14 +1465,16 @@ The official Genkit middleware for Python is available in the `genkit-middleware
 uv add genkit-middleware
 ```
 
-Register the `Middleware` plugin during initialization to expose the built-ins to the Dev UI:
+Passing a middleware instance in `use=[...]` works without any setup. Register the `Middleware` plugin to also list the built-ins in the Dev UI and to name them in a `.prompt` file's `use:`:
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware
 
 ai = Genkit(
     plugins=[
+        GoogleAI(),
         Middleware(),
     ],
 )
@@ -1511,7 +1513,7 @@ response = await ai.generate(
 
 ### 2. Skills middleware (`Skills`)
 
-Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
+Scans each directory in `skill_paths` for subfolders that contain a `SKILL.md` file, reads `name` and `description` from its YAML frontmatter, and lists the skills in the system prompt. It also adds a `use_skill` tool that loads a skill's full `SKILL.md` on demand.
 
 ```python
 from genkit import Genkit
@@ -1619,6 +1621,8 @@ response = await ai.generate(
 - `backoff_factor` (optional): The factor by which the delay increases after each retry (exponential backoff, default: 2.0).
 - `no_jitter` (optional): Whether to disable jitter on the delay (default: `False`).
 
+A `GenkitError` is retried only when its status is in `statuses`; any other exception is retried. If a `GenkitError` carries `retry_after_ms`, `Retry` waits at least that long, capped at `max_delay_ms`.
+
 ### 5. Fallback middleware (`Fallback`)
 
 Automatically switches to a different model if the primary model fails on a specific set of error codes. Useful for falling back to a smaller/faster model when a large model exceeds quota limits.
@@ -1646,13 +1650,44 @@ response = await ai.generate(
 - `models` (required): A list of model names or `ModelRef` values to try in order.
 - `statuses` (optional): A list of status names that should trigger a fallback (default: `['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']`).
 
+Each fallback model must resolve on the app, so register its plugin. A string entry runs with that model's default config; a `ModelRef` entry runs with the ref's own `config`. The primary request's `config` is not carried over. Errors that aren't a `GenkitError` with a listed status skip the fallbacks.
+
+### 6. Artifacts middleware (`Artifacts`)
+
+Gives the model `read_artifact` and `write_artifact` tools over the active agent session's artifacts, and lists the current artifacts in the system prompt each turn. `Artifacts` depends on agent sessions, so it lives in `genkit_middleware.exp` and only works when passed to an agent defined with `genkit.exp.Genkit`. The `Middleware()` plugin doesn't register it.
+
+```python
+from genkit.exp import Genkit
+from genkit_google_genai import GoogleAI
+from genkit_middleware.exp import Artifacts
+
+ai = Genkit(plugins=[GoogleAI()])
+
+builder = ai.define_agent(
+    name='builder',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='You are a code generator. Use write_artifact to create files.',
+    use=[Artifacts()],
+)
+
+chat = builder.chat()
+await chat.send('Write a README.md for a pizza ordering CLI.')
+print([artifact.name for artifact in chat.artifacts])
+# => ['README.md']
+```
+
+**Configuration options:**
+- `readonly` (optional): If `True`, only `read_artifact` is provided (default: `False`). Use it on an orchestrator that reads what its sub-agents produced; see [Multi-agent delegation](/docs/python/agents/multi-agent/).
+
 ## Building your own custom middleware
 
 Implement custom middleware by subclassing `Middleware` from `genkit.middleware` and setting a unique `name` class attribute. Decorating the class with `@ai.middleware` registers it on the Genkit instance so it appears in the Developer UI.
 
+The base class shares its name with the `genkit_middleware.Middleware` plugin. If a module needs both, alias one: `from genkit_middleware import Middleware as MiddlewarePlugin`.
+
 Middleware can override four hooks:
 - `tools(self, ctx)`: Injects tools into the generation loop.
-- `wrap_generate(self, params, ctx, next_fn)`: Wraps the outer generation loop.
+- `wrap_generate(self, params, ctx, next_fn)`: Wraps each turn of the tool loop: one model call plus the tool calls it requested. Later turns run inside its `next_fn`.
 - `wrap_model(self, params, ctx, next_fn)`: Wraps each model call.
 - `wrap_tool(self, params, ctx, next_fn)`: Wraps each tool call.
 
@@ -1663,8 +1698,9 @@ from pydantic import BaseModel
 
 from genkit import Genkit, ModelResponse
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit_google_genai import GoogleAI
 
-ai = Genkit()
+ai = Genkit(plugins=[GoogleAI()])
 
 
 class LoggerConfig(BaseModel):
@@ -1697,11 +1733,25 @@ Pass an instance in `use`:
 
 ```python
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello',
     use=[LoggerMiddleware(verbose=True)],
 )
 ```
+
+### Composition order
+
+Middleware in `use=[...]` composes left to right, with the first entry as the outermost wrapper. Each `next_fn` runs the next inner layer:
+
+```python
+use=[
+    Retry(max_retries=3),  # outer: retries the whole inner stack
+    Fallback(models=[GoogleAI.gemini('gemini-flash-latest')]),  # inner: tries the backup on failure
+]
+# effective chain: Retry { Fallback { model } }
+```
+
+Order matters. `Retry` outside `Fallback` retries the entire fallback cascade as a unit. Swap them and `Retry` exhausts its attempts on the primary model before `Fallback` switches models.
 
 For more examples of custom middleware, see the built-in implementations in [`py/packages/genkit-middleware`](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-middleware).
 

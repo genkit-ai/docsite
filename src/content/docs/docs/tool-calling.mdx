@@ -1366,8 +1366,7 @@ For this to work, several requirements must be met:
 - The model must be trained to make tool requests when it's needed to complete
   a prompt. Most of the larger models provided through web APIs, such as
   Gemini and Claude, can do this, but smaller and more specialized models
-  often cannot. Genkit will throw an error if you try to provide tools to a
-  model that doesn't support it.
+  often cannot.
 - The calling application must provide tool definitions to the model in the
   format it expects.
 - The calling application must prompt the model to generate tool calling
@@ -1383,13 +1382,10 @@ calling loop described earlier.
 ### Model support
 
 Tool calling support depends on the model, the model API, and the Genkit plugin.
-Consult the relevant documentation to determine if tool calling is likely to be
-supported. In addition:
-
-- Genkit will throw an error if you try to provide tools to a model that
-  doesn't support it.
-- If the plugin exports model references, the `info.supports.tools` property
-  will indicate if it supports tool calling.
+Consult the plugin's documentation to determine if tool calling is supported.
+Genkit forwards `tools` to the model plugin without checking support first, so
+a model that can't call tools either rejects the request or ignores the tools,
+depending on the plugin and provider API.
 
 ### Defining tools
 
@@ -1597,6 +1593,42 @@ if (
     print(f'Stopped after max_turns ({len(response.messages)} messages recorded)')
 ```
 
+### When a tool fails
+
+An exception raised inside a tool stops the tool loop. `ai.generate()` does not
+raise it. It returns a `ModelResponse` with
+`finish_reason == FinishReason.FAILED` and `response.error.reason ==
+ErrorReason.TOOL_FAILED`. The model never sees the error and does not retry.
+`response.messages` drops the failed round and ends at the last completed one,
+so you can retry without re-running tools that already succeeded.
+
+Raise `PublicError` or `GenkitError` to control the status and message. Any
+other exception is reported as `INTERNAL` with the message `'internal error'`,
+and Genkit logs the original traceback:
+
+```python
+from genkit import ErrorReason, PublicError
+from pydantic import BaseModel
+
+class OrderInput(BaseModel):
+    order_id: str
+
+@ai.tool()
+async def lookup_order(input: OrderInput) -> str:
+    """Looks up the delivery status of a restaurant order."""
+    raise PublicError('NOT_FOUND', f'No order {input.order_id}')
+
+response = await ai.generate(prompt='Where is order A1?', tools=[lookup_order])
+
+if response.error and response.error.reason == ErrorReason.TOOL_FAILED:
+    print(response.finish_reason, response.error.status, response.error.message)
+    # => failed NOT_FOUND No order A1
+```
+
+A model that calls a tool you didn't register gets the same shape with
+`NOT_FOUND` and `ErrorReason.TOOL_NOT_FOUND`. See
+[Error types](/docs/error-types) for the full error model.
+
 ### Pause the tool loop by using interrupts
 
 By default, Genkit repeatedly calls the LLM until every tool call has been
@@ -1615,9 +1647,9 @@ how to use them.
 ### Explicitly handling tool calls
 
 If you want full control over the tool-calling loop, set
-`return_tool_requests=True`. `ai.generate()` returns immediately with any
-`Part` items containing `tool_request` in `response.tool_requests`, and you
-supply `Part.from_tool_response(...)` messages on the next turn:
+`return_tool_requests=True`. `ai.generate()` returns the model's tool requests
+in `response.tool_requests` without running them, and you send back
+`Part.from_tool_response(...)` parts on the next turn:
 
 ```python
 from genkit import Message, Part, Role

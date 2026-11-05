@@ -1468,11 +1468,8 @@ its own test set will happily write questions the source text does not answer.
 
 <Lang lang="python">
 
-<Aside type="caution" title="Evaluator APIs in Genkit Python 0.13">
-  Genkit Python 0.13 is the last release shipping the current evaluator APIs
-  (`genkit.evaluator`, `ai.define_evaluator()`, and `ai.evaluate()`) and the
-  `genkit-evaluators` package (`genkit<1`) ahead of a cross-SDK evaluation
-  redesign in 1.0.
+<Aside type="caution" title="Evaluators are cut from 1.0">
+  Genkit Python 0.13 is the last release with evaluators (`ai.define_evaluator()`, `ai.evaluate()`, `genkit.evaluator`) and the `genkit-evaluators` package. Genkit 1.0 cuts evaluators from the 1.0 release; evaluation will return as an additive feature in a later release. To keep using evaluators, pin `genkit==0.13.*`.
 </Aside>
 
 ## Quick start
@@ -1516,6 +1513,13 @@ async def qa_flow(input: QAInput) -> QAOutput:
         docs=fact_docs,
     )
     return QAOutput(answer=response.text)
+
+async def main() -> None:
+    pass
+
+# Keeps the process alive under `genkit start` so the Dev UI can call qa_flow
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 3.  Start your Genkit application.
@@ -1544,7 +1548,7 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 
    a. Click the **Add example** button to open the example editor panel.
 
-   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example has to your dataset.
+   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example to your dataset.
 
    c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
 
@@ -1579,7 +1583,7 @@ dataset page. You can also start a new evaluation from the _Evaluations_ tab.
    to the _Evaluation details_ page.
 
 You can see the details of your evaluation on this page, including original
-input, extracted context and metrics (if any).
+input, output, and metrics (if any).
 
 ## Core concepts
 
@@ -1643,10 +1647,8 @@ That registers:
 - **Deep Equal** (`genkitEval/deep_equal`) -- Checks if the generated output is deep-equal to the reference output
 - **JSONata** (`genkitEval/jsonata`) -- Checks if the generated output matches a JSONata expression provided in the reference field
 
-For LLM-as-judge metrics, define your own with
-**`ai.define_evaluator()`** (see [Custom evaluators](#custom-evaluators)) or use
-[Gemini Enterprise evaluation metrics](/docs/integrations/vertex-ai#evaluation-metrics)
-via the Google GenAI plugin.
+For LLM-as-judge metrics, define your own with `ai.define_evaluator()` (see
+[Custom evaluators](#custom-evaluators)) or use an evaluator plugin.
 
 ### Evaluator plugins
 
@@ -1680,18 +1682,18 @@ async def food_evaluator(
     response = await ai.generate(
         model=GoogleAI.gemini('gemini-flash-latest'),
         prompt=(
-            'Is the following food delicious? Respond with "yes", "no", or "maybe". '
+            'Is the following food delicious? Reply with exactly one word: yes, no, or maybe. '
             f'Food: {datapoint.output}'
         ),
     )
-    verdict = response.text.strip()
+    verdict = response.text.strip().lower()
 
     return EvaluatorResponse(
         test_case_id=datapoint.test_case_id or '',
         evaluation=[
             Score(
                 score=verdict,
-                status=ScoreStatus.PASS,
+                status=ScoreStatus.PASS if verdict == 'yes' else ScoreStatus.FAIL,
                 details=ScoreDetails(reasoning=f'LLM judged: {verdict}'),
             ),
         ],
@@ -1705,10 +1707,22 @@ ai.define_evaluator(
 )
 ```
 
-Run your custom evaluator from the Developer UI or with the CLI `eval:run` and `eval:flow` commands:
+Run your custom evaluator from the Developer UI or with the CLI `eval:run` and `eval:flow` commands. This one expects a string `output`, so point it at a dataset or flow that produces plain text:
 
 ```bash
-genkit eval:flow qa_flow --input myDataset.json --evaluators=byo/food_evaluator
+genkit eval:run foodDataset.json --evaluators=byo/food_evaluator -- uv run main.py
+```
+
+Here, `foodDataset.json` holds rows with `input` and `output` fields:
+
+```json
+[
+  {
+    "testCaseId": "soup",
+    "input": "Recommend a comforting soup.",
+    "output": "Roasted tomato bisque with sourdough croutons."
+  }
+]
 ```
 
 ### Running evaluations programmatically
@@ -1742,13 +1756,14 @@ async def run_evaluation() -> list[EvaluatorResponse]:
     results = await ai.evaluate(
         evaluator='byo/food_evaluator',
         dataset=dataset,
-        config={},
         eval_run_id='my-eval-run',
     )
 
     for row in results:
         for score in row.evaluation:
             print(f'Test case {row.test_case_id}: {score.score} ({score.status})')
+    # => Test case test-1: yes (PASS)
+    #    Test case test-2: yes (PASS)
 
     return results
 
@@ -1924,8 +1939,10 @@ Array<{
 }>;
 ```
 
-The data extractor automatically locates retrievers and adds the produced docs
-to the context array. You can run evaluation metrics on this extracted dataset
+The data extractor fills `context` from retriever steps in the trace. The
+quick start flow fetches its documents with a plain function, so `context` is
+empty for it. If your metric needs context, add a `context` list to each row
+before you run it. You can run evaluation metrics on this extracted dataset
 using the `eval:run` command.
 
 ```bash

@@ -649,15 +649,12 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Export traces, metrics, and trace-correlated logs on Cloud Run (skipped locally when GENKIT_ENV=dev)
+# Export traces, metrics, and logs to Google Cloud (skipped when GENKIT_ENV=dev)
 enable_google_cloud_telemetry()
 
-# Gemini API (API key). For Vertex AI instead:
+# Gemini API (API key). For Gemini Enterprise instead:
 #   from genkit_google_genai import VertexAI
-#   ai = Genkit(
-#       plugins=[VertexAI(project=os.environ.get('GOOGLE_CLOUD_PROJECT'), location='us-central1')],
-#       model=VertexAI.gemini('gemini-flash-latest'),
-#   )
+#   ai = Genkit(plugins=[VertexAI(location='us-central1')], model=VertexAI.gemini('gemini-3.5-flash'))
 ai = Genkit(
     plugins=[GoogleAI()],
     model=GoogleAI.gemini('gemini-flash-latest'),
@@ -763,7 +760,7 @@ async def verify_token(
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=['HS256'])
         return {
-            'uid': payload['sub'],
+            'uid': payload.get('sub'),
             'email': payload.get('email'),
         }
     except jwt.InvalidTokenError as err:
@@ -833,20 +830,25 @@ __pycache__
 
 **Gemini (Google AI)**
 
-1. [Generate an API key](https://aistudio.google.com/app/apikey) for the Gemini API using Google AI Studio.
+1. [Generate an API key](https://aistudio.google.com/app/apikey) for the
+   Gemini API using Google AI Studio.
+
 2. Store the API key in Secret Manager:
    1. Enable the [Secret Manager API](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com).
    2. Create a new secret containing your API key on the [Secret Manager](https://console.cloud.google.com/security/secret-manager) page.
    3. Grant your default compute service account the **Secret Manager Secret Accessor** role.
 
-**Vertex AI**
+**Gemini Enterprise**
 
-1. [Enable the Vertex AI API (`aiplatform.googleapis.com`)](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) for your project.
-2. On the [IAM](https://console.cloud.google.com/iam-admin/iam) page, grant the **Default compute service account** `roles/aiplatform.user`.
+1. [Enable the Gemini Enterprise API (`aiplatform.googleapis.com`)](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com)
+   for your project.
+
+2. On the [IAM](https://console.cloud.google.com/iam-admin/iam) page, ensure the
+   **Default compute service account** has the `roles/aiplatform.user` IAM role.
 
 **Cloud Trace, Monitoring, and Logging**
 
-If you enabled `enable_google_cloud_telemetry()`, grant the service account `roles/cloudtrace.agent`, `roles/monitoring.metricWriter`, and `roles/logging.logWriter`.
+If you call `enable_google_cloud_telemetry()`, grant the service account `roles/cloudtrace.agent`, `roles/monitoring.metricWriter`, and `roles/logging.logWriter`. See [Get started with Genkit Monitoring](/docs/observability/getting-started).
 
 ## 3. Deploy to Cloud Run
 
@@ -857,13 +859,14 @@ Deploy your application using the `gcloud` CLI. Cloud Run builds your container 
 ```bash
 gcloud run deploy genkit-service \
   --source . \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=<your-project-id> \
   --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
 ```
 
-**Vertex AI**
+**Gemini Enterprise**
 
-Switch `main.py` to `VertexAI(project=..., location='us-central1')` and `VertexAI.gemini('gemini-flash-latest')` before deploying (Application Default Credentials on the Cloud Run service account replace `GEMINI_API_KEY`):
+Switch `main.py` to the commented `VertexAI` lines, then deploy with these flags.
+The Cloud Run service account authenticates through Application Default
+Credentials, so no `GEMINI_API_KEY` secret is needed:
 
 ```bash
 gcloud run deploy genkit-service \
@@ -886,7 +889,6 @@ gcloud builds submit --tag us-central1-docker.pkg.dev/<your-project-id>/<repo>/g
 
 gcloud run deploy genkit-service \
   --image us-central1-docker.pkg.dev/<your-project-id>/<repo>/genkit-service \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=<your-project-id> \
   --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
 ```
 
@@ -896,19 +898,21 @@ Test the service URL printed by `gcloud run deploy`:
 
 ```bash
 SERVICE_URL="https://<service-url>"
+TOKEN="$(gcloud auth print-identity-token)"
 
 # Health check
-curl "$SERVICE_URL/health"
+curl -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health"
+# => {"status":"healthy"}
 
 # Invoke joke endpoint with IAM identity token
 curl -X POST "$SERVICE_URL/joke" \
-  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"topic": "distributed systems"}'
 
 # Invoke summarization endpoint
 curl -X POST "$SERVICE_URL/summarize" \
-  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"text": "Cloud Run is a managed compute platform that scales stateless containers on demand without manual cluster provisioning."}'
 ```
@@ -922,7 +926,7 @@ FastAPI serves interactive OpenAPI documentation on the deployed service:
 
 ## Advanced Configuration
 
-### Environment variables and resource limits
+### Resource limits
 
 ```bash
 gcloud run deploy genkit-service \
@@ -930,7 +934,6 @@ gcloud run deploy genkit-service \
   --cpu 2 \
   --memory 2Gi \
   --max-instances 10 \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=<your-project-id> \
   --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest
 ```
 
@@ -945,15 +948,15 @@ gcloud run domain-mappings create \
 ### Streaming logs
 
 ```bash
-gcloud run logs tail genkit-service --follow
-gcloud run logs read genkit-service --limit 50
+gcloud beta run services logs tail genkit-service
+gcloud run services logs read genkit-service --limit 50
 ```
 
 ## Production Best Practices
 
-### 1. Trace-correlated structured logging
+### 1. Structured logging
 
-Use `genkit.get_logger` inside flows and tools. When `enable_google_cloud_telemetry()` is initialized, Genkit stamps `logging.googleapis.com/trace` and `logging.googleapis.com/spanId` onto every event emitted inside an active span so Cloud Logging links log entries directly to the Cloud Trace waterfall:
+Use `genkit.get_logger` inside flows and tools. Each call takes an event name and keyword fields, and Cloud Run forwards stdout to Cloud Logging:
 
 ```python
 from genkit import get_logger
@@ -971,7 +974,7 @@ async def audited_joke_flow(topic: str) -> str:
 
 ### 2. Rate limiting
 
-Enforce request budgets with Cloud Armor or in-process rate limiting:
+Enforce request budgets with Cloud Armor or in-process rate limiting. This version replaces the `/joke` route in `main.py`:
 
 ```python
 from fastapi import Request

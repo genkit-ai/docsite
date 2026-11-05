@@ -51,9 +51,10 @@ uv add "flask[async]" flask-cors genkit genkit-google-genai genkit-flask
 These packages include:
 
 - **`flask[async]`**: Flask 3.1+ with async view support.
+- **`flask-cors`**: Adds CORS headers so a browser frontend can call the endpoint.
 - **`genkit`**: Core Genkit SDK for Python.
-- **`genkit-google-genai`**: Model plugin for Google's Gemini models (`genkit-flask` does not bundle model plugins, so install your provider explicitly).
-- **`genkit-flask`**: Adapter that exposes Genkit flows as Flask routes, including Server-Sent Events for streaming.
+- **`genkit-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
+- **`genkit-flask`**: Helper that exposes Genkit flows as Flask routes, including server-sent events for streaming.
 
 ### Configure a model API key
 
@@ -179,7 +180,7 @@ async def bargain_chef_flow(
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config=GeminiConfig(temperature=0.7, thinking_level='MINIMAL'),
+        config=GeminiConfig(temperature=0.7, thinking_level='LOW'),
     )
 
     async for chunk in stream_response.stream:
@@ -187,8 +188,8 @@ async def bargain_chef_flow(
             ctx.send_chunk(chunk.output)
 
     response = await stream_response.response
-    if not response.output:
-        raise ValueError('Failed to generate recipe')
+    if response.output is None:
+        raise RuntimeError(f'Recipe generation failed: {response.error}')
     return response.output
 
 
@@ -202,13 +203,16 @@ A few details are worth noting:
 - **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
 - **Describe the recipe shape:** `Recipe` is a Pydantic model passed as `output_schema` so Genkit instructs the model to emit matching JSON and parses each streamed chunk against it. `serialization_alias='onSale'` serializes `on_sale` as camelCase `onSale` over JSON and SSE while keeping snake_case in Python.
 - **Define the flow:** `bargain_chef_flow` calls `ai.generate_stream`, forwards each partial `Recipe` (`chunk.output`) via `ctx.send_chunk` (typed by `ctx: FlowContext[Recipe]`), and awaits `stream_response.response` for the validated result. Return `response.output` (or `response.text`), never a raw `ModelResponse`, whose `request` field carries your system prompt, tools, and message history.
-- **The three stacked decorators:** `@ai.flow(name='bargainChefFlow')` registers the flow, `@genkit_flask_handler(ai)` adapts it into a Flask view named after the flow (so multiple served flows in one Flask app do not collide on endpoint names) that handles JSON requests and Server-Sent Events, and `@app.post('/bargainChefFlow')` mounts it on a route.
+- **Model failures:** A failed model call (such as `UNAVAILABLE` when Gemini is overloaded) doesn't raise. The response comes back with no `output` and the failure on `response.error`. The flow raises so the server log records the failure while the client gets a generic `500`. See [Error types](/docs/error-types).
+- **The three stacked decorators:** `@ai.flow(name='bargainChefFlow')` registers the flow, `@genkit_flask_handler(ai)` adapts it into a Flask view named after the flow that handles JSON requests and Server-Sent Events, and `@app.post('/bargainChefFlow')` mounts it on a route.
 
-### Attach request context and handle auth errors
+### Attach request context
 
-Pass `context_provider=` to `@genkit_flask_handler` to validate credentials and populate `ctx.context` before the flow runs. `RequestData` (`from genkit.web import RequestData`) exposes `req.method`, lowercased `req.headers`, `req.input`, and the underlying Flask `request` proxy on `req.request`.
+Pass `context_provider=` to `@genkit_flask_handler` to validate credentials and populate `ctx.context` before the flow runs. The provider receives a `RequestData` (`from genkit.web import RequestData`) with `method`, lowercased `headers`, `input`, and Flask's `request` on `request`.
 
-Served handlers redact internal `GenkitError`s and unhandled exceptions to HTTP `500` (`{"status": "INTERNAL", "message": "Internal Error"}`). Raise `PublicError` (`from genkit import PublicError`)—or Flask's `abort(401)`, which passes through untouched—when the HTTP caller should receive an explicit status code and message, such as `401` for `'UNAUTHENTICATED'` or `403` for `'PERMISSION_DENIED'`:
+Raise `PublicError` from the provider or the flow to send a specific status and message, such as `401` for `'UNAUTHENTICATED'`; Flask's `abort(401)` in the provider also passes through. Any other exception becomes a `500` with a generic body. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full mapping.
+
+Update the decorators on `bargain_chef_flow` in `main.py`:
 
 ```python
 from genkit import FlowContext, PublicError

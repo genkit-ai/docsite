@@ -1170,7 +1170,7 @@ ai = Genkit(
 )
 ```
 
-### Authentication and Client Options
+### Authentication and client options
 
 Set `ANTHROPIC_API_KEY` in the environment, pass `api_key=` at plugin initialization, or override per request via `context={'secrets': {'api_key': ...}}`:
 
@@ -1183,14 +1183,17 @@ ai = Genkit(
     plugins=[
         Anthropic(
             api_key=os.environ['ANTHROPIC_API_KEY'],
-            # base_url takes the origin ONLY (no '/v1' suffix):
+            # base_url takes the origin only; a value ending in '/v1' raises:
             # base_url='https://anthropic-proxy.internal',
             client_options={'timeout': 60.0, 'max_retries': 3},
         )
     ],
+    model=Anthropic.claude('claude-sonnet-4-6'),
 )
 
-# Per-request key override (kept out of trace attributes):
+# Per-request key override. Traces record config but not secrets, so the
+# plugin rejects a key in config with INVALID_ARGUMENT.
+# tenant_api_key comes from your own per-tenant secret store.
 response = await ai.generate(
     model=Anthropic.claude('claude-haiku-4-5'),
     prompt='Check this invoice total.',
@@ -1198,14 +1201,16 @@ response = await ai.generate(
 )
 ```
 
-## Available Models
+## Available models
 
 - `claude-haiku-4-5` — Lowest latency and cost
 - `claude-sonnet-4-6` — Balanced coding, tool use, and extended thinking
 - `claude-opus-4-8` — Highest capability for complex reasoning and agentic loops
 - `claude-opus-4-7` — Previous-generation Opus model
 
-## Basic Usage
+Any other Claude ID resolves on demand, so `Anthropic.claude('<model-id>')` works for models released after this plugin version.
+
+## Basic usage
 
 ```python
 response = await ai.generate(
@@ -1214,7 +1219,7 @@ response = await ai.generate(
 print(response.text)
 ```
 
-## Structured Output
+## Structured output
 
 ```python
 from pydantic import BaseModel, Field
@@ -1231,7 +1236,7 @@ response = await ai.generate(
 summary: IncidentSummary = response.output
 ```
 
-## Thinking and Reasoning
+## Thinking and reasoning
 
 Configure extended or adaptive thinking with flat fields on `AnthropicConfig`:
 
@@ -1248,10 +1253,12 @@ response = await ai.generate(
         max_output_tokens=4096,
     ),
 )
-print(response.reasoning)
+reasoning = ''.join(p.reasoning or '' for p in response.message.content)
+print(reasoning)
 print(response.text)
 
-# Adaptive thinking with effort and task budget (Opus 4.7+ / Sonnet 4.6+)
+# Adaptive thinking: the model sizes its own budget, so thinking_budget is ignored.
+# task_budget (minimum 20,000) sends the request on the beta API.
 adaptive = await ai.generate(
     model=Anthropic.claude('claude-opus-4-8'),
     prompt='Audit this distributed lock protocol for split-brain edge cases.',
@@ -1263,7 +1270,7 @@ adaptive = await ai.generate(
 )
 ```
 
-## Tool Calling
+## Tool calling
 
 Pass `tool_choice` (`'auto'`, `'required'`, or `'none'`) on `ai.generate()`. To restrict Claude to at most one tool call per turn, set `disable_parallel_tool_use=True` on `AnthropicConfig`:
 
@@ -1303,9 +1310,9 @@ async def streaming_analysis(topic: str, ctx: FlowContext[str]) -> str:
     return (await stream_response.response).text
 ```
 
-## Multimodal (Image and PDF Input)
+## Multimodal (image and PDF input)
 
-Construct multimodal prompts with `Part.from_text()` and `Part.from_media()`:
+Build multimodal prompts with `Part.from_text()` and `Part.from_media()`. The plugin sends `image/*` media as image blocks and `application/pdf` as document blocks, from a URL or a `data:` URI:
 
 ```python
 from genkit import Part
@@ -1314,17 +1321,28 @@ response = await ai.generate(
     prompt=[
         Part.from_text('Extract the table headers from this image.'),
         Part.from_media(
-            'https://example.com/report-page.jpg',
+            url='https://example.com/report-page.jpg',
             content_type='image/jpeg',
         ),
     ],
 )
 print(response.text)
+
+contract = await ai.generate(
+    prompt=[
+        Part.from_text('List the termination clauses in this contract.'),
+        Part.from_media(
+            url='https://example.com/vendor-contract.pdf',
+            content_type='application/pdf',
+        ),
+    ],
+)
+print(contract.text)
 ```
 
-## Configuration Options
+## Configuration options
 
-`AnthropicConfig` validates request parameters and rejects unknown top-level keys with `GenkitError(status='INVALID_ARGUMENT')`. Pass beta headers via `betas` / `api_version` and undeclared wire fields via `extra`:
+`AnthropicConfig` rejects unknown top-level keys. `api_version='beta'` selects the beta API, and `betas` replaces the plugin's default beta headers. Undeclared request fields go in `extra`, which is merged into the top level of the request body:
 
 ```python
 from genkit_anthropic import AnthropicConfig

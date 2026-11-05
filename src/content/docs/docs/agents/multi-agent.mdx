@@ -551,7 +551,7 @@ If a sub-agent fails or triggers an interrupt, the failure or pause is returned 
 
 ## Define delegation tools
 
-In Genkit Python, every `Agent` (or `AgentClient`) exposes `.chat()`, so you compose multi-agent systems directly with `@ai.tool()` functions that run a turn on a specialist agent and return its reply. This gives the orchestrator typed Pydantic tool inputs without extra routing abstractions:
+There is no delegation middleware. Every `Agent` and `AgentClient` exposes `.chat()`, so a delegation tool is an `@ai.tool()` function that runs one turn on a specialist and returns its reply. Agents require `Genkit` from `genkit.exp`:
 
 ```python
 from pydantic import BaseModel
@@ -603,11 +603,11 @@ coordinator = ai.define_agent(
 )
 ```
 
-Keep tool descriptions concrete because the orchestrator model relies on them to select the right specialist. Middleware and token usage are scoped per agent: attach `Retry` (`from genkit_middleware import Retry`) or `Artifacts` (`from genkit_middleware.exp import Artifacts`) onto each specialist that needs it.
+Keep tool descriptions concrete; the orchestrator model picks a specialist from them. Middleware attaches per agent, so put `Retry` (from `genkit_middleware`) or `Artifacts` (from `genkit_middleware.exp`) on each specialist that needs it.
 
 ## Stream delegation progress
 
-Delegation calls appear as standard `tool_requests` on the orchestrator's stream chunks:
+Delegation calls arrive as `tool_requests` on the orchestrator's stream chunks. Awaiting the turn returns the final response:
 
 ```python
 async def stream_delegation() -> None:
@@ -620,12 +620,17 @@ async def stream_delegation() -> None:
         if chunk.text:
             print(chunk.text, end='')
 
-    await turn
+    res = await turn
+    print(res.finish_reason)
+    # => [delegating] delegate_to_researcher
+    # => [delegating] delegate_to_coder
+    # => Quicksort is a divide-and-conquer sort ...
+    # => stop
 ```
 
 ## Delegate in the background
 
-When a specialist has a session store (`InMemorySessionStore`, `FileSessionStore`, or `FirestoreSessionStore`), delegation tools can start detached work with `await specialist.chat().detach(...)` and return the `snapshot_id` immediately so the orchestrator can launch multiple investigations in parallel and collect or cancel them later:
+A specialist with a session store (`InMemorySessionStore`, `FileSessionStore`, or `FirestoreSessionStore`) can run detached. The delegation tool calls `chat().detach(...)` and returns the `snapshot_id` right away, so the orchestrator can start several scans and collect or cancel them later:
 
 ```python
 from typing import Any
@@ -643,11 +648,10 @@ log_analyst = ai.define_agent(
 @ai.tool(name='start_log_scan', description='Start a background log scan and return its snapshot_id.')
 async def start_log_scan(service: str) -> dict[str, str]:
     task = await log_analyst.chat().detach(f'Scan logs for {service}.')
-    assert task.snapshot_id is not None
     return {'snapshot_id': task.snapshot_id, 'status': SnapshotStatus.PENDING}
 
 
-@ai.tool(name='collect_log_scan', description='Check or wait on a background log scan by snapshot_id.')
+@ai.tool(name='collect_log_scan', description='Check a background log scan by snapshot_id.')
 async def collect_log_scan(snapshot_id: str) -> dict[str, Any]:
     snap = await log_analyst.get_snapshot(snapshot_id=snapshot_id)
     if snap is None:
@@ -666,21 +670,28 @@ async def collect_log_scan(snapshot_id: str) -> dict[str, Any]:
 async def abort_log_scan(snapshot_id: str) -> dict[str, str | None]:
     prev = await log_analyst.abort(snapshot_id)
     return {'previous_status': prev}
+
+
+incident_lead = ai.define_agent(
+    name='incidentLead',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Start log scans for each affected service, collect the results, and summarize the incident.',
+    tools=[start_log_scan, collect_log_scan, abort_log_scan],
+    max_turns=10,
+)
 ```
 
-Raise `max_turns` on the orchestrator when using background tools, because launching, polling, and collecting each consume a tool round.
+Launching, polling, and collecting each spend a tool round, so raise `max_turns` on the orchestrator. `abort()` returns the status from before the call: `pending` means it cancelled a running scan. See [Background execution](/docs/agents/background) for the detach lifecycle.
 
 ## Delegate to a remote agent
 
-Connect to a specialist running in another service (Python, Node.js, Go, or Dart) with `remote_agent()` from `genkit.exp.agent`. The returned `AgentClient` has the same `.chat()`, `.get_snapshot()`, and `.abort()` methods as an in-process `Agent`:
+A specialist can run in another service. Any agent a Genkit app serves over HTTP, in Python, JavaScript, Go, or Dart, is reachable with `remote_agent()` from `genkit.exp.agent`. The returned `AgentClient` has the same `chat()`, `get_snapshot()`, and `abort()` methods as a local agent, so the delegation tool does not change:
 
 ```python
 from genkit.exp.agent import remote_agent
 
 remote_researcher = remote_agent(
-    'https://research.internal/api',
-    get_snapshot_url='https://research.internal/api/getSnapshot',
-    abort_url='https://research.internal/api/abort',
+    'https://research.internal/agents/researcher',
     state_management='server',
 )
 
@@ -691,7 +702,9 @@ async def ask_remote_researcher(question: str) -> str:
     return res.text
 ```
 
-## Share sub-agent artifacts and handle failures
+`get_snapshot_url` and `abort_url` default to `{url}/getSnapshot` and `{url}/abort`. See [Connect a client](/docs/agents/http/#connect-a-client) for headers, timeouts, and client-managed state.
+
+## Read sub-agent artifacts
 
 Sub-agent artifacts stay in the sub-agent's own `AgentChat` unless your delegation tool copies them into the parent session with `current_session().add_artifacts(...)`. Pair that with `Artifacts(readonly=True)` from `genkit_middleware.exp` on the orchestrator so it can inspect merged artifacts via `read_artifact`:
 
@@ -743,6 +756,14 @@ editor = ai.define_agent(
 )
 ```
 
-Because `sub_chat.send(...)` returns `AgentFinishReason.FAILED` (with `res.error`) or `AgentFinishReason.INTERRUPTED` rather than raising into the parent turn, checking `res.finish_reason` inside the delegation tool lets the orchestrator recover or switch specialists without failing the outer conversation.
+## Interrupts and failures
+
+A failed sub-agent turn does not raise. `sub_chat.send(...)` returns with `finish_reason` set to `AgentFinishReason.FAILED` and the cause on `res.error`, or `AgentFinishReason.INTERRUPTED` when a sub-agent tool paused. The `delegate_to_writer` tool above turns both into tool output, so the orchestrator sees the failure and can retry, pick another specialist, or report back instead of failing the outer turn. `send()` raises `GenkitError` only when no turn result arrived, such as a dropped connection to a remote agent; catch that in the tool too if the orchestrator should recover from it. See [Agent error handling](/docs/agents/errors) for the full failure model.
+
+## Next steps
+
+- [Sessions and state](/docs/agents/state) covers the session artifacts a sub-agent writes into.
+- [Background execution](/docs/agents/background) covers the detached runs behind background delegation.
+- [Custom orchestration](/docs/agents/custom-orchestration) covers taking over the turn loop when tool delegation is not enough.
 
 </Lang>

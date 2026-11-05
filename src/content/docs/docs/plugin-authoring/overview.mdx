@@ -1888,14 +1888,14 @@ The registry resolves named actions (`'googleai/gemini-flash-latest'`) on demand
 
 Every symbol in Genkit Python has one canonical import path so plugin code imports only the protocol layer it implements:
 
-- **`genkit`**: Runtime entry point, turn payloads, errors, and trace-linked logging (`Genkit`, `Message`, `Role`, `Part`, `Media`, `Document`, `ModelResponse`, `ModelResponseChunk`, `FinishReason`, `Embedding`, `Operation`, `GenkitError`, `ErrorReason`, `Failure`, `get_logger`).
+- **`genkit`**: Runtime entry point, turn payloads, errors, and trace-linked logging, including `Genkit`, `Message`, `Role`, `Part`, `Media`, `Document`, `ModelResponse`, `ModelResponseChunk`, `FinishReason`, `Embedding`, `Operation`, `GenkitError`, `ErrorReason`, `Failure`, and `get_logger`.
 - **`genkit.plugin_api`**: Plugin base class, action carriers, config base, and transport helpers (`Plugin`, `Action`, `ActionKind`, `BackgroundAction`, `DynamicActionProvider`, `GenkitConfig`, `StatusName`, `StrEnum`, `provider_error`, `loop_local_client`, `GENKIT_USER_AGENT`, `is_dev_environment`, `to_json_schema`).
 - **`genkit.model`**: Model actions, references, capabilities, and request/config types (`Model`, `BackgroundModel`, `ModelRef`, `ModelContext`, `ModelRequest`, `ModelConfig`, `ModelInfo`, `ModelSupports`, `ModelStage`, `ConstrainedSupport`, `GenerationUsage`, `OutputConfig`, `ToolDefinition`, `ToolRequest`, `ToolResponse`).
 - **`genkit.embedder`**: Embedder actions and references (`Embedder`, `EmbedderRef`, `EmbedRequest`, `EmbedResponse`, `EmbedderInfo`, `EmbedderSupports`).
 - **`genkit.evaluator`**: Evaluator actions and scoring types (`Evaluator`, `BatchEvaluator`, `EvaluatorRef`, `BaseDataPoint`, `EvaluatorRequest`, `EvaluatorResponse`, `Score`, `ScoreDetails`, `ScoreStatus`).
 - **`genkit.middleware`**: Middleware base class and hook parameters (`Middleware`, `MiddlewareContext`, `GenerateHookParams`, `ModelHookParams`, `ToolHookParams`).
 - **`genkit.formats`**: Output formatters (`Formatter`, `FormatterConfig`, `FormatHandler`).
-- **`genkit.telemetry`**: Span instrumentation protocol and hooks (`Instrumentation`, `DisposableInstrumentation`, `FlushableInstrumentation`, `SpanContext`, `SpanMetadata`, `SpanNext`, `configure_instrumentation`, `run_in_new_span`).
+- **`genkit.telemetry`**: Span instrumentation protocol and hooks (`Instrumentation`, `DisposableInstrumentation`, `FlushableInstrumentation`, `SpanContext`, `SpanMetadata`, `SpanNext`, `configure_instrumentation`, `is_instrumented_by`, `reset_instrumentation`, `run_in_new_span`).
 
 ## Creating a plugin
 
@@ -2034,9 +2034,9 @@ class BistroAI(Plugin):
         )
 
 
-# 3. Register and call the plugin
+# 3. Register and call the plugin (reads BISTRO_API_KEY)
 async def main() -> None:
-    ai = Genkit(plugins=[BistroAI(api_key='sk-demo')])
+    ai = Genkit(plugins=[BistroAI()])
     res = await ai.generate(
         model=BistroAI.chat('chef-1', config=BistroConfig(cuisine_style='french')),
         prompt='Suggest a lunch special.',
@@ -2086,7 +2086,7 @@ Model handlers receive `(request: ModelRequest[Cfg], ctx: ModelContext)` and ret
 
 - **Streaming**: Check `ctx.is_streaming`. Emit incremental deltas via `ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(text=delta)]))`. Genkit does not build the final response from chunks—always return the complete `ModelResponse` at the end of `generate()`.
 - **Tool requests and responses**: Convert `request.tools` (`list[ToolDefinition]`, carrying `name`, `description`, `input_schema`, `output_schema`) into your provider's tool declarations. Emit model tool calls as `Part(tool_request=ToolRequest(name=call_name, ref=call_id, input=call_args))`. On the next turn, Genkit sends `Role.TOOL` messages containing `part.tool_response` (`ToolResponse` with `name`, `ref`, `output`, and optional multimodal `content`).
-- **Token usage**: Populate `GenerationUsage` on `ModelResponse.usage`. Follow the cross-provider accounting contract: `input_tokens` includes `cached_content_tokens` and `cache_write_tokens`, while `output_tokens` and `thoughts_tokens` are disjoint and sum with `input_tokens` to `total_tokens`.
+- **Token usage**: Populate `GenerationUsage` on `ModelResponse.usage` from the provider's counts: `input_tokens`, `output_tokens`, and `total_tokens`, plus `thoughts_tokens`, `cached_content_tokens`, and `cache_write_tokens` when the provider reports them.
 
 ```python
 from genkit import FinishReason, Message, ModelResponse, Part, Role
@@ -2235,7 +2235,7 @@ Read per-request keys from `ctx.context.get('secrets')` inside your handler. Whe
 
 ### Classifying provider errors (`provider_error`)
 
-`Retry` and `Fallback` middleware inspect `GenkitError.status` and `GenkitError.retry_after_ms` to decide whether to retry a transient `429`/`503` or fail fast on a `400`/`401`. Catch upstream SDK or HTTP exceptions at your provider boundary and raise `provider_error(...)` (`from genkit.plugin_api import provider_error`):
+`Retry` and `Fallback` middleware read `GenkitError.status` to decide whether to retry a transient `429`/`503` or fail fast on a `400`/`401`; `Retry` also waits at least `GenkitError.retry_after_ms`. Catch upstream SDK or HTTP exceptions at your provider boundary and raise `provider_error(...)` (`from genkit.plugin_api import provider_error`):
 
 ```python
 import httpx
@@ -2249,8 +2249,10 @@ async def call_upstream(client: httpx.AsyncClient, payload: dict) -> dict:
         return response.json()
     except httpx.HTTPStatusError as exc:
         # Maps 400 -> INVALID_ARGUMENT, 401 -> UNAUTHENTICATED,
-        # 429 -> RESOURCE_EXHAUSTED, 503 -> UNAVAILABLE, other 5xx -> INTERNAL,
-        # and parses Retry-After (seconds or HTTP-date) into retry_after_ms.
+        # 429 -> RESOURCE_EXHAUSTED, 503 -> UNAVAILABLE,
+        # 504 -> DEADLINE_EXCEEDED, other 5xx -> INTERNAL,
+        # unmapped 4xx (413, 422) -> UNKNOWN, and parses Retry-After
+        # (seconds or HTTP-date) into retry_after_ms.
         raise provider_error(
             exc,
             http_status=exc.response.status_code,
@@ -2258,7 +2260,13 @@ async def call_upstream(client: httpx.AsyncClient, payload: dict) -> dict:
         ) from exc
 ```
 
-Errors built with `provider_error` preserve their status in-process for `Retry` and `Fallback` middleware, while served HTTP flows redact upstream provider failures as `500 Internal Error` so an expired server API key is never misreported to end users as a caller `401`.
+Pass `status=` to override the mapping, or `retry_after_ms=` to skip header parsing. Classification matters because of how the middleware treats each status:
+
+- **Transient** (`UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`, `ABORTED`, `INTERNAL`): `Retry` retries and `Fallback` moves to the next model.
+- **`UNKNOWN` and client errors** (`INVALID_ARGUMENT`, `UNAUTHENTICATED`): both fail on the first attempt.
+- **Unclassified exceptions** (anything that isn't a `GenkitError`): `Retry` retries them, and `Fallback` ignores them.
+
+Once middleware gives up, `ai.generate()` does not raise. It returns a response with `finish_reason == FinishReason.FAILED` and the status and message in `response.error`; see [Error types](/docs/error-types). If the flow raises on that failure, the served flow answers `500` rather than the provider's status; see [Backend frameworks](/docs/backend-frameworks/overview) for the HTTP error model.
 
 ### Trace-linked logging (`get_logger`)
 
@@ -2410,24 +2418,24 @@ class BistroGuardrailsPlugin(Plugin):
 
 ### Telemetry instrumentation (`genkit.telemetry`)
 
-Genkit's core tracing pipeline is backend-agnostic and composes cleanly with the Developer UI collector. To export spans to a tracing backend or OpenTelemetry pipeline, implement the `Instrumentation` protocol (`from genkit.telemetry import Instrumentation, SpanMetadata, SpanNext, configure_instrumentation`, plus optional `FlushableInstrumentation` and `DisposableInstrumentation`) and register it before creating `Genkit()`. Check `is_dev_environment()` (`from genkit.plugin_api import is_dev_environment`) when skipping remote cloud export under `genkit start`:
+To export spans to a tracing backend, implement the `Instrumentation` protocol from `genkit.telemetry` and register it with `configure_instrumentation()` before creating `Genkit()`. Each configured provider wraps the next, so guard with `is_instrumented_by()` to avoid stacking a second copy. Add `flush()` (`FlushableInstrumentation`) if you buffer exports, or `dispose()` (`DisposableInstrumentation`) to release resources:
 
 ```python
 from typing import TypeVar
 
-from genkit.plugin_api import is_dev_environment
 from genkit.telemetry import (
-    FlushableInstrumentation,
     Instrumentation,
     SpanMetadata,
     SpanNext,
     configure_instrumentation,
+    is_instrumented_by,
 )
 
 T = TypeVar('T')
 
 
-class AuditSpanRecorder(Instrumentation, FlushableInstrumentation):
+# 1. Wrap each span like middleware: run next(), then record the result
+class AuditSpanRecorder(Instrumentation):
     def __init__(self) -> None:
         self.completed_spans: list[tuple[str, str | None]] = []
 
@@ -2437,19 +2445,14 @@ class AuditSpanRecorder(Instrumentation, FlushableInstrumentation):
         finally:
             self.completed_spans.append((metadata.name, metadata.action_type))
 
-    def flush(self) -> None:
-        pass
 
-
-def enable_bistro_telemetry(*, force_dev_export: bool = False) -> AuditSpanRecorder | None:
-    if is_dev_environment() and not force_dev_export:
-        return None
-    recorder = AuditSpanRecorder()
-    configure_instrumentation(recorder)
-    return recorder
+# 2. Register once, before Genkit() is constructed
+def enable_bistro_telemetry() -> None:
+    if not is_instrumented_by(AuditSpanRecorder):
+        configure_instrumentation(AuditSpanRecorder())
 ```
 
-To open custom child spans inside plugin helpers, call `await run_in_new_span(name, fn, action_type='util', input=...)` from `genkit.telemetry`.
+To open custom child spans inside plugin helpers, call `await run_in_new_span(name, fn, action_type='util', input=...)` from `genkit.telemetry`; `fn` receives a `SpanContext`.
 
 ## Publishing a plugin
 
