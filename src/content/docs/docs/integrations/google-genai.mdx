@@ -2065,13 +2065,7 @@ response = await ai.generate(
     prompt='Explain how B-tree indexes reduce disk reads.',
 )
 print(response.text)
-
-for media in response.media:
-    print(f'Media type: {media.content_type}')
-
-if response.usage:
-    print(response.usage.thoughts_tokens)
-    print(response.usage.cached_content_tokens)
+# => B-tree indexes keep keys sorted in wide, shallow nodes, so a lookup reads only a few pages...
 ```
 
 ### Structured output
@@ -2090,8 +2084,11 @@ response = await ai.generate(
     prompt='Create a seasonal tartine dish for a cafe menu.',
     output_schema=MenuDish,
 )
-dish: MenuDish = response.output
+dish = response.output
+if dish is None:
+    raise RuntimeError(f'Dish generation failed: {response.error}')
 print(dish.name, dish.price_cents)
+# => Smoked Beet Tartine 1450
 ```
 
 ### Thinking and reasoning
@@ -2099,13 +2096,13 @@ print(dish.name, dish.price_cents)
 Configure thinking directly on `GeminiConfig`:
 
 ```python
-from genkit_google_genai import GeminiConfig
+from genkit_google_genai import GeminiConfig, GoogleAI
 
 response = await ai.generate(
     model=GoogleAI.gemini('gemini-3.8-flash'),
     prompt='Find the minimum number of weighings to isolate one counterfeit coin among 12.',
     config=GeminiConfig(
-        thinking_level='HIGH',  # 'LOW', 'MEDIUM', or 'HIGH'; some models also accept 'MINIMAL'
+        thinking_level='HIGH',  # 'MINIMAL', 'LOW', 'MEDIUM', or 'HIGH'
         include_thoughts=True,
     ),
 )
@@ -2252,21 +2249,19 @@ for media in response.media:
 
 ## Video models (Veo)
 
-The Gemini API does not serve Veo. Generate Veo video through the `VertexAI` plugin from the same `genkit-google-genai` package; see the [Gemini Enterprise plugin](/docs/integrations/vertex-ai) for project and credential setup.
-
 Veo runs as a background model: start it with `ai.generate_operation()` and poll with `ai.check_operation()`.
 
 ```python
 import asyncio
 
-from genkit import Genkit, ModelResponse
-from genkit_google_genai import VeoConfig, VertexAI
+from genkit import Genkit
+from genkit_google_genai import GoogleAI, VeoConfig
 
-ai = Genkit(plugins=[VertexAI(location='us-central1')])
+ai = Genkit(plugins=[GoogleAI()])
 
 # 1. Start the background video generation operation
 operation = await ai.generate_operation(
-    model=VertexAI.veo('veo-3.1-fast-generate-001'),
+    model=GoogleAI.veo('veo-3.1-generate-preview'),
     prompt='Aerial shot of coastal cliffs at sunrise with ocean mist.',
     config=VeoConfig(
         aspect_ratio='16:9',
@@ -2279,17 +2274,15 @@ while not operation.done:
     await asyncio.sleep(5)
     operation = await ai.check_operation(operation)
 
-# 3. Read the completed ModelResponse
+# 3. operation.output is the completed ModelResponse
 if operation.error:
-    print(f'Error: {operation.error}')
-elif operation.output:
-    result = ModelResponse.model_validate(operation.output)
-    for media in result.media:
-        print(f'Video URL: {media.url[:40]}...')
-# => Video URL: data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGl...
+    raise RuntimeError(operation.error.message)
+for media in operation.output.media:
+    print(f'Video URL: {media.url[:40]}...')
+# => Video URL: https://generativelanguage.googleapis.com/...
 ```
 
-Set `output_gcs_uri` in `VeoConfig` to have Veo write to Cloud Storage; `media.url` is then the `gs://` path.
+On Gemini Enterprise, set `output_gcs_uri` in `VeoConfig` to have Veo write to Cloud Storage; `media.url` is then the `gs://` path.
 
 Common `VeoConfig` fields: `aspect_ratio`, `resolution`, `duration_seconds`, `negative_prompt`, `person_generation`, `number_of_videos`, `generate_audio`, and `seed`. Supported values depend on the Veo model.
 
@@ -2318,8 +2311,9 @@ response = await ai.generate(
     ),
 )
 
-if response.media:
-    print(f'Audio ({response.media[0].content_type}): {response.media[0].url[:50]}...')
+audio = response.media[0]
+print(audio.content_type)
+# => audio/l16; rate=24000; channels=1
 ```
 
 For multi-speaker dialogue, pass `speakers` mapping speaker labels in the prompt to voice names (mutually exclusive with `voice`):
@@ -2353,6 +2347,7 @@ cached_response = await ai.generate(
     prompt=f'{base_context}\n\nSummarize section 2.',
 )
 print(cached_response.usage.cached_content_tokens)
+# => 2048.0   (None when the prefix was not cached)
 ```
 
 ## Next steps

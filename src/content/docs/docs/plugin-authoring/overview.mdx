@@ -1913,6 +1913,7 @@ A plugin subclasses `Plugin` from `genkit.plugin_api`, sets a unique `name` name
 This self-contained plugin exposes a model with typed configuration, streaming support, and a static `ModelRef` helper:
 
 ```python
+import asyncio
 import os
 from typing import Literal, TypeAlias
 
@@ -1980,9 +1981,8 @@ class BistroAI(Plugin):
 
     def _create_model(self, name: str) -> Model:
         async def generate(request: ModelRequest[BistroConfig], ctx: ModelContext) -> ModelResponse:
-            secrets = ctx.context.get('secrets') or {}
-            key = secrets.get('api_key') if isinstance(secrets, dict) else None
-            if not (key or self._api_key):
+            api_key = ctx.context.get('secrets', {}).get('api_key') or self._api_key
+            if not api_key:
                 raise GenkitError(
                     status='FAILED_PRECONDITION',
                     message=(
@@ -2043,6 +2043,9 @@ async def main() -> None:
     )
     print(res.text)
     # => [french] Smoked Salmon Tartine (chef-1): Suggest a lunch special.
+
+
+asyncio.run(main())
 ```
 
 ### Constructor conventions
@@ -2094,25 +2097,16 @@ from genkit.model import GenerationUsage, ModelContext, ModelRequest, ToolReques
 
 
 async def generate_with_tools(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
-    # 1. Inspect tool definitions supplied by the caller
-    declared_tools = [
-        {
-            'name': tool.name,
-            'description': tool.description,
-            'parameters': tool.input_schema,
-        }
-        for tool in (request.tools or [])
-    ]
-
+    # 1. Convert request.tools (name, description, input_schema) to your provider's format upstream
     # 2. Emit a tool call part when the upstream model requests a function execution
-    if declared_tools and request.messages[-1].role == Role.USER:
+    if request.tools and request.messages[-1].role == Role.USER:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
                 content=[
                     Part(
                         tool_request=ToolRequest(
-                            name=declared_tools[0]['name'],
+                            name=request.tools[0].name,
                             ref='call_01',
                             input={'dish': 'almond croissant'},
                         )
