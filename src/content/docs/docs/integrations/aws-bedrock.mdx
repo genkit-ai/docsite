@@ -474,7 +474,7 @@ response, err := genkit.Generate(ctx, g,
 
 <Lang lang="python">
 
-The `genkit-amazon-bedrock` package provides access to models hosted on [Amazon Bedrock](https://aws.amazon.com/bedrock/) through the Genkit framework. It supports text generation with Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral, Cohere, and others) through the Bedrock Converse and ConverseStream APIs. Embeddings, image generation, and reranking go through InvokeModel.
+The `genkit-amazon-bedrock` package provides access to models hosted on [Amazon Bedrock](https://aws.amazon.com/bedrock/) through the Genkit framework. It supports text generation with Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral, Cohere, and others) through the Bedrock Converse and ConverseStream APIs. Embeddings and Stability image generation go through InvokeModel.
 
 ## Installation
 
@@ -486,32 +486,39 @@ uv add genkit-amazon-bedrock
 
 ```python
 from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock, ModelDefinition, bedrock_name
+from genkit_amazon_bedrock import Bedrock
 
 ai = Genkit(
     plugins=[
         Bedrock(
             region='us-east-1',
-            models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'],
         )
     ],
-    model=bedrock_name('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+    model=Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
 )
 ```
 
-The region comes from `region=` or the standard AWS SDK chain (`AWS_REGION`, `AWS_DEFAULT_REGION`, `~/.aws/config`). There is deliberately no default region, so initialization fails when nothing resolves. The string form `'bedrock/<model-id>'` is equivalent to `bedrock_name()`.
+The region comes from `region=` or the AWS SDK chain (`AWS_REGION`, `AWS_DEFAULT_REGION`, `~/.aws/config`). There is no default, so initialization fails if none resolves. `Bedrock.text()`, `Bedrock.stability()`, and `Bedrock.embedder()` attach typed config; `'bedrock/<model-id>'` strings behave the same at runtime.
 
-Other plugin parameters: `embedders` lists embedding model IDs to register, and `session` takes a pre-configured `boto3.session.Session` for custom credential wiring. The AWS client knobs (`max_retries`, `read_timeout`, `connect_timeout`, `max_pool_connections`) are unset by default, so your ambient AWS configuration wins. Package fallbacks fill in only where that configuration is silent. `total_timeout` is a whole-call deadline for non-streaming generations, retries included. It is on by default at 3600 seconds. `read_timeout` is a socket read timeout that resets on every byte, so it caps silence, not the call. The [plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock) documents every option and its fallback.
+Other plugin parameters:
 
-## AWS Setup
+- **`embedders`**: embedding model IDs to list in the Dev UI.
+- **`session`**: a `boto3.session.Session` for custom credentials.
+- **`max_retries`, `connect_timeout`, `read_timeout`, `max_pool_connections`**: unset by default, so your AWS config applies. `read_timeout` resets on every byte, so it limits silence, not call length.
+- **`total_timeout`**: deadline for a whole non-streaming call, retries included. Defaults to 3600 seconds.
 
-### Model Access
+The [plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock) lists every fallback.
+
+## AWS setup
+
+### Model access
 
 Model access is granted per AWS account and per region, in the Bedrock console under Model access. Most models cannot be called until access is granted. A grant in `us-east-1` says nothing about `us-west-2`, so a working setup can break purely by changing region.
 
 The Anthropic models additionally need the account's one-time use-case agreement (Bedrock console, Model access, Anthropic use case details). Until the agreement is accepted, Claude calls fail with `ResourceNotFoundException`.
 
-### IAM Permissions
+### IAM permissions
 
 The minimal policy covering everything this plugin does:
 
@@ -534,13 +541,13 @@ The minimal policy covering everything this plugin does:
 }
 ```
 
-Converse is authorized by `bedrock:InvokeModel` and ConverseStream by `bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to grant. Embeddings, image generation, and reranking all go through InvokeModel, so they need only `bedrock:InvokeModel`.
+Converse is authorized by `bedrock:InvokeModel` and ConverseStream by `bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to grant. Embeddings and image generation go through InvokeModel, so they need only `bedrock:InvokeModel`.
 
-Regarding the inference-profile resource, cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0` are inference-profile ARNs rather than foundation-model ARNs, so a policy limited to `foundation-model/*` refuses them with `AccessDeniedException` even when model access is granted.
+Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0` are inference-profile ARNs rather than foundation-model ARNs, so a policy limited to `foundation-model/*` refuses them with `AccessDeniedException` even when model access is granted.
 
 ### Credentials
 
-Credentials resolve through the standard AWS SDK chain, so any of these work:
+Credentials resolve through the standard AWS SDK chain:
 
 - environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` for temporary credentials)
 - the shared config and credentials files under `~/.aws`, selected with `AWS_PROFILE`
@@ -551,11 +558,11 @@ Anything the chain does not cover goes through `session=`, which takes a pre-con
 
 ## Models
 
-Models listed in `models=` appear in the Dev UI, but listing is optional. Any routable model ID resolves on demand, including inference-profile and ARN forms. IDs carrying a prefix such as `us.`, `eu.`, or `global.` are cross-region inference profiles, which route a call to whichever region in the geography has capacity. The full ID is always sent to Bedrock verbatim; the prefix is stripped only for the local capability lookup. Several of the newer models are only invocable through a profile, never by bare foundation-model ID, so the prefixed form is the normal one rather than an advanced option.
+Listing models in `models=` is optional; it only adds them to the Dev UI. Any routable ID resolves on demand, including inference profiles and ARNs. Prefixes such as `us.`, `eu.`, or `global.` mark cross-region inference profiles. Several newer models are callable only through a profile, so the prefixed form is the normal one.
 
 If a model is not offered in the region the call went to, the call fails with a `ValidationException` reading "The provided model identifier is invalid". Check the region before doubting the ID.
 
-## Basic Usage
+## Basic usage
 
 ```python
 response = await ai.generate(
@@ -566,29 +573,27 @@ print(response.text)
 
 The examples on this page use `await`, so they assume an async context. Run them inside a flow or an `async def main()` driven by `asyncio.run()`.
 
-## Structured Output
+## Structured output
 
 ```python
 from pydantic import BaseModel
 
-class Cat(BaseModel):
+class Dish(BaseModel):
     name: str
-    breed: str
-    age: int
-    personality: str
+    cuisine: str
+    allergens: list[str]
 
 response = await ai.generate(
-    prompt='Invent a cat named Mittens.',
-    output_format='json',
-    output_schema=Cat,
-    output_instructions=True,
+    prompt='Suggest one dish for a summer menu.',
+    output_schema=Dish,
 )
-print(response.output)  # Cat instance
+print(response.output)
+# => name='Chilled Cucumber Soup' cuisine='Mediterranean' allergens=['dairy']
 ```
 
-Bedrock has no constrained-decoding mode, so `output_instructions=True` is required. Without it, the schema never reaches the model.
+Bedrock models declare no constrained-decoding support, so Genkit appends the JSON schema to the prompt as format instructions and parses the reply into `Dish`. Pass `output_instructions=False` to drop the appended text, or a string to replace it.
 
-## Tool Calling
+## Tool calling
 
 ```python
 from pydantic import BaseModel, Field
@@ -603,18 +608,20 @@ async def current_weather(city_input: CityInput) -> str:
 
 response = await ai.generate(
     prompt='What is the weather in San Francisco? Use the tool, then answer in one sentence.',
-    tools=['current_weather'],
+    tools=[current_weather],
+    tool_choice='auto',
 )
 print(response.text)
+# => It is 31C and humid in San Francisco right now.
 ```
 
 ## Streaming
 
 ```python
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 @ai.flow()
-async def haiku_stream(topic: str, ctx: ActionRunContext) -> str:
+async def haiku_stream(topic: str, ctx: FlowContext[str]) -> str:
     stream_response = ai.generate_stream(
         prompt=f'Write a haiku about {topic}.',
     )
@@ -628,70 +635,94 @@ async for text in flow_response.stream:
 haiku = await flow_response.response
 ```
 
-`haiku_stream.stream()` returns a `StreamResponse`: `.stream` yields whatever the flow passes to `ctx.send_chunk`, and `.response` resolves to the flow's return value. `ai.generate_stream` returns the same shape, carrying the model's chunks and final response. When the chunks are not needed, the flow can be awaited directly with `await haiku_stream('summer')`.
+`.stream` yields each value the flow passes to `ctx.send_chunk()`, and `.response` resolves to the flow's return value. When you don't need chunks, call `await haiku_stream('summer')`.
 
-## Multimodal Input
+## Multimodal input
 
 ```python
 import base64
+from pathlib import Path
+from genkit import Part
 
-from genkit import Media, MediaPart, Part, TextPart
-
-with open('photo.png', 'rb') as f:
-    image_data_url = 'data:image/png;base64,' + base64.b64encode(f.read()).decode()
+image_data_url = 'data:image/png;base64,' + base64.b64encode(Path('photo.png').read_bytes()).decode('ascii')
 
 response = await ai.generate(
     prompt=[
-        Part(root=MediaPart(media=Media(url=image_data_url))),
-        Part(root=TextPart(text='What does this image look like? Answer in one sentence.')),
+        Part.from_media(url=image_data_url, content_type='image/png'),
+        Part.from_text('What does this image look like? Answer in one sentence.'),
     ],
 )
 print(response.text)
 ```
 
-Media travels as data URLs; remote http(s) URLs are refused rather than fetched. A media part whose MIME type is a document type (PDF, DOCX, CSV, and so on) becomes a Converse document block through the same code path. Bedrock parses the document server-side and requires accompanying text in the message.
+Media travels as data URLs; remote `http(s)` URLs are refused rather than fetched. A media part whose MIME type is a document type (PDF, DOCX, CSV, and so on) becomes a Converse document block through the same code path. Bedrock parses the document server-side and requires accompanying text in the message.
 
-## Configuration Options
+## Configuration options
 
-Pass per-request options through `config`:
+Pass per-request options with `BedrockConfig`, which rejects unknown top-level keys:
 
 ```python
+from genkit_amazon_bedrock import BedrockConfig
+
 response = await ai.generate(
     prompt='Explain generative AI in one paragraph.',
-    config={'maxOutputTokens': 512, 'temperature': 0.7},
+    config=BedrockConfig(max_output_tokens=512, temperature=0.7),
 )
 ```
 
-`topK` and `version` are accepted but dropped, since Converse has no equivalent parameters. 
+`top_k` and `version` are accepted on `BedrockConfig` for cross-provider portability and dropped before calling Converse, which has no first-class fields for them.
 
-Converse has no first-class field for some model-specific parameters, such as a top-k knob or Claude's extended thinking. These go through `additionalModelRequestFields`:
+Model-specific Converse parameters—such as Claude's extended thinking or a model's native `top_k`—go inside `BedrockConfig(extra={...})`, which Genkit forwards as Converse's `additionalModelRequestFields`:
 
 ```python
+from genkit_amazon_bedrock import Bedrock, BedrockConfig
+
 response = await ai.generate(
-    model=bedrock_name('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+    model=Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
     prompt='What is 17 * 23? Think it through, then state the answer.',
-    config={
-        'maxOutputTokens': 4096,
-        'additionalModelRequestFields': {'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
-    },
+    config=BedrockConfig(
+        max_output_tokens=4096,
+        extra={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+    ),
 )
 ```
 
-`budget_tokens` must be at least 1024 and stay below `maxOutputTokens`.
+`budget_tokens` must be at least `1024` and strictly less than `max_output_tokens`.
 
-## Additional Capabilities
+## Prompt caching
 
-The plugin covers a few more surfaces, each described in depth in the [plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock):
+Bedrock can cache a prompt prefix and reuse it across calls. `cache_point_part()` marks where the cacheable prefix ends, so place it immediately after the content it should cache:
 
-- **Prompt caching**: `cache_point_part()` marks where a cacheable prompt prefix ends; the cache point goes after the content it should cache. Cache reads surface as `usage.cached_content_tokens`, and `usage.input_tokens` counts only the uncached remainder. A small `usage.input_tokens` value is therefore not a cache failure.
-- **Embedders**: list embedding model IDs in `Bedrock(embedders=[...])` and call `ai.embed`. Amazon Titan, Cohere (text-only on Bedrock), and Amazon Nova embedding models are supported.
-- **Image generation**: declare an image model with `ModelDefinition(name=..., type='image')`. The active Stability text-to-image models are offered in `us-west-2` only.
-- **Reranking**: `rerank()` is a method on the plugin instance rather than a registered action, so keep a reference to the `Bedrock` object you pass to `Genkit`.
+```python
+from pathlib import Path
 
-## Learn More
+from genkit import Part
+from genkit_amazon_bedrock import cache_point_part
 
-- [Sample app](https://github.com/genkit-ai/genkit/tree/main/py/samples/amazon-bedrock-sample) with a runnable flow for every surface on this page
-- [Plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock) with all plugin options, troubleshooting, and dated model availability tables
+# 1. A large static prompt, reused verbatim on every call
+MENU_POLICY = Path('menu_policy.md').read_text()
+system = [Part.from_text(MENU_POLICY), cache_point_part()]
+
+# 2. The second call reads the prefix the first one wrote
+await ai.generate(system=system, prompt='Which dishes contain tree nuts?')
+second = await ai.generate(system=system, prompt='Which dishes are vegan?')
+print(second.usage.cached_content_tokens)
+# => 2048.0
+```
+
+Cache reads surface on `usage.cached_content_tokens`. Bedrock counts cached tokens outside `inputTokens`, so `usage.input_tokens` is only the uncached remainder and stays small on a hit. A prefix below the model's minimum cacheable size (roughly 1,000 tokens for Claude Sonnet, higher for smaller models) is not cached, and no error says so.
+
+## Additional capabilities
+
+The plugin covers two more surfaces, each described in the [plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock):
+
+- **Embedders**: List embedding model IDs in `Bedrock(embedders=['amazon.titan-embed-text-v2:0'])` (or resolve on demand with `Bedrock.embedder(...)`) and call `ai.embed(embedder=..., content=...)`. Amazon Titan, Cohere, and Amazon Nova embedding models are supported. Per-request embedder options are ignored.
+- **Image generation**: Call Stability image models with `Bedrock.stability('stability.sd3-5-large-v1:0')` and `StabilityImageConfig(aspect_ratio='16:9', seed=42, output_format='jpeg')`. Stability text-to-image models on Bedrock are served in `us-west-2` only.
+
+## Learn more
+
+- [Sample app](https://github.com/genkit-ai/genkit/tree/main/py/samples/amazon-bedrock-sample) with a runnable script covering text, tools, and embeddings
+- [Plugin README](https://github.com/genkit-ai/genkit/tree/main/py/packages/genkit-amazon-bedrock) with all plugin options, troubleshooting, and model availability notes
 - [Generating content](/docs/models) for the full generation API
 
 </Lang>

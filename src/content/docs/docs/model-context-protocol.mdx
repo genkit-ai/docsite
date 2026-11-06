@@ -4,6 +4,7 @@ description: Learn how to extend Genkit's capabilities using the Model Context P
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../components/Lang.astro';
@@ -898,3 +899,141 @@ type MCPServerOptions struct {
 ```
 
 </Lang>
+
+<Lang lang="python">
+
+The `genkit-mcp` plugin connects Genkit to [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers over stdio and exposes the server's tools as Genkit `tool` actions through a dynamic action provider.
+
+:::note[MCP Client & Host Support]
+The Python SDK currently supports Genkit as an MCP **client** (`define_mcp_client`) and **host** (`define_mcp_host`). Publishing Genkit tools and flows as an MCP server (`createMcpServer`) is not yet implemented in Python.
+:::
+
+## Installation
+
+Install Genkit, the MCP plugin, and a model provider plugin:
+
+```bash
+uv add genkit genkit-mcp genkit-google-genai
+```
+
+## Connecting to a single server
+
+Use `define_mcp_client` to register a child-process MCP server with your `Genkit` instance. The client manages process lifecycles and tool translation:
+
+```python
+import asyncio
+
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+from genkit_mcp import define_mcp_client
+
+# 1. Initialize Genkit with your model plugin
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+# 2. Register the MCP server as a dynamic tool provider
+client = define_mcp_client(
+    ai,
+    'everything',
+    command='npx',
+    args=['-y', '@modelcontextprotocol/server-everything'],
+)
+
+
+async def main() -> None:
+    try:
+        # 3. Retrieve active tools exposed by the MCP server
+        tools = await client.get_active_tools()
+
+        # 4. Pass tools directly to generate
+        response = await ai.generate(
+            prompt='Echo "hello world".',
+            tools=tools,
+        )
+        print(response.text)
+        # => Echo: hello world
+
+        # 5. Alternatively, reference tools using dynamic selector strings
+        response = await ai.generate(
+            prompt='Echo "hello world".',
+            tools=['everything:tool/*'],
+        )
+        print(response.text)
+        # => Echo: hello world
+    finally:
+        # 6. Shut down the child process when done
+        await client.close()
+
+
+asyncio.run(main())
+```
+
+## Tool names and namespacing
+
+Every MCP tool is registered under the format `<prefix>_<tool>`. For example, the `echo` tool on the `everything` client becomes `everything_echo`.
+
+- **Separator**: Underscores (`_`) are used because model APIs (such as Gemini and OpenAI) reject slashes (`/`) in function declaration names.
+- **Character normalization**: Any characters rejected by model providers (such as periods) are automatically rewritten to underscores with a warning.
+- **Prefix selection**: Choose concise alphanumeric identifiers (such as `fs`, `git`, or `db`) for the server prefix.
+
+## Managing several servers with McpHost
+
+When your application requires tools from multiple MCP servers, use `define_mcp_host` to register them under a single unified provider:
+
+```python
+import asyncio
+
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+from genkit_mcp import define_mcp_host
+
+# 1. Initialize Genkit instance
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+# 2. Register multiple servers behind one host provider
+host = define_mcp_host(
+    ai,
+    'tools',
+    mcp_servers={
+        'fs': {
+            'command': 'npx',
+            'args': ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+        },
+        'memory': {
+            'command': 'npx',
+            'args': ['-y', '@modelcontextprotocol/server-memory'],
+        },
+    },
+)
+
+
+async def main() -> None:
+    try:
+        # 3. Supply every host tool to generation with a wildcard selector
+        response = await ai.generate(
+            prompt='List the files in the current directory.',
+            tools=['tools:tool/*'],
+        )
+        print(response.text)
+        # => The directory contains pyproject.toml, src/, and tests/.
+    finally:
+        # 4. Stop every server process
+        await host.close()
+
+
+asyncio.run(main())
+```
+
+### Fault tolerance in McpHost
+
+`define_mcp_host` isolates individual server failures:
+- If one server fails to start, crashes, or exceeds `request_timeout_millis`, the failure is logged and that server is skipped.
+- The remaining healthy servers in the host remain active and available for generation.
+
+## Lifecycle and connections
+
+- **Lazy start**: Child processes start lazily the first time `get_active_tools()` or a generation call runs.
+- **Restarting**: `await client.restart()` reconnects a live client if the underlying server process exited or needs a state refresh.
+- **Termination**: `await client.close()` shuts down the stdio process. Once closed, calls to its tools fail with `FAILED_PRECONDITION`.
+
+</Lang>
+

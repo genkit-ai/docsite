@@ -610,11 +610,13 @@ See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime co
 
 ## Constructor choices
 
+Initialize `Genkit` from `genkit.exp` to access the experimental agent constructors:
+
 - **`ai.define_agent()`** defines the prompt instructions, tools, and the agent shell in one place. This is the common path for chat assistants, tool-calling agents, and server-backed frontend features.
 - **`ai.define_prompt_agent()`** wraps a prompt that already exists (registered with `ai.define_prompt()` or loaded from a Dotprompt file). It keeps prompt copy, model settings, schemas, and tool lists in the prompt layer while the agent adds conversation state and transport.
 - **`ai.define_custom_agent()`** replaces the prompt loop with your own code, allowing multiple model calls in one turn, custom planning loops, direct session control, or custom streaming.
 
-All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs. The agent is also a bidirectional action that can be served over HTTP.
+All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs, and can be looked up by name with `await ai.agent(name)`. The agent is also a bidirectional action that can be served over HTTP.
 
 ## Define a prompt-backed agent
 
@@ -623,8 +625,8 @@ All three constructors produce an `Agent` that supports the transport-agnostic `
 ```python
 from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit.agent import FileSessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import FileSessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -654,7 +656,7 @@ store = FileSessionStore('./.genkit/snapshots/weather')
 weather_agent = ai.define_agent(
     name='weatherAgent',
     description='Answers weather questions for a location.',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Answer weather questions. Ask for a location when one is missing.',
     tools=[get_weather],
     state_schema=WeatherState,
@@ -671,17 +673,17 @@ weather_agent = ai.define_agent(
 - **`max_turns`** caps how many model/tool iterations one turn may run before stopping.
 - **`state_schema`** is a Pydantic model for custom session state. When set, `chat.state`, `response.state`, and streamed `chunk.custom` come back as that model.
 - **`store`** switches the agent to server-managed state. Add a store when you want snapshots, branching, background execution, `load_chat()`, or smaller client payloads.
-- **`use`** lists middleware applied to the prompt model loops (for example `ToolApproval` from `genkit_middleware`).
+- **`use`** lists middleware applied to the prompt model loops (for example `ToolApproval` or `Retry` from `genkit_middleware`, or `Artifacts` from `genkit_middleware.exp`).
 - **`state_transform`** / **`chunk_transform`** shape state and stream chunks before they leave the server. Use them for redaction or client-specific projections.
 
 ## Tools and current session
 
-Tools can read and update the active session by calling `ai.current_session()`. The session exposes `update_custom(fn)`, `get_messages()`, `add_messages()`, `add_artifacts()`, and related helpers.
+Tools can read and update the active session by calling `current_session()` from `genkit.exp`. It returns `None` outside an agent turn. The session exposes `get_custom()`, `update_custom(fn)`, `get_messages()`, `add_messages()`, `get_artifacts()`, and `add_artifacts()`. `update_custom(fn)` calls `fn` with the current custom state (`None` on the first write) and stores what it returns.
 
 ```python
 from pydantic import BaseModel
 
-from genkit import Genkit
+from genkit.exp import current_session
 
 
 class TaskItem(BaseModel):
@@ -702,20 +704,21 @@ class AddTaskInput(BaseModel):
 @ai.tool()
 async def add_task(input: AddTaskInput) -> TaskItem:
     """Add a new task to the list."""
-    created: TaskItem | None = None
+    sess = current_session()
+    if sess is None:
+        raise RuntimeError('add_task requires an active agent session.')
+
+    created = TaskItem(id=0, title=input.title)
 
     def mutate(custom: dict | None) -> dict:
-        nonlocal created
-        state = custom or {}
-        next_id = state.get('next_id') or state.get('nextId') or 1
-        tasks = list(state.get('tasks') or [])
-        created = TaskItem(id=next_id, title=input.title)
-        tasks.append(created.model_dump())
-        return {'tasks': tasks, 'next_id': next_id + 1}
+        state = TaskState.model_validate(custom or {})
+        created.id = state.next_id
+        state.tasks.append(created)
+        state.next_id += 1
+        return state.model_dump()
 
-    if sess := ai.current_session():
-        await sess.update_custom(mutate)
-    return created  # type: ignore[return-value]
+    await sess.update_custom(mutate)
+    return created
 ```
 
 Provide the matching `state_schema` when defining the agent (here `state_schema=TaskState`) so custom state is returned as that model. Custom-state mutations emit streamed JSON Patch chunks, which keeps `chat.state` and `chunk.custom` current while a turn is still running.
@@ -727,7 +730,7 @@ Use `define_prompt_agent()` when the prompt already exists under the same name. 
 ```python
 ai.define_prompt(
     name='tripPlanner',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Plan short trips. Keep recommendations concise.',
 )
 
@@ -738,20 +741,22 @@ trip_planner_agent = ai.define_prompt_agent(
 )
 ```
 
-The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, the turn fails with an error telling you which prompt name was missing.
+The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, `chat.send()` does not raise: the response comes back with `finish_reason == AgentFinishReason.FAILED` and a `NOT_FOUND` error that names the missing prompt. See [Agent error handling](/docs/agents/errors).
 
 ## Define a custom agent implementation
 
-Use `define_custom_agent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and an `ActionRunContext`, and handles turn processing directly.
+Use `define_custom_agent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and an `AgentContext` from `genkit.exp.agent`, and handles turn processing directly.
 
 ```python
-from genkit import ActionRunContext
-from genkit.agent import AgentResult, SessionRunner
+from genkit.exp.agent import AgentContext, AgentInput, AgentResult, SessionRunner, TurnContext, TurnResult
 
 
-async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    # Your own per-turn loop. See Custom orchestration for the full pattern.
-    ...
+async def research_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
+        ...  # One user turn. See Custom orchestration for the full pattern.
+
+    await sess.run(handle_turn)
+    return await sess.result()
 
 
 research_agent = ai.define_custom_agent(

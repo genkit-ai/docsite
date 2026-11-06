@@ -444,49 +444,49 @@ if (order == null) {
 
 ## Failure categories
 
-- **Init misuse** raises `AgentInitError` (a `GenkitError`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
-- **Failed turns** raise `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
-- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+Python agents separate pre-turn/transport exceptions from in-band turn failures:
+
+- **Init misuse** raises `AgentInitError` (from `genkit.exp.agent`, a subclass of `PublicError` and `GenkitError`) before a turn starts—for example, passing `state` to a store-backed agent or `snapshot_id` to a client-managed agent. Both are `FAILED_PRECONDITION`.
+- **Transport and HTTP errors** raise `GenkitError` (`err.status`, `err.message`, `err.details`, `err.reason`, `err.__cause__`) when a call fails before producing a turn result, such as an HTTP 4xx/5xx response or a dropped SSE stream.
+- **Failed turns** do **not** raise an exception. `chat.send()` and `turn.response` return an `AgentResponse` with `res.finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`, `reason`), while `res.message` is `None` and `res.text` is `''`.
+- **Cancellation**: `await turn.abort()` or an `asyncio.timeout()` deadline (Python 3.11+) stops the local listener; the server turn keeps running. To stop server work, start the turn with `chat.detach()` and call `await task.abort()`.
+- **Background/detached failures** appear on `SessionSnapshot` (`await agent.get_snapshot(...)`) with `status` set to `SnapshotStatus.FAILED`, `SnapshotStatus.ABORTED`, or `SnapshotStatus.EXPIRED` and `snapshot.error` populated on failures.
 - **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
 ## Handle failed turns
 
-```python
-from genkit.agent import AgentError
+Failed turns don't raise. Check `res.error` on the response. `GenkitError` raises only when no turn result exists, such as init misuse or a transport failure, so let it propagate to your request handler.
 
-try:
-    res = await chat.send('Look up order 123.')
-    print(res.text)
-except AgentError as err:
-    print('Turn failed:', err.status)
-    print('Error details:', err.message)
-
-    recovery_chat = (
-        await agent.load_chat(snapshot_id=err.snapshot_id)
-        if err.snapshot_id
-        else agent.chat(
-            messages=err.response.messages if err.response else [],
-            state=err.state,
-            artifacts=err.response.raw.state.artifacts
-            if (err.response and err.response.raw and err.response.raw.state)
-            else None,
-        )
-    )
-    await recovery_chat.send('Try again with order 456.')
-```
-
-For streaming turns, catch errors around stream consumption and the final response. The stream rethrows failed-turn errors after yielding any chunks that arrived before the failure.
+When a turn fails, `chat` drops the failed user message and any partial custom-state changes, so the next `chat.send()` continues from the last completed turn. On a store-backed agent the failure is saved as a `failed` snapshot for inspection, and `res.snapshot_id` still points at the last completed one, so another process can resume with `load_chat(snapshot_id=res.snapshot_id)`.
 
 ```python
-turn = chat.send_stream('Write a long report.')
+res = await chat.send('Look up order 123.')
 
-try:
-    async for chunk in turn.stream:
-        render(chunk)
-    await turn.response
-except AgentError as err:
-    show_failure(err)
+if res.error:
+    print('Turn failed:', res.error.status, res.error.message)
+    # => Turn failed: NOT_FOUND Order 123 was not found.
+
+    # `chat` already rolled back to the last completed turn, so retry directly.
+    # From another process, use `await agent.load_chat(snapshot_id=res.snapshot_id)`.
+    res = await chat.send('Try again with order 456.')
+
+print(res.text)
 ```
+
+For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` with `res.error` set. Only errors that leave no turn result (init misuse, HTTP errors, dropped connections) raise `GenkitError` while iterating `turn.stream`:
+
+```python
+turn = chat.send_stream('Write a report.')
+
+async for chunk in turn.stream:
+    render(chunk)
+
+res = await turn.response
+if res.error:
+    show_turn_failure(res.error)
+```
+
+If a remote HTTP stream drops mid-turn (`GenkitError` with `UNAVAILABLE` or `DEADLINE_EXCEEDED`), a store-backed server turn may still finish. Check `await agent.get_snapshot(session_id=...)` before resending a turn with side effects, then continue with `agent.chat(session_id=...)`.
 
 ## Tool exceptions
 
@@ -514,15 +514,28 @@ async def lookup_order(input: LookupOrderInput) -> dict:
     return order
 ```
 
-When the model can recover (for example, invalid user input), return structured output instead:
+The turn fails with the `GenkitError`'s own status and message, and `res.error.reason` is `ErrorReason.TOOL_FAILED`. Any other exception fails the turn as `INTERNAL` with the message `internal error`; the original text stays in server logs.
+
+When serving over HTTP (`serve_agent()` or `genkit.web`), errors that fail the request, such as init misuse or a raising transform, keep their status and message only if they are a `PublicError`. Anything else goes out as HTTP 500 `INTERNAL` with a generic message. A failed turn is different: the response is HTTP 200, and `error` carries a tool's `GenkitError` status and message unchanged, so keep internal details such as hostnames or query text out of those messages. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full HTTP error model.
+
+When the model can recover (for example, an unknown order ID entered by the user), return structured output instead:
 
 ```python
-if order is None:
-    return {
-        'ok': False,
-        'reason': 'ORDER_NOT_FOUND',
-        'message': 'Ask the user to check the order ID.',
-    }
+@ai.tool()
+async def lookup_order(input: LookupOrderInput) -> dict:
+    """Looks up an order by ID."""
+    order = await db.orders.find(input.order_id)
+    if order is None:
+        return {
+            'ok': False,
+            'reason': 'ORDER_NOT_FOUND',
+            'message': 'Ask the user to check the order ID.',
+        }
+    return {'ok': True, 'order': order}
 ```
+
+## Transform failures
+
+`state_transform` and `chunk_transform` fail closed. If a transform raises an exception, the snapshot read or turn fails instead of exposing unredacted data. Raise `PublicError('PERMISSION_DENIED', 'Not authorized for this session.')` when enforcing tenant checks on HTTP routes.
 
 </Lang>

@@ -8,6 +8,7 @@ supportedLanguages:
   - dart
 ---
 
+import { Aside } from '@astrojs/starlight/components';
 import Lang from '../../../components/Lang.astro';
 import ThemeImage from '../../../components/ThemeImage.astro';
 
@@ -1467,6 +1468,10 @@ its own test set will happily write questions the source text does not answer.
 
 <Lang lang="python">
 
+<Aside type="caution" title="Evaluators are cut from 1.0">
+  Genkit Python 0.13 is the last release with evaluators (`ai.define_evaluator()`, `ai.evaluate()`, `genkit.evaluator`) and the `genkit-evaluators` package. Genkit 1.0 removes them; evaluation will return as an additive feature in a later release. To keep using evaluators, pin `genkit==0.13.*`.
+</Aside>
+
 ## Quick start
 
 ### Setup
@@ -1475,7 +1480,7 @@ its own test set will happily write questions the source text does not answer.
 2.  Add the following code to define a simple RAG application to evaluate. For this guide, we use a dummy retriever that always returns the same documents.
 
 ```python
-from genkit import Genkit, Document
+from genkit import Document, Genkit
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
@@ -1503,11 +1508,18 @@ async def qa_flow(input: QAInput) -> QAOutput:
     fact_docs = await dummy_retrieve(input.query)
 
     response = await ai.generate(
-        model='googleai/gemini-flash-latest',
+        model=GoogleAI.gemini('gemini-flash-latest'),
         prompt=f'Answer this question with the given context: {input.query}',
         docs=fact_docs,
     )
     return QAOutput(answer=response.text)
+
+async def main() -> None:
+    pass
+
+# Keeps the process alive under `genkit start` so the Dev UI can call qa_flow
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 3.  Start your Genkit application.
@@ -1536,7 +1548,7 @@ Create a dataset to define the examples we want to use for evaluating our flow.
 
    a. Click the **Add example** button to open the example editor panel.
 
-   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example has to your dataset.
+   b. Only the `input` field is required. Enter `{"query": "Who is man's best friend?"}` in the `input` field, and click **Save** to add the example to your dataset.
 
    c. Repeat steps (a) and (b) a couple more times to add more examples. This guide adds the following example inputs to the dataset:
 
@@ -1571,7 +1583,7 @@ dataset page. You can also start a new evaluation from the _Evaluations_ tab.
    to the _Evaluation details_ page.
 
 You can see the details of your evaluation on this page, including original
-input, extracted context and metrics (if any).
+input, output, and metrics (if any).
 
 ## Core concepts
 
@@ -1582,11 +1594,11 @@ input, extracted context and metrics (if any).
   prompt, or a model. An evaluation can be automated or manual (human
   evaluation).
 
-- **Bulk inference** Inference is the act of running an input on a flow or model to get the corresponding output. Bulk inference involves performing inference on multiple inputs simultaneously.
+- **Bulk inference**: Inference is the act of running an input on a flow or model to get the corresponding output. Bulk inference involves performing inference on multiple inputs simultaneously.
 
-- **Metric** An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
+- **Metric**: An evaluation metric is a criterion on which an inference is scored. Examples include accuracy, faithfulness, maliciousness, whether the output is in English, etc.
 
-- **Dataset** A dataset is a collection of examples to use for inference-based  
+- **Dataset**: A dataset is a collection of examples to use for inference-based
   evaluation. A dataset typically consists of `input` and optional `reference`
   fields. The `reference` field does not affect the inference step of evaluation
   but it is passed verbatim to any evaluation metrics. In Genkit, you can create
@@ -1605,7 +1617,7 @@ Depending on the type, datasets have schema validation support in the Dev UI:
 
 Note: Schema validation is a helper tool for editing examples, but it is
 possible to save an example with invalid schema. These examples may fail when
-the running an evaluation.
+you run an evaluation.
 
 :::note[Evaluating prompts]
 When evaluating a prompt, Genkit executes the prompt against the inputs in your dataset. If your prompt definition includes multiple variants (e.g., different model configurations or instructions), the Developer UI allows you to select the specific variant you want to evaluate. This enables A/B testing of different prompt strategies.
@@ -1635,10 +1647,8 @@ That registers:
 - **Deep Equal** (`genkitEval/deep_equal`) -- Checks if the generated output is deep-equal to the reference output
 - **JSONata** (`genkitEval/jsonata`) -- Checks if the generated output matches a JSONata expression provided in the reference field
 
-For LLM-as-judge metrics, define your own with
-**`ai.define_evaluator()`** (see [Custom evaluators](#custom-evaluators)) or use
-[Gemini Enterprise evaluation metrics](/docs/integrations/vertex-ai#evaluation-metrics)
-via the Google GenAI plugin.
+For LLM-as-judge metrics, define your own with `ai.define_evaluator()` (see
+[Custom evaluators](#custom-evaluators)) or use an evaluator plugin.
 
 ### Evaluator plugins
 
@@ -1646,113 +1656,117 @@ Genkit supports additional evaluators through plugins, like the Gemini Enterpris
 
 ### Custom evaluators
 
-You can extend Genkit to support custom evaluation by defining your own evaluator functions. An evaluator can use an LLM as a judge, perform programmatic (heuristic) checks, or call external APIs to assess the quality of a response.
-
-You define a custom evaluator using the `ai.define_evaluator()` method. The callback function for the evaluator can contain any logic you need.
-
-Here's an example of a custom evaluator that uses an LLM to check for "deliciousness":
+Define custom heuristic or LLM-as-judge evaluators with `ai.define_evaluator()`. Each per-datapoint callback receives a `BaseDataPoint` and optional `options` dict and returns an `EvaluatorResponse` containing one or more `Score` entries:
 
 ```python
 from genkit import Genkit
-from genkit_google_genai import GoogleAI
 from genkit.evaluator import (
-    BaseEvalDataPoint,
-    EvalFnResponse,
+    BaseDataPoint,
+    EvaluatorResponse,
     Score,
-    EvalStatusEnum,
+    ScoreDetails,
+    ScoreStatus,
 )
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 
 async def food_evaluator(
-    datapoint: BaseEvalDataPoint,
+    datapoint: BaseDataPoint,
     options: dict[str, object] | None = None,
-) -> EvalFnResponse:
+) -> EvaluatorResponse:
     """Determines if an output is a delicious food item."""
-    if not datapoint.output or not isinstance(datapoint.output, str):
-        raise ValueError("String output is required for food evaluation")
+    if not isinstance(datapoint.output, str):
+        raise ValueError('String output is required for food evaluation')
 
-    # You can use an LLM as a judge for more complex evaluations.
     response = await ai.generate(
-        model='googleai/gemini-flash-latest',
-        prompt=f'Is the following food delicious? Respond with "yes", "no", or "maybe". Food: {datapoint.output}',
-    )
-
-    # You can also perform any custom logic in the evaluator.
-    # if "marmite" in datapoint.output:
-    #     handle_marmite()
-    # or...
-    # score = await my_api.evaluate(
-    #     type='deliciousness',
-    #     value=datapoint.output
-    # )
-
-    return EvalFnResponse(
-        test_case_id=datapoint.test_case_id,
-        evaluation=Score(
-            score=response.text,
-            status=EvalStatusEnum.PASS,
-            details={'reasoning': f'LLM judged: {response.text}'},
+        model=GoogleAI.gemini('gemini-flash-latest'),
+        prompt=(
+            'Is the following food delicious? Reply with exactly one word: yes, no, or maybe. '
+            f'Food: {datapoint.output}'
         ),
+    )
+    verdict = response.text.strip().lower()
+
+    return EvaluatorResponse(
+        test_case_id=datapoint.test_case_id or '',
+        evaluation=[
+            Score(
+                score=verdict,
+                status=ScoreStatus.PASS if verdict == 'yes' else ScoreStatus.FAIL,
+                details=ScoreDetails(reasoning=f'LLM judged: {verdict}'),
+            ),
+        ],
     )
 
 ai.define_evaluator(
-    name='custom/foodEvaluator',
+    'byo/food_evaluator',
+    food_evaluator,
     display_name='Food Evaluator',
     definition='Determines if an output is a delicious food item.',
-    fn=food_evaluator,
 )
 ```
 
-You can then use this custom evaluator just like any other Genkit evaluator. You
-can use them with your datasets in the Dev UI or with the CLI in the `eval:run`
-or `eval:flow` commands:
+Run your custom evaluator from the Developer UI or with the CLI `eval:run` and `eval:flow` commands. This one expects a string `output`, so point it at a dataset or flow that produces plain text:
 
 ```bash
-genkit eval:flow myFlow --input myDataset.json --evaluators=custom/foodEvaluator
+genkit eval:run foodDataset.json --evaluators=byo/food_evaluator -- uv run main.py
+```
+
+Here, `foodDataset.json` holds rows with `input` and `output` fields:
+
+```json
+[
+  {
+    "testCaseId": "soup",
+    "input": "Recommend a comforting soup.",
+    "output": "Roasted tomato bisque with sourdough croutons."
+  }
+]
 ```
 
 ### Running evaluations programmatically
 
-You can also run evaluations directly in your code using `ai.evaluate()`:
+Run a registered evaluator directly from Python with `ai.evaluate()`, which returns `list[EvaluatorResponse]`:
 
 ```python
 import asyncio
 from genkit import Genkit
+from genkit.evaluator import BaseDataPoint, EvaluatorResponse
 from genkit_google_genai import GoogleAI
-from genkit.evaluator import BaseEvalDataPoint, EvalResponse
 
 ai = Genkit(plugins=[GoogleAI()])
 
-# ... define your evaluator ...
+# ... register byo/food_evaluator with ai.define_evaluator() ...
 
-async def run_evaluation() -> EvalResponse:
+async def run_evaluation() -> list[EvaluatorResponse]:
     dataset = [
-        BaseEvalDataPoint(
+        BaseDataPoint(
             test_case_id='test-1',
-            input='What is the capital of France?',
-            output='The capital of France is Paris.',
-            context=['France is a country in Europe. Paris is its capital.'],
+            input='Recommend a comforting soup.',
+            output='Roasted tomato bisque with sourdough croutons.',
         ),
-        BaseEvalDataPoint(
+        BaseDataPoint(
             test_case_id='test-2',
-            input='What color is the sky?',
-            output='The sky is blue during the day.',
-            context=['The sky appears blue due to light scattering.'],
+            input='Recommend a light dessert.',
+            output='Lemon panna cotta with fresh berries.',
         ),
     ]
 
-    result = await ai.evaluate(
-        evaluator='custom/foodEvaluator',
+    results = await ai.evaluate(
+        evaluator='byo/food_evaluator',
         dataset=dataset,
         eval_run_id='my-eval-run',
     )
 
-    for item in result.model_dump(exclude_none=True):
-        print(f'Test case: {item["test_case_id"]}')
-        print(f'Score: {item["evaluation"]}')
+    for row in results:
+        for score in row.evaluation:
+            print(f'Test case {row.test_case_id}: {score.score} ({score.status})')
+    # Scores come from the model, so they can vary between runs.
+    # => Test case test-1: yes (PASS)
+    #    Test case test-2: maybe (FAIL)
 
-    return result
+    return results
 
 asyncio.run(run_evaluation())
 ```
@@ -1926,9 +1940,9 @@ Array<{
 }>;
 ```
 
-The data extractor automatically locates retrievers and adds the produced docs
-to the context array. You can run evaluation metrics on this extracted dataset
-using the `eval:run` command.
+Genkit Python has no retriever steps, so `context` is empty. If your metric
+needs context, add a `context` list to each row, then run the metrics on the
+extracted dataset with `eval:run`.
 
 ```bash
 genkit eval:run factsEvalDataset.json
@@ -1944,7 +1958,6 @@ Here is an example flow that uses a PDF file to generate potential user
 questions.
 
 ```python
-from pathlib import Path
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
@@ -1963,31 +1976,19 @@ class SynthesizeOutput(BaseModel):
 
 def extract_text(file_path: str) -> str:
     """Extract text from a PDF file."""
-    pdf_path = Path(file_path).resolve()
-    with open(pdf_path, 'rb') as file:
-        reader = pypdf.PdfReader(file)
-        text = ''
-        for page in reader.pages:
-            text += page.extract_text()
-    return text
+    reader = pypdf.PdfReader(file_path)
+    return ''.join(page.extract_text() for page in reader.pages)
 
 def chunk_text(text: str, chunk_size: int = 2000, overlap: int = 100) -> list[str]:
     """Split text into overlapping chunks."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start = end - overlap
-    return chunks
+    step = chunk_size - overlap
+    return [text[i:i + chunk_size] for i in range(0, max(len(text) - overlap, 1), step)]
 
 @ai.flow()
 async def synthesize_questions(input: SynthesizeInput) -> SynthesizeOutput:
-    file_path = str(Path(input.file_path).resolve())
-
     # Extract text from the PDF
     async def _extract():
-        return extract_text(file_path)
+        return extract_text(input.file_path)
     pdf_txt = await ai.run(name='extract-text', fn=_extract)
 
     # Chunk the text
@@ -1998,7 +1999,7 @@ async def synthesize_questions(input: SynthesizeInput) -> SynthesizeOutput:
     questions = []
     for chunk in chunks:
         response = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt=f'Generate one question about the following text: {chunk}',
         )
         questions.append(Question(query=response.text))

@@ -1148,7 +1148,7 @@ print('Name: \${person.name}, Age: \${person.age}');
 
 <Lang lang="python">
 
-The `genkit-anthropic` package provides access to Anthropic's Claude models through the Genkit framework.
+The `genkit-anthropic` package integrates Anthropic's Claude models via the Messages API.
 
 ## Installation
 
@@ -1158,79 +1158,130 @@ uv add genkit-anthropic
 
 ## Configuration
 
+Register `Anthropic` on `Genkit` and reference models with `Anthropic.claude()` (or `'anthropic/<model-id>'` strings):
+
 ```python
 from genkit import Genkit
-from genkit_anthropic import Anthropic, anthropic_name
+from genkit_anthropic import Anthropic
 
 ai = Genkit(
     plugins=[Anthropic()],
-    model=anthropic_name('claude-haiku-4-5'),
+    model=Anthropic.claude('claude-sonnet-4-6'),
 )
 ```
 
-### Authentication
+### Authentication and client options
 
-Set the `ANTHROPIC_API_KEY` environment variable or pass it directly:
+Set `ANTHROPIC_API_KEY` in the environment, pass `api_key=` at plugin initialization, or override per request via `context={'secrets': {'api_key': ...}}`:
 
 ```python
+import os
+from genkit import Genkit
+from genkit_anthropic import Anthropic
+
 ai = Genkit(
-    plugins=[Anthropic(api_key='your-api-key')],
+    plugins=[
+        Anthropic(
+            api_key=os.environ['ANTHROPIC_API_KEY'],
+            # base_url takes the origin only; a value ending in '/v1' raises:
+            # base_url='https://anthropic-proxy.internal',
+            client_options={'timeout': 60.0, 'max_retries': 3},
+        )
+    ],
+    model=Anthropic.claude('claude-sonnet-4-6'),
+)
+
+# Per-request key override. Traces record config but not secrets, so the
+# plugin rejects a key in config with INVALID_ARGUMENT.
+# tenant_api_key comes from your own per-tenant secret store.
+response = await ai.generate(
+    model=Anthropic.claude('claude-haiku-4-5'),
+    prompt='Check this invoice total.',
+    context={'secrets': {'api_key': tenant_api_key}},
 )
 ```
 
-## Available Models
+## Available models
 
-- `claude-haiku-4-5` - Fastest and most cost-effective
-- `claude-sonnet-4-6` - Balanced performance with thinking/reasoning support
-- `claude-opus-4-8` - Most capable for complex reasoning and agentic tasks
-- `claude-opus-4-7` - Previous-generation Opus, highly capable for long-horizon work
+- `claude-haiku-4-5` — Lowest latency and cost
+- `claude-sonnet-4-6` — Balanced coding, tool use, and extended thinking
+- `claude-opus-4-8` — Highest capability for complex reasoning and agentic loops
+- `claude-opus-4-7` — Previous-generation Opus model
 
-## Basic Usage
+Any other Claude ID resolves on demand, so `Anthropic.claude('<model-id>')` works for models released after this plugin version.
+
+## Basic usage
 
 ```python
 response = await ai.generate(
-    prompt='Explain quantum computing in simple terms.',
+    prompt='Explain write-ahead logging in three sentences.',
 )
 print(response.text)
 ```
 
-## Structured Output
+## Structured output
 
 ```python
 from pydantic import BaseModel, Field
 
-class Character(BaseModel):
-    name: str = Field(description='Character name')
-    backstory: str = Field(description='Character backstory')
-    abilities: list[str] = Field(description='List of abilities')
+class IncidentSummary(BaseModel):
+    service: str = Field(description='Affected service name')
+    severity: str = Field(description='P0, P1, or P2')
+    root_cause: str = Field(description='One-line root cause')
 
 response = await ai.generate(
-    prompt='Generate a fantasy RPG character',
-    output_schema=Character,
+    prompt='Summarize: checkout-api returned 503s for 4 minutes after a connection pool leak.',
+    output_schema=IncidentSummary,
 )
-print(response.output)  # Character instance
+summary = response.output
+if summary is None:
+    raise RuntimeError(f'Summary generation failed: {response.error}')
+print(summary.service, summary.severity)
+# => checkout-api P1
 ```
 
-## Thinking and Reasoning
+## Thinking and reasoning
 
-Claude Sonnet 4.6 and later models support extended thinking:
+Configure extended or adaptive thinking with flat fields on `AnthropicConfig`:
 
 ```python
+from genkit_anthropic import Anthropic, AnthropicConfig
+
+# Manual token budget
 response = await ai.generate(
-    model=anthropic_name('claude-sonnet-4-6'),
-    prompt='Solve this logic puzzle step by step...',
-    config={
-        'thinking': {'type': 'enabled', 'budget_tokens': 1024},
-        'max_output_tokens': 4096,
-    },
+    model=Anthropic.claude('claude-sonnet-4-6'),
+    prompt='Prove that the square root of 2 is irrational.',
+    config=AnthropicConfig(
+        thinking='enabled',
+        thinking_budget=1024,
+        max_output_tokens=4096,
+    ),
 )
+reasoning = ''.join(p.reasoning or '' for p in response.message.content)
+print(reasoning)
 print(response.text)
+
+# Adaptive thinking: the model sizes its own budget.
+# task_budget (minimum 20,000) sends the request on the beta API.
+adaptive = await ai.generate(
+    model=Anthropic.claude('claude-opus-4-8'),
+    prompt='Audit this distributed lock protocol for split-brain edge cases.',
+    config=AnthropicConfig(
+        thinking='adaptive',
+        effort='high',  # 'low', 'medium', 'high', 'xhigh', or 'max'
+        task_budget=20_000,
+    ),
+)
+print(adaptive.text)
 ```
 
-## Tool Calling
+## Tool calling
+
+Pass `tool_choice` (`'auto'`, `'required'`, or `'none'`) on `ai.generate()`. To restrict Claude to at most one tool call per turn, set `disable_parallel_tool_use=True` on `AnthropicConfig`:
 
 ```python
 from pydantic import BaseModel, Field
+from genkit_anthropic import AnthropicConfig
 
 class WeatherInput(BaseModel):
     location: str = Field(description='City name')
@@ -1238,11 +1289,13 @@ class WeatherInput(BaseModel):
 @ai.tool()
 async def get_weather(input: WeatherInput) -> str:
     """Get current weather for a location."""
-    return f'72°F and sunny in {input.location}'
+    return f'72°F and clear in {input.location}'
 
 response = await ai.generate(
     prompt='What is the weather in San Francisco?',
     tools=[get_weather],
+    tool_choice='auto',
+    config=AnthropicConfig(disable_parallel_tool_use=True),
 )
 print(response.text)
 ```
@@ -1250,45 +1303,64 @@ print(response.text)
 ## Streaming
 
 ```python
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 @ai.flow()
-async def streaming_story(topic: str, ctx: ActionRunContext) -> str:
+async def streaming_analysis(topic: str, ctx: FlowContext[str]) -> str:
     stream_response = ai.generate_stream(
-        prompt=f'Write a short story about {topic}',
+        prompt=f'Outline failure modes for {topic}.',
     )
     async for chunk in stream_response.stream:
         ctx.send_chunk(chunk.text)
     return (await stream_response.response).text
 ```
 
-## Multimodal (Image Understanding)
+## Multimodal (image and PDF input)
+
+Build multimodal prompts with `Part.from_text()` and `Part.from_media()`. The plugin sends `image/*` media as image blocks and `application/pdf` as document blocks, from a URL or a `data:` URI:
 
 ```python
-from genkit import Part, TextPart, MediaPart, Media
+from genkit import Part
 
 response = await ai.generate(
     prompt=[
-        Part(root=TextPart(text='Describe this image')),
-        Part(root=MediaPart(media=Media(
-            url='https://example.com/image.jpg',
+        Part.from_text('Extract the table headers from this image.'),
+        Part.from_media(
+            url='https://example.com/report-page.jpg',
             content_type='image/jpeg',
-        ))),
+        ),
     ],
 )
 print(response.text)
+
+contract = await ai.generate(
+    prompt=[
+        Part.from_text('List the termination clauses in this contract.'),
+        Part.from_media(
+            url='https://example.com/vendor-contract.pdf',
+            content_type='application/pdf',
+        ),
+    ],
+)
+print(contract.text)
 ```
 
-## Configuration Options
+## Configuration options
+
+`AnthropicConfig` rejects unknown top-level keys. `api_version='beta'` selects the beta API, and `betas` replaces the plugin's default beta headers. Undeclared request fields go in `extra`, which is merged into the top level of the request body:
 
 ```python
-from genkit import ModelConfig
+from genkit_anthropic import AnthropicConfig
 
 response = await ai.generate(
-    prompt='Your prompt here',
-    config=ModelConfig(
-        temperature=0.7,
-        max_output_tokens=1000,
+    prompt='Draft a migration checklist.',
+    config=AnthropicConfig(
+        temperature=0.4,
+        max_output_tokens=1024,
+        user_id='acct_9481',
+        api_version='beta',
+        betas=['files-api-2025-04-14'],
+        extra={'container': 'cntr_01'},
     ),
 )
 ```

@@ -4,6 +4,7 @@ description: This guide provides solutions to common issues encountered when usi
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -46,6 +47,33 @@ from `@genkit-ai/otel`, which is not for use together with the Firebase plugin.
 
 </Lang>
 
+<Lang lang="python">
+
+Also check the following:
+
+- **`GENKIT_ENV=dev`**: `genkit start` sets it, and nothing is exported unless
+  you pass `force_dev_export=True`.
+- **Wrong project**: `FIREBASE_PROJECT_ID` is not read. Set `project=` or
+  `GOOGLE_CLOUD_PROJECT`; see
+  [project resolution](/docs/observability/getting-started#environment-based-configuration).
+- **Your own `TracerProvider` gets no spans**: register it before calling
+  `enable_google_cloud_telemetry()`. OpenTelemetry ignores a provider set after
+  one is already registered and logs
+  `Overriding of current TracerProvider is not allowed`.
+- **GenAI spans appear twice**: `configure_instrumentation(GenAiInstrumentation(...))`
+  after `enable_google_cloud_telemetry()` adds a second instance. Configure yours
+  first; `enable_google_cloud_telemetry()` keeps it instead of adding its own.
+- **`FAILED_PRECONDITION` on startup**: `enable_google_cloud_telemetry()` runs
+  once per process. A second call raises instead of adding a second set of
+  exporters.
+- **Error messages show `<redacted>` in Cloud Trace**: on Genkit spans, the
+  status description, `exception.message`, and `exception.stacktrace` are
+  redacted because `str(exc)` can quote prompt text. `error.type` and
+  `exception.type` are kept. Log the exception with `genkit.get_logger()` if you
+  need the message.
+
+</Lang>
+
 Debug locally:
 
 <Lang lang="js">
@@ -68,6 +96,21 @@ Enable dev export:
 firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
 	ForceDevExport: true,
 })
+```
+
+</Lang>
+
+<Lang lang="python">
+
+Enable dev export with a 5-second metric interval:
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(
+    force_dev_export=True,
+    metric_export_interval_ms=5000,
+)
 ```
 
 </Lang>
@@ -140,6 +183,21 @@ func main() {
 
 </Lang>
 
+<Lang lang="python">
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(
+    # Override the export interval to 3 minutes
+    metric_export_interval_ms=180_000,
+    # Override the export timeout to 3 minutes
+    metric_export_timeout_ms=180_000,
+)
+```
+
+</Lang>
+
 ### Intermittent network issues
 
 <Lang lang="js">
@@ -159,6 +217,16 @@ upload telemetry data. These failures are logged to Google Cloud Logging. To
 see the specific failure reason, look for a log that contains:
 
 > level=ERROR msg="Unable to send metrics to Google Cloud" error="rpc error: code = PermissionDenied desc = Permission monitoring.metricDescriptors.create denied (or the resource may not exist).
+
+</Lang>
+
+<Lang lang="python">
+
+Occasionally you may have transient network issues that result in a failure to
+upload telemetry data. Each exporter logs the failure with the underlying error.
+Look for `Error while writing to Cloud Trace`,
+`Error while writing to Cloud Monitoring`, or
+`Error while writing to Cloud Logging`.
 
 </Lang>
 

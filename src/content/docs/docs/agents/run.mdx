@@ -603,7 +603,7 @@ Initialization misuse, such as sending `state` to a server-managed agent, is rej
 </Lang>
 <Lang lang="python">
 
-Local agents from `ai.define_agent()` and remote clients from `remote_agent()` share this interface, so the same code drives both.
+Local agents from `ai.define_agent()` (in `genkit.exp`) and remote clients from `remote_agent()` (in `genkit.exp.agent`) share this interface, so the same code drives both. `weather_agent` below is the agent `ai.define_agent()` returned; see [Define agents](/docs/agents/define).
 
 ## Start a chat
 
@@ -612,6 +612,7 @@ chat = weather_agent.chat()
 res = await chat.send('Weather in Tokyo?')
 
 print(res.text)
+# => It is 72°F and sunny in Tokyo.
 print(res.session_id)
 print(res.snapshot_id)
 print(res.state)
@@ -637,6 +638,8 @@ print(chat.state)
 await chat.send('Continue from there.')
 ```
 
+`load_chat()` points the chat at the stored row as is. If the latest turn failed or was aborted, the next `send()` on that chat returns a failed response with `INVALID_ARGUMENT`. Use `chat(session_id=...)` to continue from the last completed turn instead.
+
 Use `get_snapshot()` when you want read-only data (such as checking background task status, inspecting errors, or auditing session state) without opening a chat session. Use `load_chat()` when you want an interactive `AgentChat` instance to continue the conversation and send new turns.
 
 ## Stream a turn
@@ -655,39 +658,45 @@ async for chunk in turn.stream:
 
 res = await turn.response
 print(res.finish_reason)
+# => stop
 ```
 
 `chat.send_stream()` returns an `AgentTurn`. Iterate `turn.stream` for live chunks, or await `turn.response` for the final output. Both paths apply custom-state patches so `chat.state` stays current.
 
 ## Abort a foreground turn
 
-Cancel a foreground turn with `turn.abort()`. This stops the client from listening; for store-backed agents, call `chat.abort()` if you also need to stop server-side work.
+Call `await turn.abort()` to stop listening to a foreground turn. The client detaches, and the server turn keeps running in the background.
 
 ```python
 turn = chat.send_stream('Write a long report.')
 
-# Later:
-await turn.abort()
-
-res = await turn.response
-print(res.finish_reason)  # AgentFinishReason.ABORTED
+async for chunk in turn.stream:
+    if chunk.text:
+        print(chunk.text, end='', flush=True)
+    if user_pressed_stop():
+        await turn.abort()
+        break
 ```
+
+After `turn.abort()`, `await turn.response` raises `asyncio.CancelledError`. Cancelling the task or hitting an `asyncio.timeout()` deadline (Python 3.11+) detaches the client the same way and raises `CancelledError` or `TimeoutError`.
+
+To stop server-side work on a store-backed agent, run the turn with `chat.detach()` and call `await task.abort()`. See [Background execution](/docs/agents/background).
 
 ## Failed turns
 
-When a turn fails after the invocation starts, the client raises `AgentError`. The exception carries status, details, the latest snapshot ID, and the recoverable last-good state.
+When a turn fails during execution, such as a model error or an unhandled tool exception, `chat.send()` and `turn.response` do not raise. They return an `AgentResponse` with `finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`). The chat drops the failed turn's user message and custom-state patches, and the next `chat.send()` continues from the last completed snapshot (or client state).
 
 ```python
-from genkit.agent import AgentError
+res = await chat.send('Use a broken tool.')
 
-try:
-    await chat.send('Use a broken tool.')
-except AgentError as err:
-    print(err.status)
-    print(err.snapshot_id)
-    print(err.state)
+if res.error:
+    print(res.error.status, res.error.message)
+    # => INTERNAL internal error
+
+    # The chat rolled back, so this turn continues from the last completed one.
+    res = await chat.send('Try a fallback approach.')
 ```
 
-Initialization misuse, such as sending `state` to a server-managed agent, raises `AgentInitError` before a turn starts.
+`chat.send()` raises `GenkitError` only when no turn result arrives. Init misuse that the client can detect, such as passing `state` to a store-backed agent, raises `AgentInitError` (a `GenkitError` subclass) from `agent.chat()` itself, before any turn starts. See [Agent error handling](/docs/agents/errors) for recovery patterns.
 
 </Lang>

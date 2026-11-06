@@ -667,7 +667,7 @@ Start from the [FastAPI tutorial](/docs/backend-frameworks/fastapi)
 The sample below is a plain FastAPI REST wrapper with custom request bodies.
 :::
 
-## 1. Set up your project (uv)
+## 1. Set up your project
 
 ```bash
 mkdir -p ~/tmp/genkit-plain-fastapi
@@ -677,7 +677,7 @@ uv init
 uv add genkit genkit-google-genai fastapi uvicorn
 ```
 
-## 2. Define a flow
+## 2. Configure your Genkit app
 
 Create `flows.py`:
 
@@ -687,14 +687,17 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
+
 
 @ai.flow()
 async def joke_flow(topic: str) -> str:
     response = await ai.generate(
         prompt=f'Tell a medium-sized joke about {topic}',
     )
+    if response.error:
+        raise RuntimeError(f'Joke generation failed: {response.error.message}')
     return response.text
 ```
 
@@ -703,6 +706,9 @@ async def joke_flow(topic: str) -> str:
 Create `main.py`:
 
 ```python title="main.py"
+import hmac
+import os
+
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -711,23 +717,28 @@ from flows import joke_flow
 
 app = FastAPI()
 security = HTTPBearer(auto_error=False)
+FLOW_API_KEY = os.environ['FLOW_API_KEY']
+
 
 class JokeRequest(BaseModel):
     topic: str
 
+
 async def require_auth(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> None:
-    # Optional: replace with real auth logic, or delete this dependency entirely.
-    if credentials is None or credentials.credentials != 'open-sesame':
+    # Replace with your JWT/OIDC verification, or gate at your platform proxy.
+    if credentials is None or not hmac.compare_digest(credentials.credentials, FLOW_API_KEY):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail='not authorized',
         )
 
+
 @app.get('/health')
 async def health() -> dict[str, str]:
     return {'status': 'ok'}
+
 
 @app.post('/joke')
 async def joke(request: JokeRequest, _auth: None = Depends(require_auth)) -> dict[str, str]:
@@ -739,6 +750,7 @@ async def joke(request: JokeRequest, _auth: None = Depends(require_auth)) -> dic
 
 ```bash
 export GEMINI_API_KEY=<your API key>
+export FLOW_API_KEY=<your flow API key>
 uv run uvicorn main:app --reload --port 8000
 ```
 
@@ -746,6 +758,7 @@ Or with the Developer UI:
 
 ```bash
 export GEMINI_API_KEY=<your API key>
+export FLOW_API_KEY=<your flow API key>
 genkit start -- uv run uvicorn main:app --reload --port 8000
 ```
 
@@ -753,17 +766,19 @@ Invoke the endpoint:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/joke" \
-  -H "Authorization: Bearer open-sesame" \
+  -H "Authorization: Bearer $FLOW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"topic":"bananas"}'
 ```
 
 ## 5. Deploy the project
 
-Deployment steps vary by provider, but generally you configure:
+Configure the following settings on your hosting provider:
 
-- **runtime**: Python 3.11+ (or your provider's recommended version)
-- **start command**: `uv run uvicorn main:app --host 0.0.0.0 --port $PORT`
-- **environment variables**: set `GEMINI_API_KEY` (and any other secrets)
+- **Runtime**: Python 3.10+
+- **Start command**: `uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}`
+- **Environment variables**: set `GEMINI_API_KEY` and `FLOW_API_KEY` via your platform's secret manager. Leave `GENKIT_ENV` and `GENKIT_REFLECTION_ENABLED` unset so the Developer UI reflection server stays off in production.
+
+If you serve flows with `genkit-fastapi`, `genkit-flask`, `genkit-django`, or `genkit.web` instead, see [Authorization and integrity](/docs/deployment/authorization) to authenticate callers.
 
 </Lang>

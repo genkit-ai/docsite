@@ -476,12 +476,124 @@ failure, because the HTTP status is 200 either way.
 
 <Lang lang="python">
 
-Genkit knows about two specialized error types: `GenkitError` and `PublicError`.
-`GenkitError` is the base error class for Genkit errors.
-`PublicError` is intended for your code. The separation between these two error types helps you better understand
-where your error is coming from.
+Genkit Python has two exception types, `GenkitError` and `PublicError`, and one
+failure value, `Failure`, that generation and agents return instead of raising.
 
-Using `PublicError` allows a web framework handler (e.g. FastAPI, Flask) to know it is safe to return the message in a request. Other kinds of errors will result in a generic 500 message to avoid the possibility of internal exceptions being leaked to attackers.
+- **`GenkitError(*, message, status=None, cause=None, details=None, reason=None)`**: Base exception for framework, plugin, and application failures. Carries `.message`, `.status` (a canonical status name such as `'INVALID_ARGUMENT'`, `'NOT_FOUND'`, `'RESOURCE_EXHAUSTED'`, or `'UNAVAILABLE'`; defaults to `'INTERNAL'`), `.reason` (`ErrorReason | None`), `.details`, and the exception passed as `cause=` on `.__cause__`.
+- **`PublicError(status, message, details=None)`**: Subclass of `GenkitError` whose status, message, and details are safe to send to a client. Raise it from flows, tools, and context providers.
+- **`Failure`**: Not an exception. A frozen value with `status`, `message`, `details`, and `.reason`, found on `ModelResponse.error`, agent responses, and session snapshots.
+- **`ErrorReason`**: Enum that says why the framework classified a failure, beyond its status. It travels in `details['reason']`. Common values: `MODEL_NOT_FOUND`, `TOOL_NOT_FOUND`, `TOOL_FAILED`, `MAX_TURNS_EXCEEDED`, `INVALID_INPUT`, `INVALID_OUTPUT`, and `INVALID_SCHEMA`.
+
+All four import from `genkit`:
+
+```python
+from genkit import GenkitError
+
+
+async def load_customer(customer_id: str) -> dict:
+    try:
+        return await crm.get_customer(customer_id)
+    except ConnectionError as e:
+        # 1. Classify at the source and keep the original exception.
+        raise GenkitError(status='UNAVAILABLE', message='CRM lookup failed', cause=e)
+
+# 2. Callers branch on the status, not the message text.
+try:
+    await load_customer('C-1042')
+except GenkitError as err:
+    print(err.status, err.message, repr(err.__cause__))
+    # => UNAVAILABLE CRM lookup failed ConnectionError('connection refused')
+```
+
+## At the HTTP boundary
+
+`genkit-fastapi`, `genkit-flask`, `genkit-django`, and the `error_status` / `error_body` helpers in `genkit.web` send a `PublicError`'s status, message, and details to the caller. A request body that fails the flow's input schema also keeps its `400`. Any other `GenkitError`, including a model provider's, and any other exception becomes `500` with `{"message": "Internal Error", "status": "INTERNAL"}`, so internal details never leave the process:
+
+```python
+from genkit import Genkit, PublicError
+
+ai = Genkit()
+
+
+@ai.flow()
+async def lookup_recipe(dish: str) -> str:
+    if not dish.strip():
+        # => HTTP 400 {"message": "dish must not be empty", "status": "INVALID_ARGUMENT"}
+        raise PublicError('INVALID_ARGUMENT', 'dish must not be empty')
+    if dish == 'lasagna':
+        # => HTTP 404 {"message": "no recipe for lasagna", "status": "NOT_FOUND", "details": {"dish": "lasagna"}}
+        raise PublicError('NOT_FOUND', f'no recipe for {dish}', details={'dish': dish})
+    return f'Recipe for {dish}'
+```
+
+The full status-code mapping and streaming error frames are in [Backend frameworks: Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts).
+
+## Errors from `generate()`
+
+Errors found before any model call raise `GenkitError` immediately:
+
+- An unregistered model: `NOT_FOUND`, `ErrorReason.MODEL_NOT_FOUND`.
+- An unregistered tool name in `tools=`: `NOT_FOUND`, `ErrorReason.TOOL_NOT_FOUND`.
+- An unknown or mistyped `config` key: `INVALID_ARGUMENT`, `ErrorReason.INVALID_INPUT`.
+- An invalid `output_schema`: `INVALID_ARGUMENT`, `ErrorReason.INVALID_SCHEMA`.
+
+Once generation starts, model errors, tool exceptions, hitting `max_turns`, and invalid structured output do not raise. `ai.generate()` and the response of `ai.generate_stream()` resolve to a `ModelResponse` with `response.error` set to a `Failure`:
+
+- **Model failure**: `finish_reason` is `FinishReason.FAILED` and `error.status` is the provider's classification, such as `UNAVAILABLE` or `RESOURCE_EXHAUSTED`.
+- **Tool failure**: `finish_reason` is `FinishReason.FAILED` with `ErrorReason.TOOL_FAILED`. The status comes from the `GenkitError` the tool raised, or `INTERNAL` for any other exception. A model that calls a tool you didn't register gets `NOT_FOUND` with `ErrorReason.TOOL_NOT_FOUND`.
+- **Turn limit reached**: `finish_reason` is `FinishReason.ABORTED`, `error.status` is `ABORTED`, and `error.reason` is `ErrorReason.MAX_TURNS_EXCEEDED`.
+- **Invalid or truncated structured output**: `finish_reason` keeps the model's own value, `output` is `None`, `error.status` is `INTERNAL`, and `error.reason` is `ErrorReason.INVALID_OUTPUT`. `text` keeps the raw model text.
+
+For a `FAILED` or `ABORTED` response, `text` is empty and `messages` ends at the last completed tool round, so you can send it again without repeating tool calls that already ran. `error.message` keeps the text of a `GenkitError` or `PublicError`. Any other exception from a model or tool becomes `'internal error'`, and Genkit logs the original with its traceback.
+
+```python
+from pydantic import BaseModel
+
+from genkit import ErrorReason, FinishReason, Genkit
+from genkit_google_genai import GoogleAI
+
+# 1. Initialize the plugin and register the tool
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+class WeatherInput(BaseModel):
+    city: str
+
+
+class Outfit(BaseModel):
+    top: str
+    shoes: str
+
+
+@ai.tool()
+async def get_weather(input: WeatherInput) -> str:
+    """Look up the current weather for a city."""
+    return f'{input.city}: 18C, light rain'
+
+
+# 2. Run the tool loop with structured output
+res = await ai.generate(
+    prompt='What should I wear in Baltimore today?',
+    tools=['get_weather'],
+    output_schema=Outfit,
+)
+
+# 3. Check res.error first; finish_reason tells you which kind of failure it was
+if res.error is None:
+    print(res.output)
+    # => top='Waterproof jacket' shoes='Rain boots'
+elif res.finish_reason in (FinishReason.FAILED, FinishReason.ABORTED):
+    print(res.error.status, res.error.reason, res.error.message)
+    # => UNAVAILABLE None This model is currently experiencing high demand. ...
+
+    # res.messages ends at a completed tool round, so it is safe to send again.
+    res = await ai.generate(messages=res.messages, tools=['get_weather'], output_schema=Outfit)
+    print(res.output)
+elif res.error.reason == ErrorReason.INVALID_OUTPUT:
+    print('Raw non-conforming output:', res.text)
+```
+
+Agents use the same `Failure` value: a failed turn makes `chat.send()` return a response with `finish_reason == AgentFinishReason.FAILED` and `res.error` set. `chat.send()` raises `GenkitError` only when no turn result arrives. See [Agent error handling](/docs/agents/errors).
 
 </Lang>
 

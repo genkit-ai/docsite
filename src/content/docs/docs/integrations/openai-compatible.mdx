@@ -347,22 +347,7 @@ The [compat_oai/custom sample](https://github.com/genkit-ai/genkit/tree/main/go/
 
 <Lang lang="python">
 
-The OpenAI-Compatible API package (`genkit-openai`) provides a unified interface for accessing multiple AI providers that implement OpenAI's API specification. This includes OpenAI and other compatible services.
-
-## Overview
-
-The `genkit-openai` package serves as a foundation for building plugins that work with OpenAI-compatible APIs. It includes:
-
-- **Base Implementation**: Common functionality for OpenAI-compatible APIs
-- [**OpenAI Plugin**](/docs/integrations/openai): Direct access to OpenAI's models and embeddings
-- **Extensible Framework**: Build custom plugins for other compatible providers
-
-## Prerequisites
-
-Depending on which provider you use, you'll need:
-
-- **OpenAI**: API key from [OpenAI API Keys page](https://platform.openai.com/api-keys)
-- **Other providers**: API keys from the respective services
+The `genkit-openai` package connects Genkit to any service that implements the OpenAI Chat Completions or Embeddings HTTP API. Point the `OpenAI` plugin at the service with `base_url` and Genkit sends the same requests it would send to OpenAI.
 
 ## Installation
 
@@ -372,44 +357,94 @@ uv add genkit-openai
 
 ## Configuration
 
-### Use with Compatible Providers
+### Pointing `OpenAI` at a compatible endpoint
+
+Pass `api_key` and `base_url` to `OpenAI`. `base_url` runs up to and including `/v1`; the OpenAI SDK appends `/chat/completions` or `/embeddings`. Left unset, it falls back to `OPENAI_BASE_URL`, then the public OpenAI API. Other `openai.AsyncOpenAI` arguments, such as `organization`, `default_headers`, `timeout`, `max_retries`, or `http_client`, go in `client_options`:
 
 ```python
+import os
+
 from genkit import Genkit
 from genkit_openai import OpenAI
 
-# Custom base URL for OpenAI-compatible services
 ai = Genkit(
     plugins=[
         OpenAI(
-            api_key='YOUR_API_KEY',
-            base_url='https://your-custom-endpoint.com/v1',
-            organization='your-org-id',  # Optional
-            default_headers={'Custom-Header': 'value'},  # Optional
+            api_key=os.environ['COMPAT_API_KEY'],
+            base_url='https://your-custom-endpoint.example.com/v1',
+            client_options={
+                'organization': 'your-org-id',
+                'default_headers': {'X-Custom-Header': 'value'},
+                'timeout': 30.0,
+            },
         )
     ],
 )
 ```
 
-### Common Configuration
+A `client_options` key that `AsyncOpenAI` does not accept raises `TypeError` when you construct the plugin, so a typo like `orgnization` fails at startup.
 
-OpenAI-compatible configuration options are supported:
+### Model names
+
+Every model goes through the `openai/` namespace, whatever `base_url` points at. Genkit drops the `openai/` prefix and sends the rest as the wire `model`, so `'openai/llama3'` sends `llama3`, and an ID with its own slash, such as a gateway's `vendor/model` form, passes through intact.
+
+The plugin still registers its built-in OpenAI catalog at startup, so the Dev UI lists GPT models your endpoint may not serve. Any other ID resolves on demand the first time you call it.
+
+### Generation and provider-specific fields
+
+Use `OpenAIConfig` (or a matching dict) for standard settings such as `temperature`, `max_output_tokens`, and `top_p`. Chat Completions has no `top_k`, so the plugin drops `top_k` from the config. Send `top_k` and any other field the server accepts but `OpenAIConfig` does not declare inside `extra`, which goes into the JSON request body as-is:
 
 ```python
+import os
+
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
+from genkit_openai import OpenAI, OpenAIConfig
 
-ai = Genkit(plugins=[OpenAI()])
+# 1. Point the plugin at the compatible server
+ai = Genkit(
+    plugins=[
+        OpenAI(
+            api_key=os.environ['COMPAT_API_KEY'],
+            base_url='https://your-custom-endpoint.example.com/v1',
+        )
+    ],
+)
 
+# 2. Generate with standard settings plus a server-specific field
 response = await ai.generate(
-    model=openai_model('gpt-5.5'),
-    prompt='Your prompt here',
-    config={
-        'temperature': 0.7,
-        'max_tokens': 1000,
-        'top_p': 0.9,
-    },
+    model='openai/llama3',
+    prompt='Classify this webhook event payload: {"type": "charge.refunded"}',
+    config=OpenAIConfig(
+        temperature=0.2,
+        max_output_tokens=1000,
+        top_p=0.9,
+        extra={'top_k': 40},
+    ),
+)
+
+# 3. Read the reply
+print(response.text)
+# => billing.refund
+```
+
+The server receives `max_output_tokens` as `max_tokens` (or `max_completion_tokens` for reasoning model IDs such as `o3` or `gpt-5`), next to `temperature`, `top_p`, and `top_k`. A key in `extra` replaces a declared field of the same name.
+
+### Per-request API keys
+
+A multi-tenant app can send each caller's key with the request instead of the plugin's. The key travels in `context`, not `config`, so it stays out of traces:
+
+```python
+response = await ai.generate(
+    model='openai/llama3',
+    prompt='Summarize this support ticket.',
+    context={'secrets': {'api_key': tenant_api_key}},
 )
 ```
+
+The call keeps `base_url`, timeouts, retries, and custom headers, and drops the plugin's `organization` and `project`. A plugin built without `api_key` and without `OPENAI_API_KEY` serves only requests that bring a key this way.
+
+### Embedders
+
+Embedder IDs resolve only when the ID contains `embed`, for example `'openai/nomic-embed-text'`. `ai.embed()` takes no `context`, so embedders always run on the plugin's key.
 
 </Lang>

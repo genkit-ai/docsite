@@ -4,6 +4,7 @@ description: This guide covers advanced configuration options for Genkit's Fireb
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -410,5 +411,190 @@ func main() {
 With this option set, you will no longer see traces in the Genkit
 Monitoring feature page, have access to the trace viewer, or see traces
 present in Google Cloud Tracing.
+
+</Lang>
+
+<Lang lang="python">
+
+This guide focuses on advanced configuration options for deployed features.
+Every option is a keyword-only argument to `enable_google_cloud_telemetry()`.
+Call it once per process, before you construct `Genkit()`. A second call raises
+`GenkitError` (`FAILED_PRECONDITION`).
+
+## Default Configuration
+
+Calling `enable_google_cloud_telemetry()` with no arguments is the same as:
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(
+    project=None,
+    sampler=None,
+    force_dev_export=False,
+    disable_metrics=False,
+    disable_traces=False,
+    metric_export_interval_ms=None,
+    metric_export_timeout_ms=None,
+)
+```
+
+- **`project`** (`str | None`): destination Google Cloud project. When unset,
+  the project is resolved as described in
+  [Get started](/docs/observability/getting-started#environment-based-configuration).
+- **`sampler`** (`Sampler | None`): an `opentelemetry.sdk.trace.sampling.Sampler`
+  for the `TracerProvider` that `enable_google_cloud_telemetry()` creates when
+  none is registered. Unset, the OpenTelemetry SDK default applies:
+  `ParentBased(ALWAYS_ON)` unless `OTEL_TRACES_SAMPLER` is set.
+- **`force_dev_export`** (`bool`): `False`, so nothing is exported while
+  `GENKIT_ENV=dev`.
+- **`disable_metrics`** (`bool`): `False`. Traces and logs are unaffected by this
+  switch.
+- **`disable_traces`** (`bool`): `False`. Only the Cloud Trace exporter is
+  skipped. `GenAiInstrumentation` is still installed, so the Cloud Monitoring
+  exporter and your own span exporters are unaffected.
+- **`metric_export_interval_ms`** (`int | None`): 5000 in dev, 300000 in
+  production. Values below 5000 are raised to 5000 with a warning.
+- **`metric_export_timeout_ms`** (`int | None`): matches
+  `metric_export_interval_ms`.
+
+To authenticate with a service account key outside Google Cloud, point
+`GOOGLE_APPLICATION_CREDENTIALS` at the key file so Application Default
+Credentials picks it up. See
+[Authentication](/docs/observability/authentication).
+
+## Export local telemetry
+
+Nothing is exported while the process runs in a dev environment, such as under
+`genkit start`. The Developer UI keeps receiving traces either way. To export
+telemetry when running locally, pass `force_dev_export=True`.
+
+During development and testing, you can decrease latency by adjusting the export
+interval and timeout.
+
+Note: Shipping to production with a frequent export interval may
+increase the cost for exported telemetry.
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Export from a local run, flushing metrics every 10 seconds
+enable_google_cloud_telemetry(
+    force_dev_export=True,
+    metric_export_interval_ms=10_000,
+    metric_export_timeout_ms=10_000,
+)
+```
+
+Under `GENKIT_ENV=dev`, each span is exported as soon as it ends
+(`SimpleSpanProcessor`). In production, spans are batched
+(`BatchSpanProcessor`).
+
+## Sampling
+
+Left unset, every trace is kept, which is fine in development and expensive at
+production volume. Sample a fraction instead, and wrap it in `ParentBased` so a
+trace that starts sampled keeps its child spans:
+
+```python
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Keep 10% of new traces and follow the caller's sampling decision
+enable_google_cloud_telemetry(sampler=ParentBased(TraceIdRatioBased(0.1)))
+# => ~10% of traces reach Cloud Trace; metrics are not sampled
+```
+
+If your application registers its own `TracerProvider`, for example to export to
+a second OTLP backend, set the sampler on that provider and omit `sampler=`:
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Register your TracerProvider and sampler first
+trace.set_tracer_provider(
+    TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1)))
+)
+
+# 2. Add Cloud Trace to that provider; no sampler= here
+enable_google_cloud_telemetry()
+```
+
+Passing `sampler=` when a `TracerProvider` is already registered, or together
+with `disable_traces=True`, raises `GenkitError` (`INVALID_ARGUMENT`).
+
+## Instrumentation beyond Genkit
+
+`enable_google_cloud_telemetry()` does not auto-instrument anything. Genkit's own
+actions are the only source of spans unless you add OpenTelemetry
+instrumentation libraries yourself, such as
+`opentelemetry-instrumentation-fastapi` or `opentelemetry-instrumentation-httpx`.
+Those libraries use the global `TracerProvider`, so their spans land in the same
+traces as your flows in Cloud Trace. Cloud Trace redaction leaves their
+attributes untouched; see
+[Telemetry collection](/docs/observability/telemetry-collection).
+
+## What lands in telemetry
+
+Content capture is opt-in, so there is no `disable_logging_input_and_output`
+option. By default, no prompt, response, or tool payload text is exported. The
+exception is the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment
+variable: set to `EVENT_ONLY` or `SPAN_AND_EVENT`, the default
+`GenAiInstrumentation` picks it up and content goes to Cloud Logging.
+
+- **Cloud Trace is always redacted**: `GcpAdjustingTraceExporter` replaces Genkit
+  content attributes, and the error text on Genkit spans, with `'<redacted>'`,
+  whatever the instrumentation settings.
+- **Cloud Logging content is opt-in**: to export prompts, responses, system
+  instructions, and tool payloads as `gen_ai.client.inference.operation.details`
+  log records, configure `GenAiInstrumentation` before calling
+  `enable_google_cloud_telemetry()`. `SPAN_ONLY` content never reaches Google
+  Cloud; only span exporters you add yourself receive it.
+
+```python
+from genkit.telemetry import configure_instrumentation
+from genkit_google_cloud import enable_google_cloud_telemetry
+from genkit_otel import GenAiInstrumentation
+
+# 1. Opt in to content events and tool spans
+configure_instrumentation(
+    GenAiInstrumentation(
+        content_capturing_mode='EVENT_ONLY',  # May contain PII.
+        emit_tool_spans=True,
+    )
+)
+
+# 2. Cloud telemetry keeps the GenAiInstrumentation you configured
+enable_google_cloud_telemetry()
+```
+
+## Disable telemetry
+
+Input and output logging is already off by default, as described in "What
+lands in telemetry" above. Metrics and traces can be disabled independently.
+
+### Disable metrics
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(disable_metrics=True)
+```
+
+With this option set, nothing is sent to Cloud Monitoring.
+
+### Disable traces
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(disable_traces=True)
+```
+
+With this option set, nothing is sent to Cloud Trace. The Cloud Monitoring and
+Cloud Logging exporters are unaffected.
 
 </Lang>

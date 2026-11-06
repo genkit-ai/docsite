@@ -134,21 +134,154 @@ Two deployment settings can truncate a stream that the code handles correctly:
     framework="fastapi"
     title="FastAPI"
     description="Modern APIs, streaming responses, and typed server applications."
-    href="/docs/python/backend-frameworks/fastapi/"
+    href="/docs/backend-frameworks/fastapi"
   />
   <FrameworkCard
     framework="flask"
     title="Flask"
     description="Lightweight Python services and flexible server integrations."
-    href="/docs/python/backend-frameworks/flask/"
+    href="/docs/backend-frameworks/flask"
   />
   <FrameworkCard
     framework="django"
     title="Django"
     description="Add Genkit flows to Django projects as async views with streaming support."
-    href="/docs/python/backend-frameworks/django/"
+    href="/docs/backend-frameworks/django"
   />
 </CardGrid>
+
+## The HTTP handler contract
+
+`genkit-fastapi`, `genkit-flask`, and `genkit-django` serve a flow with the same wire protocol, built on `genkit.web`:
+
+- **Request body:** `POST` JSON wrapped in `{"data": <flow input>}`, or `{}` when the flow takes no input. The input is validated against the flow's schema.
+- **One-shot response:** `application/json` body of `{"result": <flow output>}`, serialized with camelCase aliases and `None` model fields omitted.
+- **Streaming response:** `text/event-stream` when the request sends `Accept: text/event-stream` or `?stream=true`. Each event is `data: {"message": <chunk>}`, then a final `data: {"result": <output>}`. When the server closes the stream on a client disconnect, the running flow is cancelled.
+- **Context:** Pass `context_provider=` to the framework's handler decorator. It receives a `RequestData` and returns the dict that becomes `ctx.context` in the flow and its tools. FastAPI's `serve_flow` takes a `Depends`-style `context_dependency=` instead.
+- **Return values:** Return `response.text` or `response.output` from a served flow, not a raw `ModelResponse`. Its `request` field holds the system prompt, tool definitions, retrieved documents, and message history, and would be serialized onto the wire.
+
+## Errors and timeouts
+
+The adapters derive the HTTP status with `genkit.web.error_status(e)` and the body with `error_json(e)` (or `error_body(e)` for the dict), using the statuses described in [Error types](/docs/error-types):
+
+- **`PublicError(status, message, details=None)`** (`from genkit import PublicError`) sends its status, message, and details. Raise it from a flow or a context provider when the caller should see why the request failed.
+- **Status codes:** `UNAUTHENTICATED` 401, `PERMISSION_DENIED` 403, `NOT_FOUND` 404, `INVALID_ARGUMENT` / `FAILED_PRECONDITION` / `OUT_OF_RANGE` 400, `ALREADY_EXISTS` / `ABORTED` 409, `RESOURCE_EXHAUSTED` 429, `CANCELLED` 499, `UNIMPLEMENTED` 501, `UNAVAILABLE` 503, `DEADLINE_EXCEEDED` 504, `INTERNAL` / `UNKNOWN` / `DATA_LOSS` 500.
+- **Everything else is a 500.** A plain `GenkitError` of any status, a model provider error, a `ValueError`, or a raw Pydantic `ValidationError` becomes `{"message":"Internal Error","status":"INTERNAL"}`. The full error is logged server-side through Python's `logging`.
+- **Bad requests keep their 400.** A body that isn't valid JSON or isn't wrapped in `{"data": ...}` returns `INVALID_ARGUMENT` with `request body must be valid JSON` or `Flow request must be wrapped in {"data": ...}`. Input that fails the flow's schema names the failing field without echoing its value, such as `Invalid input for flow 'order': qty: Input should be a valid integer, unable to parse string as an integer`.
+- **Framework exceptions pass through a context provider:** FastAPI/Starlette `HTTPException`, Flask `abort(...)`, and Django `PermissionDenied`, `Http404`, and `SuspiciousOperation` keep the framework's own response.
+- **Streaming:** the response has already committed a 200, so a mid-stream failure arrives as a terminal `data: {"error": {"message": ..., "status": ...}}` event instead of a status code, with the same redaction. A custom route that fails before `to_sse` starts can yield `error_sse(e)` for the same frame.
+
+Two deployment settings can truncate a stream that the code handles correctly:
+
+- A WSGI server worker timeout, such as Gunicorn's `--timeout` (30 seconds by default), kills a sync worker mid-response. Raise it above your slowest generation for routes that stream.
+- A reverse proxy that buffers responses holds every event until the flow finishes. Disable response buffering on the streaming route.
+
+### Model failures in a served flow
+
+`ai.generate()` doesn't raise when the model call fails at runtime, such as Gemini returning `UNAVAILABLE`. It returns a `ModelResponse` with `response.error` set and `response.text` empty. Invalid structured output lands on `response.error` the same way. See [Errors from `generate()`](/docs/error-types#errors-from-generate). What the HTTP caller receives depends on what the flow does next:
+
+- **Returns without checking:** 200 with `{"result":""}`.
+- **Raises anything other than `PublicError`**, such as `RuntimeError(response.error.message)`: 500 with `{"message":"Internal Error","status":"INTERNAL"}`.
+- **Raises `PublicError`:** its status and message.
+
+```python
+from genkit import Genkit, PublicError
+from genkit_google_genai import GoogleAI
+
+# 1. Initialize Genkit with a default model
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+@ai.flow()
+async def suggest_dish(cuisine: str) -> str:
+    # 2. A failed model call comes back on response.error, not as an exception
+    response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+
+    # 3. Pick the status and message the caller sees
+    if response.error is not None:
+        raise PublicError('UNAVAILABLE', 'Menu suggestions are busy, try again shortly')
+    return response.text
+
+
+# POST /suggest_dish {"data": "thai"} (Gemini returns UNAVAILABLE)
+# => 503 {"message":"Menu suggestions are busy, try again shortly","status":"UNAVAILABLE"}
+```
+
+Don't forward `response.error.status` unchecked. A rejected server API key or a request your server built wrong would reach the caller as a 4xx, blaming the caller for a server problem.
+
+## Custom routes with `genkit.web`
+
+To wire a flow into another ASGI/WSGI framework or a hand-written route, use the `genkit.web` primitives directly:
+
+```python
+from starlette.requests import Request
+from starlette.responses import Response, StreamingResponse
+
+from genkit import FlowContext, Genkit, PublicError
+from genkit.web import (
+    RequestData,
+    error_json,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
+
+# 1. Initialize Genkit and define a flow
+ai = Genkit()
+
+
+@ai.flow()
+async def order_flow(dish: str, ctx: FlowContext[str]) -> str:
+    if not ctx.context.get('token'):
+        raise PublicError('UNAUTHENTICATED', 'Missing authorization header')
+    ctx.send_chunk(f'Plating {dish}')
+    return f'1x {dish} confirmed.'
+
+
+# 2. Extract request context from normalized RequestData
+async def auth(req: RequestData) -> dict[str, object]:
+    return {'token': req.headers.get('authorization')}
+
+
+def error_response(err: Exception) -> Response:
+    return Response(error_json(err), status_code=error_status(err), media_type='application/json')
+
+
+# 3. Parse body, resolve context, and return SSE or JSON
+async def serve_order(request: Request) -> Response:
+    try:
+        body = await request.json()
+    except ValueError:
+        return error_response(PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'))
+    try:
+        flow_input = read_body(body)
+        req_data = RequestData(
+            request=request,
+            method=request.method,
+            headers=request.headers.items(),
+            input=flow_input,
+        )
+        ctx = await auth(req_data)
+        if wants_stream(
+            accept=request.headers.get('accept'),
+            stream=request.query_params.get('stream'),
+        ):
+            stream = order_flow.stream(flow_input, context=ctx)
+            return StreamingResponse(to_sse(stream), media_type='text/event-stream')
+        result = await order_flow.run(flow_input, context=ctx)
+        return Response(result_json(result.response), media_type='application/json')
+    except Exception as err:
+        return error_response(err)
+
+
+# POST /order?stream=true {"data": "pad thai"} (Authorization: Bearer tok_123)
+# => data: {"message":"Plating pad thai"}
+#    data: {"result":"1x pad thai confirmed."}
+# POST /order {"data": "pad thai"} (no Authorization header)
+# => 401 {"message":"Missing authorization header","status":"UNAUTHENTICATED"}
+```
 
 </Lang>
 

@@ -662,7 +662,7 @@ final response = await ai.generate(
 
 <Lang lang="python">
 
-The `genkit-openai` package includes a pre-configured plugin for official [OpenAI models](https://platform.openai.com/docs/models).
+The `genkit-openai` package provides the `OpenAI` plugin for [OpenAI models](https://platform.openai.com/docs/models): chat and reasoning models, embedders, image generation, text-to-speech, and transcription.
 
 ## Installation
 
@@ -672,77 +672,101 @@ uv add genkit-openai
 
 ## Configuration
 
-To use this plugin, import `OpenAI` and `openai_model` and specify it when you initialize Genkit:
+Import `OpenAI` and register it on `Genkit`:
 
 ```python
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
+from genkit_openai import OpenAI
 
-ai = Genkit(plugins=[OpenAI()], model=openai_model('gpt-5.5'))
+ai = Genkit(plugins=[OpenAI()], model=OpenAI.gpt('gpt-5.5'))
 ```
 
-The plugin requires an API key for the OpenAI API. You can get one from the [OpenAI Platform](https://platform.openai.com/api-keys).
+`OpenAI.gpt()` returns a chat model ref bound to `OpenAIConfig`. A plain `'openai/gpt-5.5'` string works too, and the model validates `config` against `OpenAIConfig` either way. The plugin registers a built-in catalog at startup; any other OpenAI model ID resolves on demand under the `openai/` prefix.
 
-Configure the plugin to use your API key by doing one of the following:
+### Authentication
 
-- Set the `OPENAI_API_KEY` environment variable to your API key.
-- Specify the API key when you initialize the plugin:
+Get an API key from the [OpenAI Platform](https://platform.openai.com/api-keys) and provide it in one of these ways:
+
+- **Environment variable**: set `OPENAI_API_KEY`.
+- **Plugin initialization**: pass `api_key`. Other `AsyncOpenAI` settings, such as `timeout`, `max_retries`, `organization`, or `project`, go in `client_options`:
 
 ```python
-OpenAI(api_key='YOUR_API_KEY')
+import os
+
+from genkit_openai import OpenAI
+
+OpenAI(
+    api_key=os.environ['OPENAI_API_KEY'],
+    client_options={'timeout': 30.0, 'max_retries': 3},
+)
 ```
 
-However, don't embed your API key directly in code!
+- **Per-request key**: pass `context={'secrets': {'api_key': tenant_key}}` on `generate()` or `generate_stream()`. The call authenticates and bills as the tenant, and the plugin leaves its own organization and project off the request. The key never enters the request config, so it stays out of traces:
+
+```python
+response = await ai.generate(
+    model=OpenAI.gpt('gpt-5.5'),
+    prompt='Summarize the open support tickets for this account.',
+    context={'secrets': {'api_key': tenant_key}},
+)
+```
+
+With no key from any source, `ai.generate()` doesn't raise; the response comes back with `response.error.status` set to `FAILED_PRECONDITION`. See [Error types](/docs/error-types/). Embedders always use the plugin's key, since `ai.embed()` takes no `context`, so `ai.embed()` raises `FAILED_PRECONDITION` when the plugin has none.
+
+To route through a proxy or gateway, pass `base_url` (up to and including `/v1`) or set `OPENAI_BASE_URL`.
 
 ## Usage
 
-The plugin provides helpers to reference supported models and embedders.
-
-### Chat Models
-
-You can reference chat models like `gpt-5.5` and `gpt-5.4-mini` using the `openai_model()` helper.
+### Chat models
 
 ```python
-import structlog
-from pydantic import BaseModel, Field
-
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
-
-logger = structlog.get_logger(__name__)
+from genkit_openai import OpenAI, OpenAIConfig
 
 ai = Genkit(plugins=[OpenAI()])
 
 @ai.flow()
-async def say_hi(name: str) -> str:
-    """Say hi to a name.
-
-    Args:
-        name: The name to say hi to.
-
-    Returns:
-        The response from the OpenAI API.
-    """
+async def summarize_ticket(ticket_body: str) -> str:
     response = await ai.generate(
-        model=openai_model('gpt-5.5'),
-        prompt=f'hi {name}',
+        model=OpenAI.gpt('gpt-5.5'),
+        prompt=f'Summarize this customer issue in one sentence:\n\n{ticket_body}',
+        config=OpenAIConfig(
+            reasoning_effort='low',
+            max_output_tokens=256,
+        ),
     )
     return response.text
 ```
 
-You can also pass model-specific configuration:
+`OpenAIConfig` uses Genkit's standard `max_output_tokens` and `stop_sequences` names:
+
+- **`max_output_tokens`** goes out as `max_completion_tokens` for reasoning model IDs (`gpt-5*`, `gpt-6*`, `o1`, `o3`, `o4`) or when `reasoning_effort` is set, and as `max_tokens` otherwise.
+- **`stop_sequences`** goes out as `stop`.
+
+Unknown top-level keys raise, including OpenAI's raw `max_tokens`, `max_completion_tokens`, `stop`, and `user`, so a typo like `temprature` fails by name before the request is sent. For end-user abuse monitoring, set `safety_identifier`.
+
+### Structured output
+
+Pass `output_schema` and `response.output` comes back as an instance of that model. The plugin requests OpenAI [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) with `strict: true`. It rewrites the schema to meet strict mode's rules: every object gets `additionalProperties: false` and every property becomes required, so a field with a default comes back as `null` rather than missing.
 
 ```python
+from pydantic import BaseModel
+
+class MenuItem(BaseModel):
+    name: str
+    price_usd: float
+    allergens: list[str] | None = None
+
 response = await ai.generate(
-    model=openai_model('gpt-5.5'),
-    config={'temperature': 1},
-    prompt=f'hi {name}',
+    model=OpenAI.gpt('gpt-5.5'),
+    prompt='Invent a seasonal dish for a bistro menu.',
+    output_schema=MenuItem,
 )
+print(response.output.name)
+# => Roasted Squash Risotto
 ```
 
-### Text Embedding Models
-
-You can use text embedding models to create vector embeddings from text.
+### Text embedding models
 
 ```python
 from genkit import Genkit
@@ -752,52 +776,34 @@ ai = Genkit(plugins=[OpenAI()])
 
 @ai.flow()
 async def embed_flow(text: str) -> list[float]:
-    """Create embeddings for text.
-
-    Args:
-        text: The text to embed.
-
-    Returns:
-        The first embedding vector values.
-    """
     embeddings = await ai.embed(
         embedder='openai/text-embedding-3-small',
         content=text,
+        config={'dimensions': 512},
     )
-
     return embeddings[0].embedding
 ```
 
-### Tool Calling
+### Tool calling
 
-You can define and use tools with OpenAI models.
+Pass tools in `tools=[...]` and control tool selection with `tool_choice` (`'auto'`, `'required'`, or `'none'`). The plugin sends each tool with `strict: true` and the same schema rewrite as structured output.
 
 ```python
 import httpx
-from decimal import Decimal
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
+from genkit_openai import OpenAI
 
 ai = Genkit(plugins=[OpenAI()])
 
 class WeatherRequest(BaseModel):
-    """Weather request."""
-
-    latitude: Decimal
-    longitude: Decimal
+    latitude: float
+    longitude: float
 
 @ai.tool()
 async def get_weather_tool(coordinates: WeatherRequest) -> float:
-    """Get the current temperature for provided coordinates in celsius.
-
-    Args:
-        coordinates: The coordinates to get the weather for.
-
-    Returns:
-        The current temperature for the provided coordinates.
-    """
+    """Get the current temperature for provided coordinates in Celsius."""
     url = (
         f'https://api.open-meteo.com/v1/forecast?'
         f'latitude={coordinates.latitude}&longitude={coordinates.longitude}'
@@ -810,70 +816,103 @@ async def get_weather_tool(coordinates: WeatherRequest) -> float:
 
 @ai.flow()
 async def get_weather_flow(location: str) -> str:
-    """Get the weather for a location.
-
-    Args:
-        location: The location to get the weather for.
-
-    Returns:
-        The weather for the location.
-    """
     response = await ai.generate(
-        model=openai_model('gpt-5.4-mini'),
+        model=OpenAI.gpt('gpt-5.4-mini'),
         prompt=f"What's the weather like in {location} today?",
         tools=[get_weather_tool],
+        tool_choice='auto',
     )
-    # The response will contain the tool output if the model decided to call it.
     return response.text
 ```
 
 ### Streaming
 
-The plugin supports streaming responses.
+```python
+from genkit import FlowContext
+
+@ai.flow()
+async def summarize_stream(topic: str, ctx: FlowContext[str]) -> str:
+    result = ai.generate_stream(
+        model=OpenAI.gpt('gpt-5.5'),
+        prompt=f'Explain {topic} in three short paragraphs.',
+    )
+    async for chunk in result.stream:
+        ctx.send_chunk(chunk.text)
+    return (await result.response).text
+```
+
+The plugin asks OpenAI for usage on streamed responses, so the final response's `usage` carries token counts.
+
+### Image generation models
+
+Image, speech, and transcription models take string refs: `OpenAI.gpt()` accepts chat model IDs only and raises `INVALID_ARGUMENT` for the rest. Each model validates `config` against its own endpoint's fields.
 
 ```python
-@ai.flow()
-async def say_hi_stream(name: str) -> str:
-    """Say hi to a name and stream the response.
+response = await ai.generate(
+    model='openai/gpt-image-1',
+    prompt='A watercolor illustration of a farmers market at dawn.',
+    config={'size': '1536x1024', 'quality': 'medium'},
+)
+print(response.media[0].url[:30])
+# => data:image/png;base64,iVBORw0K
+```
 
-    Args:
-        name: The name to say hi to.
+### Speech generation (text-to-speech)
 
-    Returns:
-        The response from the OpenAI API.
-    """
-    result = ai.generate_stream(
-        model=openai_model('gpt-5.5'),
-        prompt=f'hi {name}',
-    )
-    text = ''
-    async for chunk in result.stream:
-        text += chunk.text
-    return text
+```python
+response = await ai.generate(
+    model='openai/gpt-4o-mini-tts',
+    prompt='Your table for four is ready.',
+    config={'voice': 'coral', 'instructions': 'Speak warmly and briefly.'},
+)
+print(response.media[0].content_type)
+# => audio/mpeg
+```
+
+`voice` defaults to `alloy`. Set `response_format` to `wav`, `opus`, `aac`, `flac`, or `pcm` for formats other than MP3.
+
+### Transcription (speech-to-text)
+
+Send the audio as a base64 `data:` URI; the plugin does not download remote URLs.
+
+```python
+import base64
+from pathlib import Path
+
+from genkit import Part
+
+audio_b64 = base64.b64encode(Path('voicemail.mp3').read_bytes()).decode()
+
+response = await ai.generate(
+    model='openai/gpt-4o-transcribe',
+    prompt=[Part.from_media(f'data:audio/mpeg;base64,{audio_b64}', content_type='audio/mpeg')],
+)
+print(response.text)
+# => Hi, this is Dana calling about my reservation for Friday.
 ```
 
 ## Advanced usage
 
-### Passthrough configuration
+### Forwarding undeclared fields with `extra`
 
-You can pass configuration options that are not defined in the plugin's custom configuration schema. This permits you to access new models and features without having to update your Genkit version.
+`OpenAIConfig` rejects unknown top-level keys. To forward newly added OpenAI API parameters before `genkit-openai` adds typed fields for them, pass them inside `extra`:
 
 ```python
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
+from genkit_openai import OpenAI, OpenAIConfig
 
 ai = Genkit(plugins=[OpenAI()])
 
 response = await ai.generate(
-    prompt='Tell me a cool story',
-    model=openai_model('gpt-4-new'),  # hypothetical new model
-    config={
-        'seed': 123,
-        'new_feature_parameter': ...,  # hypothetical config needed for new model
-    },
+    model='openai/gpt-5.5',
+    prompt='Draft a postmortem outline.',
+    config=OpenAIConfig(
+        seed=123,
+        extra={'custom_provider_flag': True},
+    ),
 )
 ```
 
-Genkit passes this config as-is to the OpenAI API giving you access to the new model features. Note that the field name and types are not validated by Genkit and should match the OpenAI API specification to work.
+The plugin sends `extra` as the OpenAI SDK's `extra_body`, which replaces a top-level field of the same name. Genkit doesn't check the values. Keys Genkit builds from the request (`model`, `messages`, `tools`, `tool_choice`, `response_format`, `stream`) are refused: the response comes back with `response.error.status` set to `INVALID_ARGUMENT` and nothing is sent. Pin a model snapshot with `version` instead of `extra={'model': ...}`.
 
 </Lang>

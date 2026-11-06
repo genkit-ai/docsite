@@ -52,7 +52,7 @@ These packages include:
 - **`uvicorn`**: The ASGI server that runs your FastAPI app.
 - **`genkit`**: Core Genkit SDK.
 - **`genkit-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
-- **`genkit-fastapi`**: Mounts Genkit flows and agents on FastAPI with `serve_flow` / `serve_agent`, including streaming.
+- **`genkit-fastapi`**: Serves Genkit flows as FastAPI routes, with SSE streaming.
 
 ### Configure a model API key
 
@@ -99,13 +99,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 from genkit_fastapi import serve_flow
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 
@@ -148,7 +148,7 @@ async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleItem]:
 class RecipeIngredient(BaseModel):
     name: str
     quantity: str
-    on_sale: bool
+    on_sale: bool = Field(serialization_alias='onSale')
 
 
 class Recipe(BaseModel):
@@ -163,8 +163,11 @@ class BargainChefInput(BaseModel):
     craving: str = Field(description='What the user feels like eating right now.')
 
 
-@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
-async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
     today = datetime.now().strftime('%A')
 
     stream_response = ai.generate_stream(
@@ -178,7 +181,7 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+        config=GeminiConfig(temperature=0.7, thinking_level='LOW'),
     )
 
     async for chunk in stream_response.stream:
@@ -186,8 +189,8 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
             ctx.send_chunk(chunk.output)
 
     response = await stream_response.response
-    if not response.output:
-        raise ValueError('Failed to generate recipe')
+    if response.output is None:
+        raise RuntimeError(f'Recipe generation failed: {response.error}')
     return response.output
 
 
@@ -208,54 +211,103 @@ app.include_router(serve_flow(bargain_chef_flow))
 
 A few details are worth noting before you run the backend:
 
-- **Final output and streamed chunks:** `Recipe` is the complete recipe the flow returns at the end, passed as `output_schema` so Genkit validates the model's output against it. Declaring `chunk_type=Recipe` on the flow tells Genkit that streamed chunks share the same shape, with fields filling in progressively as the model generates them.
-- **Shared Python types:** the Pydantic models (`Recipe`, `RecipeIngredient`, `BargainChefInput`) define the request and response shapes once, so the flow, the HTTP handler, and any client share a single source of truth.
-- **The `get_ingredients_on_sale` tool:** the model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
-- **`ctx.send_chunk`:** each call pushes the latest partial recipe to the client, giving it a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
+- **Final output and streamed chunks:** `output_schema=Recipe` validates the complete recipe returned at the end and parses partial `Recipe` objects as JSON tokens arrive. Annotating `ctx: FlowContext[Recipe]` types the streamed chunks sent via `ctx.send_chunk`. Return `response.output` (or `response.text`), never a raw `ModelResponse`, whose `request` field carries your system prompt, tools, retrieved documents, and history.
+- **Shared Python types:** The Pydantic models (`Recipe`, `RecipeIngredient`, `BargainChefInput`) define the request and response shapes once. `serialization_alias='onSale'` puts camelCase `onSale` on the JSON and SSE wire while keeping snake_case in Python.
+- **The `get_ingredients_on_sale` tool:** The model decides when to call it based on the prompt, and the typed `GetIngredientsInput` forces the model to pass `day_type='weekday'` or `'weekend'`. In a real app, the tool would query a pricing database, inventory system, or third-party API.
+- **`ctx.send_chunk`:** Each call pushes the latest partial recipe to the client, giving it a typed view of the generated JSON as it grows. After the stream completes, the flow awaits `stream_response.response` so the HTTP request resolves with a validated recipe.
+- **Failed generation:** `generate_stream` doesn't raise when the model fails (for example, an overloaded model). The response has no output and carries the failure on `response.error`. The flow raises with that failure, so the client gets a generic `Internal Error` (a 500, or a final `error` event on a streaming request) and your server log records the status and message. See [Error types](/docs/error-types).
 
 ### Expose the flow over HTTP
 
-`serve_flow` returns a FastAPI `APIRouter` you mount with `app.include_router`. By default the route is `POST /<flow name>` (here `/bargainChefFlow`). When the client sends `Accept: text/event-stream`, the endpoint streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON. Pass `base_path=` or a router `prefix=` if you want a different URL.
+`serve_flow` returns a FastAPI `APIRouter` you mount with `app.include_router`. By default the route is `POST /<flow name>` (here `/bargainChefFlow`). When the client sends `Accept: text/event-stream` or `?stream=true`, the endpoint streams partial chunks as Server-Sent Events; otherwise it returns the final recipe as JSON. Pass `base_path=` or a router `prefix=` if you want a different URL.
 
 ### Attach request context
 
-Use `context_dependency` to wire FastAPI dependency injection into Genkit. The dependency returns a dict; Genkit makes that dict available on the flow as `ctx.context`—the same `ActionRunContext` you already use for `send_chunk`. Typical uses are auth, tenancy, and other values you already resolve with `Depends`:
+Use `context_dependency` on `serve_flow` to wire FastAPI `Depends` into Genkit. FastAPI resolves the dependency before the Genkit handler runs, and the returned dict becomes `ctx.context` in the flow and its tools. Replace the `app.include_router(serve_flow(bargain_chef_flow))` line in `main.py` with:
 
 ```python
-from fastapi import Header
+from fastapi import Header, HTTPException
 
-async def user_context(authorization: str = Header(...)) -> dict[str, object]:
-    # Validate the token and load the user in a real app.
-    return {'uid': authorization.removeprefix('Bearer ').strip()}
+
+async def user_context(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    token = (authorization or '').removeprefix('Bearer ').strip()
+    if not token:
+        raise HTTPException(status_code=401, detail='Missing bearer token')
+    return {'uid': token}
+
 
 app.include_router(
     serve_flow(bargain_chef_flow, context_dependency=user_context),
 )
 ```
 
-Inside the flow:
+Reject a request from a dependency with `HTTPException`, as above. Don't raise `PublicError` there: FastAPI runs dependencies before Genkit sees the request, so it becomes a plain-text `500`. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for other failures.
+
+To read context from the raw request instead of `Depends`, pass a `context_provider` to `@genkit_fastapi_handler`:
 
 ```python
-uid = (ctx.context or {}).get('uid')
+from genkit import FlowContext, PublicError
+from genkit.web import RequestData
+from genkit_fastapi import genkit_fastapi_handler
+
+
+async def auth_provider(req: RequestData) -> dict[str, object]:
+    token = (req.headers.get('authorization') or '').removeprefix('Bearer ').strip()
+    if not token:
+        raise PublicError('UNAUTHENTICATED', 'Missing bearer token')
+    return {'uid': token}
+
+
+@app.post('/custom-chef')
+@genkit_fastapi_handler(ai, context_provider=auth_provider)
+@ai.flow()
+async def custom_chef(prompt: str, ctx: FlowContext) -> str:
+    uid = ctx.context.get('uid')
+    res = await ai.generate(prompt=f'Answer for {uid}: {prompt}')
+    if res.error:
+        raise RuntimeError(f'Answer failed: {res.error}')
+    return res.text
+```
+
+When FastAPI owns the route signature (for custom `Depends(...)`, rate limiters, or typed query parameters), delegate to `handle_genkit_request` for full JSON + SSE handling, or stream a handle directly with `genkit.web.to_sse`:
+
+```python
+from fastapi import Depends, Request
+from fastapi.responses import StreamingResponse
+from genkit.web import to_sse
+from genkit_fastapi import handle_genkit_request
+
+
+# 1. Serve both JSON POST and SSE streaming from a custom route
+@app.post('/api/chef')
+async def chef_endpoint(request: Request, ctx: dict[str, object] = Depends(user_context)):
+    return await handle_genkit_request(request, action=bargain_chef_flow, context=ctx)
+
+
+# 2. Stream SSE frames from typed FastAPI parameters
+@app.post('/api/chef/stream')
+async def chef_stream(craving: str, ctx: dict[str, object] = Depends(user_context)):
+    stream = bargain_chef_flow.stream(BargainChefInput(craving=craving), context=ctx)
+    return StreamingResponse(to_sse(stream), media_type='text/event-stream')
 ```
 
 ### Serve an agent over HTTP
 
-For [agents](/docs/agents/overview), use `serve_agent` the same way. One `include_router` call mounts the turn route. Configure a [session store](/docs/agents/session-stores) on the agent when you want server-managed sessions—only then does `serve_agent` also mount `/getSnapshot` and `/abort`. Without a store, those paths are not registered and return 404.
+Agents are experimental. To get `define_agent`, change `from genkit import Genkit` to `from genkit.exp import Genkit` in `main.py`; the rest of the file stays the same. `serve_agent` mounts the turn route, plus `/getSnapshot` and `/abort` when the agent has a [session store](/docs/agents/session-stores).
 
-Pass the same `context_dependency` and Genkit applies it on every mounted route. Install `genkit-google-cloud` for the Firestore-backed store:
+Install `genkit-google-cloud` for the Firestore-backed store:
 
 ```bash
 uv add genkit-google-cloud
 ```
 
 ```python
-from genkit_fastapi import serve_agent
-from genkit_google_cloud import FirestoreSessionStore
+from genkit_fastapi.exp import serve_agent
+from genkit_google_cloud.exp import FirestoreSessionStore
 
 bargain_chef_agent = ai.define_agent(
     name='bargainChefAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You help users cook from grocery sale ingredients.',
     tools=[get_ingredients_on_sale],
     store=FirestoreSessionStore(),
@@ -299,13 +351,14 @@ This launches the FastAPI app at `http://localhost:8000`. With the server runnin
 ```bash
 curl -N -X POST http://localhost:8000/bargainChefFlow \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer user-123" \
   -H "Accept: text/event-stream" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
 
 The `{ "data": ... }` wrapper is required: Genkit's HTTP handler reads the flow input from the request body's `data` field.
 
-The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far: title first, then description, then ingredients (with `on_sale` flags on the ones the model picked from the tool), then steps.
+The response arrives as a series of `data:` events. Each event contains the partial recipe accumulated so far: title first, then description, then ingredients (with `onSale` flags on the ones the model picked from the tool), then steps.
 
 ## Test and inspect the app
 
@@ -318,6 +371,7 @@ For a non-streaming response, drop the `Accept: text/event-stream` header:
 ```bash
 curl -X POST http://localhost:8000/bargainChefFlow \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer user-123" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
 
@@ -334,10 +388,6 @@ The Developer UI is Genkit's local console for testing flows and inspecting exec
    ```
 
    This launches the Developer UI at `http://localhost:4000` by default.
-
-   :::tip[Add a script]
-   To make starting the Developer UI easier, add the above command to your project's scripts in `pyproject.toml`.
-   :::
 
 2. Select `bargainChefFlow` from the list of flows.
 3. Enter sample input:

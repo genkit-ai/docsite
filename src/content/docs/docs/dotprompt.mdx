@@ -236,11 +236,34 @@ your-project/
 ```
 
 ```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
 ai = Genkit(
-    plugins=[...],
+    plugins=[GoogleAI()],
     prompt_dir='./llm_prompts',
 )
 ```
+
+#### Prompts in subdirectories
+
+A prompt in a subdirectory is named after its path inside the prompt directory,
+so two flows can each keep a `main.prompt` without a collision:
+
+```
+prompts/
+├── main.prompt            "main"
+└── support/
+    └── main.prompt        "support/main"
+```
+
+```python
+support_prompt = ai.prompt('support/main')
+```
+
+The separator is `/` on every platform, Windows included. Only the file name
+sets a [variant](#prompt-variants), so a directory such as `v1.0/` stays part of
+the name: `prompts/v1.0/greet.fun.prompt` is the `fun` variant of `v1.0/greet`.
 
 </Lang>
 
@@ -635,61 +658,52 @@ code.
 
 <Lang lang="python">
 
-To use a prompt, first load it using the `prompt('file_name')` method:
+To use a prompt, first load it using `ai.prompt('file_name')`:
 
 ```python
 hello_prompt = ai.prompt('hello')
 ```
 
-    Once loaded, you can call the prompt like a function:
+Once loaded, call the prompt like an async function:
 
 ```python
 response = await hello_prompt()
 
-# Access the text output
 print(response.text)
 ```
 
-    Or you can run the prompt in streaming mode:
+Or stream chunks with `.stream()`:
 
 ```python
 result = hello_prompt.stream()
-
 async for chunk in result.stream:
-    print(chunk.text)
+    print(chunk.text, end='', flush=True)
 
-# optional final (aggregated) response
 final_response = await result.response
 print(final_response.text)
 ```
 
-    A callable prompt takes optional parameters: the input to the prompt (see
-    the section below on [specifying input schemas](#input-and-output-schemas)), and keyword arguments
-    for generation options. For example:
+A callable prompt accepts input (see [specifying input schemas](#input-and-output-schemas)) and keyword arguments for generation options:
 
 ```python
 response = await hello_prompt(
-    # Prompt input:
-    {"name": "Ted"},
-    # Generation options:
-    config={"temperature": 0.4},
+    {'name': 'Ted'},
+    config={'temperature': 0.4},
 )
 ```
 
-    Similarly for streaming:
+Similarly for streaming:
 
 ```python
 result = hello_prompt.stream(
-    {"name": "Ted"},
-    config={"temperature": 0.4},
+    {'name': 'Ted'},
+    config={'temperature': 0.4},
 )
+async for chunk in result.stream:
+    print(chunk.text, end='', flush=True)
 ```
 
-    Any parameters you pass to the prompt call will override the same parameters
-    specified in the prompt file.
-
-    See [Generate content with AI models](/docs/models) for descriptions of the available
-    options.
+Options passed to the prompt call override the corresponding values in the `.prompt` file. See [Generating content with AI models](/docs/models) for available options.
 
 </Lang>
 
@@ -868,15 +882,17 @@ is a plain `int32` rather than a pointer.
 <Lang lang="python">
 
 ```python
+from genkit_google_genai import GeminiConfig
+
 response = await hello_prompt(
     {},
-    config={
-        "temperature": 1.4,
-        "top_k": 50,
-        "top_p": 0.4,
-        "max_output_tokens": 400,
-        "stop_sequences": ["<end>", "<fin>"],
-    },
+    config=GeminiConfig(
+        temperature=1.4,
+        top_k=50,
+        top_p=0.4,
+        max_output_tokens=400,
+        stop_sequences=['<end>', '<fin>'],
+    ),
 )
 ```
 
@@ -1029,6 +1045,34 @@ matching pair of prompts.
 
 </Lang>
 
+<Lang lang="python">
+
+Register the `Middleware()` plugin from `genkit_middleware` so the names in
+`use` resolve at runtime:
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Middleware
+
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
+```
+
+An unregistered name fails the prompt call with `NOT_FOUND`. To attach
+middleware from code, pass instances to `use=`, which needs no registration:
+
+```python
+from genkit_middleware import Retry
+
+trip_prompt = ai.prompt('trip')
+response = await trip_prompt(use=[Retry(max_retries=3)])
+```
+
+When the front matter omits `maxTurns`, the Python SDK caps the tool loop at 50
+turns. A run that hits the cap ends with `finish_reason` set to `aborted`.
+
+</Lang>
+
 <Lang lang="dart">
 
 Register the middleware plugins so the `use` references resolve at runtime.
@@ -1116,17 +1160,17 @@ log.Println(output["description"])
 
 ```python
 menu_prompt = ai.prompt('menu')
-response = await menu_prompt({"theme": "medieval"})
+response = await menu_prompt({'theme': 'medieval'})
 
-dish_name = response.output["dishname"]
-description = response.output["description"]
+dish_name = response.output['dishname']
+description = response.output['description']
 ```
 
 :::note[Accessing structured output in Python]
-`response.output` can be either a dict or a typed Pydantic model:
+`response.output` is either a `dict` or a typed Pydantic model instance:
 
-- Use `response.output["field"]` when output comes from `.prompt` schema (Picoschema/JSON Schema).
-- Use `response.output.field` when you pass `output={'schema': YourPydanticModel}`.
+- Read `response.output['field']` when the schema is declared inline in the `.prompt` file (Picoschema or JSON Schema) without a bound Python class.
+- Read `response.output.field` when you register the Pydantic model with `ai.define_schema()`, pass `output_schema=YourModel` to `ai.prompt()`, or define the prompt in code with `ai.define_prompt(..., output_schema=YourModel)`.
 
 :::
 
@@ -1237,27 +1281,27 @@ type Article struct {
 <Lang lang="python">
 
 ```python
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 class Author(BaseModel):
     name: str
-    email: Optional[str] = None
+    email: str | None = None
 
 class Metadata(BaseModel):
-    updated_at: Optional[str] = Field(None, description="ISO timestamp of last update")
-    approved_by: Optional[int] = Field(None, description="id of approver")
+    updated_at: str | None = Field(None, description='ISO timestamp of last update')
+    approved_by: int | None = Field(None, description='id of approver')
 
 class Article(BaseModel):
     title: str
-    subtitle: Optional[str] = None
-    draft: Optional[bool] = Field(None, description="true when in draft state")
-    status: Optional[Literal["PENDING", "APPROVED"]] = Field(None, description="approval status")
+    subtitle: str | None = None
+    draft: bool | None = Field(None, description='true when in draft state')
+    status: Literal['PENDING', 'APPROVED'] | None = Field(None, description='approval status')
     date: str = Field(description="the date of publication e.g. '2024-04-09'")
-    tags: list[str] = Field(description="relevant tags for article")
+    tags: list[str] = Field(description='relevant tags for article')
     authors: list[Author]
-    metadata: Optional[Metadata] = None
-    extra: Optional[Any] = Field(None, description="arbitrary extra data")
+    metadata: Metadata | None = None
+    extra: Any = Field(None, description='arbitrary extra data')
 ```
 
 </Lang>
@@ -1476,12 +1520,8 @@ resp, err := genkit.Generate(ctx, g,
 
 <Lang lang="python">
 
-In addition to directly defining schemas in the `.prompt` file, you can
-reference a Pydantic model using the `output` parameter when defining
-or calling the prompt. This approach lets you take advantage of Python's type
-checking features when you work with prompts.
-
-Define your schema as a Pydantic model:
+Register a Pydantic model with `ai.define_schema()` to reference it by name in
+`.prompt` files without duplicating field definitions:
 
 ```python
 from pydantic import BaseModel
@@ -1491,43 +1531,38 @@ class MenuItem(BaseModel):
     description: str
     calories: int
     allergens: list[str]
+
+ai.define_schema('MenuItem', MenuItem)
 ```
 
-Within your prompt, you can use Picoschema or JSON Schema as usual:
+Reference the registered schema name in the `.prompt` front matter:
 
 ```dotprompt
 ---
 model: googleai/gemini-flash-latest
 output:
-  schema:
-    dishname: string
-    description: string
-    calories: integer
-    allergens(array): string
+  schema: MenuItem
 ---
-Invent a menu item for a pirate themed restaurant.
+Invent a menu item for a {{theme}} themed restaurant.
 ```
 
-Then load and call the prompt, specifying the output schema for type safety:
+Pass `output_schema=MenuItem` to `ai.prompt()` so type checkers infer `Prompt[Any, MenuItem]`:
 
 ```python
-menu_prompt = ai.prompt('menu')
-response = await menu_prompt(
-    {"theme": "medieval"},
-    output={'schema': MenuItem},
-)
+menu_prompt = ai.prompt('menu', output_schema=MenuItem)
+response = await menu_prompt({'theme': 'medieval'})
 
-# output is now typed as MenuItem
-dish_name = response.output.dishname
-description = response.output.description
+if response.output is not None:
+    dish_name = response.output.dishname
+    description = response.output.description
 ```
 
-You can also use `ai.define_prompt()` to define prompts programmatically with
-Pydantic schemas using the `Output` helper:
+You can also define prompts in code with `ai.define_prompt()` and Pydantic
+`input_schema` / `output_schema` types:
 
 ```python
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
-
 
 class MenuInput(BaseModel):
     theme: str
@@ -1539,15 +1574,15 @@ class MenuItem(BaseModel):
     allergens: list[str]
 
 menu_prompt = ai.define_prompt(
-    name="menu",
-    model="googleai/gemini-flash-latest",
+    name='menu',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     input_schema=MenuInput,
     output_schema=MenuItem,
-    prompt="Invent a menu item for a {{theme}} themed restaurant.",
+    prompt='Invent a menu item for a {{theme}} themed restaurant.',
 )
 
-response = await menu_prompt(MenuInput(theme="pirate"))
-# response.output is MenuItem
+response = await menu_prompt(MenuInput(theme='pirate'))
+# response.output is MenuItem | None
 ```
 
 </Lang>
@@ -1671,12 +1706,18 @@ invalid prompt; it never looks up tool names.
 <Lang lang="python">
 
 ```python
-@ai.tool()
-def my_tool(...):
-    ...
+from pydantic import BaseModel
 
-my_prompt = ai.prompt('my_prompt')
-response = await my_prompt({"input_args": "go here"}, tools=[my_tool])
+class FlightQuery(BaseModel):
+    destination: str
+
+@ai.tool()
+async def search_flights(input: FlightQuery) -> str:
+    """Finds direct flights to a destination."""
+    return f'Direct flights available to {input.destination}.'
+
+trip_prompt = ai.prompt('my_prompt')
+response = await trip_prompt({'destination': 'Lisbon'}, tools=[search_flights])
 ```
 
 </Lang>
@@ -1756,7 +1797,7 @@ resp, err := menuPrompt.Execute(context.Background(),
 
 ```python
 menu_prompt = ai.prompt('menu')
-response = await menu_prompt({"theme": "medieval"})
+response = await menu_prompt({'theme': 'medieval'})
 ```
 
 </Lang>
@@ -1921,7 +1962,7 @@ resp, err := multimodalPrompt.Execute(context.Background(),
 ```python
 multimodal_prompt = ai.prompt('multimodal')
 response = await multimodal_prompt({
-    "photoUrl": "https://example.com/photo.jpg",
+    'photoUrl': 'https://example.com/photo.jpg',
 })
 print(response.text)
 ```
@@ -2008,7 +2049,7 @@ Help the user decide between these vacation destinations:
 {{/each}}
 ```
 
-<Lang lang="js go">
+<Lang lang="js go python">
 
 A partial in a subdirectory is named after its path, like a prompt, and also
 keeps its short name when no other partial has that name yet:
@@ -2066,7 +2107,7 @@ execution, not before the prompt is defined.
 ai.define_partial('personality', 'Talk like a {{#if style}}{{style}}{{else}}helpful assistant{{/if}}.')
 ```
 
-    Code-defined partials are available in all prompts.
+Code-defined partials are available in all prompts.
 
 </Lang>
 
@@ -2139,8 +2180,14 @@ HELLO, {{shout name}}!!!
 <Lang lang="python">
 
 ```python
-ai.define_helper('shout', lambda text: text.upper())
+def shout(args, options):
+    return str(args[0]).upper()
+
+ai.define_helper('shout', shout)
 ```
+
+A helper receives its positional arguments as a list, followed by a Handlebars
+options object that carries hash arguments in `options.hash`.
 
 Once a helper is defined you can use it in any prompt:
 
@@ -2706,10 +2753,10 @@ return genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil)
 
 <Lang lang="python">
 
-Use the `define_prompt()` function. You can specify a Handlebars template string
-with the `prompt` parameter, or use structured messages:
+Use `ai.define_prompt()` to define Handlebars prompt templates in Python:
 
 ```python
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 class GreetingInput(BaseModel):
@@ -2717,7 +2764,7 @@ class GreetingInput(BaseModel):
 
 my_prompt = ai.define_prompt(
     name='myPrompt',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     input_schema=GreetingInput,
     prompt='Hello, {{name}}. How are you today?',
 )
@@ -2726,9 +2773,10 @@ response = await my_prompt(GreetingInput(name='Alice'))
 print(response.text)
 ```
 
-You can also define prompts with structured output. For array output, use JSON schema via `TypeAdapter`:
+For structured array output, pass a JSON Schema generated by Pydantic's `TypeAdapter` alongside `output_format='array'`:
 
 ```python
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, TypeAdapter
 
 CountryList = TypeAdapter(list[str]).json_schema()
@@ -2738,7 +2786,7 @@ class GeoQuery(BaseModel):
 
 geography_prompt = ai.define_prompt(
     name='GeographyPrompt',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     input_schema=GeoQuery,
     output_schema=CountryList,
     output_format='array',
@@ -2747,32 +2795,25 @@ geography_prompt = ai.define_prompt(
 )
 
 response = await geography_prompt(GeoQuery(country_count=15))
-# response.output is list[str]
+# response.output is list[str] | None
 print(response.output)
 ```
 
-    For streaming:
+Stream prompt output with `.stream()`:
 
 ```python
 result = geography_prompt.stream(GeoQuery(country_count=15))
-
 async for chunk in result.stream:
-    print(chunk.text)
+    print(chunk.text, end='', flush=True)
 
 final_response = await result.response
 print(final_response.output)
 ```
 
-You can also define prompts with a system message and multi-turn setup:
+To render a prompt into `GenerateActionOptions` without invoking the model immediately, call `await my_prompt.render(...)`:
 
 ```python
-my_prompt = ai.define_prompt(
-    name='chatPrompt',
-    model='googleai/gemini-flash-latest',
-    input_schema=GreetingInput,
-    system='You are a helpful assistant.',
-    prompt='Hello, {{name}}!',
-)
+options = await my_prompt.render(GreetingInput(name='Alice'))
 ```
 
 </Lang>
