@@ -665,26 +665,19 @@ print(res.finish_reason)
 
 ## Abort a foreground turn
 
-Cancel a foreground turn on the client with `await turn.abort()`, or wrap the call in `asyncio.timeout()` or a task cancel. Both detach the client: `await turn.response` raises `asyncio.CancelledError` after `turn.abort()` and `TimeoutError` on a deadline. The server turn keeps running in the background.
+Call `await turn.abort()` to stop listening to a foreground turn. The client detaches, and the server turn keeps running in the background.
 
 ```python
-import asyncio
-
 turn = chat.send_stream('Write a long report.')
 
-try:
-    async with asyncio.timeout(30.0):
-        async for chunk in turn.stream:
-            if chunk.text:
-                print(chunk.text, end='', flush=True)
-            if user_pressed_stop():
-                await turn.abort()
-                break
-        else:
-            res = await turn.response
-except TimeoutError:
-    print('Client deadline expired; detached from the turn.')
+async for chunk in turn.stream:
+    print(chunk.text, end='', flush=True)
+    if user_pressed_stop():
+        await turn.abort()
+        break
 ```
+
+After `turn.abort()`, `await turn.response` raises `asyncio.CancelledError`. Cancelling the task or hitting an `asyncio.timeout()` deadline (Python 3.11+) detaches the client the same way and raises `CancelledError` or `TimeoutError`.
 
 To stop server-side work on a store-backed agent, run the turn with `chat.detach()` and call `await task.abort()`. See [Background execution](/docs/agents/background).
 
@@ -693,20 +686,14 @@ To stop server-side work on a store-backed agent, run the turn with `chat.detach
 When a turn fails during execution, such as a model error or an unhandled tool exception, `chat.send()` and `turn.response` do not raise. They return an `AgentResponse` with `finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`). The chat drops the failed turn's user message and custom-state patches, and the next `chat.send()` continues from the last completed snapshot (or client state).
 
 ```python
-from genkit import GenkitError
-from genkit.exp.agent import AgentFinishReason
+res = await chat.send('Use a broken tool.')
 
-try:
-    res = await chat.send('Use a broken tool.')
-    if res.finish_reason == AgentFinishReason.FAILED and res.error:
-        print(res.error.status)
-        # => INTERNAL
-        print(res.error.message)
-        # The next turn continues from the last completed turn.
-        res = await chat.send('Try a fallback approach.')
-except GenkitError as err:
-    # No turn result arrived, such as a dropped connection.
-    print(err.status, err.message)
+if res.error:
+    print(res.error.status, res.error.message)
+    # => INTERNAL internal error
+
+    # The chat rolled back, so this turn continues from the last completed one.
+    res = await chat.send('Try a fallback approach.')
 ```
 
 `chat.send()` raises `GenkitError` only when no turn result arrives. Init misuse that the client can detect, such as passing `state` to a store-backed agent, raises `AgentInitError` (a `GenkitError` subclass) from `agent.chat()` itself, before any turn starts. See [Agent error handling](/docs/agents/errors) for recovery patterns.

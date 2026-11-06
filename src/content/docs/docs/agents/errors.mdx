@@ -455,55 +455,38 @@ Python agents separate pre-turn/transport exceptions from in-band turn failures:
 
 ## Handle failed turns
 
-Check `GenkitError` around the call for init or transport failures, and check `res.finish_reason == AgentFinishReason.FAILED` for turn failures.
+Failed turns don't raise. Check `res.error` on the response. `GenkitError` raises only when no turn result exists, such as init misuse or a transport failure, so let it propagate to your request handler.
 
 When a turn fails in band, `AgentChat` rolls back the failed turn's optimistic user message and any partial custom-state patches. On a store-backed agent, the failed turn is recorded as a terminal `failed` snapshot while `chat.snapshot_id` and `res.snapshot_id` remain pinned to the last completed snapshot; on a client-managed agent, `chat.messages` and `chat.state` revert to the pre-turn state (also returned on `res.raw.state`). Calling `chat.send()` again on the same `chat`—or loading `res.snapshot_id` in another process—continues from last-good history. The `failed` snapshot itself is for inspection only: a turn can resume only from a `completed` snapshot.
 
 ```python
-from genkit import GenkitError
-from genkit.exp.agent import AgentFinishReason, AgentInitError
+res = await chat.send('Look up order 123.')
 
-try:
-    res = await chat.send('Look up order 123.')
-except AgentInitError:
-    # Caller passed incompatible state/session options before the turn started.
-    raise
-except GenkitError as err:
-    # Network disconnect or HTTP 4xx/5xx before a turn result arrived.
-    print('Transport error:', err.status, err.message)
-else:
-    if res.finish_reason == AgentFinishReason.FAILED and res.error is not None:
-        print('Turn failed:', res.error.status, res.error.message)
-        # => Turn failed: NOT_FOUND Order 123 was not found.
+if res.error:
+    print('Turn failed:', res.error.status, res.error.message)
+    # => Turn failed: NOT_FOUND Order 123 was not found.
 
-        # `chat` already rolled back to the last completed turn, so send directly.
-        # From another process, use `await agent.load_chat(snapshot_id=res.snapshot_id)`.
-        retry = await chat.send('Try again with order 456.')
-        print(retry.text)
-    else:
-        print(res.text)
+    # `chat` already rolled back to the last completed turn, so retry directly.
+    # From another process, use `await agent.load_chat(snapshot_id=res.snapshot_id)`.
+    res = await chat.send('Try again with order 456.')
+
+print(res.text)
 ```
 
-For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` carrying `AgentFinishReason.FAILED` and `res.error`. Only errors that leave no turn result (init misuse, HTTP errors, dropped connections) raise `GenkitError` while iterating `turn.stream`:
+For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` with `res.error` set. Only errors that leave no turn result (init misuse, HTTP errors, dropped connections) raise `GenkitError` while iterating `turn.stream`:
 
 ```python
-from genkit import GenkitError
-from genkit.exp.agent import AgentFinishReason
-
 turn = chat.send_stream('Write a report.')
 
-try:
-    async for chunk in turn.stream:
-        render(chunk)
-    res = await turn.response
-except GenkitError as err:
-    show_transport_error(err)
-else:
-    if res.finish_reason == AgentFinishReason.FAILED and res.error is not None:
-        show_turn_failure(res.error)
+async for chunk in turn.stream:
+    render(chunk)
+
+res = await turn.response
+if res.error:
+    show_turn_failure(res.error)
 ```
 
-If a remote HTTP stream drops mid-turn (`err.status` is `'UNAVAILABLE'` or `'DEADLINE_EXCEEDED'`), `chat` rolls back locally, but a store-backed server turn may still finish in the background. Inspect `await agent.get_snapshot(session_id=...)` before resending a turn that triggers side-effecting tools, then continue with `agent.chat(session_id=...)`, which resumes from the session's last completed snapshot. `await agent.load_chat(session_id=...)` loads the newest snapshot as is, so if the background turn failed, the next `send()` fails with `INVALID_ARGUMENT` (`SNAPSHOT_NOT_RESUMABLE`).
+If a remote HTTP stream drops mid-turn (the `GenkitError` status is `'UNAVAILABLE'` or `'DEADLINE_EXCEEDED'`), `chat` rolls back locally, but a store-backed server turn may still finish in the background. Inspect `await agent.get_snapshot(session_id=...)` before resending a turn that triggers side-effecting tools, then continue with `agent.chat(session_id=...)`, which resumes from the session's last completed snapshot. `await agent.load_chat(session_id=...)` loads the newest snapshot as is, so if the background turn failed, the next `send()` fails with `INVALID_ARGUMENT` (`SNAPSHOT_NOT_RESUMABLE`).
 
 ## Tool exceptions
 
