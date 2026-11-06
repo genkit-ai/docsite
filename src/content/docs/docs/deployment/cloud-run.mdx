@@ -637,17 +637,13 @@ uv add genkit genkit-google-genai genkit-google-cloud fastapi uvicorn slowapi Py
 Expose Genkit flows as FastAPI endpoints and attach Cloud Trace, Cloud Monitoring, and Cloud Logging export. Create `main.py`:
 
 ```python title="main.py"
-import logging
 import os
-from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from genkit import Genkit
 from genkit_google_cloud import enable_google_cloud_telemetry
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
-
-logger = logging.getLogger(__name__)
 
 # Export traces, metrics, and logs to Google Cloud (skipped when GENKIT_ENV=dev)
 enable_google_cloud_telemetry()
@@ -674,17 +670,9 @@ class SummaryRequest(BaseModel):
     text: str = Field(description='Text to summarize', min_length=10)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info('Starting Genkit Cloud Run service')
-    yield
-    logger.info('Shutting down Genkit Cloud Run service')
-
-
 app = FastAPI(
     title='Genkit Cloud Run Service',
     version='1.0.0',
-    lifespan=lifespan,
 )
 
 
@@ -705,12 +693,8 @@ async def joke_flow(topic: str) -> str:
 
 @app.post('/joke', response_model=JokeResponse)
 async def generate_joke(request: JokeRequest) -> JokeResponse:
-    try:
-        joke = await joke_flow(request.topic)
-        return JokeResponse(joke=joke, topic=request.topic)
-    except Exception:
-        logger.exception('joke_flow failed')
-        raise HTTPException(status_code=500, detail='Internal server error')
+    joke = await joke_flow(request.topic)
+    return JokeResponse(joke=joke, topic=request.topic)
 
 
 @ai.flow()
@@ -725,12 +709,7 @@ async def summarize_flow(text: str) -> str:
 
 @app.post('/summarize')
 async def summarize_text(request: SummaryRequest) -> dict[str, str]:
-    try:
-        summary = await summarize_flow(request.text)
-        return {'summary': summary}
-    except Exception:
-        logger.exception('summarize_flow failed')
-        raise HTTPException(status_code=500, detail='Internal server error')
+    return {'summary': await summarize_flow(request.text)}
 
 
 if __name__ == '__main__':
@@ -745,7 +724,7 @@ if __name__ == '__main__':
 Gate deployed endpoints before exposing metered model calls:
 
 - **Cloud IAM**: Require IAM identity tokens at the Cloud Run ingress layer. See [Authentication](https://cloud.google.com/run/docs/authenticating/overview) in the Cloud Run docs.
-- **Application-level JWT verification**: Verify caller tokens in a FastAPI dependency and pass the verified identity into the flow via `context=` (see [Authorization and integrity](/docs/deployment/authorization) for `serve_flow`, `ContextProvider`, and `PublicError`):
+- **Application-level JWT verification**: Verify caller tokens in a FastAPI dependency. See [Authorization and integrity](/docs/deployment/authorization) for `serve_flow`, `ContextProvider`, and `PublicError`:
 
 ```python
 import os
@@ -780,8 +759,8 @@ async def protected_generate_joke(
     request: JokeRequest,
     user: dict[str, object] = Depends(verify_token),
 ) -> JokeResponse:
-    result = await joke_flow.run(request.topic, context={'auth': user})
-    return JokeResponse(joke=result.response, topic=request.topic)
+    joke = await joke_flow(request.topic)
+    return JokeResponse(joke=joke, topic=request.topic)
 ```
 
 ### Create a Dockerfile for Cloud Run
