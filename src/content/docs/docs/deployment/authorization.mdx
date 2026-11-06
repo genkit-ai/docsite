@@ -663,6 +663,8 @@ async def summarize_ticket(ticket_text: str, ctx: FlowContext) -> str:
     if not ctx.context.get('auth'):
         raise PublicError('UNAUTHENTICATED', 'Authentication required.')
     response = await ai.generate(prompt=f'Summarize support ticket: {ticket_text}')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Ticket summaries are busy, try again shortly')
     return response.text
 
 
@@ -708,6 +710,8 @@ async def bearer_context(req: RequestData) -> dict[str, Any]:
 @ai.flow()
 async def draft_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Write a short refund confirmation for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
     return response.text
 # POST /draft_refund_note (no Authorization header)
 # => 401 {"message":"Missing bearer token.","status":"UNAUTHENTICATED"}
@@ -721,7 +725,7 @@ and `genkit-django` (`uv add genkit-django genkit-google-genai`, Django 5.0+ ASG
 
 ```python
 from flask import Flask
-from genkit import Genkit
+from genkit import Genkit, PublicError
 from genkit_flask import genkit_flask_handler
 from genkit_google_genai import GoogleAI
 
@@ -735,12 +739,14 @@ flask_app = Flask(__name__)
 @ai.flow()
 async def flask_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
     return response.text
 ```
 
 ```python
 from django.urls import path
-from genkit import Genkit
+from genkit import Genkit, PublicError
 from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
 
@@ -752,6 +758,8 @@ ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 @ai.flow()
 async def django_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
     return response.text
 
 
@@ -851,8 +859,7 @@ class OrderLookupInput(BaseModel):
 # 1. Read caller identity from ToolContext, never from model arguments
 @ai.tool(description='List orders belonging to the signed-in customer.')
 async def list_my_orders(input: OrderLookupInput, ctx: ToolContext) -> list[dict[str, str]]:
-    auth = ctx.context.get('auth')
-    uid = auth.get('uid') if isinstance(auth, dict) else None
+    uid = ctx.context.get('auth', {}).get('uid')
     if not uid:
         raise PublicError('UNAUTHENTICATED', 'No signed-in customer.')
     return await order_store.list_for_user(uid=uid, status=input.status)

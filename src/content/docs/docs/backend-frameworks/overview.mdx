@@ -203,7 +203,7 @@ async def suggest_dish(cuisine: str) -> str:
     return response.text
 
 
-# POST /suggest {"data": "thai"} (Gemini returns UNAVAILABLE)
+# POST /suggest_dish {"data": "thai"} (Gemini returns UNAVAILABLE)
 # => 503 {"message":"Menu suggestions are busy, try again shortly","status":"UNAVAILABLE"}
 ```
 
@@ -235,7 +235,7 @@ ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 @ai.flow()
 async def order_flow(dish: str, ctx: FlowContext[str]) -> str:
-    if not (ctx.context or {}).get('token'):
+    if not ctx.context.get('token'):
         raise PublicError('UNAUTHENTICATED', 'Missing authorization header')
     ctx.send_chunk(f'Plating {dish}')
     res = await ai.generate(prompt=f'Confirm 1x {dish} in five words.')
@@ -247,19 +247,23 @@ async def auth(req: RequestData) -> dict[str, object]:
     return {'token': req.headers.get('authorization')}
 
 
+def error_response(err: Exception) -> Response:
+    return Response(error_json(err), status_code=error_status(err), media_type='application/json')
+
+
 # 3. Parse body, resolve context, and return SSE or JSON
 async def serve_order(request: Request) -> Response:
     try:
-        try:
-            body = await request.json()
-        except ValueError as err:
-            raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
+        body = await request.json()
+    except ValueError:
+        return error_response(PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'))
+    try:
         flow_input = read_body(body)
         req_data = RequestData(
             request=request,
             method=request.method,
             headers=request.headers.items(),
-            input=body.get('data'),
+            input=flow_input,
         )
         ctx = await auth(req_data)
         if wants_stream(
@@ -271,11 +275,7 @@ async def serve_order(request: Request) -> Response:
         result = await order_flow.run(flow_input, context=ctx)
         return Response(result_json(result.response), media_type='application/json')
     except Exception as err:
-        return Response(
-            error_json(err),
-            status_code=error_status(err),
-            media_type='application/json',
-        )
+        return error_response(err)
 
 
 # POST /order?stream=true {"data": "pad thai"} (Authorization: Bearer tok_123)
