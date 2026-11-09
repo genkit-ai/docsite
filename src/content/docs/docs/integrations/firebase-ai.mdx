@@ -1,6 +1,6 @@
 ---
 title: Firebase AI Logic plugin
-description: Call Gemini models directly from Flutter apps with Genkit and Firebase AI Logic, including App Check, structured output, tool calling, grounding, and the Live API.
+description: Learn how to use the Genkit Firebase AI Logic plugin to call Gemini models directly from Flutter apps, with App Check, structured output, tool calling, grounding, and the Live API.
 supportedLanguages:
   - dart
 ---
@@ -25,54 +25,53 @@ flutter pub add genkit genkit_firebase_ai firebase_core firebase_app_check schem
 2. Add Firebase to your app with `flutterfire configure`.
 3. Set up [App Check](https://firebase.google.com/docs/ai-logic/app-check).
 
-### App Check
-
-:::caution[App Check is enforced since November 2, 2026]
-Since that date, Firebase enforces App Check for Firebase AI Logic, and requests without a valid App Check token are blocked. This includes requests from app versions that you already released without App Check. You can delay enforcement in the Firebase console, but not past January 21, 2027.
+:::caution[App Check enforcement]
+App Check has been enforced for Firebase AI Logic since November 2, 2026. Requests without a valid App Check token are blocked, including requests from app versions that you already released without App Check. You can delay enforcement in the Firebase console, but not past January 21, 2027.
 :::
 
-Activate App Check before the first model call. The plugin reads App Check from the `FirebaseApp`. Use the debug providers during development and the platform attestation providers in release builds:
+### Configuration
+
+In `main()`, initialize Firebase, activate App Check, and then initialize Genkit with the plugin. The plugin reads App Check from the `FirebaseApp`, so activate App Check before the first model call:
 
 ```dart
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
-
-import 'firebase_options.dart';
-
-await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-await FirebaseAppCheck.instance.activate(
-  providerAndroid: kDebugMode
-      ? const AndroidDebugProvider()
-      : const AndroidPlayIntegrityProvider(),
-  providerApple: kDebugMode
-      ? const AppleDebugProvider()
-      : const AppleAppAttestWithDeviceCheckFallbackProvider(),
-  providerWeb: kDebugMode
-      ? WebDebugProvider()
-      : ReCaptchaEnterpriseProvider('your-recaptcha-site-key'),
-);
-```
-
-Never ship the debug providers: anyone with a registered debug token passes App Check. On first run, each debug provider logs a debug token (in the browser console on web). Add it in the Firebase console under **App Check > Apps > Manage debug tokens**. The release providers need their own setup in the Firebase console. See [Get started with App Check](https://firebase.google.com/docs/app-check/flutter/default-providers).
-
-### Configuration
-
-Add the plugin when you initialize Genkit:
-
-```dart
+import 'package:flutter/widgets.dart';
 import 'package:genkit/genkit.dart';
 import 'package:genkit_firebase_ai/genkit_firebase_ai.dart';
 
-final ai = Genkit(plugins: [firebaseAI()]);
+import 'firebase_options.dart';
+
+late final Genkit ai;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await FirebaseAppCheck.instance.activate(
+    providerAndroid: kDebugMode
+        ? const AndroidDebugProvider()
+        : const AndroidPlayIntegrityProvider(),
+    providerApple: kDebugMode
+        ? const AppleDebugProvider()
+        : const AppleAppAttestWithDeviceCheckFallbackProvider(),
+    providerWeb: kDebugMode
+        ? WebDebugProvider()
+        : ReCaptchaEnterpriseProvider('your-recaptcha-site-key'),
+  );
+
+  ai = Genkit(plugins: [firebaseAI()]);
+}
 ```
+
+Debug builds use the App Check debug providers. Never ship them: anyone with a registered debug token passes App Check. On first run, each debug provider logs a debug token (in the browser console on web). Add it in the Firebase console under **App Check > Apps > Manage debug tokens**. The release providers need their own setup. See [Get started with App Check](https://firebase.google.com/docs/app-check/flutter/default-providers).
 
 By default, the plugin uses the Gemini Developer API. The `firebaseAI()` function also accepts:
 
-- `provider`: `FirebaseAiProvider.googleAI()` (the default) for the Gemini Developer API, or `FirebaseAiProvider.agentPlatform()` for the Agent Platform (formerly Vertex AI) Gemini API.
+- `provider`: `FirebaseAiProvider.googleAI()` (the default) for the Gemini Developer API, or `FirebaseAiProvider.agentPlatform()` for the Gemini API in [Gemini Enterprise Agent Platform](/docs/integrations/vertex-ai/) (formerly Vertex AI).
 - `app`: the `FirebaseApp` to use. The plugin reads App Check and Auth from this app.
 - `useLimitedUseAppCheckTokens`: sends a single-use App Check token with each request. You need it if you turn on [replay protection](https://firebase.google.com/docs/ai-logic/app-check).
-- `httpClient`: a custom `http.Client` (for a proxy, logging, or a mock in tests). Live models connect over a WebSocket and don't use it. The plugin never closes a client you provide, so close it yourself when you're done.
+- `httpClient`: a custom `http.Client` (for a proxy, logging, or a mock in tests). Live models connect over a WebSocket and don't use it.
 
 ```dart
 final ai = Genkit(
@@ -86,22 +85,7 @@ final ai = Genkit(
 );
 ```
 
-`FirebaseAiProvider.agentPlatform()` uses the `global` location by default. Set a Live-enabled region such as `us-central1` as the `location` to use the [Live models](#live-api-experimental) on Agent Platform, or set a regional `location` for data residency.
-
-:::note[Upgrading from 0.4]
-Version 1.0 has these breaking changes:
-
-- Errors are a `GenkitException` with a `status`, so `on QuotaExceeded catch` and `response.cause is QuotaExceeded` no longer match. Check `status` instead.
-- Finish reasons use Genkit's names. For example, `maxTokens` is now `length` and `safety` is now `blocked`.
-- Output schemas go to Gemini unchanged as `responseJsonSchema`, and tool input schemas as `parametersJsonSchema`.
-- `logprobs` and `responseLogprobs` are removed from `GeminiOptions`.
-- The converter and Live helper functions are no longer exported.
-- A Live session that the server closes ends with an error, and receive errors are reported.
-- Absent token counts are `null` instead of `0`.
-- Streaming with `candidateCount` greater than 1 is rejected.
-
-From a version before 0.4, also note that `FirebaseAiProvider.vertexAI` is now `FirebaseAiProvider.agentPlatform`. See the [changelog](https://pub.dev/packages/genkit_firebase_ai/changelog) for the full notes.
-:::
+`FirebaseAiProvider.agentPlatform()` uses the `global` location by default. Set a Live-enabled region such as `us-central1` as the `location` to use the [Live models](#live-api) on Agent Platform, or set a regional `location` for data residency.
 
 ## Usage
 
@@ -118,10 +102,34 @@ print(response.text);
 
 `firebaseAI.gemini(name)` works with any Gemini model that Firebase AI Logic serves. See [supported models](https://firebase.google.com/docs/ai-logic/models) for names and shutdown dates. The plugin also registers these models, so they show up in the Genkit Developer UI with their capabilities:
 
-- **Text**: `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, and `gemini-3.1-pro-preview`. `gemini-flash-latest`, `gemini-3.7-flash`, and `gemini-3.6-flash` are registered for the Gemini Developer API only.
-- **Image**: `gemini-nano-banana-2.1`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and `gemini-3-pro-image`.
-- **Text-to-speech**: `gemini-3.8-flash-tts` and `gemini-3.8-flash-lite-tts`.
-- **Live**: `gemini-3.8-live` and `gemini-live-2.5-flash-native-audio` (see [Live API](#live-api-experimental) for which backend serves each).
+**Text**
+
+- `gemini-4-argon`
+- `gemini-3.8-flash`
+- `gemini-3.5-flash`
+- `gemini-3.5-flash-lite`
+- `gemini-3.1-flash-lite`
+- `gemini-3.1-pro-preview`
+- `gemini-flash-latest` (Gemini Developer API only)
+- `gemini-3.7-flash` (Gemini Developer API only)
+- `gemini-3.6-flash` (Gemini Developer API only)
+
+**Image**
+
+- `gemini-nano-banana-2.1`
+- `gemini-3.1-flash-image`
+- `gemini-3.1-flash-lite-image`
+- `gemini-3-pro-image`
+
+**Text-to-speech**
+
+- `gemini-3.8-flash-tts`
+- `gemini-3.8-flash-lite-tts`
+
+**Live** (see [Live API](#live-api) for which backend serves each)
+
+- `gemini-3.8-live`
+- `gemini-live-2.5-flash-native-audio`
 
 :::tip
 A model name compiled into your app stops working when that model shuts down. Firebase [recommends](https://firebase.google.com/docs/ai-logic/change-model-name-remotely) reading the model name from Remote Config, so that you can change it without an app release.
@@ -142,7 +150,7 @@ final response = await ai.generate(
 );
 ```
 
-Gemini 3 and newer models ignore `temperature`, `topP`, and `topK`, and may reject `presencePenalty` and `frequencyPenalty` with a 400 error. They don't support `candidateCount` either.
+Gemini 3 and newer models ignore `temperature`, `topP`, and `topK`.
 
 ### Thinking
 
@@ -240,8 +248,6 @@ config: GeminiOptions(
 ),
 ```
 
-`codeExecution: true` lets the model write and run Python. The code and its result come back as custom parts.
-
 ### Images and speech
 
 Image models return images as media parts with a `data:` URL. Set `responseModalities` and, optionally, `imageConfig`:
@@ -258,15 +264,19 @@ final response = await ai.generate(
 final image = response.media; // data:image/png;base64,...
 ```
 
-Text-to-speech models return audio the same way. Set `responseModalities: ['AUDIO']` and a `speechConfig` with one voice, or a `multiSpeakerVoiceConfig` with exactly two speakers whose names match the prompt.
+Text-to-speech models return audio the same way. Set `responseModalities: ['AUDIO']` and a voice in `speechConfig`.
 
-`mediaResolution` sets how much detail the model takes from images and video in the prompt: `MEDIA_RESOLUTION_LOW`, `MEDIA_RESOLUTION_MEDIUM`, or `MEDIA_RESOLUTION_HIGH`. A media part can set its own in `metadata['mediaResolution']`, which also takes `MEDIA_RESOLUTION_ULTRA_HIGH`.
+`mediaResolution` sets how much detail the model takes from images and video in the prompt: `MEDIA_RESOLUTION_LOW`, `MEDIA_RESOLUTION_MEDIUM`, or `MEDIA_RESOLUTION_HIGH`.
 
 ### Errors
 
 Errors from Firebase AI Logic, the network, or the SDK are reported as a `GenkitException` with a status code. For example, quota errors are `RESOURCE_EXHAUSTED`, an unavailable service is `UNAVAILABLE`, and a prompt blocked for safety is `FAILED_PRECONDITION` (with `firebase_ai` 5.1 or later; before 5.1, some blocked prompts are reported as `UNKNOWN`).
 
-`ai.generate` doesn't throw for these errors. It returns a response with `finishReason: FinishReason.failed`, the status and message in `response.error`, and the exception in `response.cause`. The [`retry` middleware](/docs/middleware/) retries statuses that can succeed on a second try, such as `UNAVAILABLE` and `RESOURCE_EXHAUSTED`:
+`ai.generate` doesn't throw for these errors. It returns a response with `finishReason: FinishReason.failed`, the status and message in `response.error`, and the exception in `response.cause`.
+
+### Retry
+
+To retry failed requests, add the `retry` middleware from `package:genkit/genkit.dart`:
 
 ```dart
 final response = await ai.generate(
@@ -274,29 +284,88 @@ final response = await ai.generate(
   prompt: 'Hello',
   use: [retry(maxRetries: 2)],
 );
-if (response.finishReason == FinishReason.failed) {
-  print('${response.error?.status}: ${response.error?.message}');
-}
 ```
+
+By default, `retry` retries `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED`, and `INTERNAL`, so a blocked prompt (`FAILED_PRECONDITION`) is not retried. See [Retry middleware](/docs/middleware/#4-retry-middleware-retry) for all options.
 
 ### Cancellation
 
-To stop a request, pass a cancellation token. Cancelling aborts the HTTP request or stream, and the response ends with `FinishReason.aborted`:
+To let users stop a request, pass a `CancellationController`'s token to `ai.generate` and cancel it when the user taps **Stop**. Cancelling aborts the in-flight HTTP request or stream, and the response ends with `FinishReason.aborted`. That is not an error, so reset the loading state instead of showing a failure. If the user taps **Stop** while `retry` waits to try again, the response ends with `FinishReason.aborted` at once, without another attempt.
 
 ```dart
-final controller = CancellationController();
-final result = ai.generate(
-  model: firebaseAI.gemini('gemini-flash-latest'),
-  prompt: 'Write a long story.',
-  cancel: controller.token,
-);
-// Later, for example when the user taps Stop:
-controller.cancel('user pressed stop');
+import 'package:flutter/material.dart';
+import 'package:genkit/genkit.dart';
+import 'package:genkit_firebase_ai/genkit_firebase_ai.dart';
+
+class StoryView extends StatefulWidget {
+  const StoryView({super.key, required this.ai});
+
+  final Genkit ai;
+
+  @override
+  State<StoryView> createState() => _StoryViewState();
+}
+
+class _StoryViewState extends State<StoryView> {
+  CancellationController? _controller;
+  String _text = '';
+
+  Future<void> _generate() async {
+    final controller = CancellationController();
+    setState(() {
+      _controller = controller;
+      _text = '';
+    });
+    final response = await widget.ai.generate(
+      model: firebaseAI.gemini('gemini-flash-latest'),
+      prompt: 'Write a long story.',
+      cancel: controller.token,
+    );
+    if (!mounted) return;
+    setState(() {
+      _controller = null;
+      if (response.finishReason == FinishReason.failed) {
+        _text = 'Error: ${response.error?.status} ${response.error?.message}';
+      } else if (response.finishReason != FinishReason.aborted) {
+        _text = response.text;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.cancel('widget disposed');
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    return Column(
+      children: [
+        if (controller == null)
+          ElevatedButton(onPressed: _generate, child: const Text('Generate'))
+        else
+          ElevatedButton(
+            onPressed: () => controller.cancel('user pressed stop'),
+            child: const Text('Stop'),
+          ),
+        Text(_text),
+      ],
+    );
+  }
+}
 ```
 
-## Live API (experimental)
+See [Handling errors and cancellation](/docs/models/#handling-errors-and-cancellation) for how cancellation works with any model.
 
-Live models stream audio and text both ways over a WebSocket, through `generateBidi`. This is built on Genkit's experimental API (`package:genkit/experimental.dart`), which can change in any minor release.
+## Live API
+
+:::caution[Experimental]
+The Live API uses `generateBidi` from `package:genkit/experimental.dart`. [Experimental APIs](/docs/api-stability/) can change in any minor release.
+:::
+
+Live models stream audio and text both ways over a WebSocket, through `generateBidi`.
 
 ```dart
 import 'package:genkit/experimental.dart';
@@ -325,8 +394,8 @@ A session takes system messages only in its first request (`system:` above). Sen
 
 ## Learn more
 
-- [`genkit_firebase_ai` on pub.dev](https://pub.dev/packages/genkit_firebase_ai), with the full option reference
-- [Sample Flutter app](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/firebase_ai) with tool calling, grounding, and Live audio
-- [Generating content with AI models](/docs/models/)
-- [Tool calling](/docs/tool-calling/)
-- [Middleware](/docs/middleware/) for retry and fallback
+- [`genkit_firebase_ai` on pub.dev](https://pub.dev/packages/genkit_firebase_ai) - The full option reference for the plugin
+- [Sample Flutter app](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/firebase_ai) - A complete app with tool calling, grounding, and Live audio
+- [Generating content with AI models](/docs/models/) - Learn more about model configuration and generation options
+- [Tool calling](/docs/tool-calling/) - Define tools and let models call them
+- [Middleware](/docs/middleware/) - Add retry, fallback, and other behavior to `generate` calls

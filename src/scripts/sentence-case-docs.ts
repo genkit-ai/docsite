@@ -9,7 +9,7 @@ function sentenceCaseString(title?: string): string {
         "JSON", "Google", "Gemini", "Antigravity", "Firebase", "Cloud", "BigQuery", "TypeScript", 
         "JavaScript", "Go", "Dart", "Python", "Node.js", "Next.js", 
         "HTTP", "MCP", "RAG", "Firestore", "GCP", "GKE", "CLI", "Ollama", "Pinecone", "Chroma", "Dev UI",
-        "Agent Skills"
+        "Agent Skills", "App Check"
     ];
 
     const localProperNouns = [...properNouns];
