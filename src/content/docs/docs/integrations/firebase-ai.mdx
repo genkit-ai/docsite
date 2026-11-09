@@ -14,8 +14,10 @@ Use this plugin when Genkit runs inside your Flutter app (Android, iOS, macOS, o
 ### Installation
 
 ```bash
-flutter pub add genkit genkit_firebase_ai:^1.0.0 firebase_core firebase_app_check
+flutter pub add genkit genkit_firebase_ai firebase_core firebase_app_check schemantic dev:build_runner dev:schemantic_builder
 ```
+
+`schemantic`, `build_runner`, and `schemantic_builder` generate the typed schemas used in [Tool calling](#tool-calling). Use `firebase_ai` 5.1 or later.
 
 ### Set up Firebase
 
@@ -25,15 +27,18 @@ flutter pub add genkit genkit_firebase_ai:^1.0.0 firebase_core firebase_app_chec
 
 ### App Check
 
-:::caution[App Check is required from November 2, 2026]
-From that date, Firebase enforces App Check for Firebase AI Logic, and requests without a valid App Check token are blocked. This includes requests from app versions that you already released without App Check. You can delay enforcement in the Firebase console, but not past January 21, 2027.
+:::caution[App Check is enforced since November 2, 2026]
+Since that date, Firebase enforces App Check for Firebase AI Logic, and requests without a valid App Check token are blocked. This includes requests from app versions that you already released without App Check. You can delay enforcement in the Firebase console, but not past January 21, 2027.
 :::
 
 Activate App Check before the first model call. The plugin reads App Check from the `FirebaseApp`. Use the debug providers during development and the platform attestation providers in release builds:
 
 ```dart
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+
+import 'firebase_options.dart';
 
 await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 await FirebaseAppCheck.instance.activate(
@@ -81,10 +86,21 @@ final ai = Genkit(
 );
 ```
 
-`FirebaseAiProvider.agentPlatform()` uses the `global` location by default. Set a regional `location` (for example `'us-central1'`) to use the [Live models](#live-api-experimental) on Agent Platform, or for data residency.
+`FirebaseAiProvider.agentPlatform()` uses the `global` location by default. Set a Live-enabled region such as `us-central1` as the `location` to use the [Live models](#live-api-experimental) on Agent Platform, or set a regional `location` for data residency.
 
-:::note
-Upgrading from 0.x? `FirebaseAiProvider.vertexAI` is now `FirebaseAiProvider.agentPlatform`, and the `appCheck` and `auth` parameters are removed. See the [migration notes](https://pub.dev/packages/genkit_firebase_ai#configuration) in the package README.
+:::note[Upgrading from 0.4]
+Version 1.0 has these breaking changes:
+
+- Errors are a `GenkitException` with a `status`, so `on QuotaExceeded catch` and `response.cause is QuotaExceeded` no longer match. Check `status` instead.
+- Finish reasons use Genkit's names. For example, `maxTokens` is now `length` and `safety` is now `blocked`.
+- Output schemas go to Gemini unchanged as `responseJsonSchema`, and tool input schemas as `parametersJsonSchema`.
+- `logprobs` and `responseLogprobs` are removed from `GeminiOptions`.
+- The converter and Live helper functions are no longer exported.
+- A Live session that the server closes ends with an error, and receive errors are reported.
+- Absent token counts are `null` instead of `0`.
+- Streaming with `candidateCount` greater than 1 is rejected.
+
+From a version before 0.4, also note that `FirebaseAiProvider.vertexAI` is now `FirebaseAiProvider.agentPlatform`. See the [changelog](https://pub.dev/packages/genkit_firebase_ai/changelog) for the full notes.
 :::
 
 ## Usage
@@ -105,7 +121,7 @@ print(response.text);
 - **Text**: `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, and `gemini-3.1-pro-preview`. `gemini-flash-latest`, `gemini-3.7-flash`, and `gemini-3.6-flash` are registered for the Gemini Developer API only.
 - **Image**: `gemini-nano-banana-2.1`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and `gemini-3-pro-image`.
 - **Text-to-speech**: `gemini-3.8-flash-tts` and `gemini-3.8-flash-lite-tts`.
-- **Live**: `gemini-3.8-live` on both backends, and `gemini-live-2.5-flash-native-audio` on Agent Platform only.
+- **Live**: `gemini-3.8-live` and `gemini-live-2.5-flash-native-audio` (see [Live API](#live-api-experimental) for which backend serves each).
 
 :::tip
 A model name compiled into your app stops working when that model shuts down. Firebase [recommends](https://firebase.google.com/docs/ai-logic/change-model-name-remotely) reading the model name from Remote Config, so that you can change it without an app release.
@@ -248,7 +264,7 @@ Text-to-speech models return audio the same way. Set `responseModalities: ['AUDI
 
 ### Errors
 
-Errors from Firebase AI Logic, the network, or the SDK are reported as a `GenkitException` with a status code. For example, quota errors are `RESOURCE_EXHAUSTED`, an unavailable service is `UNAVAILABLE`, and a prompt blocked for safety is `FAILED_PRECONDITION`.
+Errors from Firebase AI Logic, the network, or the SDK are reported as a `GenkitException` with a status code. For example, quota errors are `RESOURCE_EXHAUSTED`, an unavailable service is `UNAVAILABLE`, and a prompt blocked for safety is `FAILED_PRECONDITION` (with `firebase_ai` 5.1 or later; before 5.1, some blocked prompts are reported as `UNKNOWN`).
 
 `ai.generate` doesn't throw for these errors. It returns a response with `finishReason: FinishReason.failed`, the status and message in `response.error`, and the exception in `response.cause`. The [`retry` middleware](/docs/middleware/) retries statuses that can succeed on a second try, such as `UNAVAILABLE` and `RESOURCE_EXHAUSTED`:
 
@@ -261,6 +277,21 @@ final response = await ai.generate(
 if (response.finishReason == FinishReason.failed) {
   print('${response.error?.status}: ${response.error?.message}');
 }
+```
+
+### Cancellation
+
+To stop a request, pass a cancellation token. Cancelling aborts the HTTP request or stream, and the response ends with `FinishReason.aborted`:
+
+```dart
+final controller = CancellationController();
+final result = ai.generate(
+  model: firebaseAI.gemini('gemini-flash-latest'),
+  prompt: 'Write a long story.',
+  cancel: controller.token,
+);
+// Later, for example when the user taps Stop:
+controller.cancel('user pressed stop');
 ```
 
 ## Live API (experimental)
@@ -288,7 +319,7 @@ session.stream.listen((chunk) {
 });
 ```
 
-`gemini-3.8-live` works with both the Gemini Developer API and Agent Platform. `gemini-live-2.5-flash-native-audio` works with Agent Platform only. On Agent Platform, both models need a regional `location` such as `'us-central1'`, because the default `global` location doesn't serve them.
+`gemini-3.8-live` works with both the Gemini Developer API and Agent Platform. `gemini-live-2.5-flash-native-audio` works with Agent Platform only. On Agent Platform, both models need a Live-enabled region such as `us-central1` as the `location`, because the default `global` location doesn't serve them.
 
 A session takes system messages only in its first request (`system:` above). Sending one later fails with `INVALID_ARGUMENT`.
 
