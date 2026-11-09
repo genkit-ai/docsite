@@ -1,38 +1,1263 @@
 ---
-import Button from './Button.astro';
-import Icon from './Icon.astro';
+import InstallWidget from './InstallWidget.astro';
+import { highlightLines } from './highlight-code';
+import { hero, heroDemo, sdks } from '../../data/landing';
+
+const DEFAULT_LANG = 'js';
+
+const [titleStart, titleEnd = ''] = hero.title.split(hero.highlight);
+
+// Wrap the tool names so the demo can point at the tool being called.
+const markTools = (html: string) =>
+  html
+    .replace(/(findSeats|find_seats)/, '<mark data-tool="find">$1</mark>')
+    .replace(/(buyTickets|buy_tickets)/, '<mark data-tool="buy">$1</mark>');
+
+const callouts = await Promise.all(
+  sdks.map(async (sdk) => {
+    const lang = sdk.id === 'js' ? 'ts' : sdk.id;
+    const code = heroDemo.code[sdk.id];
+    const [tools] = await highlightLines(code.tools, lang);
+    const [genui] = await highlightLines(code.genui, lang);
+    return { lang: sdk.id, tools: markTools(tools), genui };
+  }),
+);
+
+const check = 'M20 6 9 17l-5-5';
+
+/*
+ * The seat map in the GenUI card: a stage with three tiers of seats around it.
+ * Each section is a ring segment centered on the stage, stretched sideways so
+ * the map fills the card. Angles are in degrees from straight down, so negative
+ * angles are on the left.
+ */
+const MAP_CX = 120;
+const MAP_CY = 2;
+const MAP_STRETCH = 1.4;
+
+const point = (radius: number, angle: number) => {
+  const rad = (angle * Math.PI) / 180;
+  return `${(MAP_CX + radius * MAP_STRETCH * Math.sin(rad)).toFixed(1)} ${(MAP_CY + radius * Math.cos(rad)).toFixed(1)}`;
+};
+
+/** An arc around the stage to `end`: sweep 0 runs left to right through the bottom, 1 runs back. */
+const arc = (radius: number, sweep: 0 | 1, end: string) =>
+  `A${(radius * MAP_STRETCH).toFixed(1)} ${radius} 0 0 ${sweep} ${end}`;
+
+/** The outline of a section, swept from `from` to `to` through the bottom. */
+const sectionPath = (inner: number, outer: number, from: number, to: number) =>
+  `M${point(outer, from)}${arc(outer, 0, point(outer, to))}` +
+  `L${point(inner, to)}${arc(inner, 1, point(inner, from))}Z`;
+
+/** Rows of seats inside a section, drawn as arcs that CSS dots with a dash pattern. */
+const seatRowsPath = (inner: number, outer: number, from: number, to: number) => {
+  let path = '';
+  for (let radius = inner + 3.5; radius < outer - 1.5; radius += 4) {
+    const inset = (2.2 / radius) * (180 / Math.PI);
+    path += `M${point(radius, from + inset)}${arc(radius, 0, point(radius, to - inset))}`;
+  }
+  return path;
+};
+
+interface VenueSection {
+  from: number;
+  to: number;
+  /** Set on the two sections the app suggests: "a" is the first option, "b" the second. */
+  offer?: 'a' | 'b';
+}
+
+const tiers: Array<{ inner: number; outer: number; sections: VenueSection[] }> = [
+  { inner: 20, outer: 38, sections: [{ from: -48, to: 48, offer: 'a' }] },
+  { inner: 42, outer: 60, sections: [{ from: -66, to: -22 }, { from: -20, to: 20 }, { from: 22, to: 66 }] },
+  {
+    inner: 64,
+    outer: 86,
+    sections: [{ from: -78, to: -40 }, { from: -38, to: -1 }, { from: 1, to: 38, offer: 'b' }, { from: 40, to: 78 }],
+  },
+];
+
+const venueSections = tiers.flatMap(({ inner, outer, sections }) =>
+  sections.map(({ from, to, offer }) => ({
+    offer,
+    outline: sectionPath(inner, outer, from, to),
+    seats: seatRowsPath(inner, outer, from, to),
+  })),
+);
 ---
 
-<section class="pt-8 px-6 text-center">
-  <div class="max-w-4xl mx-auto">
-    <div class="mt-12 sm:mt-20 mb-6 sm:mb-8">
-      <!-- Mobile: Logo above text -->
-      <div class="flex flex-col items-center gap-4 sm:hidden">
-        <Icon name="genkit-logo" size="md" class="w-12 h-12" />
-        <h1 class="text-5xl leading-tight tracking-tight text-foreground font-medium font-display text-center">
-          Build Powerful<br>
-          Agentic Apps
-        </h1>
-      </div>
-      
-      <!-- Desktop: Logo inline -->
-      <h1 class="hidden sm:block text-5xl lg:text-7xl leading-tight tracking-tight text-foreground font-medium font-display text-center">
-        Build Powerful<br>
-        Agentic Apps
+<section class="hero" aria-labelledby="hero-title">
+  <div class="gk-container hero-grid">
+    <div class="hero-copy">
+      <h1 id="hero-title" class="gk-h1 hero-title">
+        {titleStart}<span class="hero-accent">{hero.highlight}</span>{titleEnd}
       </h1>
+      <p class="gk-lead hero-lead">{hero.lead}</p>
+      <InstallWidget idPrefix="hero-install" class="hero-install" />
     </div>
-    
-    <p class="text-xl leading-normal text-muted mb-12 max-w-2xl mx-auto">
-      Genkit is Google's open-source framework for building full-stack, AI-powered and agentic applications for any platform
-    </p>
-    
-    <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center items-center">
-      <Button variant="primary" size="lg" href="/docs/get-started">
-        Get Started
-      </Button>
-      <Button variant="secondary" size="lg" href="https://github.com/genkit-ai/genkit">
-        View on Github
-      </Button>
-    </div>
+
+    <!--
+      The demo plays through `data-step` (0 to 7), set by landing-demos.ts.
+      Without JavaScript, or with reduced motion, it shows step 4.
+    -->
+    <figure id="hero-demo" class="hero-demo" data-step="4" aria-labelledby="hero-demo-caption">
+      <figcaption id="hero-demo-caption" class="sr-only">{heroDemo.description}</figcaption>
+      <div class="stage">
+        <div class="phone" aria-hidden="true">
+          <div class="screen">
+            <span class="island"></span>
+            <div class="status">
+              <span class="status-time">9:41</span>
+              <span class="status-icons">
+                <svg viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".6"></rect><rect x="5" y="5.5" width="3" height="6.5" rx=".6"></rect><rect x="10" y="3" width="3" height="9" rx=".6"></rect><rect x="15" y="0" width="3" height="12" rx=".6"></rect></svg>
+                <svg viewBox="0 0 27 12" fill="none"><rect x=".5" y=".5" width="23" height="11" rx="3.5" stroke="currentColor" opacity=".45"></rect><rect x="2" y="2" width="18" height="8" rx="2" fill="currentColor"></rect><path d="M25 4v4c.8-.3 1.5-1.1 1.5-2S25.8 4.3 25 4Z" fill="currentColor" opacity=".45"></path></svg>
+              </span>
+            </div>
+
+            <div class="app-bar">
+              <span class="avatar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2"></path><path d="M13 17v2"></path><path d="M13 11v2"></path></svg>
+              </span>
+              <span class="app-name">Ticket assistant</span>
+            </div>
+
+            <div class="chat">
+              <p class="msg-ai">Hi! What do you want to see?</p>
+              <p class="msg-user s1">2 seats for Saturday's&nbsp;show</p>
+
+              <div class="row s2">
+                <span class="tool-chip">
+                  <span class="stack chip-icon">
+                    <span class="spinner" data-on="3 6"></span>
+                    <svg class="chip-check" data-on="4 5 7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d={check}></path></svg>
+                  </span>
+                  <span class="stack">
+                    <span data-on="3">Finding seats…</span>
+                    <span data-on="4 5">Found 2 options</span>
+                    <span data-on="6">Buying tickets…</span>
+                    <span data-on="7">Tickets confirmed</span>
+                  </span>
+                </span>
+                <span class="callout callout-tools">
+                  <span class="callout-label">{heroDemo.callouts.tools}</span>
+                  {callouts.map((callout) => (
+                    <code data-lang-only={callout.lang} hidden={callout.lang !== DEFAULT_LANG} set:html={callout.tools} />
+                  ))}
+                </span>
+              </div>
+
+              <div class="row s3">
+                <div class="surface">
+                  <div class="surface-media">
+                    <span class="surface-head">
+                      <span class="surface-title">Harbor Hall</span>
+                      <span class="surface-meta">Sat · 8:00 PM · 2 seats</span>
+                    </span>
+                    <svg class="venue" viewBox="0 0 240 90">
+                      <rect class="venue-stage" x="84" y="2" width="72" height="10" rx="2.5"></rect>
+                      <text class="venue-stage-label" x="120" y="9.1" text-anchor="middle">STAGE</text>
+                      {venueSections.map((section) => (
+                        <g class:list={['venue-section', section.offer && `venue-offer-${section.offer}`]}>
+                          <path class="venue-outline" d={section.outline}></path>
+                          <path class="venue-seats" d={section.seats}></path>
+                        </g>
+                      ))}
+                      <g transform="translate(120 31)">
+                        <g class="venue-booked">
+                          <circle r="5.5"></circle>
+                          <path d="M-2.5 0 -0.8 1.8 2.6 -1.7"></path>
+                        </g>
+                      </g>
+                    </svg>
+                  </div>
+
+                  <div class="surface-body stack">
+                    <div class="options" data-off="7">
+                      <div class="option">
+                        <span class="option-swatch option-swatch-a"></span>
+                        <span class="option-info"><b>Floor · Row F</b><small>Seats 7–8 · Center</small></span>
+                        <span class="option-price">$192</span>
+                        <span class="select select-primary">
+                          <span class="select-label">Select</span>
+                          <span class="spinner spinner-dark" data-on="6"></span>
+                          <span class="tap"></span>
+                        </span>
+                      </div>
+                      <div class="option">
+                        <span class="option-swatch option-swatch-b"></span>
+                        <span class="option-info"><b>Balcony · Row B</b><small>Seats 21–22 · Full view</small></span>
+                        <span class="option-price">$128</span>
+                        <span class="select"><span class="select-label">Select</span></span>
+                      </div>
+                    </div>
+
+                    <div class="pass" data-on="7">
+                      <span class="pass-top">
+                        <span class="pass-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d={check}></path></svg>You're in</span>
+                        <span class="pass-seat">2 tickets</span>
+                      </span>
+                      <span class="pass-details">
+                        <span class="pass-field"><small>Section</small><b>Floor</b></span>
+                        <span class="pass-field"><small>Row</small><b>F</b></span>
+                        <span class="pass-field"><small>Seats</small><b>7–8</b></span>
+                        <span class="pass-code"></span>
+                      </span>
+                      <span class="pass-time">Sat · Doors 7:00 PM · Show 8:00 PM</span>
+                    </div>
+                  </div>
+                </div>
+                <span class="callout callout-genui">
+                  <span class="callout-label">{heroDemo.callouts.genui}</span>
+                  {callouts.map((callout) => (
+                    <code data-lang-only={callout.lang} hidden={callout.lang !== DEFAULT_LANG} set:html={callout.genui} />
+                  ))}
+                </span>
+              </div>
+            </div>
+
+            <div class="composer">
+              <span class="stack composer-text">
+                <span class="composer-placeholder" data-off="1">Ask anything</span>
+                <span class="composer-typed" data-on="1">2 seats for Saturday's show</span>
+              </span>
+              <span class="send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <!-- Shown by landing-demos.ts once the loop starts. -->
+        <button type="button" id="hero-demo-toggle" class="demo-toggle" aria-label="Pause animation" hidden>
+          <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
+          <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"></path></svg>
+        </button>
+      </div>
+    </figure>
   </div>
 </section>
+
+<style>
+  /* ---------- Layout ---------- */
+  .hero {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    padding-block: 3rem 4.5rem;
+    background-color: var(--gk-canvas);
+  }
+
+  /* Soft light behind the demo, plus a fine grain so the canvas is not flat. */
+  .hero::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: -20% -10% -10% 25%;
+    pointer-events: none;
+    background:
+      radial-gradient(38% 42% at 64% 46%, rgb(168 199 250 / 0.16), transparent 72%),
+      radial-gradient(26% 30% at 80% 80%, rgb(251 191 36 / 0.08), transparent 70%);
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.5;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+  }
+
+  :global(:root[data-theme='light']) .hero::before {
+    background:
+      radial-gradient(38% 42% at 64% 46%, rgb(26 115 232 / 0.12), transparent 72%),
+      radial-gradient(26% 30% at 80% 80%, rgb(245 158 11 / 0.1), transparent 70%);
+  }
+
+  :global(:root[data-theme='light']) .hero::after {
+    opacity: 0.35;
+    mix-blend-mode: multiply;
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3.5rem;
+    align-items: center;
+  }
+
+  @media (min-width: 1024px) {
+    .hero {
+      padding-block: 4rem 5.5rem;
+    }
+
+    .hero-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 3rem;
+    }
+  }
+
+  /* ---------- Copy ---------- */
+  .hero-title {
+    margin: 0 0 1.25rem;
+    font-size: clamp(2.6rem, 9vw, 3.75rem);
+    line-height: 1.02;
+    letter-spacing: -0.042em;
+  }
+
+  @media (min-width: 1024px) {
+    .hero-title {
+      font-size: clamp(3.4rem, 5.1vw, 4.6rem);
+    }
+  }
+
+  .hero-accent {
+    color: var(--color-genkit-primary);
+  }
+
+  .hero-lead {
+    max-width: 31rem;
+    margin: 0 0 2rem;
+  }
+
+  .hero-copy :global(.hero-install) {
+    max-width: 34rem;
+  }
+
+  /* ---------- Demo stage ----------
+   * Everything below is sized in `em`, and the stage font size follows the
+   * available width, so the whole scene scales as one piece.
+   */
+  .hero-demo {
+    margin: 0;
+    container-type: inline-size;
+  }
+
+  .stage {
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --ink: #0b1a33;
+    --blue: #a8c7fa;
+    --green: #34d399;
+    --amber: #fbbf24;
+    position: relative;
+    isolation: isolate;
+    width: 34em;
+    height: 35.5em;
+    margin-inline: auto;
+    font-size: min(1rem, calc(100cqi / 34));
+    color: #e8eaed;
+  }
+
+  .stage::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: 1em -4em -2em 8em;
+    border-radius: 50%;
+    background:
+      radial-gradient(closest-side at 55% 40%, rgb(168 199 250 / 0.42), transparent),
+      radial-gradient(closest-side at 72% 86%, rgb(251 191 36 / 0.2), transparent);
+    filter: blur(2em);
+  }
+
+  :global(:root[data-theme='light']) .stage::before {
+    background:
+      radial-gradient(closest-side at 55% 40%, rgb(26 115 232 / 0.28), transparent),
+      radial-gradient(closest-side at 72% 86%, rgb(245 158 11 / 0.24), transparent);
+  }
+
+  /* Pause and play for the looping demo. */
+  .demo-toggle {
+    position: absolute;
+    z-index: 3;
+    right: 19.4em;
+    bottom: 0;
+    display: grid;
+    place-items: center;
+    width: 2.1em;
+    height: 2.1em;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--gk-border-default);
+    background: var(--gk-surface-1);
+    color: var(--gk-text-secondary);
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .demo-toggle:hover {
+    background: var(--gk-surface-2);
+    color: var(--gk-text-primary);
+  }
+
+  .demo-toggle:focus-visible {
+    outline: 2px solid var(--color-genkit-primary);
+    outline-offset: 2px;
+  }
+
+  .demo-toggle svg {
+    width: 0.75em;
+    height: 0.75em;
+  }
+
+  .demo-toggle:not([data-paused]) .icon-play,
+  .demo-toggle[data-paused] .icon-pause {
+    display: none;
+  }
+
+  .hero-demo[data-paused] .phone * {
+    animation-play-state: paused !important;
+  }
+
+  @container (max-width: 30rem) {
+    .stage {
+      width: 18.4em;
+      margin-bottom: 3em;
+      font-size: min(1rem, calc(100cqi / 18.4));
+    }
+
+    .callout {
+      display: none !important;
+    }
+
+    .demo-toggle {
+      right: 50%;
+      bottom: -2.85em;
+      margin-right: -1.05em;
+    }
+  }
+
+  /* ---------- Phone ---------- */
+  .phone {
+    position: absolute;
+    top: 0;
+    right: 0.2em;
+    width: 18em;
+    height: 35.5em;
+    padding: 0.5em;
+    border-radius: 2.9em;
+    background: linear-gradient(150deg, #3a404c 0%, #14171d 22%, #0c0e12 50%, #14171d 78%, #333944 100%);
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.1),
+      0 3em 5em -2em rgb(0 0 0 / 0.75),
+      0 1.2em 2.4em -1em rgb(0 0 0 / 0.5);
+  }
+
+  .phone::before,
+  .phone::after {
+    content: '';
+    position: absolute;
+    width: 0.2em;
+    border-radius: 0.2em;
+    background: #2a2f38;
+  }
+
+  .phone::before {
+    left: -0.2em;
+    top: 7em;
+    height: 2.6em;
+  }
+
+  .phone::after {
+    right: -0.2em;
+    top: 9em;
+    height: 4.2em;
+  }
+
+  .screen {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    border-radius: 2.4em;
+    background:
+      radial-gradient(120% 50% at 50% 0%, rgb(168 199 250 / 0.08), transparent 70%),
+      #0e1016;
+  }
+
+  .screen::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0.5em;
+    width: 6em;
+    height: 0.24em;
+    margin-left: -3em;
+    border-radius: 1em;
+    background: rgb(255 255 255 / 0.4);
+  }
+
+  .island {
+    position: absolute;
+    top: 0.55em;
+    left: 50%;
+    width: 5.6em;
+    height: 1.6em;
+    margin-left: -2.8em;
+    border-radius: 1em;
+    background: #000;
+  }
+
+  .status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 2.7em;
+    padding: 0 1.55em 0 2.05em;
+  }
+
+  .status-time {
+    font-size: 0.72em;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .status-icons {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+  }
+
+  .status-icons svg {
+    height: 0.62em;
+    width: auto;
+  }
+
+  .app-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.55em;
+    padding: 0.25em 1.1em 0.7em;
+    border-bottom: 1px solid rgb(255 255 255 / 0.06);
+  }
+
+  .avatar {
+    display: grid;
+    place-items: center;
+    width: 1.8em;
+    height: 1.8em;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #c6dafc, #7fa9f5);
+    color: var(--ink);
+  }
+
+  .avatar svg {
+    width: 0.95em;
+    height: 0.95em;
+  }
+
+  .app-name {
+    font-size: 0.8em;
+    font-weight: 600;
+  }
+
+  .chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75em;
+    padding: 1em 0.95em 0;
+  }
+
+  .msg-user,
+  .msg-ai {
+    max-width: 78%;
+    margin: 0;
+    padding: 0.55em 0.8em;
+    font-size: 0.78em;
+    line-height: 1.4;
+  }
+
+  .msg-user {
+    align-self: flex-end;
+    max-width: 88%;
+    border-radius: 1.1em 1.1em 0.3em 1.1em;
+    background: var(--blue);
+    color: var(--ink);
+  }
+
+  .msg-ai {
+    align-self: flex-start;
+    border-radius: 1.1em 1.1em 1.1em 0.3em;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    background: rgb(255 255 255 / 0.05);
+    color: #e8eaed;
+  }
+
+  .row {
+    position: relative;
+  }
+
+  .stack {
+    display: grid;
+  }
+
+  .stack > * {
+    grid-area: 1 / 1;
+  }
+
+  .tool-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45em;
+    padding: 0.3em 0.75em 0.3em 0.4em;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.09);
+    background: rgb(255 255 255 / 0.05);
+    font-size: 0.68em;
+    color: #c4cad4;
+  }
+
+  .chip-icon {
+    place-items: center;
+    width: 1.15em;
+    height: 1.15em;
+  }
+
+  .chip-check {
+    width: 1.1em;
+    height: 1.1em;
+    color: var(--green);
+  }
+
+  .spinner {
+    width: 1em;
+    height: 1em;
+    border-radius: 50%;
+    border: 0.16em solid rgb(255 255 255 / 0.18);
+    border-top-color: var(--blue);
+    animation: hero-spin 0.7s linear infinite;
+  }
+
+  .spinner-dark {
+    width: 1.1em;
+    height: 1.1em;
+    border-color: rgb(11 26 51 / 0.25);
+    border-top-color: var(--ink);
+  }
+
+  /* ---------- GenUI surface ---------- */
+  .surface {
+    overflow: hidden;
+    border-radius: 1em;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    background: #161a22;
+    box-shadow: 0 0.8em 1.6em -0.8em rgb(0 0 0 / 0.7);
+  }
+
+  /* The header and seat map, under a soft light from the stage. */
+  .surface-media {
+    padding: 0.6em 0.75em 0.4em;
+    border-bottom: 1px solid rgb(255 255 255 / 0.05);
+    background:
+      radial-gradient(60% 75% at 50% 30%, rgb(168 199 250 / 0.12), transparent 70%),
+      #12151c;
+  }
+
+  .surface-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5em;
+  }
+
+  .surface-title {
+    font-size: 0.82em;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #fff;
+  }
+
+  .surface-meta {
+    font-size: 0.6em;
+    color: rgb(255 255 255 / 0.7);
+  }
+
+  .venue {
+    display: block;
+    width: 100%;
+    height: 4.8em;
+    margin-top: 0.3em;
+  }
+
+  .venue-stage {
+    fill: rgb(255 255 255 / 0.12);
+  }
+
+  .venue-stage-label {
+    font-size: 6px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    fill: rgb(255 255 255 / 0.55);
+  }
+
+  .venue-section {
+    transition: opacity 0.4s ease;
+  }
+
+  /* Sold-out sections stay quiet. The offered ones take the colors of their options below. */
+  .venue-outline {
+    fill: rgb(255 255 255 / 0.04);
+    stroke: rgb(255 255 255 / 0.07);
+    stroke-width: 0.6;
+    transition:
+      fill 0.4s ease,
+      stroke 0.4s ease;
+  }
+
+  /* Zero-length dashes with round caps draw each row as a line of seats. */
+  .venue-seats {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.16);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-dasharray: 0 3.2;
+    transition: stroke 0.4s ease;
+  }
+
+  .venue-offer-a .venue-outline {
+    fill: rgb(168 199 250 / 0.18);
+    stroke: rgb(168 199 250 / 0.5);
+  }
+
+  .venue-offer-a .venue-seats {
+    stroke: var(--blue);
+  }
+
+  .venue-offer-b .venue-outline {
+    fill: rgb(251 191 36 / 0.14);
+    stroke: rgb(251 191 36 / 0.45);
+  }
+
+  .venue-offer-b .venue-seats {
+    stroke: var(--amber);
+  }
+
+  .venue-booked {
+    opacity: 0;
+    transform: scale(0.4);
+    transform-box: fill-box;
+    transform-origin: center;
+    transition:
+      opacity 0.35s ease,
+      transform 0.5s var(--ease);
+  }
+
+  .venue-booked circle {
+    fill: var(--green);
+    stroke: #12151c;
+    stroke-width: 1.2;
+  }
+
+  .venue-booked path {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .surface-body {
+    padding: 0.55em;
+  }
+
+  .options {
+    display: grid;
+    gap: 0.4em;
+  }
+
+  .option {
+    display: flex;
+    align-items: center;
+    gap: 0.55em;
+    padding: 0.45em 0.45em 0.45em 0.6em;
+    border-radius: 0.7em;
+    border: 1px solid rgb(255 255 255 / 0.05);
+    background: rgb(255 255 255 / 0.04);
+  }
+
+  /* Matches the option's section on the map. */
+  .option-swatch {
+    flex: none;
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 0.15em;
+  }
+
+  .option-swatch-a {
+    background: var(--blue);
+  }
+
+  .option-swatch-b {
+    background: var(--amber);
+  }
+
+  .option-info {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    gap: 0.1em;
+  }
+
+  .option-info b {
+    font-size: 0.7em;
+    font-weight: 600;
+    color: #f3f5f8;
+  }
+
+  .option-info small {
+    font-size: 0.58em;
+    color: #9aa3b2;
+  }
+
+  .option-price {
+    font-size: 0.74em;
+    font-weight: 600;
+    color: #f3f5f8;
+  }
+
+  .select {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    padding: 0.4em 0.75em;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.08);
+    font-size: 0.6em;
+    font-weight: 600;
+    color: #e8eaed;
+    transition: transform 0.15s ease;
+  }
+
+  .select > * {
+    grid-area: 1 / 1;
+  }
+
+  .select-primary {
+    background: var(--blue);
+    color: var(--ink);
+  }
+
+  .tap {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3.2em;
+    height: 3.2em;
+    margin: -1.6em 0 0 -1.6em;
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.6);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* The confirmation is a ticket: the details sit below a tear line with a notch at each end. */
+  .pass {
+    display: grid;
+    align-content: center;
+    gap: 0.4em;
+    padding: 0.5em 0.65em;
+    border-radius: 0.7em;
+    border: 1px solid rgb(255 255 255 / 0.07);
+    background:
+      radial-gradient(90% 120% at 0% 0%, rgb(52 211 153 / 0.16), transparent 60%),
+      rgb(255 255 255 / 0.04);
+  }
+
+  .pass-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.62em;
+  }
+
+  .pass-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-weight: 600;
+    color: var(--green);
+  }
+
+  .pass-ok svg {
+    width: 1.1em;
+    height: 1.1em;
+  }
+
+  .pass-seat {
+    color: #9aa3b2;
+  }
+
+  .pass-details {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 1em;
+    padding-top: 0.4em;
+    border-top: 1px dashed rgb(255 255 255 / 0.16);
+  }
+
+  /* The notches are circles in the card's color, centered on the ticket's edges. */
+  .pass-details::before,
+  .pass-details::after {
+    content: '';
+    position: absolute;
+    top: -0.35em;
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
+    background: #161a22;
+  }
+
+  .pass-details::before {
+    left: calc(-1em - 1px);
+  }
+
+  .pass-details::after {
+    right: calc(-1em - 1px);
+  }
+
+  .pass-field {
+    display: grid;
+    gap: 0.1em;
+  }
+
+  .pass-field small {
+    font-size: 0.48em;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8e98a8;
+  }
+
+  .pass-field b {
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #f3f5f8;
+  }
+
+  .pass-code {
+    margin-left: auto;
+    width: 3.4em;
+    height: 1.4em;
+    opacity: 0.8;
+    background: repeating-linear-gradient(90deg, #e8eaed 0 1px, transparent 1px 3px, #e8eaed 3px 5px, transparent 5px 6px, #e8eaed 6px 7px, transparent 7px 9px);
+  }
+
+  .pass-time {
+    font-size: 0.58em;
+    color: #9aa3b2;
+  }
+
+  .composer {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    margin: 0.8em 0.9em 1.35em;
+    padding: 0.4em 0.4em 0.4em 0.95em;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    background: rgb(255 255 255 / 0.04);
+    font-size: 1em;
+  }
+
+  .composer-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 0.7em;
+    white-space: nowrap;
+  }
+
+  .composer-placeholder {
+    color: #7d8594;
+  }
+
+  /* Typed text with a caret that follows it. */
+  .composer-typed {
+    justify-self: start;
+    max-width: 100%;
+    overflow: hidden;
+    padding-right: 0.1em;
+    border-right: 0.12em solid var(--blue);
+    color: #e8eaed;
+  }
+
+  .send {
+    display: grid;
+    place-items: center;
+    width: 1.75em;
+    height: 1.75em;
+    flex: none;
+    border-radius: 50%;
+    background: var(--blue);
+    color: var(--ink);
+    transition:
+      opacity 0.2s ease,
+      transform 0.2s ease;
+  }
+
+  .send svg {
+    width: 0.9em;
+    height: 0.9em;
+  }
+
+  /* ---------- Code callouts ---------- */
+  .callout {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    right: calc(100% + 0.7em);
+    display: grid;
+    gap: 0.3em;
+    padding: 0.6em 0.8em 0.65em;
+    border-radius: 0.8em;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(17 20 27 / 0.9);
+    box-shadow: 0 1.2em 2.4em -1.2em rgb(0 0 0 / 0.7);
+    backdrop-filter: blur(10px);
+    white-space: nowrap;
+    transform: translateY(-50%);
+  }
+
+  /* Connector from the callout to the part of the app it explains. */
+  .callout::before,
+  .callout::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+  }
+
+  .callout::before {
+    left: 100%;
+    width: 0.7em;
+    border-top: 1px solid rgb(168 199 250 / 0.45);
+  }
+
+  .callout::after {
+    left: calc(100% + 0.7em - 0.22em);
+    width: 0.44em;
+    height: 0.44em;
+    margin-top: -0.22em;
+    border-radius: 50%;
+    border: 1px solid var(--blue);
+    background: #0e1016;
+    transition: background-color 0.3s ease;
+  }
+
+  .callout-label {
+    font-family: var(--font-mono);
+    font-size: 0.56em;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #8e98a8;
+    transition: color 0.3s ease;
+  }
+
+  .callout code {
+    display: block;
+    margin: 0 -0.35em;
+    padding: 0.15em 0.35em;
+    border-radius: 0.35em;
+    font-family: var(--font-mono);
+    font-size: 0.68em;
+    color: #e1dfdf;
+    transition: background-color 0.3s ease;
+  }
+
+  .callout :global(mark) {
+    margin: 0 -0.12em;
+    padding: 0 0.12em;
+    border-radius: 0.25em;
+    background: transparent;
+    color: inherit;
+    transition: background-color 0.3s ease;
+  }
+
+  /* ---------- Playback ----------
+   * 0 reset, 1 typing, 2 sent, 3 finding seats (tool call), 4 GenUI seat map
+   * and options, 5 tap on "Select", 6 buying (tool call), 7 ticket.
+   */
+  .s1,
+  .s2,
+  .s3 {
+    transition:
+      opacity 0.5s var(--ease),
+      transform 0.5s var(--ease);
+  }
+
+  :global(html.js) .hero-demo:not([data-live]) :is(.s1, .s2, .s3),
+  .hero-demo:is([data-step='0'], [data-step='1']) :is(.s1, .s2, .s3),
+  .hero-demo[data-step='2'] :is(.s2, .s3),
+  .hero-demo[data-step='3'] .s3 {
+    opacity: 0;
+    transform: translateY(0.6em);
+  }
+
+  [data-on] {
+    opacity: 0;
+    transition:
+      opacity 0.35s ease,
+      transform 0.45s var(--ease);
+  }
+
+  .pass[data-on] {
+    transform: scale(0.96);
+  }
+
+  .hero-demo[data-step='1'] [data-on~='1'],
+  .hero-demo[data-step='2'] [data-on~='2'],
+  .hero-demo[data-step='3'] [data-on~='3'],
+  .hero-demo[data-step='4'] [data-on~='4'],
+  .hero-demo[data-step='5'] [data-on~='5'],
+  .hero-demo[data-step='6'] [data-on~='6'],
+  .hero-demo[data-step='7'] [data-on~='7'] {
+    opacity: 1;
+    transform: none;
+  }
+
+  [data-off] {
+    transition:
+      opacity 0.35s ease,
+      transform 0.45s var(--ease);
+  }
+
+  .hero-demo[data-step='1'] [data-off~='1'],
+  .hero-demo[data-step='7'] [data-off~='7'] {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+
+  /* Typing, then sending. The composer swaps text instantly, like a real input. */
+  .composer-placeholder,
+  .composer-typed {
+    transition: none;
+  }
+
+  .hero-demo[data-step='1'] .composer-typed {
+    animation: hero-type 0.9s steps(24, end) both;
+  }
+
+  .send {
+    opacity: 0.4;
+  }
+
+  .hero-demo[data-step='1'] .send {
+    opacity: 1;
+  }
+
+  .hero-demo[data-step='2'] .send {
+    animation: hero-send 0.45s ease-out;
+  }
+
+  /* The tap on "Select", then its loading state. */
+  .hero-demo[data-step='5'] .tap {
+    animation: hero-tap 0.7s ease-out;
+  }
+
+  .hero-demo[data-step='5'] .select-primary {
+    transform: scale(0.94);
+  }
+
+  .select-label {
+    transition: opacity 0.2s ease;
+  }
+
+  .hero-demo[data-step='6'] .select-primary .select-label {
+    opacity: 0;
+  }
+
+  /* The pick shows on the map: its section lights up and the other offer steps back. */
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-a .venue-outline {
+    fill: rgb(168 199 250 / 0.36);
+    stroke: var(--blue);
+  }
+
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-a .venue-seats {
+    stroke: #fff;
+  }
+
+  .hero-demo:is([data-step='5'], [data-step='6'], [data-step='7']) .venue-offer-b {
+    opacity: 0.3;
+  }
+
+  /* Once the ticket is confirmed, a check lands on the section. */
+  .hero-demo[data-step='7'] .venue-booked {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Point at the code behind the current moment. */
+  .hero-demo:is([data-step='3'], [data-step='6']) .callout-tools .callout-label,
+  .hero-demo:is([data-step='4'], [data-step='7']) .callout-genui .callout-label {
+    color: var(--blue);
+  }
+
+  .hero-demo:is([data-step='3'], [data-step='6']) .callout-tools::after,
+  .hero-demo:is([data-step='4'], [data-step='7']) .callout-genui::after {
+    background: var(--blue);
+  }
+
+  .hero-demo[data-step='3'] .callout-tools :global(mark[data-tool='find']),
+  .hero-demo[data-step='6'] .callout-tools :global(mark[data-tool='buy']),
+  .hero-demo:is([data-step='4'], [data-step='7']) .callout-genui code {
+    background: rgb(168 199 250 / 0.16);
+  }
+
+  @keyframes hero-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes hero-type {
+    from {
+      max-width: 0;
+    }
+  }
+
+  @keyframes hero-send {
+    from {
+      opacity: 1;
+      transform: scale(0.84);
+    }
+  }
+
+  @keyframes hero-tap {
+    from {
+      opacity: 0.7;
+      transform: scale(0.2);
+    }
+    to {
+      opacity: 0;
+      transform: scale(1.3);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .s1,
+    .s2,
+    .s3,
+    [data-on],
+    [data-off],
+    .send,
+    .select,
+    .select-label,
+    .venue-section,
+    .venue-outline,
+    .venue-seats,
+    .venue-booked {
+      transition: none;
+    }
+
+    .spinner,
+    .hero-demo[data-step='1'] .composer-typed,
+    .hero-demo[data-step='2'] .send,
+    .hero-demo[data-step='5'] .tap {
+      animation: none;
+    }
+  }
+</style>

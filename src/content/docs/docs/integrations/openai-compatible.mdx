@@ -142,6 +142,8 @@ Every plugin below lives under `github.com/firebase/genkit/go/plugins/compat_oai
 
 Each one is a struct you register with `genkit.WithPlugins`, and each takes an `APIKey` field that wins over its environment variable, plus `Opts []option.RequestOption` for anything else the OpenAI SDK client accepts, such as `option.WithBaseURL` or an extra header.
 
+Credentials never cross providers. The OpenAI SDK reads `OPENAI_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT_ID` from the environment for every client it builds, and the base plugin clears all three before applying what a provider plugin composes, so a request to DeepSeek or xAI carries that provider's key and nothing of OpenAI's. Only the `openai` plugin reads the organization and project variables, and it sets them explicitly.
+
 | Plugin                  | Model ID prefix | API key                                 | Base URL                                  | Model config                      |
 | ----------------------- | --------------- | --------------------------------------- | ----------------------------------------- | --------------------------------- |
 | `openai.OpenAI`         | `openai/`       | `OPENAI_API_KEY`                        | no variable, use `Opts`                   | `*openai.ChatCompletionNewParams` |
@@ -219,11 +221,48 @@ g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{
 }))
 ```
 
+## Media input
+
+A media part in a user message goes out as the chat completions content part its type calls for:
+
+| Media type | Content part | Source |
+| --- | --- | --- |
+| `image/*`, or no type | `image_url` | An `https:` URL or a `data:` URI |
+| `audio/*` | `input_audio`, with the subtype as its format (`wav`, `mp3`, ...) | A `data:` URI |
+| any other type, such as `application/pdf` | `file`, with the data inline | A `data:` URI |
+
+Audio and files travel inline, and the plugin does not download a URL named in model input, so an `https:` URL for either fails with `INVALID_ARGUMENT`. Video fails the same way, because chat completions have no standard content part for it.
+
+Each plugin also declares which types its provider's chat completions read, and a part of any other type fails before the request is sent. That matters most for providers that drop a content part they do not read instead of rejecting it:
+
+| Plugin | Media it sends |
+| --- | --- |
+| `openai` | images, audio, and PDF |
+| `anthropic`, `dashscope`, `kimi`, `xai` | images only |
+| `deepseek`, `openrouter`, `zai` | every type; the provider decides |
+
+```go
+pdf, err := os.ReadFile("report.pdf")
+if err != nil {
+    return err
+}
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(openai.ModelRef("gpt-5.4", nil)),
+    ai.WithPromptParts(
+        ai.NewTextPart("Summarize this report in three bullets."),
+        ai.NewMediaPart("application/pdf", "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(pdf)),
+    ),
+)
+```
+
 ## Response fields
 
 Every plugin in the family fills in three response fields that are easy to miss.
 
-**Reasoning.** Providers send reasoning text under two non-standard fields: `reasoning_content` (DeepSeek, Kimi) and `reasoning` (OpenRouter's normalized field). Both are read, in that order, and the first non-empty one becomes a single Genkit reasoning part. A response carrying both is read once, not concatenated. Reach it with `resp.Reasoning()`.
+**Reasoning.** Providers send reasoning text under two non-standard fields: `reasoning_content` (DeepSeek, Kimi) and `reasoning` (OpenRouter's normalized field). Both are read, in that order, and the first non-empty one becomes a single Genkit reasoning part. A response carrying both is read once, not concatenated. A field that is present but empty still becomes an empty reasoning part, while a missing or `null` field makes none. Reach it with `resp.Reasoning()`.
+
+A model message that carries a reasoning part, even an empty one, sends it back as `reasoning_content` when the history is replayed, so pass `resp.History()` or the message itself to the next request. DeepSeek in thinking mode needs it: a tool call whose ID DeepSeek did not issue, for example one your app rewrote, is rejected without it.
 
 **Cost.** A gateway that prices the request reports it as `resp.Usage.Custom["cost"]`, in whatever currency the gateway bills in. Presence of the key decides, not its value: a free-tier request is priced at an explicit zero, which is an answer. Read it with the two-value map form rather than testing for a value above zero. Provider endpoints that do not price requests leave the key absent.
 
@@ -255,11 +294,16 @@ if _, err := genkit.Generate(ctx, g, ai.WithStreaming(onChunk)); err != nil {
 }
 ```
 
-`resp.Custom` carries the same map as `resp.Raw` for older code, but it is deprecated; prefer `resp.Raw`.
-
 ## Custom provider
 
-For a service with no dedicated plugin, register `compat_oai.OpenAICompatible` itself. Give it a `Provider` name, which becomes both the plugin's name and the prefix its model IDs carry, plus `APIKey`, `BaseURL`, and any `Opts` the client needs. If the service's models endpoint does not speak OpenAI's pagination, supply a `ListModels` function that returns every model it serves.
+For a service with no dedicated plugin, register `compat_oai.OpenAICompatible` itself. Give it a `Provider` name, which becomes both the plugin's name and the prefix its model IDs carry, plus `APIKey`, `BaseURL`, and any `Opts` the client needs. Four optional fields describe how the service differs from OpenAI:
+
+| Field | Type | Use |
+| --- | --- | --- |
+| `ListModels` | `func(ctx context.Context, client *openai.Client) ([]string, error)` | Lists every model the service serves, when its models endpoint does not speak OpenAI's pagination. |
+| `MediaTypes` | `[]string` | The media types its chat completions read, exact (`"application/pdf"`) or a wildcard (`"image/*"`). A part of any other type fails before the request is sent. Empty sends every type. |
+| `SeparateReasoningTokens` | `bool` | The service counts `reasoning_tokens` apart from `completion_tokens`, as xAI does, rather than inside them, as OpenAI does. Left false, each response is read by its `total_tokens`. |
+| `ClassifyError` | `func(err *openai.Error) status.Name` | Names the status of an error the service sends with a misleading HTTP code, such as an unknown model answered with 400. Return `""` to keep the status the HTTP code gives. |
 
 The base plugin knows nothing about the service it points at, so it ships no typed config and no `ModelRef` helper. Models take the OpenAI SDK's own `openai.ChatCompletionNewParams` as their config, and you name them with `ai.NewModelRef` under the provider prefix; the advertised schema is the SDK's minus the fields Genkit builds from the request, which are rejected by name rather than silently dropped.
 
@@ -299,30 +343,11 @@ resp, err := genkit.Generate(ctx, g,
 
 The [compat_oai/custom sample](https://github.com/genkit-ai/genkit/tree/main/go/samples/compat_oai/custom) is this shape end to end. Prefer a dedicated plugin whenever one exists: the SDK request type has no home for provider extensions such as routing, thinking, or reasoning budgets, and its schema rejects them.
 
-:::caution
-`OpenAICompatible.DefineModel` is still the untyped path, and it is deprecated. It builds a model whose config is validated against nothing, so an unknown key is accepted and forwarded to the provider instead of being refused at the action boundary. Use `OpenAICompatible.NewModel`, which takes the provider from the plugin rather than as an argument, for a model the framework validates.
-:::
-
 </Lang>
 
 <Lang lang="python">
 
-The OpenAI-Compatible API package (`genkit-openai`) provides a unified interface for accessing multiple AI providers that implement OpenAI's API specification. This includes OpenAI and other compatible services.
-
-## Overview
-
-The `genkit-openai` package serves as a foundation for building plugins that work with OpenAI-compatible APIs. It includes:
-
-- **Base Implementation**: Common functionality for OpenAI-compatible APIs
-- [**OpenAI Plugin**](/docs/integrations/openai): Direct access to OpenAI's models and embeddings
-- **Extensible Framework**: Build custom plugins for other compatible providers
-
-## Prerequisites
-
-Depending on which provider you use, you'll need:
-
-- **OpenAI**: API key from [OpenAI API Keys page](https://platform.openai.com/api-keys)
-- **Other providers**: API keys from the respective services
+The `genkit-openai` package connects Genkit to any service that implements the OpenAI Chat Completions or Embeddings HTTP API. Point the `OpenAI` plugin at the service with `base_url` and Genkit sends the same requests it would send to OpenAI.
 
 ## Installation
 
@@ -332,44 +357,94 @@ uv add genkit-openai
 
 ## Configuration
 
-### Use with Compatible Providers
+### Pointing `OpenAI` at a compatible endpoint
+
+Pass `api_key` and `base_url` to `OpenAI`. `base_url` runs up to and including `/v1`; the OpenAI SDK appends `/chat/completions` or `/embeddings`. Left unset, it falls back to `OPENAI_BASE_URL`, then the public OpenAI API. Other `openai.AsyncOpenAI` arguments, such as `organization`, `default_headers`, `timeout`, `max_retries`, or `http_client`, go in `client_options`:
 
 ```python
+import os
+
 from genkit import Genkit
 from genkit_openai import OpenAI
 
-# Custom base URL for OpenAI-compatible services
 ai = Genkit(
     plugins=[
         OpenAI(
-            api_key='YOUR_API_KEY',
-            base_url='https://your-custom-endpoint.com/v1',
-            organization='your-org-id',  # Optional
-            default_headers={'Custom-Header': 'value'},  # Optional
+            api_key=os.environ['COMPAT_API_KEY'],
+            base_url='https://your-custom-endpoint.example.com/v1',
+            client_options={
+                'organization': 'your-org-id',
+                'default_headers': {'X-Custom-Header': 'value'},
+                'timeout': 30.0,
+            },
         )
     ],
 )
 ```
 
-### Common Configuration
+A `client_options` key that `AsyncOpenAI` does not accept raises `TypeError` when you construct the plugin, so a typo like `orgnization` fails at startup.
 
-OpenAI-compatible configuration options are supported:
+### Model names
+
+Every model goes through the `openai/` namespace, whatever `base_url` points at. Genkit drops the `openai/` prefix and sends the rest as the wire `model`, so `'openai/llama3'` sends `llama3`, and an ID with its own slash, such as a gateway's `vendor/model` form, passes through intact.
+
+The plugin still registers its built-in OpenAI catalog at startup, so the Dev UI lists GPT models your endpoint may not serve. Any other ID resolves on demand the first time you call it.
+
+### Generation and provider-specific fields
+
+Use `OpenAIConfig` (or a matching dict) for standard settings such as `temperature`, `max_output_tokens`, and `top_p`. Chat Completions has no `top_k`, so the plugin drops `top_k` from the config. Send `top_k` and any other field the server accepts but `OpenAIConfig` does not declare inside `extra`, which goes into the JSON request body as-is:
 
 ```python
+import os
+
 from genkit import Genkit
-from genkit_openai import OpenAI, openai_model
+from genkit_openai import OpenAI, OpenAIConfig
 
-ai = Genkit(plugins=[OpenAI()])
+# 1. Point the plugin at the compatible server
+ai = Genkit(
+    plugins=[
+        OpenAI(
+            api_key=os.environ['COMPAT_API_KEY'],
+            base_url='https://your-custom-endpoint.example.com/v1',
+        )
+    ],
+)
 
+# 2. Generate with standard settings plus a server-specific field
 response = await ai.generate(
-    model=openai_model('gpt-5.5'),
-    prompt='Your prompt here',
-    config={
-        'temperature': 0.7,
-        'max_tokens': 1000,
-        'top_p': 0.9,
-    },
+    model='openai/llama3',
+    prompt='Classify this webhook event payload: {"type": "charge.refunded"}',
+    config=OpenAIConfig(
+        temperature=0.2,
+        max_output_tokens=1000,
+        top_p=0.9,
+        extra={'top_k': 40},
+    ),
+)
+
+# 3. Read the reply
+print(response.text)
+# => billing.refund
+```
+
+The server receives `max_output_tokens` as `max_tokens` (or `max_completion_tokens` for reasoning model IDs such as `o3` or `gpt-5`), next to `temperature`, `top_p`, and `top_k`. A key in `extra` replaces a declared field of the same name.
+
+### Per-request API keys
+
+A multi-tenant app can send each caller's key with the request instead of the plugin's. The key travels in `context`, not `config`, so it stays out of traces:
+
+```python
+response = await ai.generate(
+    model='openai/llama3',
+    prompt='Summarize this support ticket.',
+    context={'secrets': {'api_key': tenant_api_key}},
 )
 ```
+
+The call keeps `base_url`, timeouts, retries, and custom headers, and drops the plugin's `organization` and `project`. A plugin built without `api_key` and without `OPENAI_API_KEY` serves only requests that bring a key this way.
+
+### Embedders
+
+Embedder IDs resolve only when the ID contains `embed`, for example `'openai/nomic-embed-text'`. `ai.embed()` takes no `context`, so embedders always run on the plugin's key.
 
 </Lang>

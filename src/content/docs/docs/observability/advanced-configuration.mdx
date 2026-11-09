@@ -4,6 +4,7 @@ description: This guide covers advanced configuration options for Genkit's Fireb
 supportedLanguages:
   - js
   - go
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -53,22 +54,42 @@ you up and running quickly. These are the provided defaults:
 <Lang lang="go">
 
 This guide focuses on advanced configuration options for deployed features
-using the Firebase telemetry plugin.
+using the Firebase telemetry plugin. Every option lives on
+`firebase.FirebaseTelemetryOptions`, which you pass to
+`firebase.EnableFirebaseTelemetry`. Pass `nil` to take all of the defaults.
+
+| Field                          | Type                  | Default when unset                                                                  |
+| ------------------------------ | --------------------- | ----------------------------------------------------------------------------------- |
+| `ProjectID`                    | `string`              | Read from `FIREBASE_PROJECT_ID`, then `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT` |
+| `Credentials`                  | `*google.Credentials` | Application Default Credentials                                                     |
+| `Sampler`                      | `sdktrace.Sampler`    | `AlwaysOnSampler`, so every trace is kept                                           |
+| `MetricExportIntervalMillis`   | `*int`                | 5000 in dev, 300000 in production. Google Cloud rejects anything below 5000         |
+| `MetricExportTimeoutMillis`    | `*int`                | Matches `MetricExportIntervalMillis`                                                |
+| `DisableMetrics`               | `bool`                | `false`. Traces and logs are unaffected by this switch                              |
+| `DisableTraces`                | `bool`                | `false`. Metrics and logs are unaffected by this switch                             |
+| `DisableLoggingInputAndOutput` | `bool`                | `false`, so prompts and model responses are written to Cloud Logging                |
+| `ForceDevExport`               | `bool`                | `false`, so nothing is exported while `GENKIT_ENV=dev`                              |
+
+`google.Credentials` is `golang.org/x/oauth2/google.Credentials`, and
+`sdktrace` is `go.opentelemetry.io/otel/sdk/trace`.
+
+The two interval fields are `*int`, so setting them needs an addressable
+variable:
 
 ```go
-// Note: MetricExportIntervalMillis and MetricExportTimeoutMillis are pointers to int (*int).
-// The values shown below represent the internal defaults in production.
-{
-  DisableMetrics: false,
-  DisableTraces: false,
-  DisableLoggingInputAndOutput: false,
-  ForceDevExport: false,
-  // 5 minutes
-  MetricExportIntervalMillis: nil, // defaults to 300000
-  // 5 minutes
-  MetricExportTimeoutMillis: nil,  // defaults to 300000
-  // OpenTelemetry defaults to sdktrace.AlwaysSample()
-  Sampler: nil, // defaults to sdktrace.AlwaysSample()
+package main
+
+import (
+	"github.com/firebase/genkit/go/plugins/firebase"
+)
+
+func main() {
+	interval := 10000 // Milliseconds.
+
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		ForceDevExport:             true,
+		MetricExportIntervalMillis: &interval,
+	})
 }
 ```
 
@@ -76,8 +97,8 @@ using the Firebase telemetry plugin.
 
 ## Export local telemetry
 
-To export telemetry when running locally set the `forceDevExport` option to
-`true`.
+Nothing is exported while the process runs in a dev environment. To export
+telemetry when running locally, turn on the force dev export option.
 
 <Lang lang="js">
 
@@ -95,11 +116,9 @@ enableFirebaseTelemetry({ forceDevExport: true });
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(
-    &firebase.FirebaseTelemetryOptions{
-      ForceDevExport: true,
-    }
-  )
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		ForceDevExport: true,
+	})
 }
 ```
 
@@ -131,15 +150,126 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  interval := 10000
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    MetricExportIntervalMillis: &interval, // 10 seconds
-    MetricExportTimeoutMillis:  &interval, // 10 seconds
-  })
+	interval := 10000
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		MetricExportIntervalMillis: &interval, // 10 seconds
+		MetricExportTimeoutMillis:  &interval, // 10 seconds
+	})
 }
 ```
 
 </Lang>
+
+<Lang lang="go">
+
+## Sampling
+
+`Sampler` accepts any `sdktrace.Sampler`. Left `nil`, the plugin keeps every
+trace, which is fine in development and expensive at production volume: each
+kept trace costs storage in Cloud Trace and counts against your ingestion quota
+the same way a short export interval costs money in Cloud Monitoring.
+
+Sample a fraction instead, and wrap it in `ParentBased` so a trace that starts
+sampled stays sampled all the way down instead of losing its child spans:
+
+```go
+package main
+
+import (
+	"github.com/firebase/genkit/go/plugins/firebase"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+func main() {
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		// Keep 5% of traces. Metrics are unaffected by sampling.
+		Sampler: sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0.05)),
+	})
+}
+```
+
+Metrics are not sampled, so request counts and token counts stay exact no matter
+what you set here.
+
+## Instrumentation beyond Genkit
+
+The Go plugin does not auto-instrument anything. Go has no zero-code
+instrumentation equivalent, so the plugin registers a `TracerProvider` and a
+`MeterProvider` and Genkit's own actions are the only things that produce spans
+on them. That includes the model provider plugins, which use plain HTTP clients:
+a provider call shows up as Genkit's model span with nothing beneath it. To see
+the HTTP request as well, hand the plugin a client whose transport is wrapped
+with `otelhttp.NewTransport`, through its `HTTPClient` field where it has one.
+
+To trace your HTTP handlers, your database calls, or any outbound client, add
+the corresponding OpenTelemetry instrumentation library yourself. For example,
+wrap your mux in
+[`otelhttp`](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp)
+before passing it to your server. Those libraries read the global provider at
+construction time, so build them after you call
+`firebase.EnableFirebaseTelemetry`. Their spans then land in the same traces as
+your flows in Cloud Trace. The Developer UI shows Genkit spans only, so they do
+not appear there.
+
+The only trace-shaping knobs the plugin itself offers are `Sampler`,
+`DisableTraces`, and `DisableMetrics`.
+
+## Flush on shutdown
+
+The plugin installs its own `SIGINT`/`SIGTERM` handler that force-flushes spans
+and metrics with a five-second budget, then calls `os.Exit(0)`. A process that
+terminates on a signal loses nothing, and you do not need to sleep for the
+length of `MetricExportIntervalMillis`.
+
+For a shutdown path that does not go through a signal, flush explicitly:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/firebase/genkit/go/plugins/googlecloud"
+)
+
+func flush(ctx context.Context) {
+	if err := googlecloud.FlushMetrics(ctx); err != nil {
+		log.Printf("failed to flush metrics: %v", err)
+	}
+}
+```
+
+`googlecloud.FlushMetrics` works for Firebase telemetry too, because
+`firebase.EnableFirebaseTelemetry` delegates to
+`googlecloud.EnableGoogleCloudTelemetry`. Call it after your HTTP server's
+`Shutdown` returns.
+
+## What lands in telemetry
+
+`DisableLoggingInputAndOutput: true` is the only built-in privacy control. It is
+all or nothing: it removes every prompt and every model response from the
+exported payloads. There is no field-level or key-level redaction option.
+
+Traces are not the place to look for content either way. The `genkit/input` and
+`genkit/output` span attributes are always `<redacted>`, because of trace
+attribute size limits rather than for privacy. The full content travels in the
+Cloud Logging payloads, which is exactly what `DisableLoggingInputAndOutput`
+suppresses.
+
+If you need to keep some content and drop the rest, wrap the span exporter. The
+`redactingSpanExporter` pattern in
+[Writing Genkit plugins](/docs/plugin-authoring/overview#pii-redaction) is the
+supported way to do it, and it is fine to use from application code, not just
+from a plugin.
+
+Locally, the Dev UI writes traces to `.genkit/traces` under your project root,
+with full inputs and outputs and no expiry. Add `.genkit/` to `.gitignore`, and
+delete it when you are done with a prompt you would not want kept.
+
+</Lang>
+
+<Lang lang="js">
 
 ## Adjust auto instrumentation
 
@@ -152,8 +282,6 @@ documentation.
 
 To selectively disable or enable instrumentations that are eligible for auto
 instrumentation, update the `autoInstrumentationConfig` field:
-
-<Lang lang="js">
 
 ```typescript
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
@@ -201,11 +329,14 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableLoggingInputAndOutput: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableLoggingInputAndOutput: true,
+	})
 }
 ```
+
+See [What lands in telemetry](#what-lands-in-telemetry) for what this covers
+and what it does not.
 
 </Lang>
 
@@ -235,9 +366,9 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableMetrics: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableMetrics: true,
+	})
 }
 ```
 
@@ -269,9 +400,9 @@ enableFirebaseTelemetry({
 import "github.com/firebase/genkit/go/plugins/firebase"
 
 func main() {
-  firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
-    DisableTraces: true,
-  })
+	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
+		DisableTraces: true,
+	})
 }
 ```
 
@@ -280,5 +411,190 @@ func main() {
 With this option set, you will no longer see traces in the Genkit
 Monitoring feature page, have access to the trace viewer, or see traces
 present in Google Cloud Tracing.
+
+</Lang>
+
+<Lang lang="python">
+
+This guide focuses on advanced configuration options for deployed features.
+Every option is a keyword-only argument to `enable_google_cloud_telemetry()`.
+Call it once per process, before you construct `Genkit()`. A second call raises
+`GenkitError` (`FAILED_PRECONDITION`).
+
+## Default Configuration
+
+Calling `enable_google_cloud_telemetry()` with no arguments is the same as:
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(
+    project=None,
+    sampler=None,
+    force_dev_export=False,
+    disable_metrics=False,
+    disable_traces=False,
+    metric_export_interval_ms=None,
+    metric_export_timeout_ms=None,
+)
+```
+
+- **`project`** (`str | None`): destination Google Cloud project. When unset,
+  the project is resolved as described in
+  [Get started](/docs/observability/getting-started#environment-based-configuration).
+- **`sampler`** (`Sampler | None`): an `opentelemetry.sdk.trace.sampling.Sampler`
+  for the `TracerProvider` that `enable_google_cloud_telemetry()` creates when
+  none is registered. Unset, the OpenTelemetry SDK default applies:
+  `ParentBased(ALWAYS_ON)` unless `OTEL_TRACES_SAMPLER` is set.
+- **`force_dev_export`** (`bool`): `False`, so nothing is exported while
+  `GENKIT_ENV=dev`.
+- **`disable_metrics`** (`bool`): `False`. Traces and logs are unaffected by this
+  switch.
+- **`disable_traces`** (`bool`): `False`. Only the Cloud Trace exporter is
+  skipped. `GenAiInstrumentation` is still installed, so the Cloud Monitoring
+  exporter and your own span exporters are unaffected.
+- **`metric_export_interval_ms`** (`int | None`): 5000 in dev, 300000 in
+  production. Values below 5000 are raised to 5000 with a warning.
+- **`metric_export_timeout_ms`** (`int | None`): matches
+  `metric_export_interval_ms`.
+
+To authenticate with a service account key outside Google Cloud, point
+`GOOGLE_APPLICATION_CREDENTIALS` at the key file so Application Default
+Credentials picks it up. See
+[Authentication](/docs/observability/authentication).
+
+## Export local telemetry
+
+Nothing is exported while the process runs in a dev environment, such as under
+`genkit start`. The Developer UI keeps receiving traces either way. To export
+telemetry when running locally, pass `force_dev_export=True`.
+
+During development and testing, you can decrease latency by adjusting the export
+interval and timeout.
+
+Note: Shipping to production with a frequent export interval may
+increase the cost for exported telemetry.
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Export from a local run, flushing metrics every 10 seconds
+enable_google_cloud_telemetry(
+    force_dev_export=True,
+    metric_export_interval_ms=10_000,
+    metric_export_timeout_ms=10_000,
+)
+```
+
+Under `GENKIT_ENV=dev`, each span is exported as soon as it ends
+(`SimpleSpanProcessor`). In production, spans are batched
+(`BatchSpanProcessor`).
+
+## Sampling
+
+Left unset, every trace is kept, which is fine in development and expensive at
+production volume. Sample a fraction instead, and wrap it in `ParentBased` so a
+trace that starts sampled keeps its child spans:
+
+```python
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Keep 10% of new traces and follow the caller's sampling decision
+enable_google_cloud_telemetry(sampler=ParentBased(TraceIdRatioBased(0.1)))
+# => ~10% of traces reach Cloud Trace; metrics are not sampled
+```
+
+If your application registers its own `TracerProvider`, for example to export to
+a second OTLP backend, set the sampler on that provider and omit `sampler=`:
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+# 1. Register your TracerProvider and sampler first
+trace.set_tracer_provider(
+    TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1)))
+)
+
+# 2. Add Cloud Trace to that provider; no sampler= here
+enable_google_cloud_telemetry()
+```
+
+Passing `sampler=` when a `TracerProvider` is already registered, or together
+with `disable_traces=True`, raises `GenkitError` (`INVALID_ARGUMENT`).
+
+## Instrumentation beyond Genkit
+
+`enable_google_cloud_telemetry()` does not auto-instrument anything. Genkit's own
+actions are the only source of spans unless you add OpenTelemetry
+instrumentation libraries yourself, such as
+`opentelemetry-instrumentation-fastapi` or `opentelemetry-instrumentation-httpx`.
+Those libraries use the global `TracerProvider`, so their spans land in the same
+traces as your flows in Cloud Trace. Cloud Trace redaction leaves their
+attributes untouched; see
+[Telemetry collection](/docs/observability/telemetry-collection).
+
+## What lands in telemetry
+
+Content capture is opt-in, so there is no `disable_logging_input_and_output`
+option. By default, no prompt, response, or tool payload text is exported. The
+exception is the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` environment
+variable: set to `EVENT_ONLY` or `SPAN_AND_EVENT`, the default
+`GenAiInstrumentation` picks it up and content goes to Cloud Logging.
+
+- **Cloud Trace is always redacted**: `GcpAdjustingTraceExporter` replaces Genkit
+  content attributes, and the error text on Genkit spans, with `'<redacted>'`,
+  whatever the instrumentation settings.
+- **Cloud Logging content is opt-in**: to export prompts, responses, system
+  instructions, and tool payloads as `gen_ai.client.inference.operation.details`
+  log records, configure `GenAiInstrumentation` before calling
+  `enable_google_cloud_telemetry()`. `SPAN_ONLY` content never reaches Google
+  Cloud; only span exporters you add yourself receive it.
+
+```python
+from genkit.telemetry import configure_instrumentation
+from genkit_google_cloud import enable_google_cloud_telemetry
+from genkit_otel import GenAiInstrumentation
+
+# 1. Opt in to content events and tool spans
+configure_instrumentation(
+    GenAiInstrumentation(
+        content_capturing_mode='EVENT_ONLY',  # May contain PII.
+        emit_tool_spans=True,
+    )
+)
+
+# 2. Cloud telemetry keeps the GenAiInstrumentation you configured
+enable_google_cloud_telemetry()
+```
+
+## Disable telemetry
+
+Input and output logging is already off by default, as described in "What
+lands in telemetry" above. Metrics and traces can be disabled independently.
+
+### Disable metrics
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(disable_metrics=True)
+```
+
+With this option set, nothing is sent to Cloud Monitoring.
+
+### Disable traces
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(disable_traces=True)
+```
+
+With this option set, nothing is sent to Cloud Trace. The Cloud Monitoring and
+Cloud Logging exporters are unaffected.
 
 </Lang>

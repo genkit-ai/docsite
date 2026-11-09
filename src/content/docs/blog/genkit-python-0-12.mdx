@@ -1,0 +1,187 @@
+---
+title: 'Genkit Python 0.12: Generative UI with A2UI, typed Pydantic streaming, and Deep Research and Lyria models'
+date: 2026-09-24
+authors: chris-gill
+description: Genkit Python 0.12 brings generative UI with A2UI, typed Pydantic streaming, Deep Research and Lyria 3 models, and simpler mid-turn error recovery.
+cover:
+  alt: Genkit Python 0.12
+  image: ./_assets/genkit-python-0-12/banner.png
+tags:
+  - python
+  - announcements
+  - releases
+---
+
+import a2uiDemoVideo from './_assets/genkit-python-0-12/a2ui-demo.mp4';
+import lyriaModelRunnerVideo from './_assets/genkit-python-0-12/lyria-model-runner.mp4';
+
+[Genkit Python](https://genkit.dev/docs/python/overview/) 0.12 makes it easier to build interactive, multimodal AI applications in Python. With the new `genkit-a2ui` package, your agents can render interactive UI components instead of plain text, and `generate_stream` now yields typed Pydantic model instances as tokens arrive. This release also adds support for Google's Deep Research and Lyria 3 audio generation models, along with simpler error recovery during multi-step turns.
+
+To start using this new version, run the following command in your terminal:
+
+```shell
+uv add genkit genkit-google-genai
+```
+
+## Build interactive UIs with A2UI
+
+Plain text is often not the best interface for tasks like booking a table, filtering search results, or filling out a form. The new `genkit-a2ui` package brings [A2UI](https://a2ui.org/) generative UI support to Genkit Python, letting your models respond with rich, interactive UI components.
+
+Install the package alongside core Genkit:
+
+```shell
+uv add genkit-a2ui
+```
+
+Add `Surfaces()` to `use` on `ai.generate` or `ai.define_agent` to enable generative UI. Across multi-turn conversations, `Surfaces()` automatically tracks what is currently on screen and feeds user interactions, such as button clicks or form submissions, back into the conversation so the model can update the UI in place:
+
+```python
+from genkit import Genkit
+from genkit_a2ui import Surfaces, envelopes_from_parts
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+response = await ai.generate(
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    prompt='Show me the current weather and forecast for Tokyo.',
+    use=[Surfaces()],
+)
+
+print(envelopes_from_parts(response.message.content))
+```
+
+Out of the box, `Surfaces()` validates generated UI against a built-in catalog of common layout and input components, or you can register your own custom design system components with `load_catalog`.
+
+Because A2UI uses a language-agnostic format, you can pair a Genkit Python backend with web frontends in JavaScript or TypeScript and multi-platform apps built with Dart and Flutter. Genkit's client helpers (`@genkit-ai/a2ui/client` for JavaScript and `package:genkit_a2ui/client.dart` for Dart and Flutter) handle extracting streamed UI updates for your renderer and sending user actions back to your Python agent:
+
+<video src={a2uiDemoVideo} controls loop muted playsinline style="width: 100%; border-radius: 8px;"></video>
+
+*A Flutter client rendering an interactive Cymbal Bistro reservation form streamed from a Genkit Python agent with A2UI, then submitting the selected time slot and seating preference to confirm the booking.*
+
+## Stream typed Pydantic models
+
+When you stream structured outputs with `output_schema`, `generate_stream` now populates `chunk.output` with a partial Pydantic model instance instead of a raw dictionary. You get editor autocomplete and type-safe attribute access while rendering live UI updates as tokens arrive:
+
+```python
+from pydantic import BaseModel
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
+)
+
+
+class Country(BaseModel):
+    name: str
+    capital: str
+    population: int
+
+
+sr = ai.generate_stream(
+    prompt='Give quick facts about Japan.',
+    output_schema=Country,
+)
+
+async for chunk in sr:
+    if chunk.output and chunk.output.name:
+        print(chunk.output.name)
+
+final_country = (await sr.response).output
+print(final_country)
+```
+
+As fields stream in, unset fields default to `None` and partial strings grow with each chunk. Once streaming completes, `(await sr.response).output` returns the fully validated `Country` instance.
+
+## Run Deep Research jobs and generate audio with Lyria 3
+
+The `genkit-google-genai` plugin adds support for Google's Deep Research agent and Lyria 3 audio generation models.
+
+Deep Research plans and executes multi-step research tasks over several minutes. You can launch a research request in the background with `generate_operation` and poll for the completed report using `check_operation`:
+
+```python
+import asyncio
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+operation = await ai.generate_operation(
+    model=GoogleAI.deep_research_model('deep-research-preview-04-2026'),
+    prompt='Summarize recent advances in quantum error correction for a technical audience.',
+)
+
+while not operation.done:
+    await asyncio.sleep(10)
+    operation = await ai.check_operation(operation)
+
+print(operation.output)
+```
+
+To generate music and instrumental audio clips from text prompts, pass `GoogleAI.lyria_model` to `ai.generate`:
+
+```python
+clip = await ai.generate(
+    model=GoogleAI.lyria_model('lyria-3-clip-preview'),
+    prompt='A short piano loop, rainy window.',
+)
+
+for part in clip.message.content:
+    if part.media:
+        print(part.media.url)
+```
+
+You can also experiment with `lyria-3-clip-preview` directly in the Genkit Developer UI and listen to generated audio clips right in the browser:
+
+<video src={lyriaModelRunnerVideo} controls loop playsinline style="width: 100%; border-radius: 8px;"></video>
+
+*Generating and playing back an instrumental piano loop from a text prompt with `lyria-3-clip-preview` in the Genkit Developer UI.*
+
+## Recover cleanly from mid-turn errors
+
+Previously, if a model failed to match your `output_schema` or a tool call failed mid-turn, `ai.generate` raised an exception and discarded the conversation history and raw model output you needed to recover.
+
+Now, `ai.generate` only raises `GenkitError` for setup mistakes before a turn starts, such as an invalid model name. Once a turn is underway, `ai.generate` always returns a `ModelResponse` so you can inspect `response.error` alongside the preserved `response.messages` and `response.text` to debug or retry without losing progress:
+
+```python
+from genkit import Genkit, GenkitError
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+
+try:
+    history = None
+    for attempt in range(3):
+        response = await ai.generate(
+            prompt='Look up order #412 and process a refund.' if attempt == 0 else None,
+            messages=history,
+            tools=[lookup_order, process_refund],
+        )
+        if not response.error:
+            break
+        print(f'Turn failed ({response.error.reason}). Resuming...')
+        # => Turn failed (TOOL_FAILED). Resuming...
+        history = response.messages
+
+    print(response.text)
+    # => Looked up order #412 and issued an $85 refund.
+
+except GenkitError as err:
+    print(err.reason)
+    # => MODEL_NOT_FOUND
+```
+
+Inside tools, you can also raise `PublicError` to pass safe, user-facing error messages back on `response.error` while unexpected exceptions stay masked.
+
+## Also in this release
+
+* **Simpler Part API.** You can now create message parts directly with `Part(text='hello')` and read `part.text` or `part.media` without unwrapping `part.root`.
+* **Multipart tool responses.** Tools can now return media attachments alongside structured JSON in a single tool response.
+* **OpenAI plugin updates.** `genkit_openai` adds support for `gpt-6-astra` and improves streaming for reasoning tokens, tool calls, and refusal metadata.
+* **Per-request API keys.** Multi-tenant apps can now pass per-request Gemini credentials through `context={'secrets': {'api_key': tenant_key}}`.
+
+## Get started
+
+We can't wait to see what you build with Genkit Python 0.12. Explore the [Genkit Python documentation](https://genkit.dev/docs/python/overview/), check out the [Python sample applications](https://github.com/genkit-ai/genkit/tree/main/py/samples), or read the [complete v0.12.0 release notes on GitHub](https://github.com/genkit-ai/genkit/releases/tag/py%2Fv0.12.0).

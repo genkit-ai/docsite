@@ -50,7 +50,8 @@ uv add "flask[async]" flask-cors genkit genkit-google-genai genkit-flask
 
 These packages include:
 
-- **`flask`**: The Flask web framework.
+- **`flask[async]`**: Flask 3.1+ with async view support.
+- **`flask-cors`**: Adds CORS headers so a browser frontend can call the endpoint.
 - **`genkit`**: Core Genkit SDK for Python.
 - **`genkit-google-genai`**: Plugin that connects Genkit to Google's Gemini models.
 - **`genkit-flask`**: Helper that exposes Genkit flows as Flask routes, including server-sent events for streaming.
@@ -80,7 +81,7 @@ You'll build the backend in four parts:
 3. **Describe the recipe shape** with Pydantic so Genkit can validate the final output and stream partial recipe chunks.
 4. **Define the flow** that ties everything together.
 
-Create `main.py`:
+Replace the contents of `main.py` with the following:
 
 ```python title="main.py"
 from datetime import datetime
@@ -90,13 +91,13 @@ from flask import Flask
 from flask_cors import CORS
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 from genkit_flask import genkit_flask_handler
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 app = Flask(__name__)
@@ -144,7 +145,7 @@ async def get_ingredients_on_sale(input: GetIngredientsInput) -> list[SaleItem]:
 class RecipeIngredient(BaseModel):
     name: str
     quantity: str
-    on_sale: bool
+    on_sale: bool = Field(serialization_alias='onSale')
 
 
 class Recipe(BaseModel):
@@ -161,8 +162,11 @@ class BargainChefInput(BaseModel):
 
 @app.post('/bargainChefFlow')
 @genkit_flask_handler(ai)
-@ai.flow(name='bargainChefFlow', chunk_type=Recipe)
-async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> Recipe:
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
     today = datetime.now().strftime('%A')
 
     stream_response = ai.generate_stream(
@@ -176,7 +180,7 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
         ),
         tools=[get_ingredients_on_sale],
         output_schema=Recipe,
-        config={'temperature': 0.7, 'thinkingConfig': {'thinkingLevel': 'MINIMAL'}},
+        config=GeminiConfig(temperature=0.7, thinking_level='LOW'),
     )
 
     async for chunk in stream_response.stream:
@@ -184,8 +188,8 @@ async def bargain_chef_flow(input: BargainChefInput, ctx: ActionRunContext) -> R
             ctx.send_chunk(chunk.output)
 
     response = await stream_response.response
-    if not response.output:
-        raise ValueError('Failed to generate recipe')
+    if response.output is None:
+        raise RuntimeError(f'Recipe generation failed: {response.error}')
     return response.output
 
 
@@ -195,11 +199,47 @@ if __name__ == '__main__':
 
 A few details are worth noting:
 
-- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')` sets up the SDK and registers Gemini as the default model provider.
-- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. Tools let the model reach outside its training data and into your code. Here, the tool fetches live sale prices before the model finalizes the recipe. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
-- **Describe the recipe shape:** `Recipe` is a Pydantic model that describes the structure of the final response. The flow passes it as `output_schema` so Genkit instructs the model to emit JSON matching that shape, and parses each streamed chunk against it.
-- **Define the flow:** `bargain_chef_flow` ties everything together. It calls `ai.generate_stream`, which yields chunks as the model produces them; `chunk.output` is the partial `Recipe` object parsed from everything generated so far, and `ctx.send_chunk` forwards it to the client so the UI can fill in field by field. After the stream completes, the flow awaits `stream_response.response` so the HTTP request still resolves with a validated recipe.
-- **The three stacked decorators:** These wire everything up. `@ai.flow(name='bargainChefFlow', chunk_type=Recipe)` registers the function as a Genkit flow, `@genkit_flask_handler(ai)` adapts it into a Flask view that handles JSON requests and server-sent events for streaming, and `@app.post('/bargainChefFlow')` mounts it on a route.
+- **Initialize Genkit:** `Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))` initializes the SDK and sets a typed Gemini model reference as the default model.
+- **The `get_ingredients_on_sale` tool:** This is a function the model can call mid-generation. The Pydantic `GetIngredientsInput` model uses `Literal['weekday', 'weekend']` so the tool's typed input forces the model to pick one of those values. In a real app, this would query a pricing database, inventory system, or third-party API.
+- **Describe the recipe shape:** `Recipe` is a Pydantic model passed as `output_schema` so Genkit instructs the model to emit matching JSON and parses each streamed chunk against it. `serialization_alias='onSale'` serializes `on_sale` as camelCase `onSale` over JSON and SSE while keeping snake_case in Python.
+- **Define the flow:** `bargain_chef_flow` calls `ai.generate_stream`, forwards each partial `Recipe` (`chunk.output`) via `ctx.send_chunk` (typed by `ctx: FlowContext[Recipe]`), and awaits `stream_response.response` for the validated result. Return `response.output` (or `response.text`), never a raw `ModelResponse`, whose `request` field carries your system prompt, tools, and message history.
+- **Model failures:** A failed model call (such as `UNAVAILABLE` when Gemini is overloaded) doesn't raise. The response comes back with no `output` and the failure on `response.error`. The flow raises so the server log records the failure, and the client gets a generic `Internal Error`: a `500`, or an `error` event when streaming. See [Error types](/docs/error-types).
+- **The three stacked decorators:** `@ai.flow(name='bargainChefFlow')` registers the flow, `@genkit_flask_handler(ai)` adapts it into a Flask view named after the flow that handles JSON requests and Server-Sent Events, and `@app.post('/bargainChefFlow')` mounts it on a route.
+
+### Attach request context
+
+Pass `context_provider=` to `@genkit_flask_handler` to validate credentials and populate `ctx.context` before the flow runs. The provider receives a `RequestData` (`from genkit.web import RequestData`) with `method`, lowercased `headers`, `input`, and Flask's `request` on `request`.
+
+Raise `PublicError` from the provider or the flow to send a specific status and message, such as `401` for `'UNAUTHENTICATED'`; Flask's `abort(401)` in the provider also passes through. Any other exception becomes a `500` with a generic body. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full mapping.
+
+Update the decorators on `bargain_chef_flow` in `main.py`:
+
+```python
+from genkit import FlowContext, PublicError
+from genkit.web import RequestData
+from genkit_flask import genkit_flask_handler
+
+
+# 1. Validate request headers and populate ctx.context
+async def auth_context(req: RequestData) -> dict[str, object]:
+    auth_header = req.headers.get('authorization') or ''
+    token = auth_header.removeprefix('Bearer ').strip()
+    if not token:
+        raise PublicError('UNAUTHENTICATED', 'Missing bearer token')
+    return {'uid': token}
+
+
+# 2. Read ctx.context inside the served flow
+@app.post('/bargainChefFlow')
+@genkit_flask_handler(ai, context_provider=auth_context)
+@ai.flow(name='bargainChefFlow')
+async def bargain_chef_flow(
+    input: BargainChefInput,
+    ctx: FlowContext[Recipe],
+) -> Recipe:
+    uid = ctx.context.get('uid')
+    ...
+```
 
 ### Check the project layout
 
@@ -230,7 +270,7 @@ Start the Flask server:
 uv run python main.py
 ```
 
-The server listens on `http://127.0.0.1:8080`. Send a request with a craving and the flow will pick today's sale list, propose a recipe, and stream the partial recipe back to the client field by field, title first, then description, then ingredients (with `on_sale=true` on the ones the model picked from the tool), then steps.
+The server listens on `http://127.0.0.1:8080`. Send a request with a craving and the flow will pick today's sale list, propose a recipe, and stream the partial recipe back to the client field by field, title first, then description, then ingredients (with `"onSale": true` on the ones the model picked from the tool), then steps.
 
 ## Test and inspect the app
 
@@ -243,6 +283,7 @@ With the server running, use the `-N` flag and an `Accept: text/event-stream` he
 ```bash
 curl -N -X POST http://127.0.0.1:8080/bargainChefFlow \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer user-123" \
   -H "Accept: text/event-stream" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
@@ -256,6 +297,7 @@ For a non-streaming request, drop the `Accept` header and you'll get a single JS
 ```bash
 curl -X POST http://127.0.0.1:8080/bargainChefFlow \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer user-123" \
   -d '{"data":{"craving":"something warm with chicken"}}'
 ```
 
@@ -270,10 +312,6 @@ The Developer UI is Genkit's local console for testing flows and inspecting exec
    ```
 
    This launches the Developer UI at `http://localhost:4000` by default.
-
-   :::tip[Add a script]
-   To make starting the Developer UI easier, add the above command to your project's scripts (for example, in a Makefile or a `[tool.uv]` script entry).
-   :::
 
 2. Select `bargainChefFlow` from the list of flows.
 3. Enter sample input:

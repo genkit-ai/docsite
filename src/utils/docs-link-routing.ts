@@ -327,6 +327,11 @@ type RewriteOptions = {
   context?: string;
   warnOnUnresolved?: boolean;
   warnOnCrossLanguageTargets?: boolean;
+  /**
+   * Rewrite links that carry a fragment (`/docs/models#structured-output`).
+   * Defaults to true: `resolveDocsTarget` preserves the fragment, so skipping
+   * these left anchored neutral links unresolved on every language page.
+   */
   rewriteHashLinks?: boolean;
 };
 
@@ -340,7 +345,7 @@ export function rewriteInternalDocsLinks(
   const crossLanguageWarnings: string[] = [];
   const warnUnresolved = Boolean(options.warnOnUnresolved);
   const warnOnCrossLanguageTargets = Boolean(options.warnOnCrossLanguageTargets);
-  const rewriteHashLinks = Boolean(options.rewriteHashLinks);
+  const rewriteHashLinks = options.rewriteHashLinks !== false;
 
   const rewriteIfNeeded = (originalUrl: string): string => {
     const parsed = parseDocsUrl(originalUrl);

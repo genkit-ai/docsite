@@ -104,7 +104,7 @@ For more Genkit features like embeddings, structured output, and flows, refer to
 
 <Lang lang="go">
 
-Azure AI Foundry plugin for Genkit Go that provides text generation and chat capabilities using Azure OpenAI and other models available through Azure AI Foundry.
+Azure AI Foundry plugin for Genkit Go that provides text generation and chat capabilities using Azure OpenAI and other models available through Azure AI Foundry. The plugin is maintained in the [azure-foundry-go-plugin](https://github.com/genkit-ai/azure-foundry-go-plugin) repository.
 
 ## Installation
 
@@ -127,6 +127,10 @@ go get github.com/xavidop/genkit-azure-foundry-go
 - **Flexible Authentication**: Support for API keys, Azure Default Credential, and custom token credentials
 
 ### Initialize the Plugin
+
+:::caution[Azure addresses models by deployment name]
+Use your Azure deployment name, not the model name, in `ModelDefinition.Name` and in the provider-prefixed string you pass to `genkit.WithDefaultModel` (`azureaifoundry/<deployment-name>`). If you deployed `gpt-5` under the deployment name `my-gpt5-deployment`, that is the string both places want. A wrong name fails at Azure with a 404, not locally.
+:::
 
 ```go
 package main
@@ -153,18 +157,17 @@ func main() {
 	// Initialize Genkit
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(azurePlugin),
-		genkit.WithDefaultModel("azureaifoundry/gpt-5"),
+		genkit.WithDefaultModel("azureaifoundry/my-gpt5-deployment"),
 	)
-
-	// Optional: Define common models for easy access
-	azureaifoundry.DefineCommonModels(azurePlugin, g)
 
 	log.Println("Starting basic Azure AI Foundry example...")
 
-	// Define a GPT-5 model (use your deployment name)
+	// Define your GPT-5 deployment. The plugin registers nothing at Init and
+	// has no dynamic resolver, so a name that was never defined does not
+	// resolve at Generate time.
 	gpt5Model := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
-		Name:          "gpt-5", // Your deployment name in Azure
-		Type:          "chat",
+		Name:          "my-gpt5-deployment", // Your deployment name in Azure
+		Type:          azureaifoundry.ModelTypeChat,
 		SupportsMedia: true,
 	}, nil)
 
@@ -392,12 +395,40 @@ func main() {
 
 ### Model Deployments
 
-Important: The `Name` in `ModelDefinition` should match your **deployment name** in Azure, not the model name. For example:
+Every model you generate with has to be defined first: the plugin registers nothing at `Init` and has no dynamic resolver. `ModelDefinition` describes one deployment.
 
-- If you deployed `gpt-5` with deployment name `my-gpt5-deployment`, use `"my-gpt5-deployment"`
-- If you deployed `gpt-5.5` with deployment name `gpt-5.5`, use `"gpt-5.5"`
+| Field           | Type     | Description                                                                                     |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `Name`          | `string` | Your **deployment name** in Azure, not the model name. If you deployed `gpt-5` as `my-gpt5-deployment`, use `"my-gpt5-deployment"`. |
+| `Type`          | `string` | One of the `ModelType` constants below. Left empty, the type is inferred from `Name`.            |
+| `MaxTokens`     | `int32`  | Default maximum output tokens. A per-call value wins.                                             |
+| `SupportsMedia` | `bool`   | Whether the deployment takes images or audio as input. Required for a model you send media to.    |
+
+`Type` decides which Azure API the request goes to, so it has to match the deployment:
+
+| Constant                              | Value               | Use for                    |
+| ------------------------------------- | ------------------- | -------------------------- |
+| `azureaifoundry.ModelTypeChat`        | `"chat"`            | Chat and text deployments  |
+| `azureaifoundry.ModelTypeText`        | `"text"`            | Same path as chat          |
+| `azureaifoundry.ModelTypeImage`       | `"image"`           | DALL-E, GPT Image          |
+| `azureaifoundry.ModelTypeTextToSpeech`| `"text-to-speech"`  | TTS deployments            |
+| `azureaifoundry.ModelTypeSpeechToText`| `"speech-to-text"`  | Whisper, transcription     |
+
+:::caution
+An explicit `Type` overrides the name-based inference. Setting `Type: azureaifoundry.ModelTypeChat` on a DALL-E or Whisper deployment sends the request to the chat completions API and fails. Either name the right constant, or leave `Type` empty and let the plugin infer it from the deployment name (`dall-e`/`gpt-image` to image, `tts` to text-to-speech, `whisper`/`transcribe` to speech-to-text, everything else to chat).
+:::
+
+:::note
+The [AWS Bedrock plugin](/docs/integrations/aws-bedrock) also has a `ModelDefinition` with a `Type` field, but its vocabulary is `"chat"`, `"text"`, `"image"`, `"embedding"`. The two plugins are not interchangeable.
+:::
+
+`azureaifoundry.DefineCommonModels(azurePlugin, g)` registers chat deployments named `gpt-5`, `gpt-5-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, `gpt-4`, and `gpt-35-turbo`, and `DefineCommonEmbedders(azurePlugin, g)` does the same for `text-embedding-ada-002`, `text-embedding-3-small`, and `text-embedding-3-large`. Both take the plugin first and `g` second, unlike the `g`-first order used elsewhere in Genkit Go. They only help if your deployment names happen to match those model names.
 
 For more Genkit features like embeddings, structured output, and flows, refer to the [Genkit documentation](https://genkit.dev/docs).
+
+### Non-chat configuration
+
+Image, text-to-speech, and speech-to-text requests take an untyped `map[string]any` config. Unlike the typed configs on the first-party provider pages, these keys go to Azure verbatim and are not validated against a schema, so a misspelled key or an out-of-range value fails at Azure rather than locally. The keys are Azure OpenAI's own wire names; the tables below list what the plugin forwards, and the linked REST references are authoritative on the accepted values.
 
 ### Image Generation
 
@@ -407,14 +438,14 @@ Generate images with DALL-E models using the standard `genkit.Generate()` method
 // Define DALL-E model
 dallE3 := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
 	Name: azureaifoundry.ModelDallE3,
-	Type: "chat",
+	Type: azureaifoundry.ModelTypeImage,
 }, nil)
 
 // Generate image
 response, err := genkit.Generate(ctx, g,
 	ai.WithModel(dallE3),
 	ai.WithPrompt("A serene landscape with mountains at sunset"),
-	ai.WithConfig(map[string]interface{}{
+	ai.WithConfig(map[string]any{
 		"quality": "hd",
 		"size":    "1024x1024",
 		"style":   "vivid",
@@ -425,34 +456,44 @@ if err != nil {
 	log.Fatal(err)
 }
 
-log.Printf("Image URL: %s", response.Text())
+for _, part := range response.MediaParts() {
+	log.Printf("%s: %s", part.ContentType, part.Text)
+}
 ```
 
-The Configuration options for image generation depends on the model used. Common options include:
+Generated images come back as media parts with content type `image/png`, one per image. `part.Text` holds either the Azure URL or a `data:image/png;base64,...` URL, depending on `response_format`.
+
+Configuration keys, per the [image generation REST reference](https://learn.microsoft.com/azure/ai-services/openai/reference#image-generation):
+
 | Option | Type | Description |
 | ------------ | -------- | ---------------------------------------- |
-| `quality` | `string` | Image quality: `standard`, `hd` |
-| `size` | `string` | Image size: `256x256`, `512x512`, `1024x1024` |
-| `style` | `string` | Image style: `vivid`, `photorealistic`, `cartoon` |
+| `n` | `int` | Number of images, 1 to 10. Default `1`. |
+| `size` | `string` | `256x256`, `512x512`, `1024x1024`, `1792x1024`, `1024x1792`. Default `1024x1024`. |
+| `quality` | `string` | `standard` or `hd`. DALL-E 3 only. Default `standard`. |
+| `style` | `string` | `vivid` or `natural`. DALL-E 3 only. Default `vivid`. |
+| `response_format` | `string` | `url` or `b64_json`. Default `url`. |
 
 ### Text-to-Speech
 
 Convert text to speech using the standard `genkit.Generate()` method:
 
 ```go
-import "encoding/base64"
+import (
+	"encoding/base64"
+	"strings"
+)
 
 // Define TTS model
 ttsModel := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
 	Name: azureaifoundry.ModelTTS1HD,
-	Type: "chat",
+	Type: azureaifoundry.ModelTypeTextToSpeech,
 }, nil)
 
 // Generate speech
 response, err := genkit.Generate(ctx, g,
 	ai.WithModel(ttsModel),
 	ai.WithPrompt("Hello! Welcome to Azure AI Foundry."),
-	ai.WithConfig(map[string]interface{}{
+	ai.WithConfig(map[string]any{
 		"voice":           "nova",
 		"response_format": "mp3",
 		"speed":           1.5,
@@ -463,10 +504,22 @@ if err != nil {
 	log.Fatal(err)
 }
 
-// Decode base64 audio and save file
-audioData, _ := base64.StdEncoding.DecodeString(response.Text())
+// The audio arrives as a media part holding a data URL.
+_, encoded, _ := strings.Cut(response.Media(), ",")
+audioData, err := base64.StdEncoding.DecodeString(encoded)
+if err != nil {
+	log.Fatal(err)
+}
 os.WriteFile("output.mp3", audioData, 0644)
 ```
+
+Configuration keys, per the [audio generation REST reference](https://learn.microsoft.com/azure/ai-services/openai/reference#text-to-speech):
+
+| Option | Type | Description |
+| ------------ | -------- | ---------------------------------------- |
+| `voice` | `string` | `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`. Default `alloy`. |
+| `response_format` | `string` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`. Default `mp3`. The media part's content type follows this. |
+| `speed` | `float` | 0.25 to 4.0. Default `1.0`. |
 
 ### Speech-to-Text
 
@@ -478,7 +531,7 @@ import "encoding/base64"
 // Define Whisper model with media support (required for audio input)
 whisperModel := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
 	Name:          azureaifoundry.ModelWhisper1,
-	Type:          "chat",
+	Type:          azureaifoundry.ModelTypeSpeechToText,
 	SupportsMedia: true, // Required for media parts (audio)
 }, nil)
 
@@ -492,7 +545,7 @@ response, err := genkit.Generate(ctx, g,
 	ai.WithMessages(ai.NewUserMessage(
 		ai.NewMediaPart("audio/mp3", "data:audio/mp3;base64,"+base64Audio),
 	)),
-	ai.WithConfig(map[string]interface{}{
+	ai.WithConfig(map[string]any{
 		"language": "en",
 	}),
 )
@@ -503,5 +556,16 @@ if err != nil {
 
 log.Printf("Transcription: %s", response.Text())
 ```
+
+The transcript is the one modality that does come back as text, so `response.Text()` is right here.
+
+Configuration keys, per the [audio transcription REST reference](https://learn.microsoft.com/azure/ai-services/openai/reference#transcriptions):
+
+| Option | Type | Description |
+| ------------ | -------- | ---------------------------------------- |
+| `language` | `string` | Input language code, for example `en` or `es`. Improves accuracy when you know it. |
+| `prompt` | `string` | Free text that guides the model's style and spelling. |
+| `response_format` | `string` | `json`, `text`, `srt`, `verbose_json`, `vtt`. Default `json`. |
+| `temperature` | `float` | 0 to 1. |
 
 </Lang>

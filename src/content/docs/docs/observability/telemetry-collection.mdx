@@ -37,17 +37,28 @@ tiers. Specific pricing can be found at the following links:
 - [Cloud Trace Pricing](https://cloud.google.com/trace#pricing)
 - [Cloud Monitoring Pricing](https://cloud.google.com/stackdriver/pricing#monitoring-pricing-summary)
 
+<Lang lang="js go">
+
 ## Metrics
 
 The Firebase telemetry plugin collects a number of different metrics to support
 the various Genkit action types detailed in the following sections.
+
+<Lang lang="go">
+
+:::note
+The Go SDK hard-codes the `source` dimension to `go` on every metric and every
+log payload. You can filter or group on it, but you cannot change it.
+:::
+
+</Lang>
 
 ### Feature metrics
 
 Features are the top-level entry-point to your Genkit code. In most cases, this
 will be a flow. Otherwise, this will be the top-most span in a trace.
 
-<Lang lang="js python">
+<Lang lang="js">
 
 | Name                    | Type      | Description             |
 | ----------------------- | --------- | ----------------------- |
@@ -72,14 +83,14 @@ Each feature metric contains the following dimensions:
 | name          | The name of the feature. In most cases, this is the top-level Genkit flow        |
 | status        | 'success' or 'failure' depending on whether or not the feature request succeeded |
 | error         | Only set when `status=failure`. Contains the error type that caused the failure  |
-| source        | The Genkit source language. Eg. 'ts'                                             |
+| source        | The Genkit SDK language that emitted the telemetry                               |
 | sourceVersion | The Genkit framework version                                                     |
 
 ### Action and Path metrics
 
 Actions represent a generic step of execution within Genkit.
 
-<Lang lang="js python">
+<Lang lang="js">
 
 Unique failing execution paths are tracked instead:
 
@@ -122,6 +133,19 @@ Each action metric contains the following dimensions:
 | source        | The Genkit source language. Eg. 'go'                                                                 |
 | sourceVersion | The Genkit framework version                                                                         |
 
+Unique failing execution paths are tracked too:
+
+| Name                         | Type      | Description                        |
+| ---------------------------- | --------- | ---------------------------------- |
+| genkit/feature/path/requests | Counter   | Tracks unique flow paths per flow. |
+| genkit/feature/path/latency  | Histogram | Latencies per flow path.           |
+
+A path is counted on the span where the error originated, the one Genkit marks
+with `genkit:isFailureSource`. The spans that only pass the error up to their
+callers are not marked, so one failure counts once, not once per enclosing
+step. Each path metric has the `featureName`, `path`, `status`, `error`,
+`source`, and `sourceVersion` dimensions described above.
+
 </Lang>
 
 ### Generate metrics
@@ -146,7 +170,7 @@ model specific dimensions that make debugging and configuration tuning easier.
 
 </Lang>
 
-<Lang lang="go python">
+<Lang lang="go">
 
 | Name                                 | Type      | Description                                |
 | ------------------------------------ | --------- | ------------------------------------------ |
@@ -176,7 +200,7 @@ Each generate metric contains the following dimensions:
 | latencyMs     | The response time taken by the model                                                                 |
 | status        | 'success' or 'failure' depending on whether or not the feature request succeeded                     |
 | error         | Only set when `status=failure`. Contains the error type that caused the failure                      |
-| source        | The Genkit source language. Eg. 'ts'                                                                 |
+| source        | The Genkit SDK language that emitted the telemetry                                                   |
 | sourceVersion | The Genkit framework version                                                                         |
 
 ## Traces
@@ -395,7 +419,7 @@ Metadata:
 | model         | Model name.                                                                                                                                                     |
 | path          | The execution path that generated this log of the format `step1 > step2 > step3                                                                                 |
 | qualifiedPath | The execution path that generated this log, including type information of the format: `/{flow1,t:flow}/{generate,t:util}/{modelProvider/model,t:action,s:model` |
-| source        | The Genkit library language used. This will always be set to 'ts' as it is the only supported language.                                                         |
+| source        | The Genkit SDK language that emitted the log.                                                                                                                   |
 | sourceVersion | The Genkit library version.                                                                                                                                     |
 | temperature   | Model temperature used.                                                                                                                                         |
 
@@ -414,3 +438,125 @@ Metadata:
 | ---------- | ---------------------------------------------------------------- |
 | flowName   | The name of the Genkit flow, action, tool, util, or helper.      |
 | paths      | An array containing all execution paths for the collected spans. |
+
+<Lang lang="go">
+
+## Sensitive data
+
+Read the two halves of this page together before you deploy anything that
+handles regulated or personal data.
+
+- **Traces carry no content.** The `genkit/input` and `genkit/output` span
+  attributes are always `<redacted>`. That is a consequence of Cloud Trace's
+  256-byte attribute value limit, not a privacy feature, and it is true whatever
+  you configure.
+- **Logs carry everything.** The Input, Output, and Config log payloads above
+  contain the full prompt text, the full model response, and the model
+  configuration. Those go to Cloud Logging.
+
+`DisableLoggingInputAndOutput: true` on `firebase.FirebaseTelemetryOptions` (or
+`googlecloud.GoogleCloudTelemetryOptions`) suppresses that content. It is the
+only built-in control and it is all or nothing: there is no per-field, per-flow,
+or per-key redaction option.
+
+:::caution
+Middleware that scrubs the `ModelRequest` does not help here. The log payloads
+are built from the span, not from the request your middleware rewrote, so the
+original text still reaches Cloud Logging.
+:::
+
+For selective redaction, wrap the span exporter and rewrite attributes on the
+way out. The `redactingSpanExporter` pattern in
+[Writing Genkit plugins](/docs/plugin-authoring/overview#pii-redaction) is the
+supported way to do it, and applications may use it, not just plugins. See
+[Advanced configuration](/docs/observability/advanced-configuration) for the
+option reference.
+
+</Lang>
+
+</Lang>
+
+<Lang lang="python">
+
+`enable_google_cloud_telemetry()` exports telemetry that follows the
+[OpenTelemetry GenAI semantic conventions](/docs/observability/otel-genai-semantic-conventions).
+It installs `GenAiInstrumentation` from `genkit-otel` unless one is already
+configured. It does not write the `genkit/feature/*`, `genkit/action/*`, or
+`genkit/ai/generate/*` metrics, or the `[genkit] Input[...]` style log entries.
+
+## Metrics
+
+`GenAiInstrumentation` records two histograms for every model call on the
+process `MeterProvider`. Metrics are not sampled.
+
+- **`gen_ai.client.token.usage`**: histogram of token counts, split by
+  `gen_ai.token.type` (`input` or `output`).
+- **`gen_ai.client.operation.duration`**: histogram of model call latency in
+  seconds, for successful and failed calls. Failures carry `error.type`, the
+  exception class name.
+
+Both carry `gen_ai.operation.name` (`chat`), `gen_ai.request.model`, and
+`gen_ai.provider.name` when the provider is known.
+
+## Traces
+
+Each Genkit request produces one connected trace in Cloud Trace:
+
+- **Model spans (`chat <model>`)**: `CLIENT` spans with the `gen_ai.*`
+  attributes listed in
+  [What gets emitted](/docs/observability/otel-genai-semantic-conventions#what-gets-emitted).
+- **Tool spans (`execute_tool <name>`)**: `INTERNAL` spans with
+  `gen_ai.tool.name` and `gen_ai.tool.type = 'function'`. Emitted only when you
+  configure `GenAiInstrumentation(emit_tool_spans=True)` before calling
+  `enable_google_cloud_telemetry()`.
+- **Other action spans (`<action name>`)**: `INTERNAL` spans with
+  `genkit.action.type`, such as `flow` or `retriever`, so model calls nest under
+  their flow. If a tool or flow raises `Interrupt`, the span gets
+  `genkit.interrupted = True` and no error status.
+
+Before export, `GcpAdjustingTraceExporter` adjusts each span for Cloud Trace:
+
+- `:` in attribute keys becomes `/`, so `genkit:metadata:<key>` arrives as
+  `genkit/metadata/<key>`.
+- Spans with an error status get `/http/status_code = '599'`, so Cloud Trace
+  highlights them.
+- Zero-length spans are padded to 1 microsecond.
+
+## Logs
+
+Prompt and response events are off by default. Turn them on with
+`content_capturing_mode='EVENT_ONLY'` or `'SPAN_AND_EVENT'`, either on
+`GenAiInstrumentation` before you call `enable_google_cloud_telemetry()` or
+through `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`. See
+[Capturing message content](/docs/observability/otel-genai-semantic-conventions#capturing-message-content).
+
+Each model call then emits a `gen_ai.client.inference.operation.details` log
+record with `gen_ai.input.messages`, `gen_ai.output.messages`, and
+`gen_ai.system_instructions`. With `emit_tool_spans=True`, each tool call emits
+one with `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`. Records go
+to Cloud Logging under the log name `gen_ai.client.inference.operation.details`.
+
+## Sensitive data
+
+- **Cloud Trace does not store prompt or reply content**: before export,
+  `GcpAdjustingTraceExporter` replaces these attributes with `'<redacted>'`:
+  `gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`,
+  `gen_ai.tool.call.result`, `genkit.input`, `genkit.output`, `genkit:input`,
+  `genkit:output`, `genkit:metadata:interrupt`, and `genkit:metadata:resumed`.
+- **Genkit span errors are redacted too**: `str(exc)`, for example from a
+  Pydantic `ValidationError`, can quote prompt or tool payloads. On spans
+  Genkit created, the status description, `exception.message`, and
+  `exception.stacktrace` become `'<redacted>'`. `error.type` and
+  `exception.type` are kept.
+- **Other spans pass through unchanged**: spans from HTTP frameworks, database
+  drivers, or your own code keep their attributes and exception messages.
+- **Cloud Logging is not redacted**: with `EVENT_ONLY` or `SPAN_AND_EVENT`, the
+  operation-details records carry the full prompt, reply, system instructions,
+  and tool payloads to Cloud Logging.
+- **Your own exporters see the content**: with `content_capturing_mode='SPAN_ONLY'`
+  or `capture_action_io=True`, a `SpanExporter` you attach to the same
+  `TracerProvider` receives the unredacted attributes. Only the Cloud Trace
+  export is redacted.
+
+</Lang>

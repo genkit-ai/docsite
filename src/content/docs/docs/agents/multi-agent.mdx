@@ -5,6 +5,7 @@ supportedLanguages:
   - js
   - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -73,8 +74,80 @@ The middleware can discover agent descriptions from action metadata, or you can 
 - **`historyLength`** sets how many recent conversation messages are forwarded to sub-agents.
 - **`maxDelegations`** limits delegation calls in one orchestrator turn.
 - **`artifactStrategy`** controls whether sub-agent artifacts are merged into the parent session.
+- **`async`** enables [background delegation](#delegate-in-the-background).
+- **`maxWaitSeconds`** caps how long one `wait_for_background_tasks` call blocks, whatever timeout the model asks for.
 
 When history is forwarded to client-managed sub-agents, the middleware includes recent messages in the sub-agent state. For server-managed sub-agents, history is not forwarded as client state because those agents own their server-side session.
+
+## Delegate in the background
+
+By default a delegation blocks the orchestrator's turn until the sub-agent finishes. With `async: true`, every delegation tool also accepts `background: true`. A background delegation starts the sub-agent as a [detached task](/docs/agents/background) and returns a task ID right away, so the orchestrator can keep working and collect the result later.
+
+```ts
+import { agents, retry } from '@genkit-ai/middleware';
+import { InMemorySessionStore } from 'genkit/beta';
+
+const logAnalyst = ai.defineAgent({
+  name: 'logAnalyst',
+  description: 'Reads service logs and reports what they show.',
+  store: new InMemorySessionStore(), // required for background work
+  tools: [readLogs],
+});
+
+const deployHistorian = ai.defineAgent({
+  name: 'deployHistorian',
+  description: 'Lists recent deploys and what changed in each.',
+  store: new InMemorySessionStore(),
+  tools: [listDeploys],
+});
+
+const commander = ai.defineAgent({
+  name: 'commander',
+  system:
+    'Start investigations in the background, post a status update while they run, then collect the results.',
+  tools: [postStatus],
+  maxTurns: 20,
+  use: [
+    agents({ agents: ['logAnalyst', 'deployHistorian'], async: true }),
+    retry(),
+  ],
+});
+```
+
+`async` adds three tools for managing background tasks:
+
+| Tool                        | What it does                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `check_background_tasks`    | Reports the current status of the given tasks without waiting.                                   |
+| `wait_for_background_tasks` | Waits until the tasks settle. Accepts `timeoutSeconds` and `waitFor: "first"`.                   |
+| `abort_background_tasks`    | Stops the given tasks without waiting. A running task reports `aborting`.                        |
+
+A stopped task later settles as `aborted` with the progress it saved, and `wait_for_background_tasks` collects it. A task that had already finished or expired is left alone and reports its status.
+
+A task ID has the form `<agent>:<snapshotId>` and comes back in the delegation tool's result, so it lives in the conversation history. An orchestrator rebuilt from that history can still collect the result. Background delegation requires a sub-agent with a session store. A launch on a store-less agent is refused, and the orchestrator is told to delegate synchronously instead.
+
+Background work adds tool rounds (launch, post, wait, post, wait again), so raise `maxTurns` on the orchestrator.
+
+## Continue a task
+
+A delegation to a sub-agent with a session store leaves a handle behind when it settles, whether it ran in the background or not: the result carries a `taskId` and a `status` of `completed`, `failed`, or `aborted`. The `continue_task` tool picks the task up from that handle:
+
+```
+continue_task  { taskId, instructions?, background? }
+```
+
+- **Failed or aborted:** continues from the sub-agent's last saved progress. Without `instructions`, it retries as it stood. With them, it steers the retry.
+- **Completed:** takes follow-up `instructions` inside the sub-agent's own session. It is refused without them, since an empty retry would only repeat the finished work.
+- **Expired** (its background worker is presumed dead): stops the stale worker first, then continues from the last snapshot committed before the background run started. A fresh background delegation has no such snapshot, so it is refused and the orchestrator is told to delegate again. It is also refused when the sub-agent's store cannot signal a running worker to stop.
+- **Pending or aborting:** refused, with a pointer to the wait or check tool.
+
+A sub-agent run that stopped on an interrupt cannot be continued, since continuing it would mean answering the interrupt. A synchronous result carries no `taskId`, and `continue_task` refuses a background task that stopped on one. The orchestrator should delegate a more self-contained task instead.
+
+`background` is accepted only with `async: true`. A continuation counts against `maxDelegations`. When every configured sub-agent is client-managed, the tool is hidden from the model.
+
+Task handles are scoped to the conversation. The background-task tools and `continue_task` accept only task IDs that this conversation's delegations and continuations returned, so text that reaches the model cannot point them at another conversation's task. The sub-agent's own `getSnapshot`, `waitForSnapshot`, and `abort` routes are not scoped, so in multi-tenant deployments treat snapshot IDs as secrets where those routes are exposed.
+
+Only an explicitly set, non-empty `toolPrefix` namespaces these shared tools: `toolPrefix: 'research'` gives `research_continue_task`. The default `delegate_to` prefix does not, so the shared tools keep the bare names shown above. Two `agents()` instances in one call therefore need distinct, explicit prefixes. Otherwise both register `continue_task`, whether or not `async` is set, and the call is rejected for duplicate tool names.
 
 ## Stream delegation progress
 
@@ -101,7 +174,7 @@ for await (const chunk of turn.stream) {
 
 ## Interrupts and failures
 
-Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as retrying, choosing another specialist, or asking the user for clarification.
+Sub-agent interrupts and failures are returned to the orchestrator as tool output. They do not automatically become top-level interrupts for the original client. Write orchestrator instructions that tell it how to handle delegated failures, such as continuing the task with `continue_task`, choosing another specialist, or asking the user for clarification. An interrupted sub-agent run cannot be continued; the orchestrator has to delegate a more self-contained task.
 
 ## Artifacts from sub-agents
 
@@ -123,10 +196,25 @@ The experimental middleware package `github.com/firebase/genkit/go/plugins/middl
 
 ```go
 import (
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
+```
+
+The snippets below share one Genkit instance and one store for the orchestrator:
+
+```go
+g := genkit.Init(ctx,
+	genkit.WithExperimental(), // Required: the exp constructors panic without it.
+	genkit.WithPlugins(&googlegenai.GoogleAI{}),
+)
+
+store := localstore.NewInMemorySessionStore[any]()
 ```
 
 ```go
@@ -168,7 +256,11 @@ coordinator := genkitx.DefineAgent(g, "coordinator",
 
 Reference a sub-agent by name (`aix.AgentRef{Name: "researcher"}`) or capture it from an agent value with `agent.Ref()`, which carries the agent's description into the system listing. Descriptions matter because they become the delegation tool descriptions the orchestrator model sees, so keep them concrete.
 
-The middleware resolves sub-agents through the `Genkit` instance seeded on the turn context, which `genkitx.DefineAgent` (and `genkit.Generate`) set automatically. Attach it to the orchestrator agent.
+The middleware resolves sub-agents through the `Genkit` instance seeded on the turn context, which `genkitx.DefineAgent` (and `genkit.Generate`) set automatically. Attach it to the orchestrator agent. Delegation composes: a sub-agent that carries its own `Agents` middleware delegates further, so orchestrations nest without extra wiring.
+
+Middleware is per-agent. A delegation tool runs the sub-agent as its own invocation, so middleware attached with `ai.WithUse` on the orchestrator's inline prompt wraps only the orchestrator's model calls, never a sub-agent's. Attach cross-cutting middleware such as redaction or logging to every agent that should have it. Doing so does not double-apply: the two agents' generate calls are separate.
+
+Token usage is per-agent too. Each sub-agent records its model calls in its own session, so the orchestrator's `Usage` fields count only its own calls. A `Budget` middleware on the orchestrator is the exception: while the run lasts, it also counts the calls of the in-process sub-agents the run starts, so delegation cannot spend around the cap. See [Middleware](/docs/middleware/).
 
 The orchestrator agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample is this arrangement running: it delegates to two client-managed sub-agents and reads their work back through session artifacts.
 
@@ -177,24 +269,119 @@ The orchestrator agent in the [basic-agents](https://github.com/genkit-ai/genkit
 The `Agents` middleware is configured through struct fields:
 
 - **`Agents`** lists the sub-agents available for delegation, by name or via `agent.Ref()`. At least one is required.
-- **`ToolPrefix`** controls generated tool names. A `nil` value defaults to `delegate_to` (tools become `delegate_to_<agent>`); a pointer to the empty string uses bare agent names.
-- **`MaxDelegations`** caps delegation calls in one orchestrator generate call. `0` means unlimited.
+- **`ToolPrefix`** controls generated tool names. A `nil` value defaults to `delegate_to` (tools become `delegate_to_<agent>`); a pointer to the empty string uses bare agent names. A non-empty prefix also namespaces the shared tools described below, so two `Agents` instances in one generate call need distinct, explicit prefixes.
+- **`MaxDelegations`** caps delegation calls in one orchestrator generate call. `0` means unlimited. Background launches and continuations spend the same budget.
 - **`HistoryLength`** sets how many recent conversation messages are forwarded to a sub-agent. `0` forwards only the task description.
 - **`ArtifactStrategy`** controls how sub-agent artifacts surface, `ArtifactStrategyInline` (default) or `ArtifactStrategySession`.
+- **`Async`** lets the orchestrator launch a sub-agent in the background and collect its result later. See [Delegate in the background](#delegate-in-the-background).
+- **`MaxWaitSeconds`** bounds how long one `wait_for_background_tasks` call blocks, whatever timeout the model asks for. `0` means no bound.
 
 History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
+
+Every delegation tool takes a `task` and an optional `name`, a short label the middleware echoes on the result and on background-task reports next to the task ID. It is a reading aid for a model juggling several delegations, not an identifier.
+
+## Delegate in the background
+
+An orchestrator that delegates and waits is blocked for as long as the sub-agent runs. Set `Async: true` to let it keep working instead. Every delegation tool then takes a `background` flag that starts the sub-agent through its detach support and returns a task ID at once, and three shared tools give the orchestrator one control per thing it can do with a launched task.
+
+| Tool                        | Input                                              | Returns                                                                                         |
+| --------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `delegate_to_<agent>`       | `task`, `name`, `background: true`                 | `response` describing the launch, `taskId`, `status: "pending"`                                 |
+| `check_background_tasks`    | `taskIds`                                          | One report per task: `taskId`, `agent`, `status`, and `response`, `artifacts`, or `error`.       |
+| `wait_for_background_tasks` | `taskIds`, `timeoutSeconds`, `waitFor: "all" \| "first"` | The same reports, plus `timedOut`.                                                       |
+| `abort_background_tasks`    | `taskIds`                                          | The same reports, each task where the stop left it.                                             |
+
+It is the *sub-agent* that needs a session store here, one whose store supports detach: background work is tracked by a pending snapshot, so a sub-agent without one can only be delegated to synchronously, and the launch is refused with a hint to retry that way. The orchestrator itself needs no store for this.
+
+```go
+logAnalyst := genkitx.DefineAgent(g, "log_analyst",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Scan the logs of the service you are given and report the failure signature."),
+		ai.WithTools(queryLogs),
+	},
+	aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+	aix.WithDescription[any]("Scans service logs and reports the failure signature. Slow: a scan takes tens of seconds."),
+)
+
+commander := genkitx.DefineAgent(g, "commander",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Run the incident. Start every investigation in the background, post a status update at once, then wait for the results."),
+		ai.WithTools(postStatus),
+		// Launch, post, wait, and post again are all tool rounds.
+		ai.WithMaxTurns(15),
+		ai.WithUse(&middlewarex.Agents{
+			Agents:         []aix.AgentRef{logAnalyst.Ref()},
+			Async:          true,
+			MaxDelegations: 6,
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The orchestrator launches with `{"task": "...", "background": true}`, calls other tools while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn: zero waits until the tasks settle, and a wait that runs out returns the current statuses with `timedOut` set. `waitFor: "first"` turns the join into a race that returns as soon as any listed task settles while the rest keep running. Set `MaxWaitSeconds` to put an upper bound on every wait, zero included, so a sub-agent that keeps running cannot hold the orchestrator's turn open: at the bound the tool reports `timedOut`, as it does at the model's own timeout. An abort is safe on any task and never blocks: a task that had already finished is left alone and reports its result, and a live one reports `aborting` while it saves its progress. It settles as a resumable `aborted`, or as `completed` when the turn in flight finished anyway, and the wait tool can collect either.
+
+The middleware keeps no task registry. A task ID is `<agent>:<snapshotId>`, and it rides in the tool result, so the orchestrator's own conversation is the registry: a re-instantiated orchestrator collects with nothing but the IDs in its history. Reports key on the snapshot. A `pending` task reports its status alone; a `completed` one carries the sub-agent's last message and its artifacts; a `failed`, `aborted`, or `expired` one carries an explanatory error; a completed run whose finish reason carries no answer, such as an interrupt, reports as `failed` with the reason. A task ID the store cannot find reports "delegate again".
+
+Two prompting details matter. The middleware explains how background delegation works, but not when to use it, so tell the orchestrator which delegations to background and when to post interim updates. And raise `ai.WithMaxTurns`: launching, posting, waiting, and posting again are all tool rounds, so an orchestrator that collects in the background needs more room than one that blocks on each delegation. The commander agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample is the worked example: an incident commander that starts two slow investigators in the background, posts its first update while they run, and folds their answers in as they settle.
+
+## Continue a task
+
+Every delegation to a server-managed sub-agent leaves a continuable handle behind. A synchronous result names the run's last committed snapshot as `taskId` with its settled `status`, and background reports for `failed`, `aborted`, and `expired` tasks name the same handle. The shared `continue_task` tool spends it:
+
+- A **failed or aborted** task continues from its last saved progress. With no `instructions` the committed turn is re-attempted as it stood; with `instructions` the retry is steered by a fresh user message.
+- A **completed** task accepts follow-up `instructions` inside the sub-agent's own session, so pressing on never repeats finished work. It is refused without them, since an empty input would re-run the finished turn.
+- An **expired** task, whose worker died, is fenced with an abort and continued from its parent snapshot, the last one committed before the launch. A launch that never committed a turn has nothing saved, and the tool says to delegate again.
+- A task that stopped on an **interrupt** is refused as a dead end, since continuing it would mean answering the interrupt. The orchestrator delegates a more self-contained task instead.
+
+With `Async` set, `continue_task` also takes `background: true` and returns a fresh task ID in the same session. A client-managed delegation settles inline, carries no `taskId`, and is redone by delegating again. The tool registers only when some configured sub-agent may be server-managed, so an all-client-managed configuration gets no dead tool. A continuation spends a `MaxDelegations` slot; a refusal that names a retry which can succeed refunds it.
+
+## Delegate to a remote agent
+
+A sub-agent can run in another service. Any agent that a Genkit app serves over HTTP, in Go, JavaScript, or Dart, becomes a sub-agent once `genkitx.DefineRemoteAgent` registers it, and the orchestrator code is the same as for a local agent, background delegation included:
+
+```go
+researcher := genkitx.DefineRemoteAgent(g, "researcher", "https://research.internal/agents/researcher",
+	aix.WithDescription[any]("Researches one question and answers in a few sentences."),
+	aix.WithAgentMetadata(&aix.AgentMetadata{
+		StateManagement: aix.AgentStateManagementServer,
+		Abortable:       true,
+	}),
+)
+
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Give each part of a question to the researcher in the background, then combine the answers."),
+		ai.WithUse(&middlewarex.Agents{
+			Agents: []aix.AgentRef{researcher.Ref()},
+			Async:  true,
+		}),
+		ai.WithMaxTurns(10),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+The metadata tells the middleware what the remote server supports. `StateManagement: aix.AgentStateManagementServer` means the remote agent keeps its own session, so it gets no forwarded history. `Abortable: true` declares that its store can stop background work, which background delegation needs. Without metadata the middleware forwards no history and learns from the agent's answer whether it can run in the background. The remote server needs a session store for background tasks and `continue_task`, the same as a local sub-agent.
+
+A remote sub-agent's failures reach the orchestrator with their status names, so `continue_task` and the background-task tools classify them the same way as a local agent's. Its token usage stays in the remote session, and a `Budget` on the orchestrator does not see the calls it makes in its own process. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent) for authentication and the other options. [`go/samples/basic-agents-remote`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents-remote) is this arrangement running.
 
 ## Read sub-agent artifacts
 
 The `Artifacts` middleware gives a model `read_artifact` and `write_artifact` tools over the active session's artifacts, and injects an `<artifacts>` listing into the system prompt each turn. Set `Readonly: true` to provide only `read_artifact`.
 
-With `ArtifactStrategySession`, a sub-agent's artifacts are merged into the parent session (namespaced by invocation as `<agent>_<n>/<name>`) and kept out of the tool result. Pair it with `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can inspect delegated work through `read_artifact` before answering. The default `ArtifactStrategyInline` instead includes artifact content in the delegation tool result and also merges it into the session.
+With `ArtifactStrategySession`, a sub-agent's artifacts are merged into the parent session and kept out of the tool result. They are namespaced by invocation, `<agent>_<snapshotId prefix>/<name>` for a run with a snapshot behind it and `<agent>_<n>/<name>` otherwise, so a later check of the same task overwrites its earlier merge rather than duplicating it. Pair the strategy with `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can inspect delegated work through `read_artifact` before answering. The default `ArtifactStrategyInline` instead includes artifact content in the delegation tool result and also merges it into the session.
 
 Artifacts live on the active agent session, so the `Artifacts` tools only have an effect inside an agent invocation. With no active session they degrade gracefully: the listing is empty and the tools report that.
 
 ## Interrupts and failures
 
-A sub-agent interrupt or failure is returned to the orchestrator as the delegation tool's output, not propagated as a top-level interrupt or error to the original client. There is no stateful sub-agent runtime to resume into, so write orchestrator instructions that tell it how to handle a delegated failure, such as retrying, choosing another specialist, or asking the user for clarification.
+A sub-agent failure is returned to the orchestrator as the delegation tool's output, with the task ID to continue it, rather than propagated as a top-level error to the original client. A sub-agent interrupt is reported the same way but cannot be continued: there is no stateful sub-agent runtime to answer it from. Write orchestrator instructions that say how to handle a delegated failure, such as continuing the task, choosing another specialist, or asking the user for clarification.
+
+Task handles are scoped to the conversation. `check_background_tasks`, `wait_for_background_tasks`, `abort_background_tasks`, and `continue_task` accept a task ID only when this generate call started the task, or when a delegation or `continue_task` result in the history carries the ID. Any other ID reports as unknown, "was not started in this conversation", and an abort leaves it alone. Text that reaches the orchestrator model, such as a sub-agent's answer or a retrieved document, therefore cannot steer these tools at another conversation's task. A history trimmed or compacted past a launch result loses that task's handle. The sub-agent's own companion actions and routes are not scoped this way, so in a multi-tenant deployment treat snapshot IDs as capability-like secrets wherever those are exposed.
 
 ## Register as a plugin
 
@@ -202,9 +389,17 @@ Using the middlewares through `ai.WithUse` needs no plugin. Register `&middlewar
 
 ```go
 g := genkit.Init(ctx,
+	genkit.WithExperimental(),
 	genkit.WithPlugins(&googlegenai.GoogleAI{}, &middlewarex.Middleware{}),
 )
 ```
+
+## Next steps
+
+- [Sessions and state](/docs/agents/state) covers the session artifacts a sub-agent writes into.
+- [Background execution](/docs/agents/background) covers the detached runs that back background delegation.
+- [Agent error handling](/docs/agents/errors) covers what a delegated failure looks like to the orchestrator.
+- [Custom orchestration](/docs/agents/custom-orchestration) covers taking over the turn loop when middleware delegation is not enough.
 
 </Lang>
 
@@ -216,8 +411,11 @@ Genkit Dart provides the `agents()` middleware from `package:genkit_middleware/a
 
 Make sure to include `AgentsPlugin()` in your `Genkit` initialization.
 
+The `agents()` middleware is experimental and pulls `getCurrentSession` from `package:genkit/experimental.dart`, which is also where `defineAgent()` lives.
+
 ```dart
 import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
 import 'package:genkit_middleware/agents.dart';
 
 final researcher = ai.defineAgent(
@@ -257,8 +455,13 @@ Always provide a clear, descriptive `description` for sub-agents, as this metada
 ## Delegation options
 
 - **`agents`** is a list of sub-agent names available to the orchestrator.
+- **`toolPrefix`** controls generated tool names. It defaults to `delegate_to` (tools become `delegate_to_<agent>`); set it to an empty string to use bare agent names.
 - **`maxDelegations`** caps delegation calls in one orchestrator turn to prevent runaway loops (e.g., `5`).
-- **`historyLength`** sets how many recent conversation messages are forwarded to the sub-agents so they have context.
+- **`historyLength`** sets how many recent conversation messages are forwarded to the sub-agents so they have context. `0` or omitted forwards only the task description.
+- **`artifactStrategy`** controls how sub-agent artifacts surface: `inline` (default) includes artifact content in the delegation tool result and merges artifacts into the parent session; `session` merges into the parent session only, so the tool result names the artifacts without their content.
+- **`async`** enables background delegation. See [Delegate in the background](#delegate-in-the-background).
+
+History is forwarded only to client-managed sub-agents (those without a session store). A server-managed sub-agent owns its server-side session, so it receives only the task description.
 
 ## Stream delegation progress
 
@@ -280,8 +483,284 @@ await for (final chunk in turn.stream) {
 }
 ```
 
+## Delegate in the background
+
+An orchestrator that delegates and waits is blocked for as long as the sub-agent runs. Set `async: true` to let it keep working instead. Each delegation tool then accepts a `background` flag that starts the sub-agent and returns a task ID at once, and three shared tools give the orchestrator one control per thing it can do with a launched task.
+
+| Tool                        | Purpose                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `check_background_tasks`    | Returns the current status of the given tasks without waiting.                                                             |
+| `wait_for_background_tasks` | Blocks until the given tasks settle. `timeoutSeconds` bounds the wait; `waitFor: "first"` returns as soon as one settles.  |
+| `abort_background_tasks`    | Stops tasks whose results are no longer needed.                                                                            |
+
+Background delegation requires **server-managed sub-agents**: the launched sub-agent needs a session store that supports detach, because background work is tracked by a pending snapshot. A sub-agent without one can only be delegated to synchronously, and the launch is refused with a hint to retry that way. The orchestrator itself needs no store for this.
+
+```dart
+import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
+import 'package:genkit_middleware/agents.dart';
+
+// Server-managed: the store is what makes background delegation possible.
+final researcher = ai.defineAgent(
+  name: 'researcher',
+  description: 'Researches a single, focused topic and returns a concise summary.',
+  system: 'You are a focused research assistant. Given one topic, return a tight summary.',
+  store: InMemorySessionStore(),
+  maxTurns: 4,
+);
+
+final orchestrator = ai.defineAgent(
+  name: 'asyncOrchestrator',
+  system: '''
+    When the user asks about several topics, delegate each one to "researcher"
+    in the background (set "background": true) so they run in parallel, keeping
+    the taskId each delegation returns. Once every task is launched, call
+    wait_for_background_tasks with all the taskIds to collect the results, then
+    synthesize a final answer.
+  ''',
+  use: [
+    agents(agents: ['researcher'], async: true, maxDelegations: 8),
+  ],
+  store: InMemorySessionStore(),
+);
+```
+
+The orchestrator launches with `{"task": "...", "background": true}`, calls other tools while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn: on timeout the current statuses are returned. An abort is safe on any task and never blocks: a task that already finished is left alone and reports its result, and a live one reports `aborting` while it saves progress, settling as a resumable `aborted`.
+
+Task IDs ride in the tool result, so the orchestrator's own conversation is the registry: task IDs from earlier tool results stay valid across turns, and re-delegating the same work is avoidable by checking them first. Because launching, collecting, and following up are separate tool rounds, raise `maxTurns` and `maxDelegations` so a background-collecting orchestrator has room to work.
+
+The middleware explains how background delegation works, but not when to use it, so tell the orchestrator which delegations to background and when to post interim updates. The [async agent sample](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/agents/bin/async_agent_sample.dart) is the worked example: an orchestrator that fans several research tasks out in the background and folds their answers in as they settle.
+
+## Continue a task
+
+Every delegation to a server-managed sub-agent leaves a continuable handle behind, named by the task's `taskId`. The `continue_task` tool spends it:
+
+- A **failed or aborted** task continues from its last saved progress. With no `instructions` the committed turn is re-attempted as it stood; with `instructions` the retry is steered by a fresh user message.
+- A **completed** task accepts follow-up `instructions` inside the sub-agent's own session, so pressing on never repeats finished work. It is refused without them.
+- A task that stopped on an **interrupt** is refused as a dead end, since continuing it would mean answering the interrupt.
+
+The tool registers only when a configured sub-agent may be server-managed, so an all-client-managed configuration gets no dead tool. With `async: true`, `continue_task` also accepts `background: true` and returns a fresh task ID in the same session.
+
 ## Interrupts and failures
 
-If a sub-agent fails or triggers an interrupt, the failure or pause is returned to the orchestrator as the delegation tool's output. It does not automatically bubble up as a top-level error to the client. You should instruct the orchestrator on how to handle failures—for example, by trying a different specialist, correcting input, or reporting the issue back to the user.
+If a sub-agent fails or triggers an interrupt, the failure or pause is returned to the orchestrator as the delegation tool's output. It does not automatically bubble up as a top-level error to the client. You should instruct the orchestrator on how to handle failures, for example by continuing the task with `continue_task`, trying a different specialist, correcting input, or reporting the issue back to the user.
+
+</Lang>
+
+<Lang lang="python">
+
+## Define delegation tools
+
+There is no delegation middleware. Every `Agent` and `AgentClient` exposes `.chat()`, so a delegation tool is an `@ai.tool()` function that runs one turn on a specialist and returns its reply. Agents require `Genkit` from `genkit.exp`:
+
+```python
+from pydantic import BaseModel
+
+from genkit.exp import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+researcher = ai.define_agent(
+    name='researcher',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    description='Finds facts and writes sourced research notes.',
+    system='Research the request and answer clearly in a few short paragraphs.',
+)
+
+coder = ai.define_agent(
+    name='coder',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    description='Writes and explains Python code.',
+    system='Write clean Python code with a brief explanation.',
+)
+
+
+class Task(BaseModel):
+    task: str
+
+
+@ai.tool(name='delegate_to_researcher', description='Hand a research question to the researcher specialist.')
+async def delegate_to_researcher(input: Task) -> str:
+    res = await researcher.chat().send(input.task)
+    return res.text
+
+
+@ai.tool(name='delegate_to_coder', description='Hand a programming task to the coder specialist.')
+async def delegate_to_coder(input: Task) -> str:
+    res = await coder.chat().send(input.task)
+    return res.text
+
+
+coordinator = ai.define_agent(
+    name='coordinator',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system=(
+        'Analyze the request and delegate: call delegate_to_researcher for research '
+        'and delegate_to_coder for code, then synthesize one final answer.'
+    ),
+    tools=[delegate_to_researcher, delegate_to_coder],
+)
+```
+
+Keep tool descriptions concrete; the orchestrator model picks a specialist from them. Middleware attaches per agent, so put `Retry` (from `genkit_middleware`) or `Artifacts` (from `genkit_middleware.exp`) on each specialist that needs it.
+
+## Stream delegation progress
+
+Delegation calls arrive as `tool_requests` on the orchestrator's stream chunks. Awaiting the turn returns the final response:
+
+```python
+async def stream_delegation() -> None:
+    turn = coordinator.chat().send_stream('Research quicksort and write a Python implementation.')
+
+    async for chunk in turn.stream:
+        for part in chunk.tool_requests:
+            print(f'[delegating] {part.tool_request.name}')
+        if chunk.text:
+            print(chunk.text, end='')
+
+    res = await turn.response
+    print(res.finish_reason)
+    # => [delegating] delegate_to_researcher
+    # => [delegating] delegate_to_coder
+    # => Quicksort is a divide-and-conquer sort ...
+    # => stop
+```
+
+## Delegate in the background
+
+A specialist with a session store (`InMemorySessionStore`, `FileSessionStore`, or `FirestoreSessionStore`) can run detached. The delegation tool calls `chat().detach(...)` and returns the `snapshot_id` right away, so the orchestrator can start several scans and collect or cancel them later:
+
+```python
+from typing import Any
+
+from genkit.exp.agent import InMemorySessionStore, SnapshotStatus
+
+log_analyst = ai.define_agent(
+    name='logAnalyst',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Scan service logs and report the root-cause signature.',
+    store=InMemorySessionStore(),
+)
+
+
+@ai.tool(name='start_log_scan', description='Start a background log scan and return its snapshot_id.')
+async def start_log_scan(service: str) -> dict[str, str]:
+    task = await log_analyst.chat().detach(f'Scan logs for {service}.')
+    return {'snapshot_id': task.snapshot_id, 'status': SnapshotStatus.PENDING}
+
+
+@ai.tool(name='collect_log_scan', description='Check a background log scan by snapshot_id.')
+async def collect_log_scan(snapshot_id: str) -> dict[str, Any]:
+    snap = await log_analyst.get_snapshot(snapshot_id=snapshot_id)
+    if snap is None:
+        return {'status': 'not_found'}
+    if snap.status == SnapshotStatus.COMPLETED:
+        messages = snap.state.messages if snap.state else []
+        return {'status': snap.status, 'answer': messages[-1].text if messages else ''}
+    return {
+        'status': snap.status,
+        'error': snap.error.message if snap.error else None,
+    }
+
+
+@ai.tool(name='abort_log_scan', description='Cancel an in-flight log scan by snapshot_id.')
+async def abort_log_scan(snapshot_id: str) -> dict[str, str | None]:
+    prev = await log_analyst.abort(snapshot_id)
+    return {'previous_status': prev}
+
+
+incident_lead = ai.define_agent(
+    name='incidentLead',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Start log scans for each affected service, collect the results, and summarize the incident.',
+    tools=[start_log_scan, collect_log_scan, abort_log_scan],
+    max_turns=10,
+)
+```
+
+Launching, polling, and collecting each spend a tool round, so raise `max_turns` on the orchestrator. `abort()` returns the status from before the call: `pending` means it cancelled a running scan. See [Background execution](/docs/agents/background) for the detach lifecycle.
+
+## Delegate to a remote agent
+
+A specialist can run in another service. Any agent a Genkit app serves over HTTP, in Python, JavaScript, Go, or Dart, is reachable with `remote_agent()` from `genkit.exp.agent`. The returned `AgentClient` has the same `chat()`, `get_snapshot()`, and `abort()` methods as a local agent, so the delegation tool does not change:
+
+```python
+from genkit.exp.agent import remote_agent
+
+remote_researcher = remote_agent(
+    'https://research.internal/agents/researcher',
+    state_management='server',
+)
+
+
+@ai.tool(name='ask_remote_researcher', description='Delegate a question to the remote research service.')
+async def ask_remote_researcher(question: str) -> str:
+    res = await remote_researcher.chat().send(question)
+    return res.text
+```
+
+`get_snapshot_url` and `abort_url` default to `{url}/getSnapshot` and `{url}/abort`. See [Connect a client](/docs/agents/http/#connect-a-client) for headers, timeouts, and client-managed state.
+
+## Read sub-agent artifacts
+
+Sub-agent artifacts stay in the sub-agent's own `AgentChat` unless your delegation tool copies them into the parent session with `current_session().add_artifacts(...)`. Pair that with `Artifacts(readonly=True)` from `genkit_middleware.exp` on the orchestrator so it can inspect merged artifacts via `read_artifact`:
+
+```python
+from genkit.exp import current_session
+from genkit.exp.agent import AgentFinishReason, Artifact
+from genkit_middleware.exp import Artifacts
+
+writer = ai.define_agent(
+    name='writer',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Draft reports with write_artifact.',
+    use=[Artifacts()],
+)
+
+
+@ai.tool(name='delegate_to_writer', description='Ask the writer specialist to draft a document.')
+async def delegate_to_writer(topic: str) -> str:
+    sub_chat = writer.chat()
+    res = await sub_chat.send(topic)
+
+    if res.error:
+        return f'Specialist failed: {res.error.message}'
+    if res.finish_reason == AgentFinishReason.INTERRUPTED:
+        return 'Specialist paused on an interrupt; delegate a self-contained task instead.'
+
+    parent = current_session()
+    if parent is not None and sub_chat.artifacts:
+        namespaced = [
+            Artifact(
+                name=f'writer/{art.name}' if art.name else None,
+                parts=art.parts,
+                metadata=art.metadata,
+            )
+            for art in sub_chat.artifacts
+        ]
+        await parent.add_artifacts(namespaced)
+
+    return res.text
+
+
+editor = ai.define_agent(
+    name='editor',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Delegate drafting to delegate_to_writer, read artifacts with read_artifact, and summarize.',
+    tools=[delegate_to_writer],
+    use=[Artifacts(readonly=True)],
+)
+```
+
+## Interrupts and failures
+
+A failed sub-agent turn does not raise. `sub_chat.send(...)` returns with `finish_reason` set to `AgentFinishReason.FAILED` and the cause on `res.error`, or `AgentFinishReason.INTERRUPTED` when a sub-agent tool paused. The `delegate_to_writer` tool above turns both into tool output, so the orchestrator sees the failure and can retry, pick another specialist, or report back instead of failing the outer turn. `send()` raises `GenkitError` only when no turn result arrived, such as a dropped connection to a remote agent; catch that in the tool too if the orchestrator should recover from it. See [Agent error handling](/docs/agents/errors) for the full failure model.
+
+## Next steps
+
+- [Sessions and state](/docs/agents/state) covers the session artifacts a sub-agent writes into.
+- [Background execution](/docs/agents/background) covers the detached runs behind background delegation.
+- [Custom orchestration](/docs/agents/custom-orchestration) covers taking over the turn loop when tool delegation is not enough.
 
 </Lang>

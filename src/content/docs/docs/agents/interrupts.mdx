@@ -148,14 +148,22 @@ Wait for the final response before treating the turn as durably interrupted, bec
 
 <Lang lang="go">
 
+Interrupts are one feature with two transports. The tool side is the same as on [Interrupts](/docs/interrupts): `genkit.DefineResumableTool`, `tool.Interrupt`, `ai.InterruptAs`, and the claim through the tool's `Interrupted` method, whose `Restart` and `Respond` verbs build the resume parts. Only the delivery differs. A plain generate call takes the resume parts through `ai.WithResume`; an agent takes them through `conn.SendResume` or `AgentInput.Resume`, which the agent forwards to the same generate resume path.
+
 ## Interrupt from a tool
 
-Define an interruptible tool with `genkitx.DefineInterruptibleTool`. Its third parameter is a typed _resume payload_: `nil` on the first call, and populated with the client's answer when the turn is resumed. The tool pauses by returning `tool.Interrupt(metadata)`; on resume it runs again from the top with the payload set. Keep approval and execution logic in one tool, and require the client to explicitly resume the turn.
+Define a resumable tool with `genkit.DefineResumableTool`. Its third type parameter is the _resume payload_: the function receives it as a pointer that is `nil` on the first call, and that holds the client's answer when the turn is resumed. The tool pauses by returning `tool.Interrupt(ctx, data)`; on resume it runs again from the top with the payload set. Keep approval and execution logic in one tool, and require the client to explicitly resume the turn.
 
 ```go
 import (
-	"github.com/firebase/genkit/go/ai/exp/tool"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/tool"
+	"github.com/firebase/genkit/go/genkit"
 )
 ```
 
@@ -169,10 +177,10 @@ type TransferOutput struct {
 	ConfirmationID string `json:"confirmationId"`
 }
 
+// TransferInterrupt is what the tool says when it pauses. The input already
+// says what the model asked for, so this holds only the tool's reason.
 type TransferInterrupt struct {
-	To     string  `json:"to"`
-	Amount float64 `json:"amount"`
-	Reason string  `json:"reason"`
+	Reason string `json:"reason"`
 }
 
 // Confirmation is the resume payload the client sends back to approve or
@@ -181,13 +189,11 @@ type Confirmation struct {
 	Approved bool `json:"approved"`
 }
 
-transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
+transferMoney := genkit.DefineResumableTool(g, "transferMoney",
 	"Transfer money after user approval.",
 	func(ctx context.Context, input TransferInput, confirm *Confirmation) (TransferOutput, error) {
 		if confirm == nil {
-			return TransferOutput{}, tool.Interrupt(TransferInterrupt{
-				To:     input.To,
-				Amount: input.Amount,
+			return TransferOutput{}, tool.Interrupt(ctx, TransferInterrupt{
 				Reason: "Approval is required before transferring money.",
 			})
 		}
@@ -200,11 +206,19 @@ transferMoney := genkitx.DefineInterruptibleTool(g, "transferMoney",
 )
 ```
 
+`DefineResumableTool` returns `*ai.ResumableToolAction[In, Out, Res]`, so the tool above has type `*ai.ResumableToolAction[TransferInput, TransferOutput, Confirmation]`. Write the type out when the tool must outlive the enclosing function:
+
+```go
+type App struct {
+	Transfer *ai.ResumableToolAction[TransferInput, TransferOutput, Confirmation]
+}
+```
+
 The banker agent in the [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample runs this end to end: its tool interrupts with a discriminated payload, and the CLI asks the user and resumes the turn.
 
 ## Collect interrupts from the stream
 
-Interrupts are model tool request parts with interrupt metadata.
+Interrupts are model tool request parts that are paused, which `part.IsInterrupt()` reports.
 
 ```go
 var interrupts []*ai.Part
@@ -222,33 +236,61 @@ for chunk, err := range conn.Receive() {
 }
 ```
 
-Use `tool.InterruptAs[T]` to decode typed interrupt metadata:
+Claim each part with the tool that raised it. The claim decodes the input to the tool's input type, and `ai.InterruptAs[T]` decodes the data the tool paused with:
 
 ```go
-meta, ok := tool.InterruptAs[TransferInterrupt](interrupts[0])
+call, ok := transferMoney.Interrupted(interrupts[0])
 if ok {
-	fmt.Printf("Approve transfer to %s?", meta.To)
+	meta, _ := ai.InterruptAs[TransferInterrupt](call.Part)
+	fmt.Printf("Approve transfer of %.2f to %s? (%s)\n", call.Input.Amount, call.Input.To, meta.Reason)
 }
 ```
+
+`Interrupted` reports false for an interrupt of another tool and for a hold that middleware such as `ToolApproval` raised. Claim holds as shown in [Answer middleware holds](/docs/interrupts/#answer-middleware-holds).
+
+### Recover interrupts from a snapshot
+
+`(*ai.ModelResponse).Interrupts()` and `chunk.ModelChunk.Interrupts()` cover the live paths. From a stored snapshot there is no response object, so filter the messages yourself: take the newest message whose `Role` is `ai.RoleModel` and keep the parts for which `part.IsInterrupt()` reports true. `*ai.Part` implements `MarshalJSON` and `UnmarshalJSON`, so an interrupt part can be persisted in your own queue, reloaded, and claimed as is.
+
+```go
+// BankState is the agent's custom state type.
+type BankState struct {
+	Balance float64 `json:"balance,omitempty"`
+}
+
+func pendingInterrupts(snap *aix.SessionSnapshot[BankState]) []*ai.Part {
+	if snap == nil || snap.State == nil {
+		// State is nil on a pending snapshot: detached work is still running.
+		return nil
+	}
+
+	for i := len(snap.State.Messages) - 1; i >= 0; i-- {
+		msg := snap.State.Messages[i]
+		if msg.Role != ai.RoleModel {
+			continue
+		}
+
+		var pending []*ai.Part
+		for _, part := range msg.Content {
+			if part.IsInterrupt() {
+				pending = append(pending, part)
+			}
+		}
+		return pending
+	}
+	return nil
+}
+```
+
+Stop at the first model message. Resume validation only searches the most recent model response, so parts from an earlier turn are rejected as stale.
 
 ## Resume an interrupted turn
 
-Build resume parts from the tool, then send them with `conn.SendResume`. Use `Resume` to re-execute the tool, delivering the client's typed answer to its resume parameter. The tool runs again from the top, this time with a non-nil payload.
+Build resume parts from the claimed call, then send them with `conn.SendResume`. Use `Restart` to re-execute the tool, delivering the client's typed answer to its resume parameter. The tool runs again from the top, this time with a non-nil payload. The claim already checked the part, so the verbs cannot fail.
 
 ```go
-import aix "github.com/firebase/genkit/go/ai/exp"
-```
-
-```go
-part, err := transferMoney.Resume(interrupts[0], Confirmation{Approved: true})
-if err != nil {
-	// Fails if the part is not this tool's interrupt or the payload type
-	// does not match the tool's resume parameter.
-	return fmt.Errorf("build resume part: %w", err)
-}
-
 if err := conn.SendResume(&aix.ToolResume{
-	Restart: []*ai.Part{part},
+	Restart: []*ai.Part{call.Restart(Confirmation{Approved: true})},
 }); err != nil {
 	return fmt.Errorf("send resume: %w", err)
 }
@@ -257,29 +299,93 @@ if err := conn.SendResume(&aix.ToolResume{
 Use `Respond` when the result should be the tool output and the tool should not run again, such as supplying a precomputed result:
 
 ```go
-part, err := transferMoney.Respond(interrupts[0], TransferOutput{
-	ConfirmationID: "manual-approval",
-})
-if err != nil {
-	// Fails if the part is not this tool's interrupt or the output type
-	// does not match the tool's result.
-	return fmt.Errorf("build respond part: %w", err)
-}
-
 if err := conn.SendResume(&aix.ToolResume{
-	Respond: []*ai.Part{part},
+	Respond: []*ai.Part{call.Respond(TransferOutput{ConfirmationID: "manual-approval"})},
 }); err != nil {
 	return fmt.Errorf("send resume: %w", err)
 }
 ```
 
+`call.RestartWithInput(input, resume)` re-executes the tool with revised input, and goes in `Restart` too.
+
 A resumed turn can interrupt again. Streaming clients should handle interrupts in a loop: receive until `TurnEnd`, resolve any interrupts, send resume, then receive the continuation.
 
-The same interruptible-tool API works outside an agent. The [basic-tool-interrupts-exp](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts-exp) sample runs the pause-and-resume cycle across two ordinary generate turns instead.
+The same resumable-tool API works outside an agent. The [basic-tool-interrupts](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-tool-interrupts) sample runs the pause-and-resume cycle across two ordinary generate turns instead.
+
+## Resume without a live connection
+
+An `AgentConnection` is a convenience, not a requirement. `aix.AgentInput` carries the same payload on its `Resume` field, and `Agent.Run` accepts invocation options alongside a full `AgentInput`, so one call resumes a session from any process:
+
+```go
+out, err := agent.Run(ctx, &aix.AgentInput{
+	Resume: &aix.ToolResume{Restart: []*ai.Part{call.Restart(Confirmation{Approved: true})}},
+}, aix.WithSessionID[BankState](sessionID))
+```
+
+An `AgentInput` carrying only `Resume`, with no `Message`, is valid. The two fields of `aix.ToolResume` match the verbs:
+
+| Field     | Type         | Holds parts from                         | Effect                                                          |
+| --------- | ------------ | ---------------------------------------- | --------------------------------------------------------------- |
+| `Restart` | `[]*ai.Part` | `call.Restart`, `call.RestartWithInput`  | Re-runs the tool with the typed resume payload attached.        |
+| `Respond` | `[]*ai.Part` | `call.Respond`                           | Supplies the tool output directly; the tool does not run again. |
+
+Both may appear in one payload. Over HTTP the same object rides in `data.resume`.
+
+### Resume from another process
+
+The process that paused the turn does not need to be the one that answers it. Read the session's latest snapshot, find the pending interrupt parts, claim them with the tool, then run:
+
+```go
+func approveTransfer(
+	ctx context.Context,
+	agent *aix.Agent[BankState],
+	transferMoney *ai.ResumableToolAction[TransferInput, TransferOutput, Confirmation],
+	sessionID string,
+) error {
+	snap, err := agent.GetLatestSnapshot(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("read latest snapshot: %w", err)
+	}
+	if snap.FinishReason != aix.AgentFinishReasonInterrupted {
+		return fmt.Errorf("session %q is not waiting on an interrupt", sessionID)
+	}
+
+	var restarts []*ai.Part
+	for _, part := range pendingInterrupts(snap) {
+		call, ok := transferMoney.Interrupted(part)
+		if !ok {
+			continue
+		}
+		fmt.Printf("Approve transfer of %.2f to %s?\n", call.Input.Amount, call.Input.To)
+		restarts = append(restarts, call.Restart(Confirmation{Approved: true}))
+	}
+	if len(restarts) == 0 {
+		return errors.New("no pending interrupts for this tool")
+	}
+
+	out, err := agent.Run(ctx, &aix.AgentInput{
+		Resume: &aix.ToolResume{Restart: restarts},
+	}, aix.WithSessionID[BankState](sessionID))
+	if err != nil {
+		return fmt.Errorf("resume session: %w", err)
+	}
+
+	fmt.Println(out.Message.Text())
+	return nil
+}
+```
+
+The server re-validates the payload with `aix.ValidateResumeAgainstHistory` before it reaches the model, so a forged restart is rejected.
+
+## Durability
+
+An interrupted turn is an ordinary completed turn. With a session store it writes a snapshot whose `Status` is `completed` and whose `FinishReason` is `interrupted`, so it is a resume point like any settled turn; see the status table on [Background execution](/docs/agents/background). Read `FinishReason`, not `Status`, to tell an interrupt apart from a plain finished turn.
+
+There is no expiry on a paused turn. The `pending` and `expired` statuses apply only to detached background work. The only constraint is that a resume must target tool requests in the snapshot's most recent model message, so answer the interrupt before sending an unrelated user message on the same session.
 
 ## Resume validation
 
-The runtime validates a resume payload against session history before it reaches the model. A `respond` entry must match an interrupted tool request by name and ref. A `restart` entry must match the original request and carry its unmodified input. This protects server tools from forged client payloads.
+The runtime validates a resume payload against session history before it reaches the model. A `respond` entry must match an interrupted tool request by name and ref. A `restart` entry must match the original request and carry its input. A restart built with `RestartWithInput` carries the revised input and records the original one it replaced, and it is the recorded original that must match. This protects server tools from forged client payloads that change the input of the call the model made.
 
 Only the most recent model response is searched. An entry naming a tool request from an earlier turn is rejected as stale, separately from one naming a request that never existed. Refs are only unique within a single model response, so searching further back would let a caller validate a restart whose input was forged from an already-settled call. A client that accumulates resume entries across turns and resends them all must send only the entries for the pending response.
 
@@ -293,16 +399,25 @@ if input.Resume != nil {
 }
 ```
 
+The check accepts a revised input. A server that must not let callers revise a tool's input rejects restart parts whose `Restart.OriginalInput` is set, as shown in [Resuming from an untrusted caller](/docs/interrupts/#resuming-from-an-untrusted-caller).
+
+## Next steps
+
+- [Interrupts](/docs/interrupts) covers the same tool API outside an agent turn.
+- [Sessions and state](/docs/agents/state) explains snapshots and the `FinishReason` field a paused turn records.
+- [Background execution](/docs/agents/background) covers detaching from a turn and reading its snapshot later.
+
 </Lang>
 
 <Lang lang="dart">
 
 ## Define an interrupt
 
-In Genkit Dart, interrupts are modeled as tools that invoke `ctx.interrupt()` to pause execution and prompt the client for external validation or missing inputs.
+An interrupt pauses execution and prompts the client for external validation or missing inputs. Use `ai.defineInterrupt()` for an interrupt-only tool that always pauses, or a regular tool that returns `.interrupt()` when it should pause only under certain conditions. The example below uses the second form:
 
 ```dart
 import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
 import 'package:schemantic/schemantic.dart';
 
 part 'banking_agent.g.dart';
@@ -320,7 +435,7 @@ final userApproval = ai.defineTool(
   description: 'Ask the user for approval before proceeding with a sensitive action.',
   inputSchema: UserApprovalInput.$schema,
   // No outputSchema needed: the output is provided by the client on resume
-  fn: (input, ctx) async => ctx.interrupt(),
+  fn: (input, ctx) async => .interrupt(),
 );
 
 final bankingAgent = ai.defineAgent(
@@ -395,15 +510,16 @@ To prevent client-side spoofing, the runtime validates that every `respond` and 
 ## Define an interrupt
 
 - **`ai.define_interrupt()`** for an interrupt-only tool that never performs work by itself and only asks the client for information.
-- **`raise Interrupt(metadata)`** inside a normal tool that can either finish immediately or pause based on runtime conditions.
+- **`raise Interrupt(metadata)`** inside a normal tool that can either finish immediately or pause based on runtime conditions. `Interrupt` subclasses `BaseException`, so a broad `except Exception:` in tool code does not swallow it.
+- **`ToolApproval`** middleware from `genkit_middleware` to pause before any tool outside an allowlist runs, without changing tool code.
 
 ```python
 from decimal import Decimal
 
 from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -434,40 +550,68 @@ async def transfer_money(input: TransferMoneyInput) -> str:
 
 banking_agent = ai.define_agent(
     name='bankingAgent',
-    model='googleai/gemini-flash-latest',
-    system='If the user wants to transfer money, ALWAYS use userApproval before transfer_money.',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='Always call userApproval before calling transfer_money.',
     tools=[user_approval, transfer_money],
     store=InMemorySessionStore(),
 )
 ```
 
-A normal tool can pause conditionally:
+Inside a normal tool, accept `ctx: ToolContext` from `genkit` to inspect `ctx.is_resumed()` and `ctx.resumed_metadata`:
 
 ```python
-from genkit import Interrupt, ToolRunContext
+from typing import Any
+
+from pydantic import BaseModel
+
+from genkit import Interrupt, ToolContext
+
+
+class RunShellInput(BaseModel):
+    command: str
 
 
 @ai.tool()
-async def run_shell(input: RunShellInput, ctx: ToolRunContext) -> dict:
-    """Run a shell command after a safety check."""
-    if is_risky(input.command) and not (ctx.resumed_metadata or {}).get('tool_approved'):
+async def run_shell(input: RunShellInput, ctx: ToolContext) -> dict[str, Any]:
+    """Run a shell command after checking approval metadata."""
+    if 'rm ' in input.command and not (ctx.resumed_metadata or {}).get('tool_approved'):
         raise Interrupt({
             'command': input.command,
-            'reason': 'The command can modify files.',
+            'reason': 'Command deletes files and requires human approval.',
         })
-    return execute(input.command)
+    return {'command': input.command, 'exit_code': 0}
+```
+
+To gate existing tools without changing their code, add `ToolApproval`. Tools in `allowed_tools` run immediately; every other tool call pauses:
+
+```python
+from genkit_middleware import ToolApproval
+
+approval_agent = ai.define_agent(
+    name='approvalAgent',
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    system='You are a banking assistant.',
+    tools=[transfer_money],
+    use=[ToolApproval(allowed_tools=[])],
+    store=InMemorySessionStore(),
+)
 ```
 
 ## Receive interrupts
 
-Interrupted tool requests surface on `res.interrupts` at turn end, and as tool request chunks while streaming.
+Interrupted tool requests surface as `AgentInterrupt` items on `res.interrupts` at turn end, and as tool request chunks while streaming. Each item exposes `name`, `ref`, and `input`.
 
 ```python
+from genkit.exp.agent import AgentFinishReason
+
+chat = banking_agent.chat()
 res = await chat.send('Transfer $500 to savings.')
 
+print(res.finish_reason == AgentFinishReason.INTERRUPTED)
+# => True
 for interrupt in res.interrupts:
-    print(interrupt.name)
-    print(interrupt.input)
+    print(interrupt.name, interrupt.input)
+    # => userApproval {'action': 'transfer', 'details': '$500 to savings'}
 ```
 
 When an interrupt occurs, the turn finishes with `finish_reason=AgentFinishReason.INTERRUPTED`.
@@ -477,35 +621,47 @@ When an interrupt occurs, the turn finishes with `finish_reason=AgentFinishReaso
 Use `respond()` when the client already has the final tool output. Pass the part to `chat.resume(respond=...)` (or `chat.resume_stream(respond=...)` for streaming). The tool does not run again on the server.
 
 ```python
-res = await chat.send('Transfer $500 to savings.')
 approvals = [i for i in res.interrupts if i.name == 'userApproval']
 
 if approvals:
     continued = await chat.resume(
-        respond=[approvals[0].respond({'approved': True, 'feedback': 'Looks good!'})]
+        respond=[approvals[0].respond({'approved': True, 'note': 'Confirmed by user'})]
     )
     print(continued.text)
 ```
 
 ## Restart pattern
 
-Use `restart()` when the server-side tool should run again after approval or a corrected request.
+Use `restart()` when the server-side tool should run again after approval. Pass `resumed_metadata` to hand the approval to the tool, which reads it from `ctx.resumed_metadata`. `ToolApproval` lets a restarted call through when `resumed_metadata` contains `'tool_approved': True`.
 
 ```python
-res = await chat.send('Deploy code to production.')
-deploy_interrupts = [i for i in res.interrupts if i.name == 'deployApproval']
+chat = approval_agent.chat()
+res = await chat.send('Transfer $500 to savings.')
 
-if deploy_interrupts:
+if res.interrupts:
     continued = await chat.resume(
-        restart=[deploy_interrupts[0].restart()]
+        restart=[i.restart(resumed_metadata={'tool_approved': True}) for i in res.interrupts]
     )
     print(continued.text)
 ```
 
-The restart helper preserves the original tool input and forces the server-side tool function to execute again with those parameters.
+The restart helper keeps the original tool call `ref` and input, so the tool runs again with exactly the arguments the model sent.
 
 ## Resume validation
 
-To prevent client-side spoofing, the runtime validates that every `respond` and `restart` entry matches an active paused tool call by name and unique reference ID.
+Before a resume reaches the model, the runtime checks every `respond` and `restart` entry against the tool requests recorded in session history, matching by name and `ref` from the newest message back. A restart must also carry the exact input of the request it matches. This stops a client from forging a tool call or re-running a tool with arguments the model never sent.
+
+A rejected resume does not raise. The turn finishes with `finish_reason=AgentFinishReason.FAILED`, and the response's `error.status` is `'INVALID_ARGUMENT'`:
+
+```python
+from genkit import Part
+
+continued = await chat.resume(
+    respond=[Part.from_tool_response(name='userApproval', ref='forged-ref', output={})]
+)
+
+print(continued.finish_reason, continued.error.status)
+# => failed INVALID_ARGUMENT
+```
 
 </Lang>

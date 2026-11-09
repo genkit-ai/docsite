@@ -1,0 +1,503 @@
+---
+title: Decision models (System One)
+description: Use System One decision models such as TypeSafe's jev, Liquid AI's d1, and Cloudflare's Clef for fast, calibrated routing, classification, scoring, and guardrail decisions in Genkit Go.
+supportedLanguages:
+  - go
+---
+
+import Lang from '../../../../components/Lang.astro';
+
+<Lang lang="go">
+
+The `systemonex` plugin serves decision models: models that speak System One, the protocol behind
+TypeSafe AI's jev, Liquid AI's d1, and Cloudflare's Clef. A decision model does not generate text.
+It evaluates a state, such as a support ticket or a user message, against typed questions and
+returns one answer per question with calibrated probabilities, in a few hundred milliseconds.
+
+:::caution[Preview]
+This plugin is in the experimental `plugins/systemone/exp` package and can change in a minor
+release.
+:::
+
+## When to use a decision model
+
+Use a decision model for the decisions inside an application, where a chat model is slow and its
+answer must be parsed:
+
+- **Routing:** which team, tool, or model handles a request.
+- **Classification:** which category a ticket, document, or message is in.
+- **Scoring:** how relevant, urgent, or severe something is, on a rubric you define.
+- **Guardrails:** whether a message is a jailbreak attempt, or whether a tool call may run.
+
+Every answer carries a probability for each option, so your code decides what to do at each
+confidence level. Use a chat model when you need text, reasoning, or tool calls.
+
+A decision model speaks only constrained JSON. The output type is the question set: each field is
+one question, and the answer lands in that field. A decision is one `genkit.GenerateData` call
+with a model, a state, and a type.
+
+## Installation
+
+```bash
+go get github.com/firebase/genkit/go
+```
+
+Import the package as `systemonex`:
+
+```go
+import systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
+```
+
+## Quick start
+
+This program asks three questions about one support ticket in a single call, then routes the
+ticket in code:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
+)
+
+// Dept is the option set of a choice question. Its criteria say what each
+// option means.
+type Dept string
+
+func (Dept) Criteria() map[Dept]string {
+	return map[Dept]string{
+		"billing":   "Payments, invoicing, refunds",
+		"technical": "Bugs, outages, integrations",
+		"other":     "None of the above",
+	}
+}
+
+// Anger is the rubric of a score question, lowest level first.
+type Anger int
+
+func (Anger) Levels() []string {
+	return []string{"Calm", "Concerned but civil", "Very angry"}
+}
+
+// Triage is the decision: one question per field.
+type Triage struct {
+	Department  systemonex.Choice[Dept] `json:"department" jsonschema_description:"Which team should handle this ticket?"`
+	IsUrgent    systemonex.Noul         `json:"isUrgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration systemonex.Score[Anger] `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+}
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(systemonex.TypeSafe()))
+
+	ticket := "I was charged twice for one order and I need the duplicate refunded today."
+
+	out, _, err := genkit.GenerateData[Triage](ctx, g,
+		ai.WithModelName("typesafe/jev-1.13.0"),
+		ai.WithPrompt(ticket))
+	if err != nil {
+		log.Fatalf("could not triage: %v", err)
+	}
+
+	if out.Department.Confidence < 0.6 {
+		fmt.Println("route to a human")
+		return
+	}
+	fmt.Println("department:", out.Department.Choice)
+	fmt.Println("urgent:", out.IsUrgent.Probability > 0.8)
+	fmt.Println("frustration:", out.Frustration.Label())
+}
+```
+
+Each field's description is the question's instructions, and each field's type is the kind of
+answer. No output format needs naming: the plugin reads the questions from the output schema.
+Prompt files, middleware, traces, and token counts work as they do for any other model.
+
+## Servers
+
+One plugin type, `SystemOne`, serves any server that speaks the protocol. A constructor sets it up
+for each known server. A model name is the plugin's provider name followed by the server's own
+model ID, so a model that a server adds later works without a Genkit release.
+
+| Constructor | Example models | Credentials | Media |
+| --- | --- | --- | --- |
+| `systemonex.TypeSafe()` | `typesafe/jev-1.13.0`, `typesafe/jev-latest` | `TYPESAFE_API_KEY` (`TYPESAFE_BASE_URL` overrides the URL) | Text only |
+| `systemonex.OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/cloudflare/clef`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | Text only |
+| `systemonex.WorkersAI(accountID)` | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty | Images on Clef models; audio and video on Clef-omni |
+| `systemonex.Ollama()` | `ollama-decisions/clef` | None (`http://localhost:11434`) | Images, sent with text |
+
+A constructor returns a `*systemonex.SystemOne`. You can change its fields before `genkit.Init`,
+for example to pass a key from a secret manager or to reach a server on another host:
+
+```go
+ts := systemonex.TypeSafe()
+ts.APIKey = os.Getenv("MY_TYPESAFE_KEY") // when the key is not in TYPESAFE_API_KEY
+
+ollama := systemonex.Ollama()
+ollama.BaseURL = "http://gpu-box:11434" // when Ollama is not on localhost
+
+g := genkit.Init(ctx, genkit.WithPlugins(
+	ts,                       // typesafe/jev-1.13.0
+	systemonex.OpenRouter(),  // openrouter-decisions/liquid/d1
+	systemonex.WorkersAI(""), // cloudflare-decisions/@cf/cloudflare/clef
+	ollama,                   // ollama-decisions/clef
+))
+```
+
+Some notes for each server:
+
+- **TypeSafe** serves jev by version and as `jev-latest`, which follows each release.
+- **OpenRouter** names models by OpenRouter's IDs. An alias that follows the latest release starts
+  with a tilde, as in `~typesafe/jev-latest`. The plugin is named `openrouter-decisions` so it can
+  run next to the [OpenRouter](/docs/integrations/openrouter/) chat plugin, which has
+  `openrouter`. The cost of each request is in `resp.Usage.Custom["cost"]`.
+- **Workers AI** names models by their Workers AI IDs, `@cf/` included. It names one model per
+  release, with no versions to pin.
+- **Ollama** serves the decision models it has pulled. The plugin is named `ollama-decisions`
+  because the [Ollama](/docs/integrations/ollama/) chat plugin has `ollama`. Ollama requires text
+  in every request, including requests with images.
+
+Pin a model version in production where the server offers one. Confidence thresholds tuned against
+one release do not carry over to the next release or to another model.
+
+### Any other server
+
+For a server with no constructor, set the fields of `SystemOne` yourself. `Provider` names the
+plugin and prefixes its model names, and must differ from every other plugin's name. `BaseURL` is
+the server's root. `Path` is the request path under it (default `/v1/systemone`; `"/"` posts to
+`BaseURL` itself), and `ModelsPath` is the path of the server's model listing, which the Dev UI
+shows. `APIKey` is optional, for a server that takes no key.
+
+```go
+liquid := &systemonex.SystemOne{
+	Provider:   "liquid",
+	BaseURL:    "https://api.liquid.ai/decisions",
+	ModelsPath: "/v1/models",
+	APIKey:     os.Getenv("LIQUID_API_KEY"),
+	Images:     systemonex.MediaSupported, // d1 reads images
+}
+
+g := genkit.Init(ctx, genkit.WithPlugins(liquid)) // liquid/d1
+```
+
+`Models` describes the models you know ahead of time, keyed by the server's model ID, so the Dev UI
+lists them even when the server has no listing. `HTTPClient` and `Headers` give you control of the
+transport. Requests that fail to connect, time out, are rate limited, or hit a server error are
+retried twice.
+
+A server whose request or response shape differs from the native protocol takes two hooks.
+`Route` gets the model ID and the native request body, and returns the path to append and the body
+to send. `Unwrap` returns the native response from the body the server sent.
+
+```go
+wrapped := &systemonex.SystemOne{
+	Provider: "wrapped",
+	BaseURL:  "https://decisions.example.com",
+	Path:     "/run",
+	// Send the native body under "input", with the model in the path.
+	Route: func(model string, body map[string]any) (string, any, error) {
+		delete(body, "model")
+		return "/" + model, map[string]any{"input": body}, nil
+	},
+	// Read the native response out of the server's envelope.
+	Unwrap: func(body []byte) ([]byte, error) {
+		var envelope struct{ Result json.RawMessage }
+		err := json.Unmarshal(body, &envelope)
+		return envelope.Result, err
+	},
+}
+```
+
+## Question types
+
+Each field of a decision type is one question. Its type is the kind of question, and its
+`jsonschema_description` tag is the instructions.
+
+| Field type | Question | Answer fields |
+| --- | --- | --- |
+| `systemonex.Choice[T]` | Pick one of the options in `T.Criteria()` | `Choice`, `Probabilities` per option, `Confidence` |
+| `systemonex.Score[L]` | Rate the state on the levels in `L.Levels()` | `Score` (the expected level, fractional), `Probabilities`, `Confidence`, `Legend` |
+| `systemonex.Noul` | Is this true? | `Probability`, where a value near 0.5 means the model could not tell |
+| `systemonex.NoulOf[C]` | Is this true, where `C.Criteria()` says what yes and no mean | `Probability` |
+
+The options of a choice, the levels of a score, and the meaning of yes and no belong to types, so
+every decision that asks the same question reuses them:
+
+- **Choice:** a string type with a `Criteria() map[T]string` method that describes each option.
+  Add a catch-all option, such as `other`, so the model is not forced into a bad fit.
+- **Score:** a type with a `Levels() []string` method that lists the levels, lowest first.
+- **Yes/no with criteria:** a type with a `Criteria() (yes, no string)` method.
+
+```go
+// Urgent says what yes and no mean for a yes/no question.
+type Urgent struct{}
+
+func (Urgent) Criteria() (yes, no string) {
+	return "Names a deadline, or says now or today", "No time pressure is expressed"
+}
+
+type Triage struct {
+	Department  systemonex.Choice[Dept]   `json:"department" jsonschema_description:"Which team should handle this ticket?"`
+	IsUrgent    systemonex.NoulOf[Urgent] `json:"isUrgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration systemonex.Score[Anger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+}
+```
+
+The answer types also have helpers:
+
+- `Choice.Ranked()` returns the options from most to least likely, and `Choice.Margin()` returns
+  the probability gap between the top two, which shows how decisive the choice is.
+- `Score.Level()` returns the nearest whole level, and `Score.Label()` returns that level's text
+  from the rubric.
+
+### Structured guidance
+
+Criteria and levels are strings. When a string is not enough, add a `Guidance()` method to the
+same type to send a structured description, such as what an option does not cover or examples of
+it. `Guidance() map[T]any` on a choice type is keyed by option, `Guidance() map[int]any` on a
+rubric is keyed by level index, and `Guidance() (yes, no any)` on a yes/no type covers each side.
+An object with no `what` key gets the criteria string as its `what`.
+
+```go
+func (Dept) Guidance() map[Dept]any {
+	return map[Dept]any{
+		"billing": map[string]any{
+			"not_for":  "Where an order is, or when it arrives",
+			"examples": []string{"I was charged twice for one order."},
+		},
+	}
+}
+```
+
+### One choice with the enum format
+
+For a single choice with no criteria, the built-in enum output format works with no decision type.
+The system message is the question, the enum values are the options, and `resp.Text()` is the
+chosen option:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("typesafe/jev-1.13.0"),
+	ai.WithSystem("Which team should handle this ticket?"),
+	ai.WithOutputEnums("billing", "technical", "other"),
+	ai.WithPrompt(ticket))
+if err != nil {
+	return "", err
+}
+team := Dept(resp.Text())
+```
+
+A `Choice` field gives you criteria per option and a probability per option, which the enum format
+does not.
+
+### Questions built at run time
+
+When the options come from data, such as the tools on hand or a tenant's own categories, there is
+no type to declare them on. Build the questions as values with `systemonex.Schema` and read the
+answers as a map of `systemonex.Answer`. `ChoiceQuestion`, `ScoreQuestion`, and `NoulQuestion`
+take what the typed questions take from their type parameters. A choice's options go out in the
+order given, and `Instructions` can be a string or any JSON value.
+
+```go
+options := make([]systemonex.ChoiceOption, 0, len(tools))
+for _, tool := range tools {
+	options = append(options, systemonex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
+}
+
+answers, _, err := genkit.GenerateData[map[string]systemonex.Answer](ctx, g,
+	ai.WithModelName("typesafe/jev-1.13.0"),
+	ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
+		"tool": systemonex.ChoiceQuestion{
+			Instructions: "Which tool serves the request?",
+			Options:      options,
+		},
+		"personal": systemonex.NoulQuestion{
+			Instructions: "Does the request involve the user's own data?",
+			Yes:          "Names the user's files, mail, or calendar",
+			No:           "Asks about the world at large",
+		},
+	})),
+	ai.WithPrompt(request))
+if err != nil {
+	return "", err
+}
+
+tool := (*answers)["tool"]
+if tool.Confidence < 0.8 {
+	return "", fmt.Errorf("no clear tool for %q", request)
+}
+return tool.Choice, nil
+```
+
+## The state
+
+The state is what the model evaluates. It is built from the user and model messages:
+
+- One message is sent as its value: the text, or the JSON of a data part.
+  `ai.WithPromptParts(ai.NewDataPart(v))` sends any value as an object state, so a question can
+  refer to its fields by name.
+- Several messages are sent as a list of turns with their roles, so a question can refer to what
+  the user said and what the model said.
+- With documents attached, the state holds the messages and the documents.
+
+A system message is never part of the state. It goes in front of every question's instructions,
+which makes it the place for context that all the questions share, such as what the state is and
+what its fields mean.
+
+```go
+type TicketRequest struct {
+	Ticket      string `json:"ticket"`
+	AccountTier string `json:"accountTier,omitempty"`
+}
+
+out, _, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("typesafe/jev-1.13.0"),
+	ai.WithSystem("The state is a support ticket; accountTier is the customer's plan."),
+	ai.WithPromptParts(ai.NewDataPart(input)))
+```
+
+Tools are refused: a decision model never calls anything.
+
+### Prompt files
+
+A decision type is a schema like any other, so a [prompt file](/docs/dotprompt/) can name it once
+you register it:
+
+```go
+genkit.DefineSchemasFor(g, TicketRequest{}, Triage{})
+```
+
+A template renders text. Set `stateJSON: true` in the config so that a template that renders JSON
+produces an object state:
+
+```yaml
+---
+model: typesafe/jev-1.13.0
+config:
+  stateJSON: true
+input:
+  schema: TicketRequest
+output:
+  schema: Triage
+---
+{{role "system"}}
+The state is a support ticket; accountTier is the customer's plan.
+
+{{role "user"}}
+{
+  "ticket": {{json ticket}},
+  "accountTier": {{json accountTier}}
+}
+```
+
+## Configuration
+
+`systemonex.Config` is the per-request config:
+
+- `StateJSON` parses each text part of the state as JSON, so rendered JSON becomes an object state.
+  Text that is not JSON is an error.
+- `Extra` merges fields that the plugin does not model into the request body, such as a gateway's
+  `session_id`. It cannot replace a field that the request builds itself, such as the model, the
+  state, or the questions.
+
+Pass it with `ai.WithConfig`. Where a model reference with a config is needed, such as in a
+fallback list, the plugin's `ModelRef` method builds one: `ts.ModelRef("jev-1.13.0", &cfg)` on the
+`TypeSafe()` plugin is `typesafe/jev-1.13.0`.
+
+## Reading the response
+
+The answers land in the typed fields. `systemonex.ResponseInfo(resp)` reads what the response
+carries beside them:
+
+- `Model` is the model version that answered, which is what confidence thresholds are tuned
+  against.
+- `Answers` holds the answers as the server sent them, keyed by question, including fields that
+  the answer types do not declare and the guidance that the server echoes back.
+- `Provider` and `ID` are a gateway's provider and generation ID.
+
+```go
+out, resp, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("openrouter-decisions/liquid/d1"),
+	ai.WithConfig(&systemonex.Config{Extra: map[string]any{"session_id": "support-queue"}}),
+	ai.WithPrompt(ticket))
+if err != nil {
+	return err
+}
+
+d := out.Department
+fmt.Println(d.Choice, d.Confidence, d.Margin(), d.Ranked())
+
+info := systemonex.ResponseInfo(resp)
+fmt.Println("answered by", info.Model)
+fmt.Println("raw answer:", info.Answers["department"])
+fmt.Println("cost:", resp.Usage.Custom["cost"]) // gateways that report a cost
+```
+
+## Media input
+
+Media parts become the request's images, audio, and videos. The text of the same messages stays
+the state. Media goes out as a base64 data URL. A part given as an HTTP URL is refused rather than
+fetched, so download the media and pass it as a data URL.
+
+```go
+damage, _, err := genkit.GenerateData[Damage](ctx, g,
+	ai.WithModelName("cloudflare-decisions/@cf/cloudflare/clef"),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("Customer's note: arrived like this."),
+		ai.NewMediaPart("image/jpeg", photoDataURL))))
+```
+
+A server that does not know a media field can drop it and answer without the media. To prevent
+that silent wrong answer, a plugin refuses each kind of media before the request is sent, unless
+its `Images`, `Audio`, or `Video` field is `systemonex.MediaSupported`. With `MediaSupported`, the
+server refuses the media for a model that cannot read it. `WorkersAI()` and `Ollama()` set
+`Images`, and Clef-omni on Workers AI also reads audio and video.
+
+A `ModelSpec` in `Models` overrides the plugin's setting for one model, kind by kind. Its zero
+value, `MediaDefault`, keeps the plugin's setting.
+
+```go
+ollama := systemonex.Ollama() // reads images
+ollama.Models["text-only-model"] = systemonex.ModelSpec{Images: systemonex.MediaUnsupported}
+```
+
+## Use a decision model as a tool approval judge
+
+The `ToolApproval` middleware can ask a model to allow, deny, or hold each tool call that is not on
+its allowlist. It asks through the enum format, so a decision model works as the judge and adds a
+few hundred milliseconds per judged call. The judge's input is a JSON document, so `StateJSON`
+sends it as an object state. See [Middleware](/docs/middleware/) for how the judge decides.
+
+```go
+ts := systemonex.TypeSafe()
+g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, ts))
+
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithPrompt("Clean up the build directory."),
+	ai.WithTools(listFiles, deleteFile),
+	ai.WithUse(&middleware.ToolApproval{
+		AllowedTools: []string{"listFiles"},
+		Judge:        ts.ModelRef("jev-1.13.0", &systemonex.Config{StateJSON: true}),
+		JudgePolicy:  "Never allow deleting files outside the build directory.",
+	}),
+)
+```
+
+## Limits
+
+- A question is a top-level field of the decision type. Decision types do not nest, and there are
+  no per-item questions: score a list with one call per item.
+- The instructions of a typed question are a string. For structured instructions, use a question
+  built at run time.
+- Each server sets its own limits on questions, tokens, and media. A server can cut a long state
+  to fit its limit and answer from what is left, with no error.
+- Responses do not stream: the answer arrives whole.
+
+</Lang>

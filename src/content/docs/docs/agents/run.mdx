@@ -22,7 +22,7 @@ Genkit agents are built around conversations that continue across turns. A sessi
 
 The JavaScript client exposes a high-level interface for driving an agent across turns.
 
-- **`AgentApi`** is the agent handle that `remoteAgent()` returns. You call `chat()`, `loadChat()`, `getSnapshot()`, and `abort()` on it; the per-turn methods live on the `AgentChat` that `chat()` returns.
+- **`AgentAPI`** is the agent handle that `remoteAgent()` returns. You call `chat()`, `loadChat()`, `getSnapshot()`, `waitForSnapshot()`, and `abort()` on it; the per-turn methods live on the `AgentChat` that `chat()` returns.
 - **`AgentChat`** is a stateful conversation. It sends normal turns, streams turns, resumes interrupts, detaches work, and tracks the next-turn state, including the session ID, for you.
 - **`AgentTurn`** represents one in-flight streaming turn. It gives you a stream, a final response, and an abort helper.
 - **`AgentResponse`** is the completed turn, with text, tool requests, interrupts, finish reason, snapshot ID, custom state, artifacts, and raw output.
@@ -59,6 +59,20 @@ await chat.send('What did we discuss last time?');
 ```
 
 When both `sessionId` and `snapshotId` are supplied, the snapshot selects the exact resume point and the session ID acts as an ownership guard.
+
+## Pass context to an in-process agent
+
+An agent from `ai.defineAgent()` accepts call options as the second argument to `chat()` and `loadChat()`. Use `context` to pass auth or other request data to the agent's tools and middleware:
+
+```ts
+const chat = weatherAgent.chat({}, { context: { auth: { uid: 'alice' } } });
+await chat.send('Weather in Tokyo?');
+
+// A per-call `context` replaces the bound one entirely; the two are not merged.
+await chat.send('And in Paris?', { context: { auth: { uid: 'bob' } } });
+```
+
+Options bound on `chat()` apply to every call on that chat, including detached tasks it starts, so auth carries through background work. `remoteAgent()` does not take `context`, because over HTTP the server derives it from the request; TypeScript rejects it at compile time.
 
 ## Restore a full chat
 
@@ -109,11 +123,11 @@ const res = await turn.response;
 console.log(res.finishReason);
 ```
 
-You can also call `turn.abort()`. Foreground aborts return an `aborted` response when cancellation is observed.
+You can also call `turn.abort()`. Foreground aborts return an `aborted` response when cancellation is observed. For an in-process agent, the chat keeps the turns that finished before the stop, so `chat.send({})` continues from there. With `remoteAgent`, the abort cancels the HTTP request and the chat stays at its previous snapshot; reload the session with `loadChat({ sessionId })` before you continue.
 
 ## Failed turns
 
-When a turn fails after the invocation starts, the client throws `AgentError`. The error carries the last-good state, snapshot ID, and response object when available.
+When a turn fails after the invocation starts, the client throws `AgentError`. The error carries the resume point and the response object when available: `err.snapshotId` for a server-managed agent, or the full state at `err.response.raw.state` for a client-managed one (`err.state` holds only the custom state). When the failed turn committed its completed tool rounds, the chat has already adopted that resume point, so `chat.send({})` retries the turn. See [Resume after a failure or a stop](/docs/agents/errors#resume-after-a-failure-or-a-stop).
 
 ```ts
 import { AgentError } from 'genkit/beta/client';
@@ -136,11 +150,28 @@ Initialization misuse, such as sending `state` to a server-managed agent or `ses
 
 <Lang lang="go">
 
-Go calls an agent through the agent value itself. `Run` and `RunText` send one turn, and `Connect` opens a live connection that carries many turns. Go has no `Chat` type and no background task handle: a detached invocation is tracked by its pending snapshot ID through `GetSnapshot`, `GetLatestSnapshot`, and `Abort`.
+The examples on this page use these imports:
+
+```go
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+```
+
+Go calls an agent through the agent value itself. `Run` and `RunText` send one turn, `Connect` opens a live connection that carries many turns, and `RunDetached` starts a turn the server finishes on its own, returning a `DetachedTask` to wait on. Go has no `Chat` type: continuity is an invocation option on each call. See [Background execution](/docs/agents/background) for detached work.
+
+`weatherAgent` below is the `*aix.Agent[WeatherState]` that `genkitx.DefineAgent` returned; see [Define agents](/docs/agents/define).
 
 ## Single-turn calls
 
-Use `RunText` for the common text-only case. Use `Run` when you need to send a full `AgentInput`, such as a resume payload or detach request.
+Use `RunText` for the common text-only case. Use `Run` when you need to send a full `aix.AgentInput`, such as a [resume payload](/docs/agents/interrupts) or a [detach request](/docs/agents/background).
 
 ```go
 out, err := weatherAgent.RunText(ctx, "Weather in Tokyo?")
@@ -158,21 +189,139 @@ fmt.Println(out.SnapshotID)
 For a structured input:
 
 ```go
-import aix "github.com/firebase/genkit/go/ai/exp"
-```
-
-```go
 out, err := weatherAgent.Run(ctx, &aix.AgentInput{
 	Message: ai.NewUserTextMessage("Weather in Tokyo?"),
 })
 ```
 
-In-band failures resolve as `AgentOutput` with `FinishReason` set to `failed` and structured details in `out.Error`. A non-nil Go error means the invocation did not start or could not produce an output.
+In-band failures resolve as an `AgentOutput` whose `FinishReason` is `aix.AgentFinishReasonFailed`, with structured details in `out.Error`. A non-nil Go error means the invocation did not start or could not produce an output. One case sets both: a run its caller stops, by cancelling the context or letting a deadline expire, returns the error that stopped it together with an output whose `FinishReason` is `aix.AgentFinishReasonAborted` and whose `SnapshotID` names where it stopped. Read `out` before giving up on `err`.
+
+## Turn input and output
+
+Three types carry everything that crosses the agent boundary, and each is small enough to read in full.
+
+```go
+type AgentInput struct {
+	// Detach moves the invocation to the background after this input.
+	Detach bool `json:"detach,omitempty"`
+	// Message is the user's input for this turn.
+	Message *ai.Message `json:"message,omitempty"`
+	// Resume answers an interrupted tool request instead of sending a new turn.
+	Resume *ToolResume `json:"resume,omitempty"`
+}
+```
+
+`Run` and `RunText` return `*aix.AgentOutput[State]`, where `State` is the agent's custom-state type. The type is generic, so a helper signature is `*aix.AgentOutput[WeatherState]`, never a bare `*aix.AgentOutput`.
+
+```go
+type AgentOutput[State any] struct {
+	// Artifacts are the artifacts produced during the session.
+	Artifacts []*Artifact `json:"artifacts,omitempty"`
+	// Error is the structured failure, set when FinishReason is "failed" or "aborted".
+	Error *status.Error `json:"error,omitempty"`
+	// FinishReason is why the invocation finished.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
+	// Message is the last model response message of the conversation.
+	Message *ai.Message `json:"message,omitempty"`
+	// SessionID identifies the conversation. Stable across resumes.
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID is the most recent turn-end snapshot. Empty with no store.
+	SnapshotID string `json:"snapshotId,omitempty"`
+	// State is the final conversation state, for client-managed agents only.
+	State *SessionState[State] `json:"state,omitempty"`
+	// Usage sums the agent's own model calls in this invocation, failed turns
+	// included. Nil when the invocation detached.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
+}
+```
+
+`State` is populated only when no session store is configured. A store-backed agent returns `SnapshotID` instead, and the state lives in the snapshot. See [Token usage](#token-usage) for `Usage`.
+
+```go
+type AgentStreamChunk struct {
+	// Artifact is a newly produced artifact.
+	Artifact *Artifact `json:"artifact,omitempty"`
+	// CustomPatch is an RFC 6902 JSON Patch against the custom state document.
+	CustomPatch JSONPatch `json:"customPatch,omitempty"`
+	// ModelChunk holds generation tokens from the model.
+	ModelChunk *ai.ModelResponseChunk `json:"modelChunk,omitempty"`
+	// TurnEnd is non-nil once the agent finishes the current input.
+	TurnEnd *TurnEnd `json:"turnEnd,omitempty"`
+}
+
+type TurnEnd struct {
+	// FinishReason is why this turn finished.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
+	// SnapshotID is the snapshot persisted at the end of this turn, if any.
+	SnapshotID string `json:"snapshotId,omitempty"`
+	// Usage sums the agent's own model calls in this turn, failed or not.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
+}
+```
+
+Every turn ends with exactly one `TurnEnd`, a failed turn included, and it arrives before the output resolves. Those four fields are the whole chunk, and more than one can be set on a single chunk. There is no interrupt field and no detach field: interrupts arrive on `chunk.ModelChunk`, so read them with `chunk.ModelChunk.Interrupts()`, and a detach is reported on `AgentOutput.FinishReason`. Tool requests and responses stream as ordinary model chunk content, so a tool-call indicator reads `chunk.ModelChunk.Content`.
+
+### Finish reasons
+
+The first six values are forwarded verbatim from the model's own finish reason. The last three are agent-specific and never arise from a model.
+
+| Constant | Wire value | Meaning |
+| --- | --- | --- |
+| `aix.AgentFinishReasonStop` | `stop` | The model stopped naturally. |
+| `aix.AgentFinishReasonLength` | `length` | Generation hit the token limit. |
+| `aix.AgentFinishReasonBlocked` | `blocked` | Generation was blocked, usually by a safety filter. Only a custom agent that forwards the model's reason reports it: a prompt-backed agent fails a blocked turn with `ai.ErrGenerationBlocked`. See [Agent error handling](/docs/agents/errors). |
+| `aix.AgentFinishReasonInterrupted` | `interrupted` | A tool paused for input. See [Agent interrupts](/docs/agents/interrupts). |
+| `aix.AgentFinishReasonOther` | `other` | The model stopped for some other reason. |
+| `aix.AgentFinishReasonUnknown` | `unknown` | The model gave no reason. |
+| `aix.AgentFinishReasonAborted` | `aborted` | The caller stopped the run: a cancelled context, an expired deadline, a closed transport, a limit it set such as `ai.WithMaxTurns` or a usage budget, or `Abort` on a detached run. The snapshot keeps the turns that finished. |
+| `aix.AgentFinishReasonDetached` | `detached` | The client detached and the work continues in the background. |
+| `aix.AgentFinishReasonFailed` | `failed` | A turn broke. Read `out.Error`. The snapshot keeps the tool rounds the turn completed. |
+
+## Token usage
+
+An agent reports what its own model calls used at three levels. Each is an `*ai.GenerationUsage`, summed field by field:
+
+- **`chunk.TurnEnd.Usage`** covers one turn, whether it succeeded or failed.
+- **`out.Usage`** covers one invocation, failed turns included. It is nil when the invocation detached, because the work continues.
+- **`SessionState.Usage`** covers the whole session. Snapshots persist it, so read it from `snap.State.Usage` for a server-managed agent or from `out.State.Usage` for a client-managed one.
+
+```go
+for chunk, err := range conn.Receive() {
+	if err != nil {
+		return fmt.Errorf("stream turn: %w", err)
+	}
+	if chunk.TurnEnd != nil && chunk.TurnEnd.Usage != nil {
+		fmt.Printf("turn used %d input and %d output tokens\n",
+			chunk.TurnEnd.Usage.InputTokens, chunk.TurnEnd.Usage.OutputTokens)
+		break
+	}
+}
+
+out, err := conn.Output()
+if err != nil {
+	return fmt.Errorf("finalize turn: %w", err)
+}
+if out.Usage != nil {
+	fmt.Printf("invocation used %d input tokens\n", out.Usage.InputTokens)
+}
+```
+
+The session usage is a ledger: each model call adds to it when the call returns, and nothing takes it back. A failed turn's messages can roll back, but its spend stays on the session. Usage counts the agent's own calls only. A sub-agent records its calls in its own session, so a sum of `out.Usage` across agents never counts a token twice. A tool that calls `genkit.Generate` directly, with no agent in between, counts toward the turn that ran it.
+
+To stop a run or a session that spends too much, attach the `Budget` middleware. See [Middleware](/docs/middleware/).
 
 ## Invocation options
 
+`Run`, `RunText`, and `Connect` all take the same `aix.InvocationOption[State]` values.
+
+```go
+func WithSessionID[State any](id string) InvocationOption[State]
+func WithSnapshotID[State any](id string) InvocationOption[State]
+func WithState[State any](state *SessionState[State]) InvocationOption[State]
+```
+
 - **`aix.WithSessionID[State](id)`** resumes the latest server-managed snapshot for a conversation.
-- **`aix.WithSnapshotID[State](id)`** resumes or branches from a specific server-managed snapshot.
+- **`aix.WithSnapshotID[State](id)`** resumes or branches from a specific server-managed snapshot. See [Session stores](/docs/agents/session-stores).
 - **`aix.WithState[State](state)`** continues a client-managed conversation by sending the full state.
 
 `WithState` is mutually exclusive with `WithSessionID` and `WithSnapshotID`. `WithSessionID` and `WithSnapshotID` can be combined to assert that the snapshot belongs to the session.
@@ -183,13 +332,57 @@ next, err := weatherAgent.RunText(ctx, "What about Paris?",
 )
 ```
 
+Because all three return the same interface type, you can build the list up and spread it into any entry point:
+
+```go
+opts := []aix.InvocationOption[WeatherState]{}
+if sessionID != "" {
+	opts = append(opts, aix.WithSessionID[WeatherState](sessionID))
+}
+
+out, err := weatherAgent.RunText(ctx, "What about Paris?", opts...)
+```
+
+## Bounding a turn
+
+There is no per-turn deadline option. Cap the tool loop inside a turn with `ai.WithMaxTurns(n)` in the agent's `aix.InlinePrompt`, and bound wall-clock time with `context.WithTimeout` on the context you pass to `Run`, `RunText`, or `Connect`.
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+defer cancel()
+
+out, err := weatherAgent.RunText(ctx, "Plan a two-week itinerary.")
+```
+
+Cancelling that context stops the invocation. `Run` and `RunText` return the cancellation error together with an output whose `FinishReason` is `aix.AgentFinishReasonAborted`. The turn that was in flight is discarded whole, and the `aborted` snapshot the output names holds the turns that finished, so it is a resume point. `ai.WithMaxTurns` also ends the run as `aborted`, because a limit the caller set is a caller stop rather than a failure, but it reports in band: `Run` returns the output with a nil error, and `out.Error` carries `ai.ErrMaxTurnsExceeded`. A custom agent should still check `ctx.Err()` between turns.
+
+## Re-attempt a turn
+
+An input with neither `Message` nor `Resume` runs the last turn again on the conversation as it stands. That is how a `failed` or `aborted` snapshot is picked up without repeating the tool calls that already succeeded:
+
+```go
+retried, err := weatherAgent.Run(ctx, &aix.AgentInput{},
+	aix.WithSnapshotID[WeatherState](out.SnapshotID),
+)
+```
+
+An empty input is rejected with `INVALID_ARGUMENT` only when the session has no messages to continue. A new message on the same snapshot changes course instead, and the previous snapshot ID rewinds past the turn altogether. See [Agent error handling](/docs/agents/errors) for deciding whether a retry is worth making.
+
 ## Open a bidirectional stream
 
 Use `Connect` for multi-turn local clients and streaming UIs. The connection lets you send text, messages, resume payloads, or a detach signal while receiving chunks.
 
 Reach for `Connect` when the caller needs direct control over both sides of the conversation on one live connection. It is useful for command-line tools, local services, workers, and lower-level integrations that need to stream output, observe custom state patches, handle interrupts, send a resume payload, or send another message after a `TurnEnd` without reconnecting.
 
-For most single-turn server code, use `RunText` or `Run`. For browser, mobile, and other HTTP clients, use the JavaScript `chat().send()` and `chat().sendStream()` clients through `remoteAgent()` rather than managing a bidirectional stream directly.
+For most single-turn server code, use `RunText` or `Run`. For browser, mobile, and other HTTP clients, [serve the agent over HTTP](/docs/agents/http) and drive it from the prebuilt client rather than managing a bidirectional stream directly.
+
+`Connect` takes the same invocation options as `Run` and `RunText`, so a streaming connection can resume a stored conversation:
+
+```go
+conn, err := weatherAgent.Connect(ctx, aix.WithSessionID[WeatherState](previousSessionID))
+```
+
+A full turn over a fresh connection:
 
 ```go
 conn, err := weatherAgent.Connect(ctx)
@@ -197,6 +390,7 @@ if err != nil {
 	// Connect fails when the init payload is rejected before any turn runs.
 	return fmt.Errorf("connect to agent: %w", err)
 }
+defer conn.Close()
 
 if err := conn.SendText("Weather in Tokyo?"); err != nil {
 	return fmt.Errorf("send message: %w", err)
@@ -223,9 +417,21 @@ if err != nil {
 fmt.Println(out.SnapshotID)
 ```
 
-Breaking from `Receive` does not cancel the connection. Multi-turn clients commonly break on `TurnEnd`, send another input, and call `Receive` again. Call `Output()` when the invocation should finish. Do not call `Output()` from one goroutine while another goroutine is iterating `Receive`.
+Breaking from `Receive` does not cancel the connection. Multi-turn clients commonly break on `TurnEnd`, send another input, and call `Receive` again.
 
 The `cli.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) is a complete client written this way: it streams each turn, renders tool calls, routes interrupts, and drives detach and resume, all against the `Agent` and `AgentConnection` surface.
+
+## Connection lifecycle
+
+- **`conn.Close()`** signals that no more inputs will be sent. Write `defer conn.Close()` right after `Connect` so an early return on an error path still releases the invocation.
+- **`conn.Output()`** is the terminator. It closes the input side for you, drains any chunks `Receive` did not consume, and blocks until the agent finalizes. It is idempotent, so the deferred `Close` and a later `Output()` do not conflict.
+- **`conn.Done()`** returns a channel closed when the invocation completes, for a caller that waits on it in a `select`.
+
+## Concurrency
+
+An `Agent` value is immutable after definition and safe for concurrent use. Share one `*aix.Agent[State]` across every HTTP handler and call `Run`, `RunText`, `Connect`, `RunDetached`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort` from any goroutine. A `DetachedTask` holds a snapshot ID and nothing else, so it is safe to share too.
+
+An `AgentConnection` belongs to one invocation and is not a shared object. Do not call `Output()` from one goroutine while another iterates `Receive()`: both consume the stream and would split chunks between them. Finish `Receive` first.
 
 ## Live custom state
 
@@ -247,7 +453,37 @@ for chunk, err := range conn.Receive() {
 }
 ```
 
+`Custom()` returns `(State, error)`, the state value itself rather than a pointer, so there is nothing to nil-check. Before the first patch of a turn arrives it returns the zero value of `State`. The error is non-nil only when an applied patch cannot decode into `State`. The patch itself is an RFC 6902 JSON Patch rooted at the custom document; see [Sessions and state](/docs/agents/state).
+
 The authoritative final state is on `AgentOutput.State` for client-managed agents, or in the saved snapshot for server-managed agents.
+
+## Agent handles
+
+Code that knows an agent only by name, such as an orchestrator, a middleware, or a tool, drives it through an `*aix.AgentHandle`: the same agent with its custom state fixed to `json.RawMessage`. `genkitx.LookupAgent` finds one in the registry, and `agent.Handle()` returns one for an agent value you already hold.
+
+```go
+h := genkitx.LookupAgent(g, "weather") // nil on a miss, like every Lookup
+if h == nil {
+	return fmt.Errorf("no agent named %q", "weather")
+}
+
+out, err := h.RunText(ctx, "Weather in Tokyo?",
+	aix.WithSessionID[json.RawMessage](sessionID),
+)
+```
+
+A handle has every call the typed agent has (`Run`, `RunText`, `RunDetached`, `Task`, `GetSnapshot`, `GetLatestSnapshot`, `WaitForSnapshot`, and `Abort`), plus `Name()`, `Description()`, `Ref()`, and `Metadata()`, which reports whether the agent is server-managed and abortable. Its invocation options are the same `aix.InvocationOption` values typed at `json.RawMessage`, resolved through the same code as the typed calls, so it rejects the same inputs with the same wording. Every read goes through the agent's companion actions: the state transform applies and a stale detached row reads as `expired`, exactly as over HTTP. `LookupAgent` needs no `genkit.WithExperimental()`, since it only reads the registry and only the gated constructors can register an agent.
+
+A handle does not care where the agent runs. `genkitx.DefineRemoteAgent` returns a handle to an agent that another Genkit app serves over HTTP, with the same calls, and registers it so `LookupAgent` and the agents middleware find it by name. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent).
+
+## Next steps
+
+- [Sessions and state](/docs/agents/state) covers custom state, artifacts, and how patches are produced.
+- [Session stores](/docs/agents/session-stores) covers snapshot IDs, branching, and store implementations.
+- [Agent interrupts](/docs/agents/interrupts) covers building the `Resume` payload.
+- [Background execution](/docs/agents/background) covers detached tasks, waiting, and abort.
+- [Serve agents over HTTP](/docs/agents/http) covers the wire protocol and browser clients.
+- [Agent error handling](/docs/agents/errors) covers failed turns and rejected init payloads.
 
 </Lang>
 
@@ -328,21 +564,27 @@ Per-turn `context` is honored by the in-process transport, where you drive a loc
 
 ## Abort a foreground turn
 
-Cancel a foreground turn using the `abort()` method on the active `AgentTurn`.
+Cancel a foreground turn using `turn.abort()` on the active `AgentTurn`, or by passing a `CancellationToken` from a `CancellationController` to `chat.send()` or `chat.sendStream()`.
 
 ```dart
-final turn = chat.sendStream(text: 'Write a long report.');
+final controller = CancellationController();
+final turn = chat.sendStream(
+  text: 'Write a long report.',
+  cancel: controller.token,
+);
 
 // Later, abort the turn:
-turn.abort();
+controller.cancel('user cancelled'); // or: turn.abort();
 
 final res = await turn.response;
 print(res.finishReason.value); // 'aborted'
 ```
 
+An aborted turn does not throw `AgentError`; it resolves with `res.finishReason == AgentFinishReason.aborted`. For a server-managed agent, the aborted turn commits a rerunnable snapshot (`res.snapshotId`) holding the last-good history before the turn.
+
 ## Failed turns
 
-When a turn fails after the invocation starts, the client throws `AgentError`. The exception carries details of the failure along with the last-good state.
+When a turn fails after the invocation starts, the client throws `AgentError`. The exception carries details of the failure along with the last-good state (`err.response.raw.state` holds the full `SessionState`; `err.state` holds the typed custom state).
 
 ```dart
 try {
@@ -354,12 +596,14 @@ try {
 }
 ```
 
+For a server-managed agent, failed turns commit a rerunnable snapshot with the last-good state. Resume a failed snapshot with `agent.chat(snapshotId: err.snapshotId)` (or an aborted snapshot with `agent.chat(snapshotId: res.snapshotId)`) and send an empty message to re-drive the turn, or new text to steer the retry. See [Agent error handling](/docs/agents/errors) for the full recovery flow.
+
 Initialization misuse, such as sending `state` to a server-managed agent, is rejected before a turn starts.
 
 </Lang>
 <Lang lang="python">
 
-Local agents from `ai.define_agent()` and remote clients from `remote_agent()` share this interface, so the same code drives both.
+Local agents from `ai.define_agent()` (in `genkit.exp`) and remote clients from `remote_agent()` (in `genkit.exp.agent`) share this interface, so the same code drives both. `weather_agent` below is the agent `ai.define_agent()` returned; see [Define agents](/docs/agents/define).
 
 ## Start a chat
 
@@ -368,6 +612,7 @@ chat = weather_agent.chat()
 res = await chat.send('Weather in Tokyo?')
 
 print(res.text)
+# => It is 72°F and sunny in Tokyo.
 print(res.session_id)
 print(res.snapshot_id)
 print(res.state)
@@ -393,6 +638,8 @@ print(chat.state)
 await chat.send('Continue from there.')
 ```
 
+`load_chat()` points the chat at the stored row as is. If the latest turn failed or was aborted, the next `send()` on that chat returns a failed response with `INVALID_ARGUMENT`. Use `chat(session_id=...)` to continue from the last completed turn instead.
+
 Use `get_snapshot()` when you want read-only data (such as checking background task status, inspecting errors, or auditing session state) without opening a chat session. Use `load_chat()` when you want an interactive `AgentChat` instance to continue the conversation and send new turns.
 
 ## Stream a turn
@@ -411,39 +658,45 @@ async for chunk in turn.stream:
 
 res = await turn.response
 print(res.finish_reason)
+# => stop
 ```
 
 `chat.send_stream()` returns an `AgentTurn`. Iterate `turn.stream` for live chunks, or await `turn.response` for the final output. Both paths apply custom-state patches so `chat.state` stays current.
 
 ## Abort a foreground turn
 
-Cancel a foreground turn with `turn.abort()`. This stops the client from listening; for store-backed agents, call `chat.abort()` if you also need to stop server-side work.
+Call `await turn.abort()` to stop listening to a foreground turn. The client detaches, and the server turn keeps running in the background.
 
 ```python
 turn = chat.send_stream('Write a long report.')
 
-# Later:
-await turn.abort()
-
-res = await turn.response
-print(res.finish_reason)  # AgentFinishReason.ABORTED
+async for chunk in turn.stream:
+    if chunk.text:
+        print(chunk.text, end='', flush=True)
+    if user_pressed_stop():
+        await turn.abort()
+        break
 ```
+
+After `turn.abort()`, `await turn.response` raises `asyncio.CancelledError`. Cancelling the task or hitting an `asyncio.timeout()` deadline (Python 3.11+) detaches the client the same way and raises `CancelledError` or `TimeoutError`.
+
+To stop server-side work on a store-backed agent, run the turn with `chat.detach()` and call `await task.abort()`. See [Background execution](/docs/agents/background).
 
 ## Failed turns
 
-When a turn fails after the invocation starts, the client raises `AgentError`. The exception carries status, details, the latest snapshot ID, and the recoverable last-good state.
+When a turn fails during execution, such as a model error or an unhandled tool exception, `chat.send()` and `turn.response` do not raise. They return an `AgentResponse` with `finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`). The chat drops the failed turn's user message and custom-state patches, and the next `chat.send()` continues from the last completed snapshot (or client state).
 
 ```python
-from genkit.agent import AgentError
+res = await chat.send('Use a broken tool.')
 
-try:
-    await chat.send('Use a broken tool.')
-except AgentError as err:
-    print(err.status)
-    print(err.snapshot_id)
-    print(err.state)
+if res.error:
+    print(res.error.status, res.error.message)
+    # => INTERNAL internal error
+
+    # The chat rolled back, so this turn continues from the last completed one.
+    res = await chat.send('Try a fallback approach.')
 ```
 
-Initialization misuse, such as sending `state` to a server-managed agent, raises `AgentInitError` before a turn starts.
+`chat.send()` raises `GenkitError` only when no turn result arrives. Init misuse that the client can detect, such as passing `state` to a store-backed agent, raises `AgentInitError` (a `GenkitError` subclass) from `agent.chat()` itself, before any turn starts. See [Agent error handling](/docs/agents/errors) for recovery patterns.
 
 </Lang>

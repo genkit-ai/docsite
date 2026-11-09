@@ -215,6 +215,47 @@ func main() {
 }
 ```
 
+`Timeout` bounds each generate request, the streamed body included, as a
+deadline on the request's context.
+
+### Hosted and proxied servers
+
+A server behind authentication takes two more fields. `Headers` are sent with
+every request the plugin makes, and win over the plugin's own. When `Headers`
+has no `Authorization` header, the plugin sends the `OLLAMA_API_KEY` environment
+variable as a bearer token, as Ollama's own clients do, so a hosted server needs
+no code at all. (The snippets in this section add `net/http`, `os`, and
+`golang.org/x/oauth2` to the imports.)
+
+```go
+// OLLAMA_API_KEY is set in the environment.
+g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
+	ServerAddress: "https://ollama.com",
+}))
+```
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
+	ServerAddress: "https://ollama.example.com",
+	Headers:       http.Header{"X-Api-Key": []string{os.Getenv("PROXY_KEY")}},
+}))
+```
+
+A credential that changes per request belongs in the transport. `HTTPClient`
+replaces the client the plugin sends every request with, so a client from
+`oauth2.NewClient` or `idtoken.NewClient` refreshes its own token, and the same
+field covers proxies, TLS, and instrumentation:
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
+	ServerAddress: "https://ollama.example.com",
+	HTTPClient:    oauth2.NewClient(ctx, tokenSource),
+}))
+```
+
+`Timeout` still applies to a client you supply, on top of any timeout the client
+sets itself.
+
 ## Usage
 
 Name any model your Ollama server has pulled. The plugin resolves it on demand,
@@ -320,21 +361,17 @@ See [Generating content](/docs/models) for more information.
 
 <Lang lang="python">
 
-The Ollama plugin provides interfaces to any of the local LLMs supported by [Ollama](https://ollama.com/).
+The `genkit-ollama` package connects Genkit to a local or remote [Ollama](https://ollama.com/) server. Any model or embedder the server has pulled resolves as `'ollama/<name>'`, with its tool and vision support read from the server.
 
 ## Prerequisites
 
-This plugin requires that you first install and run the Ollama server. You can follow the instructions on the [Download Ollama](https://ollama.com/download) page.
-
-Use the Ollama CLI to download the models you are interested in. For example:
+Install and start Ollama from [ollama.com/download](https://ollama.com/download), then pull the models you want to call:
 
 ```bash
 ollama pull llama3.2
-ollama pull gemma2
-ollama pull mistral
+ollama pull qwen3
+ollama pull nomic-embed-text
 ```
-
-For development, you can run Ollama on your development machine. Deployed apps usually run Ollama on a GPU-accelerated machine that is different from the one hosting the app backend running Genkit.
 
 ## Installation
 
@@ -344,204 +381,189 @@ uv add genkit-ollama
 
 ## Configuration
 
-To use this plugin, import `Ollama` and specify it when you initialize Genkit:
+`Ollama()` connects to `OLLAMA_HOST` when it is set, otherwise to `http://127.0.0.1:11434`. There is no model list to register; name any pulled model as `'ollama/<name>'`:
 
 ```python
 from genkit import Genkit
-from genkit_ollama import Ollama, ollama_name
-from genkit_ollama.models import ModelDefinition
+from genkit_ollama import Ollama
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[
-                ModelDefinition(name='llama3.2'),
-                ModelDefinition(name='gemma2'),
-            ],
-            server_address='http://127.0.0.1:11434',  # default local address
-        )
-    ],
-    model=ollama_name('llama3.2'),  # optional default model
+    plugins=[Ollama()],
+    model='ollama/llama3.2',
 )
 ```
 
-### Authentication
+### Custom endpoints and headers
 
-If you would like to access remote deployments of Ollama that require custom headers (such as API keys), you can specify those in the Ollama plugin configuration:
+Pass `base_url`, `request_headers`, and `timeout` (in seconds) when pointing at a remote or authenticated Ollama deployment. `base_url` is the server root: requests go to `{base_url}/api/chat`, so a URL ending in `/v1` or `/api` raises `ValueError`.
 
 ```python
+import os
+from genkit import Genkit
+from genkit_ollama import Ollama
+
 ai = Genkit(
     plugins=[
         Ollama(
-            models=[ModelDefinition(name='gemma2')],
-            server_address='https://my-deployment',
-            request_headers={
-                'api-key': 'API Key goes here'
-            },
+            base_url='https://ollama.internal:11434',
+            request_headers={'Authorization': f"Bearer {os.environ['OLLAMA_TOKEN']}"},
+            timeout=60.0,
         )
     ],
 )
 ```
+
+When `request_headers` sets no `Authorization` header, the Ollama client sends the `OLLAMA_API_KEY` environment variable as a bearer token, so hosted Ollama needs only `Ollama(base_url='https://ollama.com')`. To bill a different key per call, pass `context={'secrets': {'api_key': tenant_key}}` to `ai.generate()`; that key authenticates the call only and stays out of traces.
+
+For a token that expires, pass a callable instead of a dict. It takes no arguments, can be sync or async, and runs before every request, so it should cache the token itself. This one sends a Google ID token to an Ollama server on Cloud Run:
+
+```python
+import asyncio
+
+import google.auth.transport.requests
+import google.oauth2.id_token
+from genkit import Genkit
+from genkit_ollama import Ollama
+
+OLLAMA_URL = 'https://ollama-gpu-abc123.a.run.app'
+credentials = google.oauth2.id_token.fetch_id_token_credentials(OLLAMA_URL)
+
+async def cloud_run_headers() -> dict[str, str]:
+    # Refresh off the event loop, and only when the cached token has expired.
+    if not credentials.valid:
+        await asyncio.to_thread(credentials.refresh, google.auth.transport.requests.Request())
+    return {'Authorization': f'Bearer {credentials.token}'}
+
+ai = Genkit(plugins=[Ollama(base_url=OLLAMA_URL, request_headers=cloud_run_headers)])
+```
+
+An unreachable server doesn't make `ai.generate()` raise. The response comes back with `response.error.status` set to `UNAVAILABLE`, or `DEADLINE_EXCEEDED` when `timeout` runs out. See [Error types](/docs/error-types/).
 
 ## Usage
 
-This plugin doesn't statically export model references. Specify one of the models you configured using the `ollama_name()` helper or a string identifier:
-
 ```python
 from genkit import Genkit
-from genkit_ollama import Ollama, ollama_name
-from genkit_ollama.models import ModelDefinition
+from genkit_ollama import Ollama, OllamaConfig
 
-ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name='llama3.2')],
-        )
-    ],
-)
+ai = Genkit(plugins=[Ollama()])
 
 @ai.flow()
-async def llama_flow(prompt: str) -> str:
-    """Generate text using Llama.
-
-    Args:
-        prompt: The prompt to generate from.
-
-    Returns:
-        The generated text.
-    """
+async def summarize_notes(notes: str) -> str:
     response = await ai.generate(
-        model=ollama_name('llama3.2'),
-        prompt=prompt,
+        model='ollama/llama3.2',
+        prompt=f'Summarize these release notes in three bullet points:\n\n{notes}',
+        config=OllamaConfig(
+            temperature=0.2,
+            max_output_tokens=256,
+            num_ctx=16_384,
+            keep_alive='30m',
+        ),
     )
     return response.text
 ```
 
-Or reference the model directly by string:
+For thinking-capable models (such as `qwen3` or `deepseek-r1`), set `think=True` (or `'low'`, `'medium'`, `'high'`) on `OllamaConfig`. The model's thinking comes back as reasoning parts on `response.message.content`, separate from `response.text`.
 
-```python
-response = await ai.generate(
-    model='ollama/llama3.2',
-    prompt='Tell me a joke.',
-)
-```
+`OllamaConfig` rejects unknown keys, so a misspelled `num_ctx` fails instead of running with the default context window. `max_output_tokens` and `stop_sequences` map to Ollama's `num_predict` and `stop`. Pass an Ollama option the class doesn't declare in `OllamaConfig(extra={...})`.
+
+## Model capabilities
+
+The plugin asks the server what each model supports instead of guessing from its name:
+
+- **Listing**: the Dev UI's model list calls `GET /api/tags`. Names containing `embed` become embedders; every other model gets one `POST /api/show`, at most four at a time, each bounded by five seconds or by `timeout` when that is shorter.
+- **Resolving by name**: the first `ai.generate(model='ollama/qwen3')` makes the same `/api/show` call before the request.
+- **Mapping**: the reported `tools` capability sets `supports.tools`, and `vision` sets `supports.media`.
+- **Caching**: results are kept per process, keyed by model name and the digest from `/api/tags`, so a re-pulled model is probed again.
+- **Fallback**: a failed probe (server down, model not pulled, a server too old to report capabilities) advertises every capability and is retried after 30 seconds. The request still goes to `/api/chat`.
 
 ## Advanced usage
 
 ### Embeddings
 
-The Ollama plugin supports embeddings, which can be used for similarity searches and other NLP tasks:
+Any pulled embedding model, such as `nomic-embed-text`, resolves under `'ollama/<name>'`:
 
 ```python
 from genkit import Genkit
 from genkit_ollama import Ollama
-from genkit_ollama.embedders import EmbeddingDefinition
 
-ai = Genkit(
-    plugins=[
-        Ollama(
-            server_address='http://localhost:11434',
-            embedders=[
-                EmbeddingDefinition(
-                    name='nomic-embed-text',
-                    dimensions=768,
-                )
-            ],
-        )
-    ],
-)
+ai = Genkit(plugins=[Ollama()])
 
 @ai.flow()
-async def get_embeddings(text: str):
-    """Generate embeddings for text.
-
-    Args:
-        text: The text to embed.
-
-    Returns:
-        The embedding vector.
-    """
-    result = await ai.embed(
+async def embed_text(text: str) -> list[float]:
+    embeddings = await ai.embed(
         embedder='ollama/nomic-embed-text',
         content=text,
     )
-    return result
+    return embeddings[0].embedding
 ```
 
 ### Streaming
 
-Ollama models support streaming responses for real-time output:
-
 ```python
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 @ai.flow()
-async def streaming_story(topic: str, ctx: ActionRunContext) -> str:
-    """Generate a story with streaming output.
-
-    Args:
-        topic: Story topic.
-        ctx: Action context for streaming chunks.
-
-    Returns:
-        The complete generated story.
-    """
+async def streaming_story(topic: str, ctx: FlowContext[str]) -> str:
     stream_response = ai.generate_stream(
-        model=ollama_name('llama3.2'),
-        prompt=f'Write a short story about {topic}',
+        model='ollama/llama3.2',
+        prompt=f'Write a short story about {topic}.',
     )
     async for chunk in stream_response.stream:
         ctx.send_chunk(chunk.text)
     return (await stream_response.response).text
 ```
 
-### Tool Calling
+### Tool calling
 
-Some Ollama models support tool calling (e.g., Mistral, Llama 3.1+):
+Models with tool support (such as `llama3.2`, `qwen3`, and `mistral-nemo`) execute Genkit tools automatically:
 
 ```python
 from pydantic import BaseModel, Field
 
 class WeatherInput(BaseModel):
-    """Input for weather tool."""
     location: str = Field(description='City name')
 
 @ai.tool()
 async def get_weather(input: WeatherInput) -> str:
     """Get the current weather for a location."""
-    # In a real implementation, call a weather API
     return f'The weather in {input.location} is 72°F and sunny.'
 
 @ai.flow()
 async def weather_flow(location: str) -> str:
-    """Get weather information using Ollama with tool calling.
-
-    Note: Requires a model that supports tools, such as mistral-nemo
-    or llama3.1 and newer.
-
-    Args:
-        location: The location to get weather for.
-
-    Returns:
-        Weather information for the location.
-    """
     response = await ai.generate(
-        model=ollama_name('mistral-nemo'),
+        model='ollama/mistral-nemo',
         prompt=f"What's the weather like in {location}?",
         tools=[get_weather],
     )
     return response.text
 ```
 
-### Structured Output
+### Multimodal input
 
-Generate structured data using Pydantic models:
+Pass images to vision-capable models (such as `llava` or `gemma3`) as `data:` or `http(s):` URLs via `Part.from_media()`. Local filesystem paths are rejected:
+
+```python
+import base64
+from pathlib import Path
+from genkit import Part
+
+image_b64 = base64.b64encode(Path('diagram.png').read_bytes()).decode('ascii')
+
+response = await ai.generate(
+    model='ollama/gemma3',
+    prompt=[
+        Part.from_text('Describe the components in this diagram.'),
+        Part.from_media(url=f'data:image/png;base64,{image_b64}', content_type='image/png'),
+    ],
+)
+```
+
+### Structured output
 
 ```python
 from pydantic import BaseModel, Field
 
 class Recipe(BaseModel):
-    """A cooking recipe."""
     name: str = Field(description='Recipe name')
     ingredients: list[str] = Field(description='List of ingredients')
     steps: list[str] = Field(description='Cooking steps')
@@ -549,38 +571,12 @@ class Recipe(BaseModel):
 
 @ai.flow()
 async def create_recipe(dish: str) -> Recipe:
-    """Generate a recipe with structured output.
-
-    Args:
-        dish: The dish to create a recipe for.
-
-    Returns:
-        A structured recipe.
-    """
     response = await ai.generate(
-        model=ollama_name('llama3.2'),
+        model='ollama/llama3.2',
         prompt=f'Create a recipe for {dish}',
         output_schema=Recipe,
     )
     return response.output
-```
-
-### Custom Server Configuration
-
-For production deployments or custom Ollama server locations:
-
-```python
-ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name='llama3.2')],
-            server_address='http://ollama-server.internal:11434',
-            request_headers={
-                'X-Custom-Header': 'value',
-            },
-        )
-    ],
-)
 ```
 
 </Lang>

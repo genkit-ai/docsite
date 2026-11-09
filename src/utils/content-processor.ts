@@ -33,13 +33,155 @@ export interface ProcessedDocument {
   filePath: string;
 }
 
+type LanguageBlockNode = {
+  langs: string[];
+  openStart: number;
+  openEnd: number;
+  closeStart: number;
+  closeEnd: number;
+  children: LanguageBlockNode[];
+};
+
+function getCodeSpans(source: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const fenceRegex = /^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
+  for (const match of source.matchAll(fenceRegex)) {
+    if (match.index !== undefined) {
+      spans.push([match.index, match.index + match[0].length]);
+    }
+  }
+  const inlineRegex = /`[^`\n]+`/g;
+  for (const match of source.matchAll(inlineRegex)) {
+    if (match.index !== undefined) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (!spans.some(([s, e]) => start >= s && start < e)) {
+        spans.push([start, end]);
+      }
+    }
+  }
+  return spans;
+}
+
+function parseLanguageBlocks(source: string): LanguageBlockNode[] {
+  const codeSpans = getCodeSpans(source);
+  const tagRegex = /<(\/?)(Lang)\b([^>]*)>/g;
+  const stack: Array<LanguageBlockNode & { tagName: string }> = [];
+  const roots: LanguageBlockNode[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagRegex.exec(source)) !== null) {
+    const [fullTag, closingSlash, tagName, attrs] = match;
+    const isClosing = closingSlash === '/';
+    const tagStart = match.index;
+    const tagEnd = match.index + fullTag.length;
+
+    if (codeSpans.some(([s, e]) => tagStart >= s && tagStart < e)) {
+      continue;
+    }
+
+    if (!isClosing) {
+      const langMatch = attrs.match(
+        /\blang\s*=\s*(?:"([^"]+)"|'([^']+)'|\{([^}]+)\})/i,
+      );
+      const langs = langMatch
+        ? (langMatch[1] || langMatch[2] || langMatch[3] || '')
+            .replace(/[\[\]'"\s]+/g, ' ')
+            .split(/[\s,]+/)
+            .map((value) => normalizeLanguage(value.trim()))
+            .filter(Boolean)
+        : [];
+      const node: LanguageBlockNode & { tagName: string } = {
+        langs,
+        openStart: tagStart,
+        openEnd: tagEnd,
+        closeStart: tagEnd,
+        closeEnd: tagEnd,
+        children: [],
+        tagName,
+      };
+      stack.push(node);
+      continue;
+    }
+
+    let openNodeIndex = -1;
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      if (stack[i].tagName === tagName) {
+        openNodeIndex = i;
+        break;
+      }
+    }
+    if (openNodeIndex === -1) {
+      continue;
+    }
+
+    const node = stack.splice(openNodeIndex, 1)[0];
+    node.closeStart = tagStart;
+    node.closeEnd = tagEnd;
+    const finalized: LanguageBlockNode = {
+      langs: node.langs,
+      openStart: node.openStart,
+      openEnd: node.openEnd,
+      closeStart: node.closeStart,
+      closeEnd: node.closeEnd,
+      children: node.children,
+    };
+
+    const parent = stack[stack.length - 1];
+    if (parent) {
+      parent.children.push(finalized);
+    } else {
+      roots.push(finalized);
+    }
+  }
+
+  return roots.sort((a, b) => a.openStart - b.openStart);
+}
+
+function renderLanguageSegment(
+  source: string,
+  nodes: LanguageBlockNode[],
+  start: number,
+  end: number,
+  language: string,
+): string {
+  let cursor = start;
+  let output = '';
+
+  for (const node of nodes) {
+    if (node.openStart < start || node.closeEnd > end) {
+      continue;
+    }
+    output += source.slice(cursor, node.openStart);
+    if (node.langs.includes(language)) {
+      output += renderLanguageSegment(
+        source,
+        node.children,
+        node.openEnd,
+        node.closeStart,
+        language,
+      );
+    }
+    cursor = node.closeEnd;
+  }
+
+  output += source.slice(cursor, end);
+  return output;
+}
+
 // Language filtering utility function
-export function filterContentByLanguage(content: string, targetLang: string = 'js'): string {
+export function filterContentByLanguage(
+  content: string,
+  targetLang: string = 'js',
+): string {
   // Normalize language parameter
   const normalizedLang = normalizeLanguage(targetLang);
 
   // Remove the language controls div (contains copy controls)
-  content = content.replace(/<div[^>]*language-controls[^>]*>[\s\S]*?<\/div>/g, '');
+  content = content.replace(
+    /<div[^>]*language-controls[^>]*>[\s\S]*?<\/div>/g,
+    '',
+  );
   content = content.replace(
     /<div[^>]*style="[^"]*display:\s*flex[^"]*justify-content:\s*space-between[^"]*">[\s\S]*?<\/div>/g,
     '',
@@ -47,51 +189,42 @@ export function filterContentByLanguage(content: string, targetLang: string = 'j
 
   // Remove CopyMarkdownButton components
   content = content.replace(/<CopyMarkdownButton[^>]*\/>/g, '');
-  content = content.replace(/<CopyMarkdownButton[^>]*>[\s\S]*?<\/CopyMarkdownButton>/g, '');
+  content = content.replace(
+    /<CopyMarkdownButton[^>]*>[\s\S]*?<\/CopyMarkdownButton>/g,
+    '',
+  );
 
-  // Process language blocks.
-  const languageContentRegex = /<Lang\s+lang=["']([^"']+)["'][^>]*>([\s\S]*?)<\/Lang>/g;
+  // Process language blocks (supports nested <Lang> tags).
+  const blocks = parseLanguageBlocks(content);
+  let filteredContent = renderLanguageSegment(
+    content,
+    blocks,
+    0,
+    content.length,
+    normalizedLang,
+  );
 
-  let filteredContent = content;
-  let match;
-  const replacements: { original: string; replacement: string }[] = [];
-
-  // Reset regex lastIndex to ensure we find all matches
-  languageContentRegex.lastIndex = 0;
-
-  // Collect all language blocks.
-  while ((match = languageContentRegex.exec(content)) !== null) {
-    const [fullMatch, lang, innerContent] = match;
-    const blockLangs = lang
-      .split(/\s+/)
-      .map((value) => normalizeLanguage(value))
-      .filter(Boolean);
-    if (blockLangs.includes(normalizedLang)) {
-      // Keep content for matching language, but remove the wrapper
-      replacements.push({
-        original: fullMatch,
-        replacement: innerContent.trim(),
-      });
-    } else {
-      // Remove content for non-matching languages
-      replacements.push({
-        original: fullMatch,
-        replacement: '',
-      });
-    }
-  }
-
-  // Apply replacements
-  for (const { original, replacement } of replacements) {
-    filteredContent = filteredContent.replace(original, () => replacement);
+  // Strip any leading ESM imports/exports that were nested inside the opening <Lang> block.
+  const h1Match = filteredContent.match(/^(\s*# [^\n]+\n+)/);
+  if (h1Match) {
+    const heading = h1Match[1];
+    const body = stripLeadingEsm(filteredContent.slice(heading.length));
+    filteredContent = `${heading}${body}`;
+  } else {
+    filteredContent = stripLeadingEsm(filteredContent);
   }
 
   // Clean up extra whitespace
   filteredContent = filteredContent.replace(/\n{3,}/g, '\n\n');
-  filteredContent = rewriteInternalDocsLinks(filteredContent, normalizedLang as 'js' | 'go' | 'dart' | 'python', undefined, {
-    context: 'content-processor',
-    warnOnUnresolved: true,
-  });
+  filteredContent = rewriteInternalDocsLinks(
+    filteredContent,
+    normalizedLang as 'js' | 'go' | 'dart' | 'python',
+    undefined,
+    {
+      context: 'content-processor',
+      warnOnUnresolved: true,
+    },
+  );
 
   return filteredContent.trim();
 }
@@ -128,24 +261,64 @@ export async function processRawContent(
     '',
   );
 
-  // 2. Resolve <Code code={...} /> references to fenced blocks BEFORE stripping imports
-  //    (the resolver needs to see the import statements to find snippet paths).
+  // 2. Resolve <Code code={...} /> references and inline exported JSX constants BEFORE stripping imports
+  //    (the resolver needs to see the import/export statements).
   if (sourceFilePath) {
-    processedContent = await resolveCodeReferences(processedContent, sourceFilePath);
+    processedContent = await resolveCodeReferences(
+      processedContent,
+      sourceFilePath,
+    );
   }
+  processedContent = inlineExportedJsxConstants(processedContent);
 
   // 3. Remove leading ESM declarations (imports + top-level export const expressions).
   //    Handles both single-line and multi-line forms by tracking bracket depth.
   processedContent = stripLeadingEsm(processedContent);
 
   // 4. Remove LLMSummary blocks (like other Astro-specific syntax)
-  processedContent = processedContent.replace(/<LLMSummary>([\s\S]*?)<\/LLMSummary>/g, '');
+  processedContent = processedContent.replace(
+    /<LLMSummary>([\s\S]*?)<\/LLMSummary>/g,
+    '',
+  );
 
   // 5. Clean up extra whitespace
   processedContent = processedContent.replace(/\n{3,}/g, '\n\n').trim();
 
   // 6. Prepend H1 title
   return `# ${title}\n\n${processedContent}`;
+}
+
+function inlineExportedJsxConstants(content: string): string {
+  const constRegex =
+    /^export\s+const\s+(\w+)\s*=\s*(?:\(\s*(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\3>|<[A-Za-z][\w.-]*\b[^>]*\/>)\s*\)|(<([A-Za-z][\w.-]*)\b[\s\S]*?<\/\5>|<[A-Za-z][\w.-]*\b[^>]*\/>))\s*;?\s*$/gm;
+  const constants = new Map<string, string>();
+  for (const match of content.matchAll(constRegex)) {
+    const jsx = (match[2] ?? match[4] ?? '').trim();
+    if (jsx.startsWith('<')) {
+      constants.set(match[1], jsx);
+    }
+  }
+  if (constants.size === 0) {
+    return content;
+  }
+  const fenceRegex =
+    /(^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$)/gm;
+  return content
+    .split(fenceRegex)
+    .map((chunk, index) => {
+      if (index % 2 === 1) {
+        return chunk;
+      }
+      let replaced = chunk;
+      for (const [name, jsx] of constants) {
+        replaced = replaced.replace(
+          new RegExp(`\\{\\s*${name}\\s*\\}`, 'g'),
+          () => jsx,
+        );
+      }
+      return replaced;
+    })
+    .join('');
 }
 
 function stripLeadingEsm(content: string): string {
@@ -159,24 +332,43 @@ function stripLeadingEsm(content: string): string {
     const trimmed = line.trim();
 
     if (!inEsm) {
-      if (trimmed === '') {
+      if (
+        trimmed === '' ||
+        trimmed.startsWith('//') ||
+        (trimmed.startsWith('{/*') && trimmed.endsWith('*/}')) ||
+        (trimmed.startsWith('<!--') && trimmed.endsWith('-->'))
+      ) {
         i++;
         continue;
       }
-      if (!/^(import|export)\b/.test(trimmed)) break;
+      if (
+        !/^(?:import\s+(?:[\w*{]|['"])|export\s+(?:(?:const|let|var|function|default|class|type|interface)\b|[\{*]))/.test(
+          trimmed,
+        )
+      )
+        break;
       inEsm = true;
       depth = 0;
     }
 
-    for (const ch of line) {
+    const codeOnly = line.replace(
+      /\/\*[\s\S]*?\*\/|\/\/.*$|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+      '',
+    );
+    for (const ch of codeOnly) {
       if (ch === '(' || ch === '{' || ch === '[') depth++;
       else if (ch === ')' || ch === '}' || ch === ']') depth--;
     }
     i++;
 
-    // Statement ends when depth is balanced AND the line terminates with ; or a from-clause
-    // (optionally followed by a trailing // or /* */ comment).
-    if (depth <= 0 && /(?:;|from\s+['"][^'"]+['"]\??(?:raw)?['"]?\s*;?)\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)?\s*$/.test(line)) {
+    // Statement ends when depth is balanced AND the line terminates with ;, a from-clause,
+    // or a complete expression token (optionally followed by a trailing // or /* */ comment).
+    if (
+      depth <= 0 &&
+      /(?:;|from\s+['"][^'"]+['"]\??(?:raw)?['"]?\s*;?|[\w'"`}\])])\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)?\s*$/.test(
+        line,
+      )
+    ) {
       inEsm = false;
       depth = 0;
     }
@@ -200,12 +392,17 @@ function collectSnippetImports(content: string): SnippetImports {
   }
 
   // import { A, B as C } from './path';  (local-relative only)
-  const namedRegex = /import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"](\.[^'"]+?)['"];?/g;
+  const namedRegex =
+    /import\s+\{\s*([^}]+?)\s*\}\s+from\s+['"](\.[^'"]+?)['"];?/g;
   for (const m of content.matchAll(namedRegex)) {
     const importPath = m[2];
     if (importPath.includes('?raw')) continue;
     for (const entry of m[1].split(',')) {
-      const name = entry.trim().split(/\s+as\s+/).pop()?.trim();
+      const name = entry
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim();
       if (name) named[name] = importPath;
     }
   }
@@ -213,7 +410,10 @@ function collectSnippetImports(content: string): SnippetImports {
 }
 
 function resolveImportPath(sourceFilePath: string, importPath: string): string {
-  return path.resolve(path.dirname(sourceFilePath), importPath.replace(/\?raw$/, ''));
+  return path.resolve(
+    path.dirname(sourceFilePath),
+    importPath.replace(/\?raw$/, ''),
+  );
 }
 
 async function readSnippetFile(basePath: string): Promise<string | null> {
@@ -234,6 +434,14 @@ async function resolveCodeExpression(
 ): Promise<string | null> {
   expr = expr.trim();
 
+  // Case 0: string/template literal inside braces, e.g. code={"..."} or code={`...`}
+  const strLiteralMatch = expr.match(
+    /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`)$/,
+  );
+  if (strLiteralMatch) {
+    return strLiteralMatch[1] ?? strLiteralMatch[2] ?? strLiteralMatch[3];
+  }
+
   // Case 1: bare identifier — must be a `?raw` import.
   const idMatch = expr.match(/^(\w+)$/);
   if (idMatch) {
@@ -248,7 +456,9 @@ async function resolveCodeExpression(
     const [, fnName, , arg] = fnMatch;
     const importPath = imports.named[fnName];
     if (!importPath) return null;
-    const fileContent = await readSnippetFile(resolveImportPath(sourceFilePath, importPath));
+    const fileContent = await readSnippetFile(
+      resolveImportPath(sourceFilePath, importPath),
+    );
     if (!fileContent) return null;
 
     // Find: export const fnName = (paramName: type, ...) => `template body`;
@@ -261,17 +471,24 @@ async function resolveCodeExpression(
     // Substitute ${paramName} → arg; preserve the template literal's escapes
     // (since the snippet file is real TS, ${...} interpolations are unescaped).
     const escapedParam = paramName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return rawBody.replace(new RegExp('\\$\\{\\s*' + escapedParam + '\\s*\\}', 'g'), arg);
+    return rawBody.replace(
+      new RegExp('\\$\\{\\s*' + escapedParam + '\\s*\\}', 'g'),
+      arg,
+    );
   }
 
   return null;
 }
 
-async function resolveCodeReferences(content: string, sourceFilePath: string): Promise<string> {
-  const imports = collectSnippetImports(content);
-  if (Object.keys(imports.raw).length === 0 && Object.keys(imports.named).length === 0) {
+async function resolveCodeReferences(
+  content: string,
+  sourceFilePath: string,
+): Promise<string> {
+  if (!/<Code\b/.test(content)) {
     return content;
   }
+
+  const imports = collectSnippetImports(content);
 
   // Match <Code ... /> tags (single or multi-line). The closing /> is unambiguous since
   // attribute values like `meta='title="path/to/file"'` don't contain />.
@@ -281,15 +498,19 @@ async function resolveCodeReferences(content: string, sourceFilePath: string): P
   for (const match of content.matchAll(codeTagRegex)) {
     const [full, attrs] = match;
     const codeExpr = extractBraceAttr(attrs, 'code');
+    const codeLiteral = extractStringAttr(attrs, 'code');
     const lang = extractStringAttr(attrs, 'lang');
     const meta = extractStringAttr(attrs, 'meta');
-    if (!codeExpr || !lang) continue;
+    if ((!codeExpr && codeLiteral === null) || !lang) continue;
 
-    const resolved = await resolveCodeExpression(codeExpr, imports, sourceFilePath);
+    const resolved = codeExpr
+      ? await resolveCodeExpression(codeExpr, imports, sourceFilePath)
+      : codeLiteral;
     if (resolved == null) continue;
 
     const trimmed = resolved.replace(/\n+$/, '');
-    const fence = '```' + lang + (meta ? ' ' + meta : '') + '\n' + trimmed + '\n```';
+    const fence =
+      '```' + lang + (meta ? ' ' + meta : '') + '\n' + trimmed + '\n```';
     replacements.push({ match: full, replacement: fence });
   }
 
@@ -308,12 +529,16 @@ function extractStringAttr(attrs: string, name: string): string | null {
 }
 
 function extractBraceAttr(attrs: string, name: string): string | null {
-  const regex = new RegExp(`\\b${name}\\s*=\\s*\\{([^}]*)\\}`);
+  const regex = new RegExp(
+    `\\b${name}\\s*=\\s*\\{((?:"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`|[^}"'\`])*)\\}`,
+  );
   const m = attrs.match(regex);
   return m ? m[1].trim() : null;
 }
 
-export async function processDocumentEntry(entry: any): Promise<ProcessedDocument | null> {
+export async function processDocumentEntry(
+  entry: any,
+): Promise<ProcessedDocument | null> {
   const filePath = entry.filePath;
   const slug = entry.id.replace(/\.(md|mdx)$/, '');
   const title = entry.data.title;
@@ -338,7 +563,12 @@ export async function processDocumentEntry(entry: any): Promise<ProcessedDocumen
     return {
       slug,
       title,
-      supportedLanguages: entry.data.supportedLanguages || ['js', 'go', 'dart', 'python'],
+      supportedLanguages: entry.data.supportedLanguages || [
+        'js',
+        'go',
+        'dart',
+        'python',
+      ],
       isLanguageAgnostic: entry.data.isLanguageAgnostic,
       content,
       filePath,
@@ -349,7 +579,10 @@ export async function processDocumentEntry(entry: any): Promise<ProcessedDocumen
   }
 }
 
-function extractFrontmatter(content: string): { frontmatter: any; body: string } {
+function extractFrontmatter(content: string): {
+  frontmatter: any;
+  body: string;
+} {
   const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
   const match = content.match(frontmatterRegex);
 
@@ -366,6 +599,8 @@ function extractFrontmatter(content: string): { frontmatter: any; body: string }
   return { frontmatter: {}, body: content };
 }
 
+const GENERATED_LANG_DIRS = new Set(['js', 'go', 'dart', 'python']);
+
 async function findAllMdxFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
 
@@ -373,12 +608,24 @@ async function findAllMdxFiles(dir: string): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
+      if (entry.name.startsWith('_') || entry.name === 'README.md') {
+        continue;
+      }
       const fullPath = path.join(dir, entry.name);
 
       if (entry.isDirectory()) {
+        if (
+          path.basename(dir) === 'docs' &&
+          GENERATED_LANG_DIRS.has(entry.name)
+        ) {
+          continue;
+        }
         const subFiles = await findAllMdxFiles(fullPath);
         files.push(...subFiles);
-      } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.mdx'))) {
+      } else if (
+        entry.isFile() &&
+        (entry.name.endsWith('.md') || entry.name.endsWith('.mdx'))
+      ) {
         files.push(fullPath);
       }
     }
@@ -410,7 +657,11 @@ export async function getAllProcessedDocuments(): Promise<ProcessedDocument[]> {
       const relativePath = path.relative(contentDir, filePath);
       const slug = relativePath.replace(/\.(md|mdx)$/, '');
 
-      const baseContent = await processRawContent(rawContent, frontmatter.title, filePath);
+      const baseContent = await processRawContent(
+        rawContent,
+        frontmatter.title,
+        filePath,
+      );
 
       // Generate language-specific versions
       const content = {
@@ -423,7 +674,12 @@ export async function getAllProcessedDocuments(): Promise<ProcessedDocument[]> {
       processedDocs.push({
         slug,
         title: frontmatter.title,
-        supportedLanguages: frontmatter.supportedLanguages || ['js', 'go', 'dart', 'python'],
+        supportedLanguages: frontmatter.supportedLanguages || [
+          'js',
+          'go',
+          'dart',
+          'python',
+        ],
         isLanguageAgnostic: frontmatter.isLanguageAgnostic,
         content,
         filePath,

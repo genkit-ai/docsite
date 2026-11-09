@@ -114,6 +114,7 @@ const DOCS_SIDEBAR = [
       { label: "Overview", slug: "docs/overview" },
       { label: "Get started", slug: "docs/get-started" },
       { label: "Developer tools", slug: "docs/devtools" },
+      { label: "Migrating from 0.12 to 0.13", slug: "docs/migrating-from-0-12" },
     ],
   },
   {
@@ -124,6 +125,10 @@ const DOCS_SIDEBAR = [
       { label: "Tool calling", slug: "docs/tool-calling" },
       { label: "Prompt templating", slug: "docs/dotprompt" },
       { label: "Runtime context", slug: "docs/context" },
+      {
+        label: "Concurrency and lifecycle",
+        slug: "docs/concurrency",
+      },
       { label: "Middleware", slug: "docs/middleware" },
       { label: "Agentic patterns", slug: "docs/agentic-patterns" },
       { label: "Interrupts", slug: "docs/interrupts" },
@@ -152,6 +157,7 @@ const DOCS_SIDEBAR = [
       { label: "Define agents", slug: "docs/agents/define" },
       { label: "Run and stream", slug: "docs/agents/run" },
       { label: "Serve over HTTP", slug: "docs/agents/http" },
+      { label: "Generative UI (A2UI)", slug: "docs/agents/a2ui" },
       { label: "Sessions and state", slug: "docs/agents/state" },
       { label: "Session stores", slug: "docs/agents/session-stores" },
       { label: "Interrupts", slug: "docs/agents/interrupts" },
@@ -209,7 +215,7 @@ const DOCS_SIDEBAR = [
     items: [
       { label: "Overview", slug: "docs/integrations/model-providers" },
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
-      { label: "Google Vertex AI", slug: "docs/integrations/vertex-ai" },
+      { label: "Gemini Enterprise", slug: "docs/integrations/vertex-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
       {
         label: "OpenAI-Compatible APIs",
@@ -225,6 +231,10 @@ const DOCS_SIDEBAR = [
       { label: "Z.ai", slug: "docs/integrations/zai" },
       { label: "DashScope (Qwen)", slug: "docs/integrations/dashscope" },
       { label: "Ollama", slug: "docs/integrations/ollama" },
+      {
+        label: "Decision models (System One)",
+        slug: "docs/integrations/system-one",
+      },
     ],
   },
   {
@@ -248,11 +258,11 @@ const DOCS_SIDEBAR = [
       },
       { label: "Cloud Firestore", slug: "docs/integrations/cloud-firestore" },
       {
-        label: "Vertex AI Vector Search with BigQuery",
+        label: "Vector Search with BigQuery",
         slug: "docs/integrations/vectorsearch-bigquery",
       },
       {
-        label: "Vertex AI Vector Search with Firestore",
+        label: "Vector Search with Firestore",
         slug: "docs/integrations/vectorsearch-firestore",
       },
     ],
@@ -297,6 +307,10 @@ const DOCS_SIDEBAR = [
       },
       { label: "Troubleshooting", slug: "docs/observability/troubleshooting" },
       { label: "Google Cloud plugin", slug: "docs/integrations/google-cloud" },
+      {
+        label: "OTel GenAI semantic conventions",
+        slug: "docs/observability/otel-genai-semantic-conventions",
+      },
     ],
   },
   {

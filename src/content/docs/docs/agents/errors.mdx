@@ -21,9 +21,9 @@ Genkit agent failures have different recovery paths depending on when they happe
 ## Failure categories
 
 - **Init misuse** throws before a turn starts. Fix the caller, such as by not sending `state` to a store-backed agent.
-- **Failed turns** throw `AgentError` with `response`, `status`, `details`, `state`, and `snapshotId`. Resume from the last-good state or snapshot.
-- **Foreground aborts** resolve with `finishReason: 'aborted'`. Let the user retry or revise the request.
-- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Show the status, inspect snapshot error details, and retry from a completed snapshot when possible.
+- **Failed turns** throw `AgentError` with `response`, `status`, `details`, `state`, and `snapshotId`. The turn keeps the conversation up to its last completed tool round, so you can retry from there (see [Resume after a failure or a stop](#resume-after-a-failure-or-a-stop)).
+- **Foreground aborts** resolve with `finishReason: 'aborted'`. An in-process chat moves to the resume point the stop left; a `remoteAgent` chat stays at its previous snapshot (see [Resume after a failure or a stop](#resume-after-a-failure-or-a-stop)). Let the user retry or revise the request.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Show the status, inspect snapshot error details, and resume from the `failed` or `aborted` snapshot.
 - **Domain-level tool problems** should be structured tool output when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
 ## Handle failed turns
@@ -67,6 +67,62 @@ try {
   showFailure(err);
 }
 ```
+
+## Resume after a failure or a stop
+
+A failed turn commits the conversation it had at the last turn seam: the messages the turn started from plus every completed round of tool requests and tool responses. With a session store, that conversation is saved as a `failed` snapshot. A run the caller stopped (through an abort signal, a timeout, or `maxTurns`) is saved the same way as an `aborted` snapshot. Both are resume points, so a retry does not repeat the tool calls that already finished.
+
+Send an input with neither a message nor a resume to run the turn again on the committed conversation. Only a turn that committed can be re-run this way. A failure before the turn committed anything leaves the chat at its previous resume point without the new message, so send the message again instead. With a session store, a committed turn is one that moved the snapshot ID. Open an existing session with `loadChat()` rather than `chat({ sessionId })`, so `chat.snapshotId` is set before the turn:
+
+```ts
+const before = chat.snapshotId;
+try {
+  await chat.send('Book the full itinerary.');
+} catch (err) {
+  if (!(err instanceof AgentError)) throw err;
+  if (err.snapshotId && err.snapshotId !== before) {
+    // The turn committed: run it again from where it failed.
+    await chat.send({});
+  } else {
+    // Nothing was committed: send the message again.
+    await chat.send('Book the full itinerary.');
+  }
+}
+```
+
+A client-managed agent has no snapshot ID. A model or tool failure usually commits there too, and the chat adopts the committed state, so check whether `err.response.raw.state?.messages` grew past what the chat had before the turn.
+
+An attached run that you stop resolves instead of throwing. For an in-process agent, such as one from `ai.defineAgent()`, the chat adopts the snapshot the stop left:
+
+```ts
+const ac = new AbortController();
+const res = await chat.send('Book it.', { abortSignal: ac.signal }); // ac.abort() elsewhere
+
+if (res.finishReason === 'aborted') {
+  // chat.snapshotId names where the run stopped.
+  await chat.send({});
+}
+```
+
+With `remoteAgent`, stopping the run cancels the HTTP request, so the chat never sees how the run ended and stays at its previous snapshot. Reload the session's latest snapshot with `agent.loadChat({ sessionId })` before you retry.
+
+From another process, load the failed or aborted snapshot by ID and continue:
+
+```ts
+// The err.snapshotId or chat.snapshotId you saved earlier.
+const chat = await agent.loadChat({ snapshotId: savedSnapshotId });
+await chat.send('Try again, but skip the hotel.');
+```
+
+A few rules worth knowing:
+
+- A failure that happens before the turn commits anything rolls back. No snapshot records it, and the previous committed snapshot stays the resume point.
+- `err.status` is the model's own status for a model error and `INTERNAL` for a failed tool.
+- An empty input on a fresh conversation is rejected with `INVALID_ARGUMENT`, because there is nothing to re-run.
+- `pending` and `aborting` snapshots cannot be resumed yet. Wait for them to settle first.
+- A custom agent built with `defineCustomAgent` commits a failed turn only when its turn handler throws `CommittedTurnError`; see [Failure and recovery](/docs/agents/custom-orchestration#failure-and-recovery). It receives the empty input as is, and has to handle it.
+
+The same behavior is available on a single `generate()` call with `throwOnError: false`; see [Error types](/docs/error-types).
 
 ## Tool exceptions
 
@@ -114,16 +170,22 @@ res.assertValid();
 
 ## Failure categories
 
-- **Rejected init** returns a non-nil Go error from `Connect`, `Run`, or `RunText`. Fix the caller or selected resume source.
-- **Failed turns** return `AgentOutput` with `AgentFinishReasonFailed` and a non-nil `Error`. Resume from `State` for client-managed agents or `SnapshotID` for server-managed agents.
-- **Tool domain problems** should return structured tool output when the coordinator or model can recover.
-- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect snapshot error details or retry from a completed snapshot.
+- **Rejected init** returns a non-nil Go error from `Connect`, `Run`, `RunText`, or `RunDetached` before any turn runs. Fix the caller or the selected resume source.
+- **Failed turns** return an `AgentOutput` whose `FinishReason` is `AgentFinishReasonFailed` and whose `Error` is non-nil. The tool rounds the turn completed are kept, and the output names the resume point: `SnapshotID` for a server-managed agent, `State` for a client-managed one.
+- **Blocked or rejected responses** fail the turn. A prompt-backed agent fails a turn whose model response the provider blocked, with `ai.ErrGenerationBlocked`, and a turn whose output does not match the prompt's output schema. See [Blocked and rejected responses](#blocked-and-rejected-responses).
+- **Stopped runs** return an `AgentOutput` whose `FinishReason` is `AgentFinishReasonAborted` and whose `Error` carries the stop, classified. When the caller's context ends (a cancelled context, an expired deadline, a closed transport), the Go error is that stop too. A limit the caller set, such as `ai.WithMaxTurns` (`ai.ErrMaxTurnsExceeded`) or a usage budget (`ai.ErrBudgetExceeded`), stops the run in band: the Go error is nil. The snapshot keeps the turns that finished.
+- **Background failures** appear as snapshot status `failed`, `aborted`, or `expired`. The first two resume like their foreground counterparts. An expired run is lost; restart it from the snapshot's `ParentID`.
+- **Tool domain problems** should return structured tool output when the orchestrator or model can recover.
+
+An unrecognized `sessionId` is not an error. The agent starts a new conversation under that ID and every snapshot it writes carries it, so there is no `ErrSessionNotFound` sentinel. `aix.ErrSnapshotNotFound` applies only to an unknown `snapshotId`.
+
+The rejected-init cases from `Run`, `RunText`, and `Connect` are narrow: sending a `sessionId` to a client-managed agent (one defined without `WithSessionStore`) is a `status.FailedPrecondition`, and sending `state` to a store-backed agent is rejected the same way. `ai/exp` ships three sentinels in total: `aix.ErrSnapshotNotFound`, `aix.ErrSessionStoreNotConfigured`, and `aix.ErrSessionIDRequired`.
 
 ## Check both error channels
 
-An agent reports failure through two channels. A non-nil Go error means the invocation was rejected or could not produce an output. A failed turn is in-band, so the output can still carry recovery state or a recovery snapshot ID.
+An agent reports failure through two channels. A non-nil Go error means the invocation was rejected, could not produce an output, or its caller's context ended. A failed turn and a run stopped by a limit are in band, so the output carries the resume point. A run whose context ended sets both, so read `out` before acting on `err`.
 
-`AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
+`AgentOutput.Error` is a `*status.Error` from `github.com/firebase/genkit/go/core/status`, and it is nil in the ordinary case. Its `Status` keeps the classification the failure was raised with, so branch on that rather than on message text. A tool that fails is the exception: its turn reports `INTERNAL` (`ai.ErrToolFailed`) whatever status the tool returned. In process, `errors.Is(out.Error, ...)` still matches the tool's own error, but only the `INTERNAL` status survives serialization. See [Error types](/docs/error-types/) for the status vocabulary and the sentinels each package ships.
 
 ```go
 import (
@@ -135,24 +197,67 @@ import (
 ```go
 out, err := agent.RunText(ctx, "Look up order 123.")
 if err != nil {
+	if out != nil {
+		// The caller stopped the run. out.SnapshotID is the resume point.
+		return fmt.Errorf("agent stopped at %s: %w", out.SnapshotID, err)
+	}
 	return fmt.Errorf("agent invocation did not start: %w", err)
 }
 
 if out.FinishReason == aix.AgentFinishReasonFailed && out.Error != nil {
 	switch out.Error.Status {
 	case status.Unavailable, status.ResourceExhausted:
-		// Overloaded. Resume from out.SnapshotID in a moment.
+		// Overloaded. Re-attempt the turn from out.SnapshotID in a moment.
+		return nil
 	case status.InvalidArgument:
 		// The model or a tool rejected the request. Rephrase it.
+		return nil
 	default:
 		return fmt.Errorf("agent turn failed: %s: %s", out.Error.Status, out.Error.Message)
 	}
 }
 
+if out.FinishReason == aix.AgentFinishReasonAborted && out.Error != nil {
+	// A limit such as ai.WithMaxTurns stopped the run. out.SnapshotID is the
+	// resume point.
+	return fmt.Errorf("agent stopped at %s: %s", out.SnapshotID, out.Error.Message)
+}
+
 fmt.Println(out.Message.Text())
 ```
 
-The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
+Return from each recovery arm rather than falling through. A failed turn may have ended before any model response, in which case `out.Message` is nil. `Message.Text()` is nil-safe and returns `""`, so falling through prints a blank line instead of the answer the caller expected.
+
+What the rest of `AgentOutput` holds depends on how the invocation finished:
+
+| `FinishReason` | `Error`  | `SnapshotID`                                                                                       | `State`                          | `Message`               |
+| -------------- | -------- | -------------------------------------------------------------------------------------------------- | -------------------------------- | ----------------------- |
+| `failed`       | non-nil  | The failed turn's own snapshot: the tool rounds it completed, ending at a turn seam. Resumable.     | What the turn committed.         | May be nil.             |
+| `aborted`      | non-nil  | The aborted snapshot, holding the turns that finished before the stop. Resumable.                  | Last-good client-managed state.  | May be nil.             |
+| `detached`     | nil      | The pending snapshot.                                                                              | Nil; detach needs a store.       | May be nil.             |
+| anything else  | nil      | The most recent turn-end snapshot, or empty with no store.                                         | Client-managed final state.      | The last model message. |
+
+A turn rejected before it reaches the model, such as an invalid input or a render failure, commits no messages. Its `failed` snapshot holds the conversation through the turn before it, together with the session's usage, so `SnapshotID` is still a resume point. Either way the newest snapshot of the session is the latest resumable state. The [basic-agents](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) sample drives the same switch from its CLI, suggesting a different recovery per status.
+
+## Blocked and rejected responses
+
+A prompt-backed agent fails a turn when the model finished but its answer cannot be used: the provider blocked the response, usually with a safety filter, or the output does not match the output schema the prompt declares. A blocked response fails with `ai.ErrGenerationBlocked`, a `FAILED_PRECONDITION`, and its `Error` message carries the provider's explanation when there is one.
+
+The `failed` snapshot of such a turn holds the messages the turn sent to the model, not the rejected answer. A re-attempt with an empty input therefore asks the model again rather than showing it its own rejected output, and a new message changes course from the same point.
+
+## Match errors that crossed a boundary
+
+`out.Error`, a snapshot's `Error`, and a remote agent's failure keep only a status name and a message once they are serialized. `errors.Is` matches such an error against the base sentinel of its status, so the same check works in process, after a store read, and across a wire:
+
+```go
+if out.FinishReason == aix.AgentFinishReasonFailed && errors.Is(out.Error, status.ErrUnavailable) {
+	// Overloaded, whether the agent ran here or in another service.
+}
+```
+
+A domain sentinel derived from a base, such as `ai.ErrModelNotFound`, does not survive serialization, so match the base sentinel, here `status.ErrNotFound`, when the error may have come from a store or another process.
+
+An agent served by `genkit.Handler` outside the dev environment sends the generic message for its status in place of internal error text. The status is unchanged, so code that branches on the status works the same for a local and a remote agent. See [Serve agents over HTTP](/docs/agents/http/#failure-tiers).
 
 ## Snapshot and store failures
 
@@ -169,17 +274,17 @@ if _, err := agent.GetSnapshot(ctx, snapshotID); err != nil {
 }
 ```
 
-## Resume after failure
+## Resume after a failure or a stop
 
-For client-managed agents, pass the last-good state from the failed output:
+A `failed` or `aborted` snapshot ends at a turn seam, so the model can be called on it again. Send an input with no payload to re-attempt the turn as it stood. The turn runs again on the committed messages, so the tool calls that already succeeded are not repeated:
 
 ```go
-retry, err := agent.RunText(ctx, "Try order 456.",
-	aix.WithState(out.State),
+retried, err := agent.Run(ctx, &aix.AgentInput{},
+	aix.WithSnapshotID[OrderState](out.SnapshotID),
 )
 ```
 
-For server-managed agents, resume from the recovery snapshot:
+Send a new message on the same snapshot to change course instead, or resume from the snapshot's `ParentID` to rewind past the turn altogether:
 
 ```go
 retry, err := agent.RunText(ctx, "Try order 456.",
@@ -187,7 +292,17 @@ retry, err := agent.RunText(ctx, "Try order 456.",
 )
 ```
 
-Only completed snapshots are resumable. If the latest session snapshot is failed, aborted, or pending, use a known completed snapshot ID or wait for the pending work to finish.
+For client-managed agents the failed output's `State` is the same resume point inline. Pass it back with `aix.WithState`, with an empty input or a new message:
+
+```go
+retry, err := agent.RunText(ctx, "Try order 456.",
+	aix.WithState(out.State),
+)
+```
+
+Whether a failure is worth another attempt is the caller's decision. The runtime records the status on the row and never classifies it: a `RESOURCE_EXHAUSTED` wants a wait, an `INVALID_ARGUMENT` wants a different message, and a `FAILED_PRECONDITION` from a tool guard may want neither.
+
+Three statuses are not resume points. `pending` and `aborting` describe work that is still settling, so wait for it. `expired` means the worker died; resume from the row's `ParentID`. A custom agent commits a failed turn only when it opts in, as described in [Custom orchestration](/docs/agents/custom-orchestration).
 
 ## Tool errors
 
@@ -212,7 +327,7 @@ func lookupOrder(ctx *ai.ToolContext, input LookupOrderInput) (LookupOrderOutput
 }
 ```
 
-The [basic-errors](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors) sample works the whole pattern through, including what reaches an HTTP client and what stays in the server log.
+A tool error fails the turn. The round it belonged to is discarded whole, including the model message that requested it and any sibling tools that succeeded, because a conversation cannot end on an unanswered tool request. The rounds before it are what the `failed` snapshot keeps. The [basic-errors](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-errors) sample works the whole pattern through, including what reaches an HTTP client and what stays in the server log.
 
 Return structured output when the model should recover:
 
@@ -237,26 +352,41 @@ State and stream transforms fail closed. If a transform returns an error, the re
 ## Failure categories
 
 - **Init misuse** throws an immediate exception (e.g., `AgentInitError` or `GenkitException`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
-- **Failed turns** throw `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
-- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+- **Failed turns** throw `AgentError` containing status, details, the latest snapshot ID (`err.snapshotId`), and the recoverable last-good state (`err.response.raw.state` holds the full `SessionState`; `err.state` holds the typed custom state).
+- **Aborted turns** (a cancelled request or hitting `maxTurns`) resolve to a response with `finishReason: AgentFinishReason.aborted` rather than throwing `AgentError`, and also commit a rerunnable snapshot (`res.snapshotId`) with the last-good state.
+- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and rerun from it.
 - **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
-## Handle failed turns
+## Handle failed and aborted turns
+
+A failed or aborted turn commits a rerunnable snapshot on server-managed agents: it carries the structured error (on failure) plus the last-good history, ending before the turn that failed or aborted. Resume that snapshot with `chat(snapshotId: ...)`, then send an empty message to re-drive the same turn, or send new text to steer the retry.
 
 ```dart
 try {
   final res = await chat.send(text: 'Look up order 123.');
-  print(res.text);
+  if (res.finishReason == AgentFinishReason.aborted && res.snapshotId != null) {
+    // Aborted turn (cancelled or hit maxTurns): rerun from the committed snapshot.
+    final rerun = agent.chat(snapshotId: res.snapshotId);
+    await rerun.send(); // or: rerun.send(text: 'Try a shorter summary.')
+  } else {
+    print(res.text);
+  }
 } on AgentError catch (err) {
   print('Turn failed: ${err.status}');
   print('Error details: ${err.message}');
 
-  // Recover the conversation:
-  final recoveryChat = err.snapshotId != null
-      ? await agent.loadChat(snapshotId: err.snapshotId!)
-      : agent.chat(state: err.state);
-
-  await recoveryChat.send(text: 'Try again with order 456.');
+  if (err.snapshotId != null) {
+    // Server-managed agent: rerun the failed snapshot. send() with no message
+    // re-drives the same turn; pass text to steer the retry.
+    final rerun = agent.chat(snapshotId: err.snapshotId);
+    await rerun.send(); // or: rerun.send(text: 'Try again with order 456.')
+  } else {
+    // Client-managed agent: the existing `chat` instance automatically rolls
+    // back the failed turn's user message, or you can construct a fresh chat
+    // from the complete SessionState (`err.response.raw.state`).
+    final recoveryChat = agent.chat(state: err.response.raw.state);
+    await recoveryChat.send(text: 'Try again with order 456.');
+  }
 }
 ```
 
@@ -314,49 +444,49 @@ if (order == null) {
 
 ## Failure categories
 
-- **Init misuse** raises `AgentInitError` (a `GenkitError`) before a turn starts. Fix the parameters, such as by not sending `state` to a store-backed agent.
-- **Failed turns** raise `AgentError` containing status, details, the latest snapshot ID, and the recoverable last-good state.
-- **Background/detached failures** appear as snapshot status `failed`, `aborted`, or `expired`. Inspect the snapshot's error property and retry from the last-known completed snapshot.
+Python agents separate pre-turn/transport exceptions from in-band turn failures:
+
+- **Init misuse** raises `AgentInitError` (from `genkit.exp.agent`, a subclass of `PublicError` and `GenkitError`) before a turn starts—for example, passing `state` to a store-backed agent or `snapshot_id` to a client-managed agent. Both are `FAILED_PRECONDITION`.
+- **Transport and HTTP errors** raise `GenkitError` (`err.status`, `err.message`, `err.details`, `err.reason`, `err.__cause__`) when a call fails before producing a turn result, such as an HTTP 4xx/5xx response or a dropped SSE stream.
+- **Failed turns** do **not** raise an exception. `chat.send()` and `turn.response` return an `AgentResponse` with `res.finish_reason == AgentFinishReason.FAILED` and `res.error` set to a `Failure` (`status`, `message`, `details`, `reason`), while `res.message` is `None` and `res.text` is `''`.
+- **Cancellation**: `await turn.abort()` or an `asyncio.timeout()` deadline (Python 3.11+) stops the local listener; the server turn keeps running. To stop server work, start the turn with `chat.detach()` and call `await task.abort()`.
+- **Background/detached failures** appear on `SessionSnapshot` (`await agent.get_snapshot(...)`) with `status` set to `SnapshotStatus.FAILED`, `SnapshotStatus.ABORTED`, or `SnapshotStatus.EXPIRED` and `snapshot.error` populated on failures.
 - **Tool domain problems** should return structured tool outputs when the model can recover. Let the model explain the issue or ask the user for corrected input.
 
 ## Handle failed turns
 
-```python
-from genkit.agent import AgentError
+Failed turns don't raise. Check `res.error` on the response. `GenkitError` raises only when no turn result exists, such as init misuse or a transport failure, so let it propagate to your request handler.
 
-try:
-    res = await chat.send('Look up order 123.')
-    print(res.text)
-except AgentError as err:
-    print('Turn failed:', err.status)
-    print('Error details:', err.message)
-
-    recovery_chat = (
-        await agent.load_chat(snapshot_id=err.snapshot_id)
-        if err.snapshot_id
-        else agent.chat(
-            messages=err.response.messages if err.response else [],
-            state=err.state,
-            artifacts=err.response.raw.state.artifacts
-            if (err.response and err.response.raw and err.response.raw.state)
-            else None,
-        )
-    )
-    await recovery_chat.send('Try again with order 456.')
-```
-
-For streaming turns, catch errors around stream consumption and the final response. The stream rethrows failed-turn errors after yielding any chunks that arrived before the failure.
+When a turn fails, `chat` drops the failed user message and any partial custom-state changes, so the next `chat.send()` continues from the last completed turn. On a store-backed agent the failure is saved as a `failed` snapshot for inspection, and `res.snapshot_id` still points at the last completed one, so another process can resume with `load_chat(snapshot_id=res.snapshot_id)`.
 
 ```python
-turn = chat.send_stream('Write a long report.')
+res = await chat.send('Look up order 123.')
 
-try:
-    async for chunk in turn.stream:
-        render(chunk)
-    await turn.response
-except AgentError as err:
-    show_failure(err)
+if res.error:
+    print('Turn failed:', res.error.status, res.error.message)
+    # => Turn failed: NOT_FOUND Order 123 was not found.
+
+    # `chat` already rolled back to the last completed turn, so retry directly.
+    # From another process, use `await agent.load_chat(snapshot_id=res.snapshot_id)`.
+    res = await chat.send('Try again with order 456.')
+
+print(res.text)
 ```
+
+For streaming turns, `turn.stream` yields any chunks emitted before the failure and exits cleanly without raising; `await turn.response` then returns the `AgentResponse` with `res.error` set. Only errors that leave no turn result (init misuse, HTTP errors, dropped connections) raise `GenkitError` while iterating `turn.stream`:
+
+```python
+turn = chat.send_stream('Write a report.')
+
+async for chunk in turn.stream:
+    render(chunk)
+
+res = await turn.response
+if res.error:
+    show_turn_failure(res.error)
+```
+
+If a remote HTTP stream drops mid-turn (`GenkitError` with `UNAVAILABLE` or `DEADLINE_EXCEEDED`), a store-backed server turn may still finish. Check `await agent.get_snapshot(session_id=...)` before resending a turn with side effects, then continue with `agent.chat(session_id=...)`.
 
 ## Tool exceptions
 
@@ -384,15 +514,28 @@ async def lookup_order(input: LookupOrderInput) -> dict:
     return order
 ```
 
-When the model can recover (for example, invalid user input), return structured output instead:
+The turn fails with the `GenkitError`'s own status and message, and `res.error.reason` is `ErrorReason.TOOL_FAILED`. Any other exception fails the turn as `INTERNAL` with the message `internal error`; the original text stays in server logs.
+
+When serving over HTTP (`serve_agent()` or `genkit.web`), errors that fail the request, such as init misuse or a raising transform, keep their status and message only if they are a `PublicError`. Anything else goes out as HTTP 500 `INTERNAL` with a generic message. A failed turn is different: the response is HTTP 200, and `error` carries a tool's `GenkitError` status and message unchanged, so keep internal details such as hostnames or query text out of those messages. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts) for the full HTTP error model.
+
+When the model can recover (for example, an unknown order ID entered by the user), return structured output instead:
 
 ```python
-if order is None:
-    return {
-        'ok': False,
-        'reason': 'ORDER_NOT_FOUND',
-        'message': 'Ask the user to check the order ID.',
-    }
+@ai.tool()
+async def lookup_order(input: LookupOrderInput) -> dict:
+    """Looks up an order by ID."""
+    order = await db.orders.find(input.order_id)
+    if order is None:
+        return {
+            'ok': False,
+            'reason': 'ORDER_NOT_FOUND',
+            'message': 'Ask the user to check the order ID.',
+        }
+    return {'ok': True, 'order': order}
 ```
+
+## Transform failures
+
+`state_transform` and `chunk_transform` fail closed. If a transform raises an exception, the snapshot read or turn fails instead of exposing unredacted data. Raise `PublicError('PERMISSION_DENIED', 'Not authorized for this session.')` when enforcing tenant checks on HTTP routes.
 
 </Lang>

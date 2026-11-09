@@ -129,13 +129,14 @@ export const askQuestionsOnGoT = ai.defineFlow(
 
 <Lang lang="go">
 
-You can use PostgreSQL and `pgvector` as your retriever implementation. Use the
-following examples as a starting point and modify it to work with your database
-schema.
+You can use PostgreSQL and `pgvector` as your retriever implementation. There is
+no pgvector plugin for Go: this page wires `database/sql` to the database
+directly and defines a retriever over it. Use it as a starting point and modify
+it to work with your own schema.
 
 pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
 
-## Installation and Setup
+## Installation and setup
 
 Install the required dependencies:
 
@@ -144,90 +145,178 @@ go get github.com/lib/pq
 go get github.com/pgvector/pgvector-go
 ```
 
-Set up your PostgreSQL database with pgvector:
+The examples on this page use these imports:
+
+```go
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	_ "github.com/lib/pq"
+	pgv "github.com/pgvector/pgvector-go"
+	"google.golang.org/genai"
+)
+```
+
+`_ "github.com/lib/pq"` is a blank import. Nothing in your code refers to the
+package; importing it for its side effects is what registers the `postgres`
+driver name that `sql.Open` looks up.
+
+### Create the table
 
 ```sql
 -- Enable the pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Create a table for storing documents with embeddings
-CREATE TABLE documents (
-  id SERIAL PRIMARY KEY,
-  content TEXT NOT NULL,
-  embedding vector(768), -- Adjust dimension based on your embedding model
-  metadata JSONB,
-  created_at TIMESTAMP DEFAULT NOW()
+-- One row per chunk of transcript
+CREATE TABLE embeddings (
+  id            SERIAL PRIMARY KEY,
+  show_id       TEXT NOT NULL,
+  season_number INT  NOT NULL,
+  episode_id    INT  NOT NULL,
+  chunk         TEXT NOT NULL,
+  embedding     vector(768) NOT NULL
 );
 
--- Create an index for efficient vector similarity search
-CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- Index for efficient vector similarity search
+CREATE INDEX ON embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 ```
+
+Two constraints tie this DDL to the Go code below:
+
+- The width in `vector(N)` must equal the number of dimensions your embedder
+  emits. `text-embedding-004` and `text-embedding-005` emit 768.
+  `gemini-embedding-001` emits 3072, which is above the 2000-dimension ceiling
+  on pgvector's `ivfflat` and `hnsw` indexes, so reduce it with
+  `OutputDimensionality` before you store it.
+- The index operator class must match the distance operator your query uses:
+  `vector_cosine_ops` with `<=>`, `vector_l2_ops` with `<->`, `vector_ip_ops`
+  with `<#>`. A query that uses a different operator ignores the index and
+  falls back to a sequential scan.
+
+### Connect to the database
+
+`*sql.DB` is already a connection pool, so open one per process and share it.
+
+```go
+db, err := sql.Open("postgres", "postgres://user:password@localhost:5432/recaps?sslmode=disable")
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+```
+
+### Choose an embedder
+
+Indexing and querying must produce vectors of the same width, but Gemini
+embedders want a different task type for each side:
+
+```go
+const embedDim = 768
+
+docEmbedder := googlegenai.EmbedderRef("googleai/gemini-embedding-001", &genai.EmbedContentConfig{
+	TaskType:             "RETRIEVAL_DOCUMENT",
+	OutputDimensionality: genai.Ptr[int32](embedDim),
+})
+
+queryEmbedder := googlegenai.EmbedderRef("googleai/gemini-embedding-001", &genai.EmbedContentConfig{
+	TaskType:             "RETRIEVAL_QUERY",
+	OutputDimensionality: genai.Ptr[int32](embedDim),
+})
+```
+
+Use `docEmbedder` in whatever ingestion job writes rows into `embeddings`, and
+`queryEmbedder` in the retriever below.
 
 ## Usage
 
-We use [database/sql](https://pkg.go.dev/database/sql) to connect to the Postgres server, but you may use another client library of your choice.
+The retriever embeds the query document, then runs a nearest-neighbor search
+scoped to one show. Its per-request config is a struct, so Genkit deserializes
+`ai.RetrieverRequest.Options` into it and validates it before your function
+runs:
 
 ```go
-func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder) ai.Retriever {
-	f := func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
-		eres, err := genkit.Embed(ctx, g,
-			ai.WithEmbedder(embedder),
-			ai.WithDocs(req.Query))
-		if err != nil {
-			return nil, err
-		}
-		rows, err := db.QueryContext(ctx, `
-			SELECT episode_id, season_number, chunk as content
-			FROM embeddings
-			WHERE show_id = $1
-		  	ORDER BY embedding <#> $2
-		  	LIMIT 2`,
-			req.Options, pgv.NewVector(eres.Embeddings[0].Embedding))
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
+// ShowQuery is the retriever's per-request config. Callers set it with
+// ai.WithConfig.
+type ShowQuery struct {
+	Show string `json:"show"`
+	K    int    `json:"k,omitempty"`
+}
 
-		res := &ai.RetrieverResponse{}
-		for rows.Next() {
-			var eid, sn int
-			var content string
-			if err := rows.Scan(&eid, &sn, &content); err != nil {
+func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.EmbedderArg) ai.Retriever {
+	return genkit.DefineRetrieverAction(g, "pgvector/shows", nil,
+		func(ctx context.Context, req *ai.RetrieverRequest, cfg *ShowQuery) (*ai.RetrieverResponse, error) {
+			// The config type parameter is a pointer, so it is nil when the
+			// caller sends no config at all.
+			if cfg == nil || cfg.Show == "" {
+				return nil, fmt.Errorf("pgvector: the show option is required")
+			}
+			k := cfg.K
+			if k == 0 {
+				k = 3
+			}
+
+			eres, err := genkit.Embed(ctx, g,
+				ai.WithEmbedder(embedder),
+				ai.WithDocs(req.Query))
+			if err != nil {
 				return nil, err
 			}
-			meta := map[string]any{
-				"episode_id":    eid,
-				"season_number": sn,
+
+			// <=> is cosine distance, matching the vector_cosine_ops index.
+			rows, err := db.QueryContext(ctx, `
+				SELECT episode_id, season_number, chunk AS content
+				FROM embeddings
+				WHERE show_id = $1
+				ORDER BY embedding <=> $2
+				LIMIT $3`,
+				cfg.Show, pgv.NewVector(eres.Embeddings[0].Embedding), k)
+			if err != nil {
+				return nil, err
 			}
-			doc := &ai.Document{
-				Content:  []*ai.Part{ai.NewTextPart(content)},
-				Metadata: meta,
+			defer rows.Close()
+
+			res := &ai.RetrieverResponse{}
+			for rows.Next() {
+				var eid, sn int
+				var content string
+				if err := rows.Scan(&eid, &sn, &content); err != nil {
+					return nil, err
+				}
+				res.Documents = append(res.Documents, ai.DocumentFromText(content, map[string]any{
+					"episode_id":    eid,
+					"season_number": sn,
+				}))
 			}
-			res.Documents = append(res.Documents, doc)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		return res, nil
-	}
-	return genkit.DefineRetriever(g, "pgvector/shows", nil, f)
+			if err := rows.Err(); err != nil {
+				return nil, err
+			}
+			return res, nil
+		})
 }
 ```
 
-And here's how to use the retriever in a flow:
+And here's how to use the retriever in a flow. `ai.WithConfig` is what sets
+`ai.RetrieverRequest.Options`, which is the value Genkit decodes into the
+`*ShowQuery` parameter:
 
 ```go
-retriever := defineRetriever(g, db, embedder)
+retriever := defineRetriever(g, db, queryEmbedder)
 
-type input struct {
-	Question string
-	Show     string
+type askInput struct {
+	Question string `json:"question"`
+	Show     string `json:"show"`
 }
 
-genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in input) (string, error) {
+genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in askInput) (string, error) {
 	res, err := genkit.Retrieve(ctx, g,
 		ai.WithRetriever(retriever),
-		ai.WithConfig(in.Show),
+		ai.WithConfig(&ShowQuery{Show: in.Show, K: 3}),
 		ai.WithTextDocs(in.Question))
 	if err != nil {
 		return "", err
@@ -235,9 +324,12 @@ genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in input) (string,
 	for _, doc := range res.Documents {
 		fmt.Printf("%+v %q\n", doc.Metadata, doc.Content[0].Text)
 	}
-	// Use documents in RAG prompts.
+	// Use the documents in a RAG prompt.
 	return "", nil
 })
 ```
+
+See the [Retrieval-augmented generation](/docs/rag) page for a general
+discussion on using retrievers for RAG.
 
 </Lang>

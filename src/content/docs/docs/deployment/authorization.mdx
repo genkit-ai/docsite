@@ -3,7 +3,9 @@ title: Authorization and integrity
 description: This document explains how to manage authorization and integrity in Genkit applications, covering Firebase and non-Firebase HTTP authorization.
 supportedLanguages:
   - js
+  - go
   - dart
+  - python
 ---
 
 import Lang from '../../../../components/Lang.astro';
@@ -327,7 +329,7 @@ For more information about using Express, see the
 
 ## Authorize within a Flow
 
-Flows can check authorization by inspecting the `context` property passed to the flow function. It is up to the framework integration (like `genkit_shelf`) to populate this context.
+Flows can check authorization by inspecting the `context` property passed to the flow function. When a flow is served over HTTP, a [context provider](#context-providers) populates this context from the request.
 
 ```dart
 import 'package:genkit/genkit.dart';
@@ -355,11 +357,14 @@ final selfSummaryFlow = ai.defineFlow(
   fn: (input, context) async {
     final auth = context.context?['auth'];
     if (auth == null) {
-      throw GenkitException('Unauthenticated', status: StatusCodes.UNAUTHENTICATED);
+      throw GenkitException('Unauthenticated', status: StatusCode.unauthenticated);
     }
     // Access typed properties on the generated concrete class
     if (input.uid != auth['uid']) {
-      throw GenkitException('You may only summarize your own profile data.', status: StatusCodes.PERMISSION_DENIED);
+      throw GenkitException(
+        'You may only summarize your own profile data.',
+        status: StatusCode.permissionDenied,
+      );
     }
     // Flow logic here...
     return SelfSummaryOutput(profileSummary: 'User profile summary would go here');
@@ -386,42 +391,514 @@ await selfSummaryFlow(
 );
 ```
 
-## Context Providers (Shelf)
+## Context providers
 
-When deploying with `genkit_shelf` (running as a server), you can use a `ContextProvider` to verify incoming requests and populate the context.
+When serving flows over HTTP with `GenkitRouter` (from `package:genkit/io.dart`), pass a `contextProvider` to verify incoming requests and populate the context. The provider receives a framework-neutral `RequestData` (lowercased headers, method, and parsed input), so the same function works with the standalone server, Shelf, or any other adapter.
 
 ```dart
 import 'dart:async';
-import 'package:genkit/genkit.dart';
-import 'package:genkit_shelf/genkit_shelf.dart';
-import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart' as io;
 
-FutureOr<Map<String, dynamic>> apiKeyContextProvider(Request request) {
-  final authHeader = request.headers['Authorization'];
+import 'package:genkit/genkit.dart';
+import 'package:genkit/io.dart';
+
+FutureOr<Map<String, dynamic>> apiKeyContextProvider(RequestData request) {
+  final authHeader = request.headers['authorization'];
   if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-     // Throwing here will result in a 403 Forbidden response
-     throw GenkitException('Missing API Key', status: StatusCodes.UNAUTHENTICATED);
+    // A thrown GenkitException is answered with its status (here 401).
+    // Any other exception results in a 403.
+    throw GenkitException('Missing API Key', status: StatusCode.unauthenticated);
   }
   final token = authHeader.substring(7);
   if (token != 'REQUIRED_API_KEY') {
-    throw GenkitException('Invalid API Key', status: StatusCodes.PERMISSION_DENIED);
+    throw GenkitException('Invalid API Key', status: StatusCode.permissionDenied);
   }
   return {
-    'auth': {'uid': 'admin', 'key': token}
+    'auth': {'uid': 'admin', 'key': token},
   };
 }
 
 void main() async {
-  final ai = Genkit(plugins: []);
-  // ... define flow ...
+  final ai = Genkit();
+  // ... define selfSummaryFlow ...
 
-  final handler = const Pipeline()
-      .addMiddleware(logRequests())
-      .addHandler(shelfHandler(selfSummaryFlow, contextProvider: apiKeyContextProvider));
+  final genkit = GenkitRouter()
+    ..addAction(selfSummaryFlow, contextProvider: apiKeyContextProvider);
 
-  await io.serve(handler, 'localhost', 3400);
+  await genkit.serve(port: 3400);
 }
 ```
+
+In a Shelf app, mount the same router with `genkit.asShelfHandler()` from `genkit_shelf`, or protect a single route with `shelfHandler(selfSummaryFlow, contextProvider: apiKeyContextProvider)`.
+
+</Lang>
+
+<Lang lang="go">
+
+When you put a flow behind a public HTTP endpoint, three things have to hold:
+the caller is who they claim to be, every tool call is scoped to that caller,
+and the model cannot talk its way into a wider scope. Genkit for Go gives you
+one mechanism for all three — [action context](/docs/context) — plus the
+[error classification](/docs/error-types) that turns a rejection into the right
+HTTP status.
+
+:::note[Authentication is application-managed]
+`genkit.Handler` executes flows with the context it is given. Authentication,
+identity verification, and access policies are configured at the application level
+using context providers and HTTP middleware.
+:::
+
+## Authenticate at the handler
+
+Attach a context provider to the handler. It runs before the flow, so a
+rejection never reaches your business logic:
+
+```go
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/genkit"
+)
+
+func authProvider(verify func(context.Context, string) (*Claims, error)) core.ContextProvider {
+	return func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+		token := strings.TrimPrefix(req.Headers["authorization"], "Bearer ")
+		if token == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "missing bearer token")
+		}
+		claims, err := verify(ctx, token)
+		if err != nil {
+			// The message stays server-side; the client gets a bare 401.
+			return nil, status.Errorf(status.ErrUnauthenticated, "token rejected: %w", err)
+		}
+		return core.ActionContext{
+			"uid":    claims.Subject,
+			"tenant": claims.Tenant,
+			"scopes": claims.Scopes,
+		}, nil
+	}
+}
+
+mux.Handle("POST /summarize", genkit.Handler(summarizeFlow,
+	genkit.WithContextProviders(authProvider(verifyIDToken))))
+```
+
+Header names in `req.Headers` are lower-cased, so match on `"authorization"`.
+
+## Map a rejection to the right status
+
+The HTTP status comes from the error's classification, not from the handler:
+
+| Return | Client sees |
+| :----- | :---------- |
+| `status.Errorf(status.ErrUnauthenticated, ...)` | `401` |
+| `status.Errorf(status.ErrPermissionDenied, ...)` | `403` |
+| `status.Errorf(status.ErrInvalidArgument, ...)` | `400` |
+| `errors.New(...)` or any unclassified error | `500` |
+
+Messages are withheld from the client unless you build them with
+`status.PublicErrorf`, which is the right default: an auth failure message is
+exactly the kind of text that leaks internal structure. The full error is
+always logged server-side.
+
+## Authorize inside the flow
+
+Authentication says who the caller is. Authorization says what this particular
+request may touch, and that usually depends on the input:
+
+```go
+summarizeFlow := genkit.DefineFlow(g, "summarize",
+	func(ctx context.Context, in SummarizeInput) (string, error) {
+		actx := core.FromContext(ctx)
+		uid, _ := actx["uid"].(string)
+		if uid == "" {
+			// Reachable when the flow is called in-process without context.
+			return "", status.Errorf(status.ErrUnauthenticated, "no caller identity")
+		}
+		doc, err := store.Get(ctx, in.DocID)
+		if err != nil {
+			return "", err
+		}
+		if doc.OwnerID != uid {
+			return "", status.Errorf(status.ErrPermissionDenied,
+				"user %s does not own document %s", uid, in.DocID)
+		}
+		// ...
+	})
+```
+
+Keep the check inside the flow, not only in the provider. The same flow runs
+from a worker, a test, and the Developer UI, and only the HTTP path goes through
+a context provider.
+
+## Scope tool calls to the caller
+
+This is the part that is specific to LLM applications. A tool that takes the
+user ID as an input field lets the **model** choose whose data to read, and a
+prompt injection in retrieved content or user text can make it choose someone
+else's. Take the identity from the action context instead:
+
+```go
+// Wrong: the model supplies customerID, so the model decides whose orders to read.
+type badInput struct {
+	CustomerID string `json:"customerId"`
+}
+
+// Right: the tool takes only what the model legitimately chooses. Identity comes
+// from the request, which the model cannot influence.
+type ordersInput struct {
+	Status string `json:"status" jsonschema:"enum=open,enum=shipped"`
+}
+
+listOrders := genkit.DefineTool(g, "listOrders",
+	"Lists the signed-in customer's orders.",
+	func(toolCtx *ai.ToolContext, in ordersInput) ([]Order, error) {
+		uid, _ := core.FromContext(toolCtx.Context)["uid"].(string)
+		if uid == "" {
+			return nil, status.Errorf(status.ErrUnauthenticated, "no signed-in user")
+		}
+		return store.OrdersFor(toolCtx.Context, uid, in.Status)
+	})
+```
+
+Apply the same rule to retrievers: filter by tenant inside the retriever, never
+by a filter value the model produced.
+
+## Verify the client, not just the user
+
+Authenticating the end user does not stop a scraper replaying your endpoint with
+a stolen token, and some deployments have no end user at all. For those, add a
+check on the calling *application*: a service-to-service identity token, a
+signed request from your own frontend, or App Check-style attestation. It goes
+in the same context provider, as a second gate before the user check.
+
+## Deployment notes
+
+- **Cloud Run.** Either let the platform authenticate (deploy without
+  `--allow-unauthenticated` and require an ID token, which keeps unauthenticated
+  traffic off your container entirely), or accept public traffic and configure
+  application-level authentication as described above. See
+  [Deploy with Cloud Run](/docs/deployment/cloud-run).
+- **The Developer UI reflection server runs any registered action.** It
+  starts only when `GENKIT_ENV=dev` or `GENKIT_REFLECTION_ENABLED=true`, and
+  requires a secret only when `GENKIT_REFLECTION_SECRET_TOKEN` is set. Keep it
+  off in production, or set the secret; see
+  [Developer tools](/docs/devtools#run-the-reflection-api-outside-dev).
+- **Agent HTTP routes** need the same treatment; see
+  [Serve agents over HTTP](/docs/agents/http).
+
+## Learn more
+
+- [Passing information through context](/docs/context) — the mechanism these
+  examples are built on
+- [Error types](/docs/error-types) — the full status set and what reaches a client
+- [Testing your AI logic](/docs/testing) — asserting that an unauthenticated
+  request really is rejected
+
+</Lang>
+
+<Lang lang="python">
+
+Genkit HTTP handlers (`serve_flow`, `genkit_fastapi_handler`,
+`genkit_flask_handler`, and `genkit_django_handler`) perform no authentication
+by default. Any caller who can reach the route can invoke the action.
+
+Securing a deployed Python flow has three parts:
+
+- **Authenticate at the HTTP boundary** and attach verified caller identity to
+  the action `context` dict before the flow runs.
+- **Authorize inside the flow and tools** by reading identity from
+  `FlowContext` / `ToolContext`, never from model-generated tool arguments or
+  raw prompt input.
+- **Return safe HTTP errors** using `PublicError`, since plain exceptions and
+  internal `GenkitError` instances are redacted to generic `500` responses on
+  the wire.
+
+## Authenticate at the handler
+
+### FastAPI (`genkit-fastapi`)
+
+`serve_flow` accepts a `context_dependency`, so you can reuse FastAPI `Depends`
+auth. Its return value becomes the flow's context. FastAPI runs it before
+Genkit's handler, so reject with `HTTPException`; a `PublicError` raised there
+becomes a `500`.
+
+```python
+import hmac
+import os
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from genkit import FlowContext, Genkit, PublicError
+from genkit_fastapi import serve_flow
+from genkit_google_genai import GoogleAI
+
+# 1. Initialize Genkit
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+# 2. Verify the caller in a FastAPI dependency
+async def require_caller(
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict[str, Any]:
+    expected_token = os.environ['INTERNAL_API_TOKEN']
+    if creds is None or not hmac.compare_digest(creds.credentials, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Valid bearer token required.',
+            headers={'WWW-Authenticate': 'Bearer'},
+        )
+    return {'auth': {'uid': 'support-bot', 'role': 'support'}}
+
+
+# 3. Read the verified identity inside the flow
+@ai.flow()
+async def summarize_ticket(ticket_text: str, ctx: FlowContext) -> str:
+    if not ctx.context.get('auth'):
+        raise PublicError('UNAUTHENTICATED', 'Authentication required.')
+    response = await ai.generate(prompt=f'Summarize support ticket: {ticket_text}')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Ticket summaries are busy, try again shortly')
+    return response.text
+
+
+# 4. Mount the flow router with the dependency
+app = FastAPI()
+app.include_router(serve_flow(summarize_ticket, context_dependency=require_caller))
+# POST /summarize_ticket (no Authorization header)
+# => 401 {"detail":"Valid bearer token required."}
+```
+
+For a provider that works across FastAPI, Flask, and Django, pass
+`context_provider` to `genkit_fastapi_handler`. It receives a
+`genkit.web.RequestData` with lowercased `headers`, `method`, `input` (the
+unwrapped `"data"` field), and the framework `request`. A `PublicError` raised
+here returns its status:
+
+```python
+from typing import Any
+
+from fastapi import FastAPI
+from genkit import Genkit, PublicError
+from genkit.web import RequestData
+from genkit_fastapi import genkit_fastapi_handler
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+app = FastAPI()
+
+
+# 1. Portable ContextProvider reading lowercased headers on RequestData
+async def bearer_context(req: RequestData) -> dict[str, Any]:
+    header = req.headers.get('authorization', '')
+    if not header.startswith('Bearer '):
+        raise PublicError('UNAUTHENTICATED', 'Missing bearer token.')
+    claims = verify_jwt(header.removeprefix('Bearer '))  # your token verifier
+    return {'auth': claims}
+
+
+# 2. Serve the flow with the provider
+@app.post('/draft_refund_note')
+@genkit_fastapi_handler(ai, context_provider=bearer_context)
+@ai.flow()
+async def draft_refund_note(order_id: str) -> str:
+    response = await ai.generate(prompt=f'Write a short refund confirmation for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
+    return response.text
+# POST /draft_refund_note (no Authorization header)
+# => 401 {"message":"Missing bearer token.","status":"UNAUTHENTICATED"}
+```
+
+### Flask and Django (`genkit-flask`, `genkit-django`)
+
+The same `ContextProvider` works with `genkit-flask` and `genkit-django`. Flask
+needs `flask[async]`; Django needs 5.0+ under ASGI:
+
+```python
+from flask import Flask
+from genkit import Genkit, PublicError
+from genkit_flask import genkit_flask_handler
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+flask_app = Flask(__name__)
+
+
+# 1. Reuse bearer_context from the FastAPI example on a Flask route
+@flask_app.post('/draft_refund_note')
+@genkit_flask_handler(ai, context_provider=bearer_context)
+@ai.flow()
+async def flask_refund_note(order_id: str) -> str:
+    response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
+    return response.text
+```
+
+```python
+from django.urls import path
+from genkit import Genkit, PublicError
+from genkit_django import genkit_django_handler
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+# 1. Same provider, served as an async Django view
+@genkit_django_handler(ai, context_provider=bearer_context)
+@ai.flow()
+async def django_refund_note(order_id: str) -> str:
+    response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
+    if response.error:
+        raise PublicError('UNAVAILABLE', 'Refund notes are busy, try again shortly')
+    return response.text
+
+
+urlpatterns = [path('draft_refund_note', django_refund_note)]
+```
+
+### Custom routes (`genkit.web`)
+
+For other frameworks or hand-written routes, build a `RequestData`, call your
+provider, and frame the response with the `genkit.web` helpers. See
+[Custom routes with `genkit.web`](/docs/backend-frameworks/overview#custom-routes-with-genkitweb)
+for a full route.
+
+## Map a rejection to the right status
+
+Raise `PublicError(status, message)` (`from genkit import PublicError`) from a
+context provider or flow. The handler sends its status and message:
+
+- **`PublicError('UNAUTHENTICATED', ...)`**: `401`, missing or invalid credentials.
+- **`PublicError('PERMISSION_DENIED', ...)`**: `403`, the caller lacks access.
+
+Any other exception, including a plain `GenkitError` with an auth status,
+returns `500` with `{"message":"Internal Error","status":"INTERNAL"}`; the detail
+stays in your server logs. A FastAPI `HTTPException`, Flask `abort(...)`, or
+Django `PermissionDenied` raised in a context provider keeps the framework's
+response. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts).
+
+## Authorize inside the flow
+
+Putting the check inside the flow body protects both HTTP requests and direct
+in-process callers (`await flow.run(...)` or `flow.stream(...)`). Accept
+`ctx: FlowContext` as the second parameter of `@ai.flow()`, or call
+`Genkit.current_context()` inside shared helper functions:
+
+```python
+import asyncio
+from pydantic import BaseModel
+from genkit import FlowContext, Genkit, PublicError
+
+ai = Genkit()
+
+
+class RefundInput(BaseModel):
+    account_id: str
+    amount_cents: int
+
+
+# 1. Check both authentication and resource ownership inside the flow
+@ai.flow()
+async def issue_refund(req: RefundInput, ctx: FlowContext) -> str:
+    auth = ctx.context.get('auth')
+    if not auth:
+        raise PublicError('UNAUTHENTICATED', 'Sign-in required.')
+    if auth.get('account_id') != req.account_id and auth.get('role') != 'admin':
+        raise PublicError('PERMISSION_DENIED', 'Cannot issue refunds for another account.')
+    return f'Refunded {req.amount_cents} cents to {req.account_id}'
+
+
+# 2. Pass context explicitly when calling in-process or in tests
+async def main() -> None:
+    result = await issue_refund.run(
+        RefundInput(account_id='acct_42', amount_cents=1500),
+        context={'auth': {'account_id': 'acct_42', 'role': 'member'}},
+    )
+    print(result.response)
+    # => Refunded 1500 cents to acct_42
+
+
+asyncio.run(main())
+```
+
+For streaming callers, pass `context=` to `.stream(...)` the same way:
+`stream = issue_refund.stream(RefundInput(...), context={'auth': claims})`.
+When testing locally in the Developer UI, populate the **Auth JSON** pane (or
+pass `--context` on the CLI) to supply `ctx.context`.
+
+## Scope tool calls to the caller
+
+Prompt injection can steer a model into requesting another user's records if a
+tool accepts `user_id` or `tenant_id` as an LLM-supplied input field. Omit
+caller identity from the tool's input schema and read it from `ToolContext`
+instead:
+
+```python
+from pydantic import BaseModel, Field
+from genkit import Genkit, PublicError, ToolContext
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+class OrderLookupInput(BaseModel):
+    status: str = Field(description='Order status filter such as open or shipped')
+
+
+# 1. Read caller identity from ToolContext, never from model arguments
+@ai.tool(description='List orders belonging to the signed-in customer.')
+async def list_my_orders(input: OrderLookupInput, ctx: ToolContext) -> list[dict[str, str]]:
+    uid = ctx.context.get('auth', {}).get('uid')
+    if not uid:
+        raise PublicError('UNAUTHENTICATED', 'No signed-in customer.')
+    return await order_store.list_for_user(uid=uid, status=input.status)
+```
+
+Apply the same pattern inside custom retrievers: filter vector or database
+queries by tenant ID from `ctx.context`, never from a filter string produced by
+the model.
+
+## Verify the client, not just the user
+
+Authenticating the end user does not stop a scraper replaying your endpoint with
+a stolen token, and some deployments have no end user at all. For those, add a
+check on the calling application: a service-to-service identity token, a signed
+request from your own frontend, or App Check-style attestation. Put it in the
+same `context_dependency` or `context_provider`, as a second gate before the
+user check.
+
+## Deployment notes
+
+- **Cloud Run IAM vs. application auth**: Deploy without
+  `--allow-unauthenticated` when callers are Google Cloud services or workloads
+  that can present IAM identity tokens, keeping unauthenticated requests off
+  your container completely. For end-user bearer tokens, enforce authentication
+  in `context_dependency` or `context_provider`. See
+  [Deploy with Cloud Run](/docs/deployment/cloud-run).
+- **Keep the Developer UI reflection server off in production**: The reflection
+  server runs any registered action. It starts only when `GENKIT_ENV=dev` or
+  `GENKIT_REFLECTION_ENABLED=true`, and requires a secret only when
+  `GENKIT_REFLECTION_SECRET_TOKEN` is set. Keep it off on public containers, or
+  set the secret; see
+  [Developer tools](/docs/devtools#run-the-reflection-api-outside-dev).
+- **Return `response.text` or `response.output`** from served flows, never a raw
+  `ModelResponse`; its `request` field carries your system prompt and tool
+  definitions. See [Backend frameworks](/docs/backend-frameworks/overview).
+- **Agent HTTP routes**: `serve_agent` (`from genkit_fastapi.exp import serve_agent`)
+  takes the same `context_dependency` as `serve_flow`; see
+  [Serve agents over HTTP](/docs/agents/http).
+
+## Learn more
+
+- [Errors and timeouts](/docs/backend-frameworks/overview#errors-and-timeouts):
+  the full HTTP status mapping and what reaches a client
+- [Error types](/docs/error-types): the status set behind `PublicError`
 
 </Lang>

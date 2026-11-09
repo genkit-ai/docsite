@@ -185,6 +185,7 @@ See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime co
 - **`genkitx.DefineAgent`** keeps inline prompt configuration beside the agent wiring. Use it for most prompt-backed agents.
 - **`genkitx.DefinePromptAgent`** wraps a prompt that is already registered, including prompts loaded from Dotprompt files.
 - **`genkitx.DefineCustomAgent`** replaces the prompt loop with your own code, for a custom per-turn loop, direct session control, or multiple model calls.
+- **`genkitx.DefineRemoteAgent`** registers an agent that another Genkit app serves over HTTP, so this app can call it by name or delegate to it. See [Call a remote agent](/docs/agents/http/#call-a-remote-agent).
 
 All agents implement `api.BidiAction`, so transports and route helpers can serve them directly. Server-managed agents also expose typed snapshot helpers and companion actions.
 
@@ -194,11 +195,24 @@ All agents implement `api.BidiAction`, so transports and route helpers can serve
 
 ```go
 import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
+
+// TaskState is this agent's custom session state.
+type TaskState struct {
+	Tasks []string `json:"tasks,omitempty"`
+}
 ```
+
+In the snippet below, `g` is the `*genkit.Genkit` that `genkit.Init` returned, and `addTaskTool` and `toggleTaskTool` are tools defined as shown in [Tool calling](/docs/tool-calling).
 
 ```go
 store, err := localstore.NewFileSessionStore[TaskState]("./.genkit/snapshots/tasks")
@@ -218,7 +232,50 @@ taskAgent := genkitx.DefineAgent(g, "taskAgent",
 )
 ```
 
+`genkitx.DefineAgent` returns `*aix.Agent[State]`. The value type lives in `github.com/firebase/genkit/go/ai/exp` even though the constructor lives in `github.com/firebase/genkit/go/genkit/exp`, so write the `aix` type when you store the agent in a struct field or pass it between functions:
+
+```go
+type App struct {
+	Tasks *aix.Agent[TaskState]
+}
+```
+
 The agent's custom state type is inferred from typed options such as `WithSessionStore[TaskState]`, `WithStateTransform[TaskState]`, or the explicit type argument on `DefineAgent[TaskState]`. An agent that passes no typed option needs the argument written out, as in `DefineAgent[any]`.
+
+### Constructor and entry-point signatures
+
+The `genkitx.Define*` agent constructors all return `aix` types, so a helper that takes an agent or a turn result names the type from `github.com/firebase/genkit/go/ai/exp`.
+
+```go
+func DefineAgent[State any](g *genkit.Genkit, name string, prompt aix.InlinePrompt,
+	opts ...aix.AgentOption[State]) *aix.Agent[State]
+
+func DefinePromptAgent[State any](g *genkit.Genkit, name string,
+	opts ...aix.PromptAgentOption[State]) *aix.Agent[State]
+
+func DefineCustomAgent[State any](g *genkit.Genkit, name string, fn aix.AgentFunc[State],
+	opts ...aix.AgentOption[State]) *aix.Agent[State]
+
+func DefineRemoteAgent(g *genkit.Genkit, name, url string,
+	opts ...aix.RemoteAgentOption) *aix.AgentHandle
+```
+
+A remote agent has no Go state type, so `DefineRemoteAgent` returns the untyped `*aix.AgentHandle` described in [Run and stream agents](/docs/agents/run/#agent-handles).
+
+The entry points on the agent itself:
+
+```go
+func (a *aix.Agent[State]) Run(ctx context.Context, input *aix.AgentInput,
+	opts ...aix.InvocationOption[State]) (*aix.AgentOutput[State], error)
+
+func (a *aix.Agent[State]) RunText(ctx context.Context, text string,
+	opts ...aix.InvocationOption[State]) (*aix.AgentOutput[State], error)
+
+func (a *aix.Agent[State]) Connect(ctx context.Context,
+	opts ...aix.InvocationOption[State]) (*aix.AgentConnection[State], error)
+```
+
+`AgentOutput` and `AgentConnection` are generic over the same `State`, so a helper signature is `*aix.AgentOutput[TaskState]`, never a bare `*aix.AgentOutput`. See [Run and stream agents](/docs/agents/run) for the field sets.
 
 The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai/genkit/tree/main/go/samples/basic-agents) is the shortest working version of this shape: one inline prompt, one file store, no state of its own.
 
@@ -229,8 +286,68 @@ The `pirate.go` file of [`go/samples/basic-agents`](https://github.com/genkit-ai
 - **`aix.WithStreamTransform[State](fn)`** redacts or reshapes each streamed chunk before it is sent to clients.
 - **`aix.WithDescription[State](text)`** adds a human-readable description to action metadata and developer tooling.
 - **`aix.WithNamedPrompt[State](name, input)`** points `DefinePromptAgent` at a specific registered prompt and renders input.
+- **`aix.WithMaxSnapshotWait[State](d)`** caps how long one request to the agent's `waitForSnapshot` route holds before it answers with the snapshot as it stands. The default is 25 seconds. Keep it under the shortest request or idle timeout between your clients and the server. See [Background execution](/docs/agents/background/#poll-or-wait).
 
-Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time.
+Typed options are deliberately strict. Passing a state option with the wrong `State` type fails at compile time. A later option of the same kind replaces an earlier one, so a shared option list can be extended with an override. Invalid values still fail: an empty `WithSessionID` or a non-positive `WithMaxSnapshotWait` is rejected.
+
+### Prompt options
+
+`aix.InlinePrompt` is a `[]ai.PromptOption`, so every option `genkit.DefinePrompt` accepts is valid inside it, including `ai.WithConfig`, `ai.WithOutputType`, `ai.WithInputType`, `ai.WithMaxTurns`, and `ai.WithDocs` or `ai.WithDocsFn`.
+
+An agent turn runs the same tool loop as `genkit.Generate`, with the same default cap of five tool-call iterations. `ai.WithMaxTurns` returns a `CommonGenOption`, which embeds `PromptOption`, so it belongs in the inline prompt:
+
+```go
+aix.InlinePrompt{
+	ai.WithModelName("googleai/gemini-flash-latest"),
+	ai.WithSystem("Manage a task list. Use tools when changing tasks."),
+	ai.WithTools(addTaskTool, toggleTaskTool),
+	ai.WithMaxTurns(12),
+}
+```
+
+The cap bounds the tool loop inside one turn, not the number of turns in a conversation. A turn that exceeds it stops with `ai.ErrMaxTurnsExceeded`, and because a limit the caller set is a caller stop rather than a failure, the invocation reports `aix.AgentFinishReasonAborted` and keeps the tool rounds that completed. See [Agent error handling](/docs/agents/errors).
+
+### Ground a turn in retrieved documents
+
+Because `ai.WithDocsFn` is a prompt option, an agent can retrieve documents on every turn and pass them to the model as context:
+
+```go
+grounded := genkitx.DefineAgent(g, "grounded",
+	aix.InlinePrompt{
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithSystem("Answer from the provided documents. Say so when they do not cover the question."),
+		ai.WithDocsFn(func(ctx context.Context, _ any) ([]*ai.Document, error) {
+			history := ai.HistoryFromContext(ctx)
+			if len(history) == 0 {
+				return nil, nil
+			}
+			query := history[len(history)-1].Text()
+			res, err := genkit.Retrieve(ctx, g,
+				ai.WithRetriever(retriever),
+				ai.WithTextDocs(query),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("retrieve context for %q: %w", query, err)
+			}
+			return res.Documents, nil
+		}),
+	},
+	aix.WithSessionStore(store),
+)
+```
+
+`WithDocsFn[In]` receives the prompt's input, and an agent has no per-turn input unless the inline prompt sets `ai.WithInputType`, so `In` is the zero value by default. Build the query from `ai.HistoryFromContext(ctx)` instead, whose last element is the question this turn is about to answer. See [Retrieval-augmented generation](/docs/rag) for retrievers and indexers.
+
+## Tools in an agent
+
+Agent tools use the same constructors as any other tool. Each one reaches the active session the same way, so the choice is about signature and capability:
+
+- **`genkit.DefineTool`** hands the handler an `*ai.ToolContext`. It embeds `context.Context`, so `aix.SessionFromContext[State](ctx)` works on it directly.
+- **`genkit.DefineResumableTool`** hands the handler a plain `context.Context` and a typed resume parameter, for tools that pause with `tool.Interrupt` and continue with the caller's answer.
+
+The runtime verbs in `github.com/firebase/genkit/go/ai/tool`, such as `tool.Interrupt`, `tool.Fail`, and `tool.AttachParts`, take a `context.Context`, so they work in both kinds of tool.
+
+See [Tool calling](/docs/tool-calling), [Sessions and state](/docs/agents/state), [Interrupts](/docs/interrupts/), and [Agent interrupts](/docs/agents/interrupts/).
 
 ## How a turn is composed
 
@@ -239,6 +356,10 @@ Rendering always builds the request in one order: the system message, then the c
 - The prompt declares no conversation, the common case of `ai.WithSystem` alone. The session's messages are placed for you, between the system message and the user prompt.
 - The prompt declares a conversation with `ai.WithMessages` or `ai.WithMessagesFn`. The prompt owns placement, so the session's messages are not placed for you. A function reads them with `ai.HistoryFromContext(ctx)` and returns them where it wants them.
 - The prompt declares the conversation as a template, with `ai.WithMessagesTemplate` or the body of a `.prompt` file. The session's messages land at `{{history}}`, or, when the template has no such marker, immediately before the template's final user message.
+
+The conversation handed to the render already ends with this turn's user message, so `ai.HistoryFromContext(ctx)` inside `ai.WithSystemFn`, `ai.WithMessagesFn`, or `ai.WithDocsFn` sees the current question as its last element. A content function can build a retrieval query or a state summary from the message it is about to answer, with no backwards walk.
+
+An agent's typed custom state is exposed to its own templates as `{{@state.fieldName}}`, JSON-serialized and re-evaluated on every render, so a tool that updates state changes the next turn's instruction with no extra wiring. It works in the template forms only: `ai.WithSystem`, `ai.WithPrompt`, `ai.WithMessagesTemplate`, and `.prompt` bodies. The function forms take their text verbatim and never compile a template, so read state there with `aix.SessionFromContext[State](ctx)` as shown in [Sessions and state](/docs/agents/state). Prefer `{{@state.…}}` for straight interpolation and `ai.WithSystemFn` when the instruction needs Go logic.
 
 `ai.WithMessagesTemplate` and `ai.WithMessages` or `ai.WithMessagesFn` have no meaningful combination, since the template is the whole conversation. Passing both to one prompt definition panics with a message naming the prompt.
 
@@ -331,7 +452,8 @@ All three constructors produce an `Agent` instance supporting the transport-agno
 
 ```dart
 import 'package:genkit/genkit.dart';
-import 'package:genkit/io.dart';
+import 'package:genkit/experimental.dart';
+import 'package:genkit/experimental_io.dart';
 import 'package:schemantic/schemantic.dart';
 
 part 'weather_agent.g.dart';
@@ -375,7 +497,7 @@ final weatherAgent = ai.defineAgent(
 - **`maxTurns`** caps how many model/tool iterations one turn may run before stopping.
 - **`stateSchema`** validates custom session state when loading from snapshots or client state.
 - **`store`** switches the agent to server-managed state. Add a store when you want snapshots, branching, background execution, `loadChat()`, or smaller client payloads.
-- **`use`** lists the middleware applied to the prompt model loops. Register the matching plugin in your `Genkit(plugins: [...])` so the reference resolves at runtime (for example, `RetryPlugin()` for `retry()`, `AgentsPlugin()` for `agents()`).
+- **`use`** lists the middleware applied to the prompt model loops. Built-in middleware such as `retry()` needs no setup; for middleware from other packages, register the matching plugin in your `Genkit(plugins: [...])` so the reference resolves at runtime (for example, `AgentsPlugin()` for `agents()`).
 
 ## Tools and current session
 
@@ -431,6 +553,7 @@ Use `definePromptAgent()` when the prompt already exists as a Dotprompt file. Th
 
 ```dart
 import 'package:genkit/genkit.dart';
+import 'package:genkit/experimental.dart';
 
 import 'genkit.dart';
 
@@ -487,11 +610,13 @@ See [Custom orchestration](/docs/agents/custom-orchestration) for the runtime co
 
 ## Constructor choices
 
+Initialize `Genkit` from `genkit.exp` to access the experimental agent constructors:
+
 - **`ai.define_agent()`** defines the prompt instructions, tools, and the agent shell in one place. This is the common path for chat assistants, tool-calling agents, and server-backed frontend features.
 - **`ai.define_prompt_agent()`** wraps a prompt that already exists (registered with `ai.define_prompt()` or loaded from a Dotprompt file). It keeps prompt copy, model settings, schemas, and tool lists in the prompt layer while the agent adds conversation state and transport.
 - **`ai.define_custom_agent()`** replaces the prompt loop with your own code, allowing multiple model calls in one turn, custom planning loops, direct session control, or custom streaming.
 
-All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs. The agent is also a bidirectional action that can be served over HTTP.
+All three constructors produce an `Agent` that supports the transport-agnostic `chat()`, `load_chat()`, `get_snapshot()`, and `abort()` APIs, and can be looked up by name with `await ai.agent(name)`. The agent is also a bidirectional action that can be served over HTTP.
 
 ## Define a prompt-backed agent
 
@@ -500,8 +625,8 @@ All three constructors produce an `Agent` that supports the transport-agnostic `
 ```python
 from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit.agent import FileSessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import FileSessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -531,7 +656,7 @@ store = FileSessionStore('./.genkit/snapshots/weather')
 weather_agent = ai.define_agent(
     name='weatherAgent',
     description='Answers weather questions for a location.',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Answer weather questions. Ask for a location when one is missing.',
     tools=[get_weather],
     state_schema=WeatherState,
@@ -548,17 +673,17 @@ weather_agent = ai.define_agent(
 - **`max_turns`** caps how many model/tool iterations one turn may run before stopping.
 - **`state_schema`** is a Pydantic model for custom session state. When set, `chat.state`, `response.state`, and streamed `chunk.custom` come back as that model.
 - **`store`** switches the agent to server-managed state. Add a store when you want snapshots, branching, background execution, `load_chat()`, or smaller client payloads.
-- **`use`** lists middleware applied to the prompt model loops (for example `ToolApproval` from `genkit_middleware`).
+- **`use`** lists middleware applied to the prompt model loops (for example `ToolApproval` or `Retry` from `genkit_middleware`, or `Artifacts` from `genkit_middleware.exp`).
 - **`state_transform`** / **`chunk_transform`** shape state and stream chunks before they leave the server. Use them for redaction or client-specific projections.
 
 ## Tools and current session
 
-Tools can read and update the active session by calling `ai.current_session()`. The session exposes `update_custom(fn)`, `get_messages()`, `add_messages()`, `add_artifacts()`, and related helpers.
+Tools can read and update the active session by calling `current_session()` from `genkit.exp`. It returns `None` outside an agent turn. The session exposes `get_custom()`, `update_custom(fn)`, `get_messages()`, `add_messages()`, `get_artifacts()`, and `add_artifacts()`. `update_custom(fn)` calls `fn` with the current custom state (`None` on the first write) and stores what it returns.
 
 ```python
 from pydantic import BaseModel
 
-from genkit import Genkit
+from genkit.exp import current_session
 
 
 class TaskItem(BaseModel):
@@ -579,20 +704,21 @@ class AddTaskInput(BaseModel):
 @ai.tool()
 async def add_task(input: AddTaskInput) -> TaskItem:
     """Add a new task to the list."""
-    created: TaskItem | None = None
+    sess = current_session()
+    if sess is None:
+        raise RuntimeError('add_task requires an active agent session.')
+
+    created = TaskItem(id=0, title=input.title)
 
     def mutate(custom: dict | None) -> dict:
-        nonlocal created
-        state = custom or {}
-        next_id = state.get('next_id') or state.get('nextId') or 1
-        tasks = list(state.get('tasks') or [])
-        created = TaskItem(id=next_id, title=input.title)
-        tasks.append(created.model_dump())
-        return {'tasks': tasks, 'next_id': next_id + 1}
+        state = TaskState.model_validate(custom or {})
+        created.id = state.next_id
+        state.tasks.append(created)
+        state.next_id += 1
+        return state.model_dump()
 
-    if sess := ai.current_session():
-        await sess.update_custom(mutate)
-    return created  # type: ignore[return-value]
+    await sess.update_custom(mutate)
+    return created
 ```
 
 Provide the matching `state_schema` when defining the agent (here `state_schema=TaskState`) so custom state is returned as that model. Custom-state mutations emit streamed JSON Patch chunks, which keeps `chat.state` and `chunk.custom` current while a turn is still running.
@@ -604,7 +730,7 @@ Use `define_prompt_agent()` when the prompt already exists under the same name. 
 ```python
 ai.define_prompt(
     name='tripPlanner',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Plan short trips. Keep recommendations concise.',
 )
 
@@ -615,20 +741,22 @@ trip_planner_agent = ai.define_prompt_agent(
 )
 ```
 
-The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, the turn fails with an error telling you which prompt name was missing.
+The referenced prompt is looked up when the agent is invoked. If the prompt is not registered, `chat.send()` does not raise: the response comes back with `finish_reason == AgentFinishReason.FAILED` and a `NOT_FOUND` error that names the missing prompt. See [Agent error handling](/docs/agents/errors).
 
 ## Define a custom agent implementation
 
-Use `define_custom_agent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and an `ActionRunContext`, and handles turn processing directly.
+Use `define_custom_agent()` when the standard prompt loop is too narrow, such as for multiple model calls in one turn, custom planning loops, or manual history management. A custom agent receives a `SessionRunner` and an `AgentContext` from `genkit.exp.agent`, and handles turn processing directly.
 
 ```python
-from genkit import ActionRunContext
-from genkit.agent import AgentResult, SessionRunner
+from genkit.exp.agent import AgentContext, AgentInput, AgentResult, SessionRunner, TurnContext, TurnResult
 
 
-async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    # Your own per-turn loop. See Custom orchestration for the full pattern.
-    ...
+async def research_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
+        ...  # One user turn. See Custom orchestration for the full pattern.
+
+    await sess.run(handle_turn)
+    return await sess.result()
 
 
 research_agent = ai.define_custom_agent(
