@@ -1,6 +1,6 @@
 ---
 title: pgvector (PostgreSQL Vector Extension)
-description: Learn how to use pgvector with Genkit for vector storage, semantic search, and RAG applications using PostgreSQL.
+description: Use PostgreSQL and pgvector with Genkit for semantic search and RAG by writing indexing and retrieval flows against your own schema.
 supportedLanguages:
   - js
   - go
@@ -8,120 +8,198 @@ supportedLanguages:
 
 import Lang from '../../../../components/Lang.astro';
 
-<Lang lang="js">
+[pgvector](https://github.com/pgvector/pgvector) is a PostgreSQL extension that
+adds vector similarity search. It lets you keep embeddings next to the
+relational data they describe and query both in one statement.
 
-You can use PostgreSQL and `pgvector` as your retriever implementation. Use the
-following examples as a starting point and modify it to work with your database
-schema.
+There is no Genkit plugin for pgvector, and you don't need one. This page shows
+two flows that talk to the database directly: one that indexes text and one that
+retrieves documents for a query. Use them as a starting point and adapt the SQL
+to your own schema. See [Retrieval-augmented generation](/docs/rag) for how
+these pieces fit together.
 
-pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
+The examples index recaps of TV episodes and answer questions about a show.
 
-## Installation and Setup
-
-Install the required dependencies:
-
-```bash
-npm install postgres pgvector
-```
-
-Set up your PostgreSQL database with pgvector:
+## Create the table
 
 ```sql
 -- Enable the pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Create a table for storing documents with embeddings
-CREATE TABLE documents (
-  id SERIAL PRIMARY KEY,
-  content TEXT NOT NULL,
-  embedding vector(768), -- Adjust dimension based on your embedding model
-  metadata JSONB,
-  created_at TIMESTAMP DEFAULT NOW()
+-- One row per chunk of recap text
+CREATE TABLE embeddings (
+  id            SERIAL PRIMARY KEY,
+  show_id       TEXT NOT NULL,
+  season_number INT  NOT NULL,
+  episode_id    INT  NOT NULL,
+  chunk         TEXT NOT NULL,
+  embedding     vector(768) NOT NULL
 );
 
--- Create an index for efficient vector similarity search
-CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- Index for efficient vector similarity search
+CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops);
 ```
 
-## Usage
+Two constraints tie this DDL to the code below:
 
-Here's a complete example of creating a pgvector retriever:
+- The width in `vector(N)` must equal the number of dimensions your embedder
+  emits. `gemini-embedding-001` emits 3072 by default, which is above the
+  2000-dimension ceiling on pgvector's `ivfflat` and `hnsw` indexes, so the code
+  asks for 768.
+- The index operator class must match the distance operator your query uses:
+  `vector_cosine_ops` with `<=>`, `vector_l2_ops` with `<->`, `vector_ip_ops`
+  with `<#>`. A query that uses a different operator ignores the index and
+  falls back to a sequential scan.
+
+<Lang lang="js">
+
+## Setup
+
+Install the PostgreSQL client and the pgvector helpers:
+
+```bash
+npm install postgres pgvector
+```
+
+Configure Genkit, the database connection, and the embedder:
 
 ```ts
-import { genkit, z, Document } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
-import { toSql } from 'pgvector';
-
+import { Document, DocumentDataSchema, genkit, z } from 'genkit';
+import pgvector from 'pgvector';
 import postgres from 'postgres';
 
 const ai = genkit({
   plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
 });
 
-const sql = postgres({ ssl: false, database: 'recaps' });
+// postgres() returns a pooled client; create one per process and share it.
+const sql = postgres('postgres://user:password@localhost:5432/recaps');
 
-const QueryOptions = z.object({
-  show: z.string(),
-  k: z.number().optional(),
-});
+const embedder = googleAI.embedder('gemini-embedding-001');
+const EMBEDDING_DIMENSIONS = 768; // must match vector(768) in the table
+```
 
-const sqlRetriever = ai.defineRetriever(
+## Index documents
+
+The indexing flow embeds a batch of chunks and inserts one row per chunk. Gemini
+embedders produce better retrieval results when you tell them which side of the
+search a text is on, so it uses the `RETRIEVAL_DOCUMENT` task type.
+
+```ts
+export const indexRecap = ai.defineFlow(
   {
-    name: 'pgvector-myTable',
-    configSchema: QueryOptions,
+    name: 'indexRecap',
+    inputSchema: z.object({
+      show: z.string(),
+      season: z.number().int(),
+      episode: z.number().int(),
+      chunks: z.array(z.string()),
+    }),
+    outputSchema: z.object({ rowsInserted: z.number() }),
   },
-  async (input, options) => {
-    const embedding = (
-      await ai.embed({
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        content: input,
-      })
-    )[0].embedding;
-    const results = await sql`
-      SELECT episode_id, season_number, chunk as content
-        FROM embeddings
-        WHERE show_id = ${options.show}
-        ORDER BY embedding <#> ${toSql(embedding)} LIMIT ${options.k ?? 3}
-      `;
-    return {
-      documents: results.map((row) => {
-        const { content, ...metadata } = row;
-        return Document.fromText(content, metadata);
-      }),
-    };
-  },
+  async ({ show, season, episode, chunks }) => {
+    if (chunks.length === 0) {
+      return { rowsInserted: 0 };
+    }
+    const embeddings = await ai.embedMany({
+      embedder,
+      content: chunks,
+      options: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_DOCUMENT' },
+    });
+    const rows = chunks.map((chunk, i) => ({
+      show_id: show,
+      season_number: season,
+      episode_id: episode,
+      chunk,
+      embedding: pgvector.toSql(embeddings[i].embedding),
+    }));
+    await sql`INSERT INTO embeddings ${sql(rows)}`;
+    return { rowsInserted: rows.length };
+  }
 );
 ```
 
-And here's how to use the retriever in a flow:
+## Retrieve documents
+
+The retrieval flow embeds the query with the `RETRIEVAL_QUERY` task type and
+runs a nearest-neighbor search scoped to one show. It returns Genkit documents,
+with the other columns and the distance in each document's metadata.
 
 ```ts
-// Simple flow to use the sqlRetriever
-export const askQuestionsOnGoT = ai.defineFlow(
+export const RecapQuerySchema = z.object({
+  query: z.string(),
+  show: z.string(),
+  k: z.number().int().positive().optional().describe('Number of results, default 3'),
+});
+
+export const retrieveRecaps = ai.defineFlow(
   {
-    name: 'askQuestionsOnGoT',
-    inputSchema: z.object({ question: z.string() }),
-    outputSchema: z.object({ answer: z.string() }),
+    name: 'retrieveRecaps',
+    inputSchema: RecapQuerySchema,
+    outputSchema: z.array(DocumentDataSchema),
   },
-  async ({ question }) => {
-    const docs = await ai.retrieve({
-      retriever: sqlRetriever,
-      query: question,
-      options: {
-        show: 'Game of Thrones',
-      },
+  async ({ query, show, k = 3 }) => {
+    const [{ embedding }] = await ai.embed({
+      embedder,
+      content: query,
+      options: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_QUERY' },
     });
-    console.log(docs);
+    // <=> is cosine distance, matching the vector_cosine_ops index.
+    const rows = await sql<
+      { episode_id: number; season_number: number; content: string; distance: number }[]
+    >`
+      SELECT episode_id, season_number, chunk AS content,
+             embedding <=> ${pgvector.toSql(embedding)} AS distance
+      FROM embeddings
+      WHERE show_id = ${show}
+      ORDER BY distance
+      LIMIT ${k}`;
+    return rows.map(({ content, ...metadata }) => Document.fromText(content, metadata));
+  }
+);
+```
 
-    // Continue with using retrieved docs
-    // in RAG prompts.
-    //...
+Because the flow owns the SQL, adding filters (a season range, a minimum
+similarity, a tenant ID from the [auth context](/docs/deployment/authorization))
+is a change to the `WHERE` clause and the input schema.
 
-    // Return an answer (placeholder for actual implementation)
-    return {
-      answer: 'Answer would be generated here based on retrieved documents',
-    };
+## Use the documents in a RAG flow
+
+Call the retrieval flow like a function and pass its output to `generate`:
+
+```ts
+export const askAboutShow = ai.defineFlow(
+  {
+    name: 'askAboutShow',
+    inputSchema: z.object({ question: z.string(), show: z.string() }),
+    outputSchema: z.string(),
   },
+  async ({ question, show }) => {
+    const docs = await retrieveRecaps({ query: question, show });
+    const { text } = await ai.generate({
+      system: 'Answer using only the episode recaps provided. Say so if they do not cover the question.',
+      prompt: question,
+      docs,
+    });
+    return text;
+  }
+);
+```
+
+To let the model decide when and what to search instead, expose the same flow as
+a tool:
+
+```ts
+export const searchRecaps = ai.defineTool(
+  {
+    name: 'searchRecaps',
+    description: 'Searches episode recaps for a show. Returns the most relevant passages.',
+    inputSchema: RecapQuerySchema,
+    outputSchema: z.array(DocumentDataSchema),
+  },
+  (input) => retrieveRecaps(input)
 );
 ```
 
@@ -129,16 +207,9 @@ export const askQuestionsOnGoT = ai.defineFlow(
 
 <Lang lang="go">
 
-You can use PostgreSQL and `pgvector` as your retriever implementation. There is
-no pgvector plugin for Go: this page wires `database/sql` to the database
-directly and defines a retriever over it. Use it as a starting point and modify
-it to work with your own schema.
+## Setup
 
-pgvector is a PostgreSQL extension that adds vector similarity search capabilities to PostgreSQL databases. It provides efficient storage and querying of high-dimensional vectors, making it ideal for AI applications that need both relational and vector data in a single database.
-
-## Installation and setup
-
-Install the required dependencies:
+Install the PostgreSQL driver and the pgvector helpers:
 
 ```bash
 go get github.com/lib/pq
@@ -149,9 +220,9 @@ The examples on this page use these imports:
 
 ```go
 import (
+	"cmp"
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 
 	"github.com/firebase/genkit/go/ai"
@@ -166,38 +237,6 @@ import (
 `_ "github.com/lib/pq"` is a blank import. Nothing in your code refers to the
 package; importing it for its side effects is what registers the `postgres`
 driver name that `sql.Open` looks up.
-
-### Create the table
-
-```sql
--- Enable the pgvector extension
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- One row per chunk of transcript
-CREATE TABLE embeddings (
-  id            SERIAL PRIMARY KEY,
-  show_id       TEXT NOT NULL,
-  season_number INT  NOT NULL,
-  episode_id    INT  NOT NULL,
-  chunk         TEXT NOT NULL,
-  embedding     vector(768) NOT NULL
-);
-
--- Index for efficient vector similarity search
-CREATE INDEX ON embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-```
-
-Two constraints tie this DDL to the Go code below:
-
-- The width in `vector(N)` must equal the number of dimensions your embedder
-  emits. `text-embedding-004` and `text-embedding-005` emit 768.
-  `gemini-embedding-001` emits 3072, which is above the 2000-dimension ceiling
-  on pgvector's `ivfflat` and `hnsw` indexes, so reduce it with
-  `OutputDimensionality` before you store it.
-- The index operator class must match the distance operator your query uses:
-  `vector_cosine_ops` with `<=>`, `vector_l2_ops` with `<->`, `vector_ip_ops`
-  with `<#>`. A query that uses a different operator ignores the index and
-  falls back to a sequential scan.
 
 ### Connect to the database
 
@@ -217,7 +256,7 @@ Indexing and querying must produce vectors of the same width, but Gemini
 embedders want a different task type for each side:
 
 ```go
-const embedDim = 768
+const embedDim = 768 // must match vector(768) in the table
 
 docEmbedder := googlegenai.EmbedderRef("googleai/gemini-embedding-001", &genai.EmbedContentConfig{
 	TaskType:             "RETRIEVAL_DOCUMENT",
@@ -230,106 +269,131 @@ queryEmbedder := googlegenai.EmbedderRef("googleai/gemini-embedding-001", &genai
 })
 ```
 
-Use `docEmbedder` in whatever ingestion job writes rows into `embeddings`, and
-`queryEmbedder` in the retriever below.
+## Index documents
 
-## Usage
-
-The retriever embeds the query document, then runs a nearest-neighbor search
-scoped to one show. Its per-request config is a struct, so Genkit deserializes
-`ai.RetrieverRequest.Options` into it and validates it before your function
-runs:
+The indexing flow embeds a batch of chunks and inserts one row per chunk in a
+single transaction:
 
 ```go
-// ShowQuery is the retriever's per-request config. Callers set it with
-// ai.WithConfig.
-type ShowQuery struct {
-	Show string `json:"show"`
-	K    int    `json:"k,omitempty"`
+type RecapChunks struct {
+	Show    string   `json:"show"`
+	Season  int      `json:"season"`
+	Episode int      `json:"episode"`
+	Chunks  []string `json:"chunks"`
 }
 
-func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.EmbedderArg) ai.Retriever {
-	return genkit.DefineRetrieverAction(g, "pgvector/shows", nil,
-		func(ctx context.Context, req *ai.RetrieverRequest, cfg *ShowQuery) (*ai.RetrieverResponse, error) {
-			// The config type parameter is a pointer, so it is nil when the
-			// caller sends no config at all.
-			if cfg == nil || cfg.Show == "" {
-				return nil, fmt.Errorf("pgvector: the show option is required")
-			}
-			k := cfg.K
-			if k == 0 {
-				k = 3
-			}
+genkit.DefineFlow(g, "indexRecap", func(ctx context.Context, in RecapChunks) (int, error) {
+	if len(in.Chunks) == 0 {
+		return 0, nil
+	}
+	res, err := genkit.Embed(ctx, g, ai.WithEmbedder(docEmbedder), ai.WithTextDocs(in.Chunks...))
+	if err != nil {
+		return 0, err
+	}
 
-			eres, err := genkit.Embed(ctx, g,
-				ai.WithEmbedder(embedder),
-				ai.WithDocs(req.Query))
-			if err != nil {
-				return nil, err
-			}
-
-			// <=> is cosine distance, matching the vector_cosine_ops index.
-			rows, err := db.QueryContext(ctx, `
-				SELECT episode_id, season_number, chunk AS content
-				FROM embeddings
-				WHERE show_id = $1
-				ORDER BY embedding <=> $2
-				LIMIT $3`,
-				cfg.Show, pgv.NewVector(eres.Embeddings[0].Embedding), k)
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-
-			res := &ai.RetrieverResponse{}
-			for rows.Next() {
-				var eid, sn int
-				var content string
-				if err := rows.Scan(&eid, &sn, &content); err != nil {
-					return nil, err
-				}
-				res.Documents = append(res.Documents, ai.DocumentFromText(content, map[string]any{
-					"episode_id":    eid,
-					"season_number": sn,
-				}))
-			}
-			if err := rows.Err(); err != nil {
-				return nil, err
-			}
-			return res, nil
-		})
-}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() // no-op after Commit
+	for i, chunk := range in.Chunks {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO embeddings (show_id, season_number, episode_id, chunk, embedding)
+			VALUES ($1, $2, $3, $4, $5)`,
+			in.Show, in.Season, in.Episode, chunk, pgv.NewVector(res.Embeddings[i].Embedding)); err != nil {
+			return 0, err
+		}
+	}
+	return len(in.Chunks), tx.Commit()
+})
 ```
 
-And here's how to use the retriever in a flow. `ai.WithConfig` is what sets
-`ai.RetrieverRequest.Options`, which is the value Genkit decodes into the
-`*ShowQuery` parameter:
+## Retrieve documents
+
+The retrieval flow embeds the query, then runs a nearest-neighbor search scoped
+to one show. It returns Genkit documents, with the other columns and the
+distance in each document's metadata.
 
 ```go
-retriever := defineRetriever(g, db, queryEmbedder)
+type RecapQuery struct {
+	Query string `json:"query"`
+	Show  string `json:"show"`
+	K     int    `json:"k,omitempty"` // number of results; 0 means 3
+}
 
-type askInput struct {
+retrieveRecaps := genkit.DefineFlow(g, "retrieveRecaps",
+	func(ctx context.Context, in RecapQuery) ([]*ai.Document, error) {
+		res, err := genkit.Embed(ctx, g, ai.WithEmbedder(queryEmbedder), ai.WithTextDocs(in.Query))
+		if err != nil {
+			return nil, err
+		}
+
+		// <=> is cosine distance, matching the vector_cosine_ops index.
+		rows, err := db.QueryContext(ctx, `
+			SELECT episode_id, season_number, chunk, embedding <=> $2 AS distance
+			FROM embeddings
+			WHERE show_id = $1
+			ORDER BY distance
+			LIMIT $3`,
+			in.Show, pgv.NewVector(res.Embeddings[0].Embedding), cmp.Or(in.K, 3))
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		var docs []*ai.Document
+		for rows.Next() {
+			var episode, season int
+			var chunk string
+			var distance float64
+			if err := rows.Scan(&episode, &season, &chunk, &distance); err != nil {
+				return nil, err
+			}
+			docs = append(docs, ai.DocumentFromText(chunk, map[string]any{
+				"episode_id":    episode,
+				"season_number": season,
+				"distance":      distance,
+			}))
+		}
+		return docs, rows.Err()
+	})
+```
+
+Because the flow owns the SQL, adding filters (a season range, a minimum
+similarity, a tenant ID from the [auth context](/docs/deployment/authorization))
+is a change to the `WHERE` clause and the input struct.
+
+## Use the documents in a RAG flow
+
+Run the retrieval flow and pass its output to `Generate`:
+
+```go
+type AskInput struct {
 	Question string `json:"question"`
 	Show     string `json:"show"`
 }
 
-genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in askInput) (string, error) {
-	res, err := genkit.Retrieve(ctx, g,
-		ai.WithRetriever(retriever),
-		ai.WithConfig(&ShowQuery{Show: in.Show, K: 3}),
-		ai.WithTextDocs(in.Question))
+genkit.DefineFlow(g, "askAboutShow", func(ctx context.Context, in AskInput) (string, error) {
+	docs, err := retrieveRecaps.Run(ctx, RecapQuery{Query: in.Question, Show: in.Show})
 	if err != nil {
 		return "", err
 	}
-	for _, doc := range res.Documents {
-		fmt.Printf("%+v %q\n", doc.Metadata, doc.Content[0].Text)
-	}
-	// Use the documents in a RAG prompt.
-	return "", nil
+	return genkit.GenerateText(ctx, g,
+		ai.WithSystem("Answer using only the episode recaps provided. Say so if they do not cover the question."),
+		ai.WithPrompt(in.Question),
+		ai.WithDocs(docs...))
 })
 ```
 
-See the [Retrieval-augmented generation](/docs/rag) page for a general
-discussion on using retrievers for RAG.
+To let the model decide when and what to search instead, expose the same flow as
+a tool:
+
+```go
+searchRecaps := genkit.DefineTool(g, "searchRecaps",
+	"Searches episode recaps for a show. Returns the most relevant passages.",
+	func(ctx *ai.ToolContext, in RecapQuery) ([]*ai.Document, error) {
+		return retrieveRecaps.Run(ctx, in)
+	})
+```
 
 </Lang>
