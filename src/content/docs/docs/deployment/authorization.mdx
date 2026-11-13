@@ -657,7 +657,7 @@ async def require_caller(
 
 
 # 3. Read the verified identity inside the flow
-@ai.flow()
+@ai.flow
 async def summarize_ticket(ticket_text: str, ctx: FlowContext) -> str:
     if not ctx.context.get('auth'):
         raise PublicError('UNAUTHENTICATED', 'Authentication required.')
@@ -705,7 +705,7 @@ async def bearer_context(req: RequestData) -> dict[str, Any]:
 # 2. Serve the flow with the provider
 @app.post('/draft_refund_note')
 @genkit_fastapi_handler(ai, context_provider=bearer_context)
-@ai.flow()
+@ai.flow
 async def draft_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Write a short refund confirmation for {order_id}.')
     if response.error:
@@ -733,7 +733,7 @@ flask_app = Flask(__name__)
 # 1. Reuse bearer_context from the FastAPI example on a Flask route
 @flask_app.post('/draft_refund_note')
 @genkit_flask_handler(ai, context_provider=bearer_context)
-@ai.flow()
+@ai.flow
 async def flask_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
     if response.error:
@@ -752,7 +752,7 @@ ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 # 1. Same provider, served as an async Django view
 @genkit_django_handler(ai, context_provider=bearer_context)
-@ai.flow()
+@ai.flow
 async def django_refund_note(order_id: str) -> str:
     response = await ai.generate(prompt=f'Confirm refund for {order_id}.')
     if response.error:
@@ -788,7 +788,7 @@ response. See [Errors and timeouts](/docs/backend-frameworks/overview#errors-and
 
 Putting the check inside the flow body protects both HTTP requests and direct
 in-process callers (`await flow.run(...)` or `flow.stream(...)`). Accept
-`ctx: FlowContext` as the second parameter of `@ai.flow()`, or call
+`ctx: FlowContext` as the second parameter of `@ai.flow`, or call
 `Genkit.current_context()` inside shared helper functions:
 
 ```python
@@ -805,7 +805,7 @@ class RefundInput(BaseModel):
 
 
 # 1. Check both authentication and resource ownership inside the flow
-@ai.flow()
+@ai.flow
 async def issue_refund(req: RefundInput, ctx: FlowContext) -> str:
     auth = ctx.context.get('auth')
     if not auth:
@@ -853,15 +853,21 @@ class OrderLookupInput(BaseModel):
 
 
 # 1. Read caller identity from ToolContext, never from model arguments
-@ai.tool(description='List orders belonging to the signed-in customer.')
+@ai.tool
 async def list_my_orders(input: OrderLookupInput, ctx: ToolContext) -> list[dict[str, str]]:
+    """List orders belonging to the signed-in customer."""
     uid = ctx.context.get('auth', {}).get('uid')
     if not uid:
         raise PublicError('UNAUTHENTICATED', 'No signed-in customer.')
     return await order_store.list_for_user(uid=uid, status=input.status)
 ```
 
-Apply the same pattern inside custom retrievers: filter vector or database
+An exception raised in a tool does not reach the HTTP caller directly.
+`ai.generate()` ends the turn and sets `response.error` (here `UNAUTHENTICATED`
+with reason `TOOL_FAILED`). Check auth in the flow before calling `generate()`
+if the caller should get a 401.
+
+Apply the same pattern inside your retrieval helpers: filter vector or database
 queries by tenant ID from `ctx.context`, never from a filter string produced by
 the model.
 
