@@ -1,0 +1,146 @@
+---
+title: Flutter Developer UI on a device
+description: Run the Genkit Developer UI against a Genkit runtime inside a Flutter app on an Android device or emulator.
+supportedLanguages:
+  - dart
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A Genkit runtime inside a Flutter app can register with the Developer UI running on your machine. The Developer UI then lists the app's flows and models, runs them on the device, and shows the traces they produce. No backend and no API key are involved: if the app generates on the device, nothing leaves the phone.
+
+This page covers Android devices and the Android emulator, which is where the flow below has been run. iOS is untested.
+
+<Aside type="caution" title="Requires a recent genkit package">
+On `dart:io` targets, Genkit reads its dev-mode configuration from the process
+environment, falling back to `--dart-define`. An Android app has no process
+environment, so the fallback is what makes this work. It landed after `genkit`
+0.16.1, so until the next release you need a git dependency on `main`:
+
+```yaml title="pubspec.yaml"
+dependency_overrides:
+  genkit:
+    git:
+      url: https://github.com/genkit-ai/genkit-dart
+      path: packages/genkit
+```
+
+</Aside>
+
+## How the connection works
+
+The Developer UI does not reach into the device. The app dials out: Genkit opens a WebSocket to the reflection server the CLI started, and posts traces to the telemetry server over HTTP. Both servers listen on your machine's loopback interface.
+
+`localhost` on the device is the device, not your machine, so the two ports have to be bridged. `adb reverse` does that for a phone over USB and for the emulator alike, which is why the same URLs work on both. Rewriting the URLs to `10.0.2.2` only works on the emulator.
+
+## Prerequisites
+
+- Genkit CLI 1.41.0 or later
+- Flutter SDK, with `adb` on your `PATH`
+- An Android device with USB debugging enabled, or a running Android emulator
+
+## Add a Genkit entry point to the app
+
+Genkit starts its reflection server when you construct the `Genkit` instance in dev mode, so the app needs nothing beyond that construction and at least one action to call.
+
+Keep it in a separate entry point so no dev-mode configuration reaches a release build:
+
+```dart title="lib/main_devui.dart"
+import 'package:flutter/material.dart';
+import 'package:genkit/genkit.dart';
+
+import 'main.dart';
+
+late final Genkit ai;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Loading .prompt files walks the host filesystem, which has no meaning
+  // inside an app sandbox.
+  ai = Genkit(promptDir: null);
+
+  // A flow with no model dependency, so the Developer UI round trip can be
+  // proven before any model is wired up.
+  ai.defineFlow<String, String, void, void>(
+    name: 'deviceEcho',
+    fn: (input, _) async => 'device echo: $input',
+  );
+
+  runApp(const MyApp());
+}
+```
+
+Replace `MyApp` with your app's root widget. Register the rest of your flows, tools and model plugins here too; everything in the registry shows up in the Developer UI.
+
+## Start the Developer UI
+
+Start the CLI with the experimental reflection server, and have it write the ports it picked to a file:
+
+```bash
+genkit start --experimental-reflection-v2 --write-env-file /tmp/genkit.env --port 4000
+```
+
+The file holds the four settings the app needs:
+
+```bash title="/tmp/genkit.env"
+GENKIT_TELEMETRY_SERVER=http://localhost:4033
+GENKIT_ENV=dev
+GENKIT_REFLECTION_V2_SERVER=ws://localhost:3200
+GENKIT_ENABLE_REALTIME_TELEMETRY=true
+```
+
+The reflection port is picked from the range 3200-3400 at startup, so read both ports out of the file on every run rather than assuming the values above.
+
+## Bridge the two ports
+
+Point the device's `localhost` at your machine for the reflection and telemetry ports:
+
+```bash
+adb reverse tcp:3200 tcp:3200
+adb reverse tcp:4033 tcp:4033
+```
+
+This works with the device's Wi-Fi off, since the traffic goes over the USB connection.
+
+## Run the app
+
+In a second terminal, run the dev entry point with the four settings as `--dart-define`s:
+
+```bash
+flutter run -d <device> -t lib/main_devui.dart \
+  --dart-define=GENKIT_ENV=dev \
+  --dart-define=GENKIT_REFLECTION_V2_SERVER=ws://localhost:3200 \
+  --dart-define=GENKIT_TELEMETRY_SERVER=http://localhost:4033 \
+  --dart-define=GENKIT_ENABLE_REALTIME_TELEMETRY=true
+```
+
+`flutter devices` lists the device IDs.
+
+## Try it
+
+Open `http://localhost:4000`. "No app detected" in the header is expected: the phone registers as a runtime, not as a project on disk.
+
+Under **Flows**, run `deviceEcho` with the JSON input `"hello"`. The flow body executes on the device and the Developer UI shows the returned string. **View trace** shows the spans, with timings measured on the device. Anything the app runs by itself lands in **Traces** as well.
+
+To stop: press `q` in the `flutter run` terminal, stop the CLI, then clear the bridges with `adb reverse --remove-all`.
+
+## Why not `genkit start:flutter`
+
+`genkit start:flutter` starts the same two servers and passes the same four settings to `flutter run` for you. It cannot set up `adb reverse`, because it picks its ports as it starts, so on a device the app resolves URLs that its own `localhost` cannot reach. Until it can do that, the manual sequence above is the working path for a device or emulator.
+
+## Notes and limits
+
+- A `--dart-define` is resolved at compile time. Hot reload and hot restart keep the values the binary was built with, so a new port needs a new `flutter run`.
+- Keep the app in the foreground and the device awake. A backgrounded Android app is frozen, and Developer UI calls against it hang. `adb shell svc power stayon usb` holds the screen on while the device is plugged in.
+- Never ship `GENKIT_ENV=dev` in a release build. On Android and iOS, Genkit refuses to start the v1 loopback reflection server, because mobile loopback is shared between installed apps and serves `runAction` unauthenticated. With dev mode on and no `GENKIT_REFLECTION_V2_SERVER`, it starts no reflection server and logs a warning instead.
+
+## Troubleshooting
+
+| Symptom                                           | Cause                                                                                                   |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| The Developer UI never lists the device's actions | `adb reverse` was not run, or the ports in the defines do not match `/tmp/genkit.env` for this CLI run. |
+| App log warns that no reflection server started   | Dev mode is on but `GENKIT_REFLECTION_V2_SERVER` is unset or empty. Check the define spelling.          |
+| Actions are listed, but runs hang                 | The app is backgrounded or the device is locked.                                                        |
+| Runs work, but traces are missing                 | `GENKIT_TELEMETRY_SERVER` is not reverse-forwarded, or `GENKIT_ENABLE_REALTIME_TELEMETRY` is not set.   |
+| `genkit start` fails with `EADDRINUSE`            | An earlier CLI run still holds the ports. `lsof -iTCP:4000 -sTCP:LISTEN` finds it.                      |
