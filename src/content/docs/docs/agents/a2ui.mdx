@@ -819,6 +819,10 @@ final agent = remoteAgent(
 );
 final chat = agent.chat();
 
+// True while a turn streams. A button press mid-stream would otherwise start
+// a second turn, interleaving both streams into the same processor.
+var busy = false;
+
 // The renderer rejects a surface whose catalog ID it doesn't hold, so the ID
 // must match the catalog the agent uses. `basicCatalog()` has the same ID as
 // the plugin's bundled basic catalog.
@@ -826,11 +830,9 @@ final processor = MessageProcessor<ComponentImplementation>(
   catalogs: [basicCatalog(openUrl: (uri) => launchUrl(uri))],
   // Deliver actions to `outboundListener` as typed, versioned messages.
   unifiedOutbound: true,
-  // A surface action (e.g. a button press) becomes the next turn. A real app
-  // should also keep turns from overlapping, e.g. by ignoring presses while a
-  // turn is running.
+  // A surface action (e.g. a button press) becomes the next turn.
   outboundListener: (message) {
-    if (message is ActionMessage) {
+    if (message is ActionMessage && !busy) {
       runTurn(chat.sendStream(message: a2uiActionToMessage(message)));
     }
   },
@@ -838,21 +840,27 @@ final processor = MessageProcessor<ComponentImplementation>(
 );
 
 Future<void> runTurn(AgentTurn turn) async {
-  await for (final chunk in turn.stream) {
-    if (chunk.text.isNotEmpty) appendProse(chunk.text);
-    for (final m in a2uiMessagesFrom(chunk.raw.modelChunk?.content)) {
-      // One message the renderer can't take (a newer protocol version, say)
-      // must not stop the rest of the turn.
-      try {
-        processor.processMessages([m]);
-      } on Object catch (e) {
-        print('Skipping an A2UI message: $e');
+  busy = true;
+  try {
+    await for (final chunk in turn.stream) {
+      if (chunk.text.isNotEmpty) appendProse(chunk.text);
+      for (final m in a2uiMessagesFrom(chunk.raw.modelChunk?.content)) {
+        // One message the renderer can't take (a newer protocol version, say)
+        // must not stop the rest of the turn.
+        try {
+          processor.processMessages([m]);
+        } on Object catch (e) {
+          print('Skipping an A2UI message: $e');
+        }
       }
     }
+    await turn.response;
+  } finally {
+    busy = false;
   }
-  await turn.response;
 }
 
+// Apply the same `busy` check to your text input before starting a turn.
 await runTurn(chat.sendStream(text: 'What is the weather in Tokyo?'));
 ```
 
