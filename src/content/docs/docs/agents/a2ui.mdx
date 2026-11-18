@@ -63,7 +63,7 @@ Because the wire protocol is decoupled from the server language, an agent writte
 ```
 
 :::note[Interop with other Genkit runtimes]
-The JavaScript, Go, and Python A2UI plugins still emit A2UI v0.9 under the older `data.envelopes` key and read user actions only from that key. Until they move to `messages`, a Dart agent and a client written against another runtime's A2UI helpers (and the other way around) don't interoperate.
+The JavaScript, Go, and Python A2UI plugins still emit A2UI v0.9 under the older `data.envelopes` key and read user actions only from that key, and the `@a2ui/lit` web renderer supports v0.9 only. Until they move to `messages`, a Dart agent and a client written against another runtime's A2UI helpers (and the other way around) don't interoperate. Even then, a web client also needs v1.0 support, or the Dart agent has to stay on v0.9 with `a2ui(catalog: 'basic-v0.9')`.
 :::
 
 </Lang>
@@ -381,9 +381,9 @@ Pass configuration options to `a2ui(...)`:
 | -------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `catalog`      | `'basic'`      | Catalog ID resolved from the Genkit registry. `'basic'` is the A2UI v1.0 basic catalog; `'basic-v0.9'` keeps v0.9.                                                                                                                                         |
 | `instructions` | `'system'`     | Where to inject catalog capabilities. Set to `'system'` to append to the system prompt, or `'none'` to omit (start your own prompt from `renderCatalogInstructions(catalog)`).                                                                             |
-| `validate`     | `'warn'`       | What to do with a block that fails to compile or validate. `'warn'` logs and drops it; `'strict'` throws; `'off'` checks only that the block compiles, not the component tree. See [The trust boundary and security](#the-trust-boundary-and-security). |
+| `validate`     | `'warn'`       | What to do with a block that fails to compile or validate. `'warn'` logs and drops it; `'strict'` fails the turn; `'off'` checks only that the block compiles, not the component tree. See [The trust boundary and security](#the-trust-boundary-and-security). |
 | `repair`       | `true`         | Ask the model once to fix a block that failed to compile. Costs an extra model call on the failure path only. See [Self-repair](#self-repair).                                                                                                             |
-| `version`      | _from catalog_ | Optional assertion (`'1.0'` or `'v0.9'`). The catalog decides which protocol version a turn emits; passing `version` throws if the resolved catalog targets another one.                                                                                  |
+| `version`      | _from catalog_ | Optional assertion (`'1.0'` or `'v0.9'`). The catalog decides which protocol version a turn emits; passing `version` fails the turn if the resolved catalog targets another one.                                                                                  |
 
 ### When the model renders
 
@@ -426,7 +426,7 @@ Unless `validate` is `'off'`, every block is checked against the surfaces the co
 
 ### Self-repair
 
-Models occasionally emit a block that doesn't compile, most often by putting a label where a component ID belongs (`Button("Refresh", ...)` instead of `Button(Text("Refresh"), ...)`). When that happens, the middleware sends a follow-up call with the error, the Express contract, and the failed block, then compiles the reply. If the repair works, the surface renders; if not, the block is dropped (or `'strict'` throws). That is at most one call per distinct broken block, 3 per model call, and 30 seconds in total.
+Models occasionally emit a block that doesn't compile, most often by putting a label where a component ID belongs (`Button("Refresh", ...)` instead of `Button(Text("Refresh"), ...)`). When that happens, the middleware sends a follow-up call with the error, the Express contract, and the failed block, then compiles the reply. If the repair works, the surface renders; if not, the block is dropped (or `'strict'` fails the turn). That is at most one call per distinct broken block, 3 per model call, and 30 seconds in total.
 
 Repair runs once the model's response is complete, so a repaired surface arrives as the last chunk of the stream rather than where the model wrote it. Its token usage is added to the turn's `usage`, and cancelling the turn cancels a repair in flight.
 
@@ -1368,7 +1368,7 @@ In Flutter, implement each custom component as an `a2ui_flutter` `ComponentImple
 
 ```dart
 import 'package:a2ui_core/a2ui_core.dart'
-    show A2uiProtocolVersion, BasicCatalog, CommonSchemasV1;
+    show A2uiProtocolVersion, BasicCatalog, CommonSchemasV1, MessageProcessor;
 import 'package:a2ui_flutter/a2ui_flutter.dart';
 import 'package:a2ui_flutter/basic_catalog.dart';
 import 'package:json_schema_builder/json_schema_builder.dart';
@@ -1458,7 +1458,7 @@ A2UI operates as a specialized data channel within the Genkit runtime:
 - `basicCatalog` and `A2uiCatalog(...)` now target A2UI v1.0. Messages carry `"version": "1.0"`, new surfaces inline their components and data model on `createSurface`, data bindings use `{"@path": ...}`, and `Text.variant` drops `h1`..`h5` in favor of Markdown heading lines.
 - To stay on v0.9 (for example, while clients still render v0.9 only), use `a2ui(catalog: 'basic-v0.9')`, extend `basicCatalogV09`, or pass `protocolVersion: 'v0.9'` to `A2uiCatalog(...)`.
 - `a2ui(version:)` no longer picks the version; it asserts the catalog's version. `a2uiVersion` is removed in favor of `catalog.protocolVersion`.
-- `genui` is discontinued. Replace it with `a2ui_flutter` and `a2ui_core` 0.7, and copy the [client helpers](#2-copy-the-a2ui-helpers) again (`a2uiSubmitToMessage` became `a2uiActionToMessage`). `a2ui_flutter` ships both a v1.0 basic catalog (`package:a2ui_flutter/basic_catalog.dart`) and a v0.9 one (`package:a2ui_flutter/v0_9/basic_catalog.dart`). Their IDs differ, so a client that registers both renders surfaces from either server version.
+- `genui` is discontinued. Replace it with `a2ui_flutter` and `a2ui_core` 0.7, and copy the [client helpers](#2-copy-the-a2ui-helpers) again (`a2uiSubmitToMessage` became `a2uiActionToMessage`). `a2ui_flutter` ships both a v1.0 basic catalog (`package:a2ui_flutter/basic_catalog.dart`) and a v0.9 one (`package:a2ui_flutter/v0_9/basic_catalog.dart`). Their IDs differ, so a client that registers both renders surfaces from either server version. Both libraries export a top-level `basicCatalog(...)`, so prefix one import (`import 'package:a2ui_flutter/v0_9/basic_catalog.dart' as v09;`).
 
 **From 0.4 to 0.5:**
 
