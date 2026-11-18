@@ -216,6 +216,7 @@ const DOCS_SIDEBAR = [
       { label: "Overview", slug: "docs/integrations/model-providers" },
       { label: "Google Generative AI", slug: "docs/integrations/google-genai" },
       { label: "Gemini Enterprise", slug: "docs/integrations/vertex-ai" },
+      { label: "Firebase AI Logic", slug: "docs/integrations/firebase-ai" },
       { label: "OpenAI", slug: "docs/integrations/openai" },
       {
         label: "OpenAI-Compatible APIs",
