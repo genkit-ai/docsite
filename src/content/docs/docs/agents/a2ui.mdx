@@ -24,15 +24,63 @@ In standard conversational AI, agents communicate with users strictly through te
 
 A surface rides on its own data part channel within the Genkit streaming response:
 
-- The server middleware emits Genkit data parts carrying the MIME type `application/a2ui+json`.
-- The part's `data` payload is an object `{"envelopes": [...]}` wrapping an array of A2UI envelope messages, such as `createSurface`, `updateComponents`, and `updateDataModel`.
-- This follows the A2A binding of the A2UI specification, so emitted envelopes are byte-compatible across the JavaScript, Go, Dart, and Python packages, and can be consumed by standard `@a2ui/*` web renderers or Flutter [`genui`](https://pub.dev/packages/genui).
+<Lang lang="js go python">
 
-Because the wire protocol is completely decoupled from the server language, an agent written in Go, JavaScript/TypeScript, Dart, or Python can stream to a web frontend or Flutter client without compatibility hurdles.
+- The server middleware emits Genkit data parts carrying the MIME type `application/a2ui+json`.
+- The part's `data` payload is an object `{"envelopes": [...]}` wrapping an array of A2UI v0.9 envelope messages, such as `createSurface`, `updateComponents`, and `updateDataModel`.
+- This follows the A2A binding of the A2UI specification, so emitted envelopes are byte-compatible across the JavaScript, Go, and Python packages, and can be consumed by standard `@a2ui/*` web renderers.
+
+Because the wire protocol is decoupled from the server language, an agent written in Go, JavaScript/TypeScript, or Python can stream to the same web frontend.
+
+</Lang>
+
+<Lang lang="dart">
+
+- The server middleware emits Genkit data parts carrying the MIME type `application/a2ui+json`, following the [A2UI extension spec](https://a2ui.org/specification/v1.0-a2ui-extension-specification/).
+- The part's `data` payload is an object `{"messages": [...]}` wrapping a list of A2UI messages, such as `createSurface`, `updateComponents`, and `updateDataModel`. By default these are A2UI **v1.0** messages.
+- The part's `metadata.a2uiExpress` holds the compact source the model wrote for that surface. It's what the model sees of the surface on later turns, so clients that manage history must send parts back with their metadata intact.
+
+```json
+{
+  "data": {
+    "messages": [
+      { "version": "1.0", "deleteSurface": { "surfaceId": "tokyo-weather" } },
+      {
+        "version": "1.0",
+        "createSurface": {
+          "surfaceId": "tokyo-weather",
+          "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+          "components": [{ "id": "root", "component": "Text", "text": "Sunny, 18C" }]
+        }
+      }
+    ]
+  },
+  "metadata": {
+    "mimeType": "application/a2ui+json",
+    "a2uiExpress": "surface(\"tokyo-weather\")\nroot = Text(\"Sunny, 18C\")"
+  }
+}
+```
+
+:::note[Interop with other Genkit runtimes]
+The JavaScript, Go, and Python A2UI plugins still emit A2UI v0.9 under the older `data.envelopes` key and read user actions only from that key, and the `@a2ui/lit` web renderer supports v0.9 only. Until they move to `messages`, a Dart agent and a client written against another runtime's A2UI helpers (and the other way around) don't interoperate. Even then, a web client also needs v1.0 support, or the Dart agent has to stay on v0.9 with `a2ui(catalog: 'basic-v0.9')`.
+:::
+
+</Lang>
 
 ## Server: Add the middleware
 
+<Lang lang="js go python">
+
 To give an agent generative UI capabilities, attach the A2UI middleware to your agent or model pipeline. The middleware injects the active catalog's capabilities into the prompt, intercepts streamed model outputs, extracts `a2ui` fenced code blocks, validates them against the catalog, and rewrites them into canonical A2UI data parts. Outside these blocks, standard prose passes through untouched.
+
+</Lang>
+
+<Lang lang="dart">
+
+To give an agent generative UI capabilities, attach the A2UI middleware to your agent or model pipeline. The middleware injects the active catalog and the [A2UI Express](https://a2ui.org/specification/proposals/express/a2ui_express/) contract into the prompt, intercepts streamed model outputs, extracts the `<a2ui>` blocks the model writes, compiles and validates them against the catalog, and rewrites them into canonical A2UI data parts. Outside these blocks, standard prose passes through untouched.
+
+</Lang>
 
 <Lang lang="js">
 
@@ -275,16 +323,18 @@ Add `genkit_a2ui` alongside your core Genkit packages:
 dart pub add genkit genkit_a2ui genkit_google_genai
 ```
 
+`genkit_a2ui` is server-side only. Clients don't depend on it (see [Client: Render surfaces](#client-render-surfaces)).
+
 ### Configure the agent
 
-In Genkit Dart, middleware is resolved from the registry, so you must register `A2uiPlugin()` in `Genkit(plugins: [...])` before referencing `a2ui()`. Add `a2ui()` to the agent's `use` list to enable generative UI with the default **basic catalog**:
+In Genkit Dart, middleware is resolved from the registry, so you must register `A2uiPlugin()` in `Genkit(plugins: [...])` before referencing `a2ui()`. Add `a2ui()` to the agent's `use` list to enable generative UI with the default **basic catalog** (A2UI v1.0):
 
 ```dart
-import 'package:genkit/genkit.dart';
 import 'package:genkit/experimental.dart';
-import 'package:genkit_a2ui/a2ui.dart';
 import 'package:genkit/experimental_io.dart';
+import 'package:genkit/genkit.dart';
 import 'package:genkit/io.dart';
+import 'package:genkit_a2ui/a2ui.dart';
 import 'package:genkit_google_genai/genkit_google_genai.dart';
 
 // Register A2uiPlugin so `use: [a2ui()]` resolves from the registry
@@ -293,9 +343,7 @@ final ai = Genkit(plugins: [googleAI(), A2uiPlugin()]);
 final uiAgent = ai.defineAgent(
   name: 'uiAgent',
   model: googleAI.gemini('gemini-flash-latest'),
-  system:
-      'You help users. Render an A2UI surface whenever a result is clearer '
-      'shown than told. Keep prose brief; put the primary substance in the UI.',
+  system: 'You help users. Render UI when it is clearer than prose.',
   use: [a2ui()], // defaults to the bundled 'basic' catalog
   store: InMemorySessionStore(),
 );
@@ -311,7 +359,7 @@ void main() async {
 }
 ```
 
-The middleware also works with one-shot `ai.generate()` calls:
+The middleware also works with one-shot `ai.generate()` calls. `a2uiEnvelopesFromParts` reads the A2UI messages out of the response:
 
 ```dart
 final res = await ai.generate(
@@ -319,19 +367,74 @@ final res = await ai.generate(
   prompt: 'Show me the weather in Tokyo',
   use: [a2ui()],
 );
+
+for (final message in a2uiEnvelopesFromParts(res.message?.content)) {
+  print(message);
+}
 ```
 
 ### Options
 
 Pass configuration options to `a2ui(...)`:
 
-| Option         | Default      | Description                                                                                                                                                                            |
-| -------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `catalog`      | `'basic'`    | Catalog ID resolved from the Genkit registry.                                                                                                                                          |
-| `instructions` | `'system'`   | Where to inject catalog capabilities. Set to `'system'` to append to the system prompt, or `'none'` to omit.                                                                           |
-| `validate`     | `'warn'`     | Envelope validation strategy. `'warn'` logs invalid envelopes and drops them; `'strict'` throws errors on validation failure; `'off'` passes everything through. See [The trust boundary and security](#the-trust-boundary-and-security). |
-| `surfaceId`    | a fresh UUID | Surface ID assignment policy. Defaults to a new UUID per surface; pass a fixed string to reuse a single surface.                                                                       |
-| `version`      | `'v0.9'`     | The A2UI protocol version stamped on emitted envelopes.                                                                                                                                |
+| Option         | Default        | Description                                                                                                                                                                                                                                                  |
+| -------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `catalog`      | `'basic'`      | Catalog ID resolved from the Genkit registry. `'basic'` is the A2UI v1.0 basic catalog; `'basic-v0.9'` keeps v0.9.                                                                                                                                         |
+| `instructions` | `'system'`     | Where to inject catalog capabilities. Set to `'system'` to append to the system prompt, or `'none'` to omit (start your own prompt from `renderCatalogInstructions(catalog)`).                                                                             |
+| `validate`     | `'warn'`       | What to do with a block that fails to compile or validate. `'warn'` logs and drops it; `'strict'` fails the turn; `'off'` checks only that the block compiles, not the component tree. See [The trust boundary and security](#the-trust-boundary-and-security). |
+| `repair`       | `true`         | Ask the model once to fix a block that failed to compile. Costs an extra model call on the failure path only. See [Self-repair](#self-repair).                                                                                                             |
+| `version`      | _from catalog_ | Optional assertion (`'1.0'` or `'v0.9'`). The catalog decides which protocol version a turn emits; passing `version` fails the turn if the resolved catalog targets another one.                                                                                  |
+
+### When the model renders
+
+The injected instructions ask for a surface when the answer is data the user will look at or act on (structured tool results, comparisons, choices, forms), and for plain prose otherwise. They yield to your system prompt, so steer from there:
+
+```dart
+ai.defineAgent(
+  name: 'dashboard',
+  // More surfaces:
+  system: 'Answer with an A2UI surface whenever you can, explanations included.',
+  // Or fewer: 'Only render a surface when the user asks for one.'
+  use: [a2ui()],
+);
+```
+
+### Surfaces: create, replace, and update
+
+The model writes each surface in A2UI Express, a compact positional notation that costs far fewer tokens than the equivalent JSON:
+
+```text
+surface("tokyo-weather")
+root = Card(Column([title, refresh]))
+title = Text("## Weather in Tokyo")
+refresh = Button(Text("Refresh"), "primary", Event("refresh", {city: "Tokyo"}))
+```
+
+The model names each surface, and the ID reaches the client unchanged:
+
+- **Rendering an ID again replaces that surface.** The middleware puts a `deleteSurface` in front of every `createSurface`, since renderers reject a second `createSurface` for a live ID. For a new surface the delete is a no-op. Custom renderers must treat a `deleteSurface` for an unknown ID as a no-op too.
+- **A block without `root` updates a live surface.** It carries only what changed, as `updateComponents` or `updateDataModel` messages. For example, this updates whatever the surface bound to `$/temp`:
+
+  ```text
+  surface("tokyo-weather")
+  $/temp = "21C"
+  ```
+
+Because a part can carry only updates for a surface an earlier part or turn created, clients must feed every message from every part, in order, into one renderer per conversation, and render each surface once, keyed by its ID.
+
+Unless `validate` is `'off'`, every block is checked against the surfaces the conversation's history left on the client, so an update must target a live surface and leave its component tree valid. `remoteAgent` and session stores send A2UI parts back with the history, which is what makes this work.
+
+### Self-repair
+
+Models occasionally emit a block that doesn't compile, most often by putting a label where a component ID belongs (`Button("Refresh", ...)` instead of `Button(Text("Refresh"), ...)`). When that happens, the middleware sends a follow-up call with the error, the Express contract, and the failed block, then compiles the reply. If the repair works, the surface renders; if not, the block is dropped (or `'strict'` fails the turn). That is at most one call per distinct broken block, 3 per model call, and 30 seconds in total.
+
+Repair runs once the model's response is complete, so a repaired surface arrives as the last chunk of the stream rather than where the model wrote it. Its token usage is added to the turn's `usage`, and cancelling the turn cancels a repair in flight.
+
+To see the model's own mistakes while developing, turn repair off:
+
+```dart
+use: [a2ui(validate: 'strict', repair: false)]
+```
 
 </Lang>
 
@@ -447,7 +550,13 @@ register_basic_catalog(ai)
 
 ## Client: Render surfaces
 
-Because A2UI emits standardized JSON envelopes over HTTP, client-side rendering is completely decoupled from your backend language. A web frontend or Flutter client can interact directly with a backend written in TypeScript, Go, Dart, or Python.
+<Lang lang="js go python">
+
+Because A2UI emits standardized JSON envelopes over HTTP, client-side rendering is completely decoupled from your backend language. A web frontend can interact directly with a backend written in TypeScript, Go, or Python.
+
+:::note[Flutter clients]
+Flutter clients render surfaces with [`a2ui_flutter`](https://pub.dev/packages/a2ui_flutter), covered in the [Dart version of this page](/docs/dart/agents/a2ui/). That guide targets Genkit Dart agents, which carry A2UI under the spec's `data.messages` key. It isn't compatible with JavaScript, Go, or Python agents yet.
+:::
 
 <Tabs syncKey="client-lang">
 
@@ -574,33 +683,135 @@ for await (const event of streamA2uiAgent({
 
 </TabItem>
 
-<TabItem label="Flutter (Dart / genui)">
+</Tabs>
 
-Flutter applications render A2UI surfaces using [`genui`](https://pub.dev/packages/genui). Client components use `package:genkit/experimental_client.dart`, `package:genkit_a2ui/client.dart`, and `package:a2ui_core/a2ui_core.dart`.
+</Lang>
 
-#### 1. Install client packages
+<Lang lang="dart">
+
+Clients don't depend on `genkit_a2ui`. A2UI arrives as plain, spec-shaped data parts, so a Flutter client needs only `package:genkit` and a renderer: [`a2ui_flutter`](https://pub.dev/packages/a2ui_flutter) renders surfaces, and [`a2ui_core`](https://pub.dev/packages/a2ui_core) processes messages and holds each surface's state.
+
+:::note[Web clients]
+The web client helpers in `@genkit-ai/a2ui/client` (see the [JavaScript version of this page](/docs/js/agents/a2ui/)) read A2UI v0.9 from `data.envelopes`, so they don't render a Genkit Dart agent's surfaces yet.
+:::
+
+### 1. Install client packages
 
 Add the client packages to your Flutter app:
 
 ```bash
-flutter pub add genkit genkit_a2ui 'genui:^0.10.4' 'a2ui_core:^0.1.1'
+flutter pub add genkit a2ui_flutter a2ui_core url_launcher
 ```
 
-The client code below targets the `genui` 0.10 API with `a2ui_core` 0.1, so keep
-these constraints.
+`url_launcher` backs the basic catalog's `openUrl` function, which `a2ui_core` doesn't bundle.
 
-#### 2. Set up the SurfaceController and remoteAgent
+An app that hosts the agent in-process can depend on both `genkit_a2ui` and `a2ui_flutter`, since both build on `a2ui_core` 0.7. `a2ui_core` is pre-1.0 and still makes breaking releases, so running the agent in a server package of its own (as the sample does) keeps it from holding back the renderer version.
 
-`package:genkit_a2ui/client.dart` is browser- and Flutter-safe (no `dart:io`). Initialize `remoteAgent`, construct a `SurfaceController` with the basic catalog, and stream agent turns:
+### 2. Copy the A2UI helpers
+
+Copy these two helpers into your app. `a2uiMessagesFrom` reads A2UI messages out of a chunk's or message's parts, and `a2uiActionToMessage` wraps a surface action as the next agent input:
 
 ```dart
-import 'package:a2ui_core/a2ui_core.dart' as core;
-import 'package:flutter/material.dart';
-import 'package:genkit/experimental_client.dart';
-import 'package:genkit_a2ui/client.dart';
-import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
+import 'package:a2ui_core/a2ui_core.dart'
+    show ActionMessage, RendererToAgentMessagePayload;
+import 'package:genkit/client.dart';
 
-// remoteAgent connects to your backend endpoint
+const a2uiMimeType = 'application/a2ui+json';
+
+const _envelopeKeys = {'checks', 'accessibility', 'catalogId', 'metadata'};
+
+/// The A2UI messages carried by a chunk's or message's parts.
+Iterable<Map<String, dynamic>> a2uiMessagesFrom(List<Part>? parts) sync* {
+  for (final part in parts ?? const <Part>[]) {
+    if (part.metadata?['mimeType'] != a2uiMimeType) continue;
+    // `envelopes` is the pre-spec key, still written by older agents. Malformed
+    // payloads are skipped rather than throwing mid-stream.
+    final data = part.data;
+    if ((data?['messages'] ?? data?['envelopes']) case final List messages) {
+      yield* messages.whereType<Map>().map(
+        (m) => _normalizeEnvelopeKeys(
+          m is Map<String, dynamic> ? m : m.cast<String, dynamic>(),
+        ),
+      );
+    }
+  }
+}
+
+bool _hasAtEnvelopeKey(Object? c) =>
+    c is Map &&
+    c.keys.any(
+      (k) =>
+          k is String &&
+          k.startsWith('@') &&
+          _envelopeKeys.contains(k.substring(1)) &&
+          !c.containsKey(k.substring(1)),
+    );
+
+/// Rewrites `@checks`, `@accessibility`, `@catalogId` and `@metadata` on v1.0
+/// components to the bare names that `a2ui_core` 0.7 expects, so this client
+/// keeps rendering if the agent moves to a newer SDK first. Delete it once your
+/// `a2ui_core` reads the `@` keys itself.
+Map<String, dynamic> _normalizeEnvelopeKeys(Map<String, dynamic> message) {
+  if (message['version'] != '1.0') return message;
+  for (final kind in const ['createSurface', 'updateComponents']) {
+    if (message[kind] case final Map body) {
+      if (body['components'] case final List components
+          when components.any(_hasAtEnvelopeKey)) {
+        return <String, dynamic>{
+          ...message,
+          kind: <String, dynamic>{
+            ...body.cast<String, dynamic>(),
+            'components': <Object?>[
+              for (final c in components)
+                if (c is Map)
+                  <String, dynamic>{
+                    for (final MapEntry(:key, :value) in c.entries)
+                      if (key is String &&
+                          key.startsWith('@') &&
+                          _envelopeKeys.contains(key.substring(1)) &&
+                          !c.containsKey(key.substring(1)))
+                        key.substring(1): value
+                      else
+                        '$key': value,
+                  }
+                else
+                  c,
+            ],
+          },
+        };
+      }
+    }
+  }
+  return message;
+}
+
+/// Wraps a surface action (e.g. a button press) as the next agent input.
+///
+/// `a2ui_core` writes the `{messages: [...]}` wrapper the agent reads, with
+/// the action in a spec-shaped `{version, action}` message, so it is forwarded
+/// as is.
+Message a2uiActionToMessage(ActionMessage action) => Message(
+  role: .user,
+  content: [
+    DataPart(
+      data: RendererToAgentMessagePayload.of(action).toJson(),
+      metadata: {'mimeType': a2uiMimeType},
+    ),
+  ],
+);
+```
+
+### 3. Set up the message processor and stream turns
+
+Connect with `remoteAgent` and feed every A2UI message, in order, into one `a2ui_core` `MessageProcessor` per conversation:
+
+```dart
+import 'package:a2ui_core/a2ui_core.dart';
+import 'package:a2ui_flutter/a2ui_flutter.dart';
+import 'package:a2ui_flutter/basic_catalog.dart';
+import 'package:genkit/experimental_client.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 final agent = remoteAgent(
   url: 'http://localhost:8080/api/uiAgent',
   getSnapshotUrl: 'http://localhost:8080/api/uiAgent/getSnapshot',
@@ -608,71 +819,83 @@ final agent = remoteAgent(
 );
 final chat = agent.chat();
 
-// Re-tag genui's basic catalog with the plugin's advertised basicCatalogId
-final catalog = BasicCatalogItems.asCatalog().copyWith(
-  catalogId: basicCatalogId,
+// True while a turn streams. A button press mid-stream would otherwise start
+// a second turn, interleaving both streams into the same processor.
+var busy = false;
+
+// The renderer rejects a surface whose catalog ID it doesn't hold, so the ID
+// must match the catalog the agent uses. `basicCatalog()` has the same ID as
+// the plugin's bundled basic catalog.
+final processor = MessageProcessor<ComponentImplementation>(
+  catalogs: [basicCatalog(openUrl: (uri) => launchUrl(uri))],
+  // Deliver actions to `outboundListener` as typed, versioned messages.
+  unifiedOutbound: true,
+  // A surface action (e.g. a button press) becomes the next turn.
+  outboundListener: (message) {
+    if (message is ActionMessage && !busy) {
+      runTurn(chat.sendStream(message: a2uiActionToMessage(message)));
+    }
+  },
+  onError: (error) => print('A2UI renderer error: ${error.message}'),
 );
-final surfaceController = SurfaceController(catalogs: [catalog]);
-```
 
-:::note[Symbol conflicts]
-Importing both `package:genkit_a2ui/client.dart` and `package:genui/genui.dart` causes a collision on `basicCatalogId` (and on `DataPart` if you also import `package:genkit/client.dart`). Hide them when importing `genui`: `import 'package:genui/genui.dart' hide basicCatalogId, DataPart;`.
-:::
-
-#### 3. Stream and process agent turns
-
-Iterate over `turn.stream`, parsing A2UI envelopes from the chunk's content using `a2uiEnvelopesFromParts`, and pass each envelope as an `A2uiMessage` to `surfaceController.handleMessage`:
-
-```dart
-final turn = chat.sendStream(text: 'What is the weather in Tokyo?');
-
-await for (final chunk in turn.stream) {
-  // 1. Append prose text
-  if (chunk.text.isNotEmpty) {
-    appendProse(chunk.text);
-  }
-
-  // 2. Extract and handle A2UI envelopes
-  for (final envelope in a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content)) {
-    surfaceController.handleMessage(core.A2uiMessage.fromJson(envelope));
+Future<void> runTurn(AgentTurn turn) async {
+  busy = true;
+  try {
+    await for (final chunk in turn.stream) {
+      if (chunk.text.isNotEmpty) appendProse(chunk.text);
+      for (final m in a2uiMessagesFrom(chunk.raw.modelChunk?.content)) {
+        // One message the renderer can't take (a newer protocol version, say)
+        // must not stop the rest of the turn.
+        try {
+          processor.processMessages([m]);
+        } on Object catch (e) {
+          print('Skipping an A2UI message: $e');
+        }
+      }
+    }
+    await turn.response;
+  } finally {
+    busy = false;
   }
 }
 
-await turn.response;
+// Apply the same `busy` check to your text input before starting a turn.
+await runTurn(chat.sendStream(text: 'What is the weather in Tokyo?'));
 ```
 
-#### 4. Mount the Surface widget
+### 4. Mount the surfaces
 
-Listen to `surfaceController.surfaceUpdates` to detect new surfaces, and render `Surface(surfaceContext: surfaceController.contextFor(surfaceId))` in your UI:
+Listen to `processor.model.onSurfaceCreated` and `onSurfaceDeleted`, and render each surface with an `A2uiSurface` widget. Key the chat log by surface ID, so a replaced surface re-renders where it first appeared and an updated one changes in place:
 
 ```dart
-surfaceController.surfaceUpdates.listen((update) {
-  if (update is SurfaceAdded) {
-    setState(() {
-      entries.add(update.surfaceId);
-    });
-  }
+final surfaceIds = <String>[];
+
+// In initState:
+processor.model.onSurfaceCreated.subscribe((surface) {
+  setState(() {
+    if (!surfaceIds.contains(surface.id)) surfaceIds.add(surface.id);
+  });
 });
+processor.model.onSurfaceDeleted.subscribe((_) => setState(() {}));
 
-// Inside your build method or ListView:
+// In build, for each ID in surfaceIds:
 Widget buildSurface(String surfaceId) {
-  return IntrinsicHeight(
-    child: Surface(
-      surfaceContext: surfaceController.contextFor(surfaceId),
-    ),
-  );
+  final surface = processor.model.getSurface(surfaceId);
+  // Deleted: keep the slot in case the agent renders the ID again.
+  if (surface == null) return const SizedBox.shrink();
+  // A replaced surface is a new model, so key by it to start fresh.
+  return A2uiSurface(key: ObjectKey(surface), surface: surface);
 }
 ```
 
-Wrap `Surface` in `IntrinsicHeight` when placed inside scrollable views such as `ListView` to provide bounded constraints for components that stretch vertically.
-
-</TabItem>
-
-</Tabs>
+</Lang>
 
 ## Handle user actions and forms
 
 When users interact with components (such as clicking a `Button`), the surface triggers an action that is sent back to the agent as the next conversational turn.
+
+<Lang lang="js go python">
 
 <Tabs syncKey="client-lang">
 
@@ -707,46 +930,6 @@ async function handleAction(action: A2uiClientAction) {
 
 </TabItem>
 
-<TabItem label="Flutter (Dart / genui)">
-
-In Flutter, listen to `surfaceController.onSubmit`. Genui emits a `ChatMessage` containing a `UiInteractionPart`, which you decode into an `A2uiClientAction` and convert with `actionToMessage`:
-
-```dart
-import 'dart:convert';
-import 'package:genkit_a2ui/client.dart';
-import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
-
-surfaceController.onSubmit.listen((ChatMessage message) {
-  final action = _actionFromSubmit(message);
-  if (action == null || busy) return;
-
-  final turn = chat.sendStream(message: actionToMessage(action));
-  // Stream prose and envelopes as usual...
-});
-
-A2uiClientAction? _actionFromSubmit(ChatMessage message) {
-  for (final part in message.parts) {
-    final interaction = part.asUiInteractionPart?.interaction;
-    if (interaction == null) continue;
-    final decoded = jsonDecode(interaction);
-    final action = decoded is Map ? decoded['action'] : null;
-    if (action is Map) {
-      final m = action.cast<String, dynamic>();
-      return A2uiClientAction(
-        name: (m['name'] as String?) ?? 'action',
-        surfaceId: (m['surfaceId'] as String?) ?? '',
-        sourceComponentId: (m['widgetId'] as String?) ?? '',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
-        context: (m['context'] as Map?)?.cast<String, dynamic>() ?? const {},
-      );
-    }
-  }
-  return null;
-}
-```
-
-</TabItem>
-
 </Tabs>
 
 ### Form inputs and data binding
@@ -758,7 +941,30 @@ Input components (`TextField`, `CheckBox`, and `Slider`) do not broadcast values
 
 The instructions injected by the A2UI middleware guide the model to configure these bindings. When the user clicks submit, the client renderer resolves the bound paths from the surface data model and passes the values in `action.context`.
 
+</Lang>
+
+<Lang lang="dart">
+
+The `outboundListener` from the previous section already does this: `a2uiActionToMessage` sends the action back as an A2UI data part carrying an `action` message. The middleware turns it into a line the model can read, so no accompanying text is needed:
+
+```text
+[UI action "refresh" from refreshBtn on surface tokyo-weather context={"city":"Tokyo"}]
+```
+
+### Form inputs and data binding
+
+Input components (`TextField`, `CheckBox`, `Slider`, `ChoicePicker`, and `DateTimeInput`) don't send their values automatically. To capture what the user entered, the model must:
+
+1. Bind each input's value to a data-model path: `email = TextField("Email", $/email)`.
+2. Echo those same paths in the submit button's event context: `Event("submit", {email: $/email})`.
+
+The instructions injected by the A2UI middleware already tell the model to do this. When the user clicks submit, the renderer resolves the bound paths from the surface's data model and passes the values in the action's `context`. Without both steps, the action arrives with an empty `context`.
+
+</Lang>
+
 ## The basic component catalog
+
+<Lang lang="js go python">
 
 The built-in basic catalog provides 12 core components across layout, content, and interactive categories:
 
@@ -795,7 +1001,54 @@ The built-in basic catalog provides 12 core components across layout, content, a
 - **`Slider`**: A numeric range slider.
   - Props: `max: number` (required), `value: number or { path } binding` (required), `min?: number`, `step?: number`, `label?: string`.
 
+</Lang>
+
+<Lang lang="dart">
+
+The bundled `basicCatalog` is the A2UI v1.0 basic catalog: 18 components across layout, content, and interactive categories. A2UI Express is positional, so the order of a component's properties is the order of its arguments (`Button(Text("Go"), "primary", Event("go"))`). Optional properties are marked with `?`.
+
+### Layout components
+
+| Component | Arguments                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------- |
+| `Row`     | `children`, `justify?` (`start`, `center`, `end`, `spaceAround`, `spaceBetween`, `spaceEvenly`, `stretch`), `align?` (`start`, `center`, `end`, `stretch`) |
+| `Column`  | `children`, `justify?`, `align?` (same values as `Row`)                                         |
+| `List`    | `children`, `direction?` (`vertical`, `horizontal`), `align?`                                   |
+| `Card`    | `child` (use a `Column` or `Row` to group several elements)                                     |
+| `Tabs`    | `tabs` (a list of `{title, child}`)                                                             |
+| `Modal`   | `trigger` (the component that opens it), `content`                                              |
+| `Divider` | `axis?` (`horizontal`, `vertical`)                                                              |
+
+### Content components
+
+| Component     | Arguments                                                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Text`        | `text` (inline Markdown; use heading lines such as `"## Title"` for headings), `variant?` (`caption`, `body`)                                     |
+| `Image`       | `url`, `description?`, `fit?` (`contain`, `cover`, `fill`, `none`, `scaleDown`), `variant?` (`icon`, `avatar`, `smallFeature`, `mediumFeature`, `largeFeature`, `header`) |
+| `Icon`        | `name`: one of the names in `basicIconNames`, such as `check`, `close`, `refresh`, `star`, `info`, `warning`, `error`, `search`, or `home`        |
+| `Video`       | `url`, `posterUrl?`                                                                                                                               |
+| `AudioPlayer` | `url`, `description?`                                                                                                                             |
+
+### Interactive components
+
+| Component       | Arguments                                                                                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Button`        | `child` (a component ID, typically a `Text`), `variant?` (`default`, `primary`, `borderless`), `action` (`Event(name, context?)`)                          |
+| `TextField`     | `label`, `value`, `placeholder?`, `variant?` (`shortText`, `longText`, `number`, `obscured`)                                                               |
+| `CheckBox`      | `label`, `value`                                                                                                                                            |
+| `ChoicePicker`  | `label?`, `variant?` (`multipleSelection`, `mutuallyExclusive`), `options` (a list of `{label, value}`), `value`, `displayStyle?` (`checkbox`, `chips`), `filterable?` |
+| `Slider`        | `label?`, `min?`, `max`, `value`, `steps?`                                                                                                                  |
+| `DateTimeInput` | `value`, `enableDate?`, `enableTime?`, `min?`, `max?`, `label?`                                                                                             |
+
+Text-like and value arguments accept either a literal or a data binding (`$/path`).
+
+To keep emitting A2UI v0.9 (for example, while some clients still render v0.9 only), pass `a2ui(catalog: 'basic-v0.9')` or extend `basicCatalogV09`. It has the 12 v0.9 components, without `Tabs`, `Modal`, `Video`, `AudioPlayer`, `ChoicePicker`, and `DateTimeInput`.
+
+</Lang>
+
 ## Custom catalogs
+
+<Lang lang="js go python">
 
 When you want agents to render custom UI widgets or components tailored to your design system, you can register a custom catalog. A catalog defines:
 
@@ -825,6 +1078,104 @@ Define your catalog in a JSON file (such as `./catalogs/dashboard.json`):
 ```
 
 ### Register the catalog on the server
+
+</Lang>
+
+<Lang lang="dart">
+
+When you want agents to render custom UI widgets or components tailored to your design system, define a custom catalog, register it with `loadCatalog`, and reference it by ID.
+
+### Catalog format
+
+Catalogs use the A2UI specification's [`catalog.json`](https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json) format, so a published catalog loads unmodified:
+
+- `catalogId`: A globally unique URI identifying the catalog. It's sent as `catalogId` on `createSurface`, and the client must register a catalog under the same ID.
+- `protocolVersion`: `"1.0"` for A2UI v1.0 catalogs (omitted on v0.9 catalogs). The catalog's protocol version decides what the middleware emits.
+- `components`: An object keyed by component name, where each value is the component's JSON Schema. The schema's `description` and property descriptions are what the model sees.
+- `functions` (optional): Client functions (validation checks, formatters), keyed by name.
+
+Property order matters: A2UI Express is positional, so the model writes `MetricCard("Revenue", "$1.2M", "up")`, and the order of a component's properties decides which argument is which.
+
+### Option A: Load from a JSON file
+
+Define the catalog in a JSON file (such as `./catalogs/dashboard.json`):
+
+```json
+{
+  "catalogId": "https://example.com/catalogs/dashboard.json",
+  "protocolVersion": "1.0",
+  "components": {
+    "MetricCard": {
+      "type": "object",
+      "description": "Displays a key metric with a title, value, and trend indicator.",
+      "properties": {
+        "component": { "const": "MetricCard" },
+        "title": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "value": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "trend": { "type": "string", "enum": ["up", "down", "neutral"] }
+      },
+      "required": ["component", "title", "value"]
+    }
+  }
+}
+```
+
+Then register it under a lookup ID at startup, before the agent handles a turn:
+
+```dart
+import 'package:genkit_a2ui/a2ui.dart';
+
+await loadCatalog(ai, id: 'dashboard', file: './catalogs/dashboard.json');
+```
+
+### Option B: Define it in code
+
+`A2uiCatalogComponent.simple` builds the same schema from a parameter list, so you don't have to write JSON Schema by hand. Extend the bundled basic catalog to keep its standard components:
+
+```dart
+import 'package:genkit_a2ui/a2ui.dart';
+
+final dashboardCatalog = basicCatalog.extend(
+  id: 'https://example.com/catalogs/dashboard.json',
+  components: [
+    A2uiCatalogComponent.simple(
+      name: 'MetricCard',
+      description: 'Displays a key metric with a title, value, and trend indicator.',
+      params: [
+        // A literal or a data binding (`$/path`).
+        const A2uiParam.dynamicValue('title', required: true),
+        const A2uiParam.dynamicValue('value', required: true),
+        // A literal only, restricted to these values.
+        const A2uiParam.string('trend', enumValues: ['up', 'down', 'neutral']),
+      ],
+    ),
+  ],
+);
+
+await loadCatalog(ai, id: 'dashboard', catalog: dashboardCatalog);
+```
+
+`A2uiParam.dynamicValue` takes a string unless you set its `type` (`A2uiDynamicType.number`, `.boolean`, `.stringList`, or `.value`). The other parameter kinds are `A2uiParam.number`, `A2uiParam.boolean`, `A2uiParam.child` (one child component ID), `A2uiParam.children` (a list of child IDs), `A2uiParam.action` (an event fired on interaction), and `A2uiParam.schema` (a hand-written JSON Schema). For inputs that accept validation checks, pass `checkable: true` to `A2uiCatalogComponent.simple`.
+
+`basicCatalog.extend` keeps the basic catalog's protocol version (v1.0). Extend `basicCatalogV09` instead to build a v0.9 catalog.
+
+### Use the registered catalog
+
+Reference the lookup ID in the `a2ui()` options:
+
+```dart
+final dashboardAgent = ai.defineAgent(
+  name: 'dashboardAgent',
+  model: googleAI.gemini('gemini-flash-latest'),
+  system: 'You generate executive dashboards using MetricCards and structured layouts.',
+  use: [a2ui(catalog: 'dashboard', validate: 'strict')],
+  store: InMemorySessionStore(),
+);
+```
+
+Catalogs live in the Genkit registry (value type `a2ui-catalog`), so the middleware resolves them by lookup ID on each call. The lookup ID is separate from the catalog's `catalogId` URI, which is what the client matches.
+
+</Lang>
 
 <Lang lang="js">
 
@@ -925,44 +1276,6 @@ Catalogs live in the Genkit registry under `a2ui-catalog`. The Go plugin keys re
 
 </Lang>
 
-<Lang lang="dart">
-
-Load a catalog from a JSON file with `loadCatalog(ai, id: ..., file: ...)` or construct an `A2uiCatalog` in memory:
-
-```dart
-import 'package:genkit_a2ui/a2ui.dart';
-
-const dashboardCatalogId = 'https://example.com/catalogs/dashboard.json';
-
-final dashboardCatalog = A2uiCatalog(
-  id: dashboardCatalogId,
-  components: [
-    ...basicCatalog.components,
-    const A2uiCatalogComponent(
-      name: 'MetricCard',
-      description: 'Displays a key metric with a title, numeric value, and trend indicator.',
-      props: 'title: string (required); value: string|number (required); trend?: up|down|neutral.',
-    ),
-  ],
-);
-
-// Register at startup before handling turns
-await loadCatalog(ai, id: dashboardCatalogId, catalog: dashboardCatalog);
-```
-
-Then configure your agent with `catalog: dashboardCatalogId`:
-
-```dart
-final dashboardAgent = ai.defineAgent(
-  name: 'dashboardAgent',
-  model: googleAI.gemini('gemini-flash-latest'),
-  use: [a2ui(catalog: dashboardCatalogId, validate: 'strict')],
-  store: InMemorySessionStore(),
-);
-```
-
-</Lang>
-
 <Lang lang="python">
 
 Load a catalog from a JSON file with `load_catalog_file()`, or construct an `A2uiCatalog` in memory and register it with `load_catalog()`:
@@ -1018,6 +1331,8 @@ dashboard_agent = ai.define_agent(
 
 The client application must register a matching catalog renderer under the exact same catalog ID and support the corresponding component names:
 
+<Lang lang="js go python">
+
 <Tabs syncKey="client-lang">
 
 <TabItem label="Web (JavaScript / Lit)">
@@ -1043,50 +1358,117 @@ const processor = new MessageProcessor([basicCatalog, customCatalog], (action) =
 
 </TabItem>
 
-<TabItem label="Flutter (Dart / genui)">
+</Tabs>
 
-In Flutter, implement the component as a genui `CatalogItem` and add it to the catalog with `copyWith`:
+</Lang>
+
+<Lang lang="dart">
+
+In Flutter, implement each custom component as an `a2ui_flutter` `ComponentImplementation` (a `name`, a `schema`, and a `builder`), and build a `CatalogImplementation` that holds the basic components plus yours under the server's `catalogId`:
 
 ```dart
-import 'package:genui/genui.dart' hide basicCatalogId, DataPart;
+import 'package:a2ui_core/a2ui_core.dart'
+    show A2uiProtocolVersion, BasicCatalog, CommonSchemasV1, MessageProcessor;
+import 'package:a2ui_flutter/a2ui_flutter.dart';
+import 'package:a2ui_flutter/basic_catalog.dart';
+import 'package:json_schema_builder/json_schema_builder.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-final metricCardItem = CatalogItem(
+final metricCard = ComponentImplementation(
   name: 'MetricCard', // Must match the server component name
-  dataSchema: metricCardSchema,
-  widgetBuilder: (itemContext) {
-    return MetricCardWidget(context: itemContext);
-  },
+  schema: Schema.object(
+    properties: {
+      // A literal or a `{"@path": "/..."}` data binding.
+      'title': CommonSchemasV1.dynamicString,
+      'value': CommonSchemasV1.dynamicString,
+      'trend': Schema.string(enumValues: ['up', 'down', 'neutral']),
+    },
+    required: ['title', 'value'],
+  ),
+  // `props` holds resolved values; the builder reruns when bound data changes.
+  builder: (context, node, props, buildChild) => MetricCardWidget(
+    title: props.string('title') ?? '',
+    value: props.string('value') ?? '',
+    trend: props.string('trend'),
+  ),
 );
 
-final customCatalog = BasicCatalogItems.asCatalog().copyWith(
-  newItems: [metricCardItem],
-  catalogId: 'https://example.com/catalogs/dashboard.json', // Must match server ID
+final dashboardCatalog = CatalogImplementation(
+  id: 'https://example.com/catalogs/dashboard.json', // Must match the server catalogId
+  protocolVersion: A2uiProtocolVersion.v1_0,
+  components: [...BasicComponents.all, metricCard],
+  functions: BasicCatalog.v1_0(
+    openUrl: (uri) => launchUrl(uri),
+  ).functions.values.toList(),
+  definitions: BasicComponents.api.definitions,
 );
 
-final surfaceController = SurfaceController(catalogs: [customCatalog]);
+final processor = MessageProcessor<ComponentImplementation>(
+  catalogs: [dashboardCatalog],
+  // ...
+);
 ```
 
-</TabItem>
+The renderer rejects a `createSurface` whose `catalogId` it doesn't hold (an `A2uiCatalogError` from `processMessages`), so that surface never appears. `json_schema_builder` provides `Schema`; add it with `flutter pub add json_schema_builder`.
 
-</Tabs>
+</Lang>
 
 ## The trust boundary and security
 
 Because generative UI renders model-generated structures in the client DOM or Flutter widget tree, treat every emitted surface as **untrusted output**:
 
-- **Validation checks structure, not values:** The `validate` option (`strict` or `warn`) verifies envelope structure and component names against the active catalog. It does not sanitize property values (such as `Image.url` or Markdown text within `Text`).
+- **Validation checks structure, not values:** The `validate` option (`strict` or `warn`) checks that surfaces are well-formed against the active catalog (component names, structure, and references). It does not sanitize property values (such as `Image.url` or Markdown text within `Text`).
 - **Sanitize in the client renderer:** The client renderer is responsible for sanitizing property values before mounting them into the DOM or widget tree. Markdown parsers must escape raw HTML tags unless intentionally permitted and sanitized.
 - **Enforce Content Security Policy (CSP):** For web applications, configure a strong CSP restricting `img-src` and fetch destinations to trusted domains to prevent remote code execution or data exfiltration.
 - **Protect secrets:** Do not place confidential tokens or sensitive IDs in the surface data model, as any bound data may be returned to the server in user action payloads.
+
+<Lang lang="dart">
+
+If you need server-side control over props (for example, allow-listing image hosts), add your own model middleware **before** `a2ui()` in `use`. Middleware listed first wraps the ones after it, so it sees the parts `a2ui()` emits and can rewrite them. If you change a part's `data.messages`, also update or remove its `metadata.a2uiExpress`, since that source is what the model is shown on later turns.
+
+</Lang>
 
 ## Under the hood
 
 A2UI operates as a specialized data channel within the Genkit runtime:
 
+<Lang lang="js go python">
+
 1. **Prompt capability injection:** The middleware augments the system prompt with the active catalog's components and prop descriptions.
 2. **Stream interception:** As the model generates text, the middleware intercepts and parses `a2ui` fenced code blocks.
 3. **Envelope translation:** Emitted envelopes are validated against the catalog and packaged into Genkit `data` parts with MIME type `application/a2ui+json`.
 4. **Action translation:** Inbound user actions sent via `actionToMessage()` are converted into concise summaries for the model while preserving full structured payloads in conversation history.
+
+</Lang>
+
+<Lang lang="dart">
+
+1. **Prompt capability injection:** Unless `instructions` is `'none'`, the middleware adds the catalog's component signatures and the A2UI Express contract to the system prompt.
+2. **Stream interception:** The middleware intercepts both the streamed chunks and the final aggregated message, and extracts the `<a2ui>` Express blocks from the model's text.
+3. **Compilation:** Each block is compiled into A2UI messages (v1.0 by default) with [`a2ui_agent`](https://pub.dev/packages/a2ui_agent) and checked against the catalog and the conversation's live surfaces. A block that fails to compile goes through [self-repair](#self-repair).
+4. **Part rewriting:** Each block becomes a canonical A2UI data part with MIME type `application/a2ui+json`, with the Express source in `metadata.a2uiExpress`.
+5. **History replay:** Inbound A2UI parts are turned back into text before the model sees them. A surface the model rendered is replayed as its original Express block, and a user action becomes a line such as `[UI action "refresh" from refreshBtn on surface tokyo-weather]`. A model that doesn't understand the A2UI MIME type can still reason about prior surfaces and actions.
+
+## Upgrade from earlier versions
+
+`genkit_a2ui` is in preview, and 0.5 and 0.6 are both breaking releases. See the [package changelog](https://pub.dev/packages/genkit_a2ui/changelog) and [README](https://pub.dev/packages/genkit_a2ui) for the full migration notes.
+
+**From 0.5 (A2UI v0.9) to 0.6 (A2UI v1.0):**
+
+- `basicCatalog` and `A2uiCatalog(...)` now target A2UI v1.0. Messages carry `"version": "1.0"`, new surfaces inline their components and data model on `createSurface`, data bindings use `{"@path": ...}`, and `Text.variant` drops `h1`..`h5` in favor of Markdown heading lines.
+- To stay on v0.9 (for example, while clients still render v0.9 only), use `a2ui(catalog: 'basic-v0.9')`, extend `basicCatalogV09`, or pass `protocolVersion: 'v0.9'` to `A2uiCatalog(...)`.
+- `a2ui(version:)` no longer picks the version; it asserts the catalog's version. `a2uiVersion` is removed in favor of `catalog.protocolVersion`.
+- `genui` is discontinued. Replace it with `a2ui_flutter` and `a2ui_core` 0.7, and copy the [client helpers](#2-copy-the-a2ui-helpers) again (`a2uiSubmitToMessage` became `a2uiActionToMessage`). `a2ui_flutter` ships both a v1.0 basic catalog (`package:a2ui_flutter/basic_catalog.dart`) and a v0.9 one (`package:a2ui_flutter/v0_9/basic_catalog.dart`). Their IDs differ, so a client that registers both renders surfaces from either server version. Both libraries export a top-level `basicCatalog(...)`, so prefix one import (`import 'package:a2ui_flutter/v0_9/basic_catalog.dart' as v09;`).
+
+**From 0.4 to 0.5:**
+
+- The model writes A2UI Express in `<a2ui>` blocks instead of fenced `a2ui` JSON. With `instructions: 'none'`, rewrite your prompt starting from `renderCatalogInstructions(catalog)`.
+- The A2UI part's payload key changed from `data.envelopes` to `data.messages`. The agent still reads `envelopes` when replaying history. Upgrade the agent and its clients together.
+- `package:genkit_a2ui/client.dart` is removed. Clients no longer depend on `genkit_a2ui`.
+- Surface IDs belong to the model, and the `surfaceId` option is removed.
+- Catalogs use the spec's `catalog.json` shape (`components` keyed by name, each a JSON Schema). Extend the basic catalog with `basicCatalog.extend(...)` instead of spreading its components, and use `A2uiCatalogComponent.simple` instead of `props` strings.
+
+</Lang>
 
 ## Next steps
 
@@ -1110,10 +1492,10 @@ A2UI operates as a specialized data channel within the Genkit runtime:
 
 <Lang lang="dart">
 
-- [Deploying agents with Shelf](/docs/agents/http/) covers server endpoints and client connectivity.
+- [Serve agents over HTTP](/docs/agents/http/) covers server endpoints and client connectivity.
 - [Sessions and state](/docs/agents/state/) covers Dart session stores and history.
 - [Define agents](/docs/agents/define/) covers agent definitions and tools in Dart.
-- Explore the [`a2ui` testapp](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/a2ui) for a complete runnable Flutter + Shelf sample.
+- Explore the [`a2ui` testapp](https://github.com/genkit-ai/genkit-dart/tree/main/testapps/a2ui) for a complete runnable sample: a `dart:io` server hosting the agent with a custom catalog, plus a Flutter client that renders surfaces with `a2ui_flutter`.
 
 </Lang>
 
