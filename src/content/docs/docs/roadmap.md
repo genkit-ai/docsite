@@ -1,6 +1,11 @@
 ---
 title: Genkit roadmap and focus areas
 description: Explore the Genkit roadmap to see what's coming next and what we're working on.
+supportedLanguages:
+  - js
+  - go
+  - dart
+  - python
 isLanguageAgnostic: true
 ---
 

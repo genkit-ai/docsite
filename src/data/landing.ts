@@ -87,7 +87,7 @@ export const agentSkills = {
   install: 'npx skills add genkit-ai/skills',
   summary:
     'Genkit agent skills teach Antigravity, Claude Code, Cursor, and other coding agents to build with Genkit.',
-  cta: { label: 'Set up agent skills', href: '/docs/develop-with-ai' },
+  cta: { label: 'Set up agent skills', href: '/docs/js/develop-with-ai/' },
 };
 
 /**
@@ -254,8 +254,8 @@ export const useCases: UseCase[] = [
     summary: 'Support, shopping, and in-app help that answers in real time.',
     example: 'A chat assistant recommends the right pricing plan for a team of five.',
     learnMore: [
-      { label: 'Agents and chat', href: '/docs/agents/overview' },
-      { label: 'Streaming', href: '/docs/flows#streaming-flows' },
+      { label: 'Agents and chat', href: '/docs/js/agents/overview/' },
+      { label: 'Streaming', href: '/docs/js/flows/#streaming-flows' },
     ],
   },
   {
@@ -266,8 +266,8 @@ export const useCases: UseCase[] = [
     example:
       'A photo of a café receipt becomes structured fields for merchant, date, total, and category.',
     learnMore: [
-      { label: 'Structured output', href: '/docs/models#structured-output' },
-      { label: 'Multimodal input', href: '/docs/models#multimodal-input' },
+      { label: 'Structured output', href: '/docs/js/models/#structured-output' },
+      { label: 'Multimodal input', href: '/docs/js/models/#multimodal-input' },
     ],
   },
   {
@@ -277,8 +277,8 @@ export const useCases: UseCase[] = [
     summary: 'Ask your docs, help center, or files. Get answers with sources.',
     example: 'An assistant answers a vacation policy question and cites the employee handbook.',
     learnMore: [
-      { label: 'Retrieval (RAG)', href: '/docs/rag' },
-      { label: 'MCP', href: '/docs/model-context-protocol' },
+      { label: 'Retrieval (RAG)', href: '/docs/js/rag/' },
+      { label: 'MCP', href: '/docs/js/model-context-protocol/' },
     ],
   },
   {
@@ -288,8 +288,8 @@ export const useCases: UseCase[] = [
     summary: 'Generate product shots, art, and marketing copy from a prompt.',
     example: 'One text prompt generates product photos of a speckled mug in three glazes.',
     learnMore: [
-      { label: 'Image generation', href: '/docs/models#generating-media' },
-      { label: 'Prompt templates', href: '/docs/dotprompt' },
+      { label: 'Image generation', href: '/docs/js/models/#generating-media' },
+      { label: 'Prompt templates', href: '/docs/js/dotprompt/' },
     ],
   },
   {
@@ -300,8 +300,8 @@ export const useCases: UseCase[] = [
     example:
       'An agent looks up an order, checks the refund policy, and waits for a person to approve the refund.',
     learnMore: [
-      { label: 'Tool calling', href: '/docs/tool-calling' },
-      { label: 'Human approval', href: '/docs/agents/interrupts' },
+      { label: 'Tool calling', href: '/docs/js/tool-calling/' },
+      { label: 'Human approval', href: '/docs/js/agents/interrupts/' },
     ],
   },
   {
@@ -312,8 +312,8 @@ export const useCases: UseCase[] = [
     example:
       'Asked how the quarter went, an assistant answers with an interactive revenue chart instead of a paragraph.',
     learnMore: [
-      { label: 'GenUI (A2UI)', href: '/docs/agents/a2ui' },
-      { label: 'Client SDKs', href: '/docs/client' },
+      { label: 'GenUI (A2UI)', href: '/docs/js/agents/a2ui/' },
+      { label: 'Client SDKs', href: '/docs/client/' },
     ],
   },
 ];
@@ -336,29 +336,29 @@ export const steps: Step[] = [
     title: 'Build it with your coding agent',
     body: "Genkit gives coding agents guardrails, not guesswork. Agent skills teach Antigravity, Claude Code, and Cursor today's Genkit APIs. The Genkit MCP server lets them run your flows and read the traces, so they check their own work before you review it.",
     links: [
-      { label: 'Set up agent skills', href: '/docs/develop-with-ai' },
-      { label: 'Connect the MCP server', href: '/docs/mcp-server' },
+      { label: 'Set up agent skills', href: '/docs/js/develop-with-ai/' },
+      { label: 'Connect the MCP server', href: '/docs/mcp-server/' },
     ],
   },
   {
     id: 'models',
     title: 'Pick any model',
     body: 'Gemini, Claude, OpenAI, open models with Ollama, and more. Switching is one line.',
-    links: [{ label: 'Browse model providers', href: '/docs/integrations/model-providers' }],
+    links: [{ label: 'Browse model providers', href: '/docs/js/integrations/model-providers/' }],
   },
   {
     id: 'languages',
     title: 'Build in your language',
     body: 'Official SDKs for TypeScript, Go, Python, and Dart, built on the same concepts.',
-    links: [{ label: 'Choose your SDK', href: '/docs/get-started' }],
+    links: [{ label: 'Choose your SDK', href: '/docs/js/get-started/' }],
   },
   {
     id: 'ship',
     title: 'Test it, then ship it',
     body: 'See every prompt, tool call, and response in the local Developer UI. Then deploy to Cloud Run, Firebase, or anywhere your code runs.',
     links: [
-      { label: 'Explore the Developer UI', href: '/docs/devtools' },
-      { label: 'Deploy your app', href: '/docs/deployment/overview' },
+      { label: 'Explore the Developer UI', href: '/docs/js/devtools/' },
+      { label: 'Deploy your app', href: '/docs/js/deployment/overview/' },
     ],
   },
 ];
@@ -384,7 +384,7 @@ export const community = [
   { id: 'github', label: 'Star on GitHub', href: GITHUB_URL },
   { id: 'discord', label: 'Chat on Discord', href: DISCORD_URL },
   { id: 'examples', label: 'Try live demos', href: EXAMPLES_URL },
-  { id: 'blog', label: 'Read the blog', href: '/blog' },
+  { id: 'blog', label: 'Read the blog', href: '/blog/' },
 ];
 
 export interface Faq {
@@ -409,7 +409,7 @@ export const faqs: Faq[] = [
     question: 'Do I need to be an AI expert to use Genkit?',
     answer:
       'No. If you can build an app, you can build with Genkit. Common features like chat, structured data, and answers from your content take a few lines of code. You can also install Genkit skills so AI coding assistants like Antigravity, Claude Code, and Cursor can write Genkit code for you.',
-    link: { label: 'Build with AI coding assistants', href: '/docs/develop-with-ai' },
+    link: { label: 'Build with AI coding assistants', href: '/docs/js/develop-with-ai/' },
   },
   {
     question: "How is Genkit different from calling a model's API directly?",
@@ -420,13 +420,13 @@ export const faqs: Faq[] = [
     question: 'Which AI models does Genkit support?',
     answer:
       "Gemini (through the Gemini API or Gemini Enterprise), Anthropic Claude, OpenAI, xAI Grok, DeepSeek, models hosted on AWS Bedrock and Azure AI Foundry, open models like Gemma and Llama through Ollama, and any OpenAI-compatible API.",
-    link: { label: 'See all model providers', href: '/docs/integrations/model-providers' },
+    link: { label: 'See all model providers', href: '/docs/js/integrations/model-providers/' },
   },
   {
     question: 'Which programming languages can I use?',
     answer:
       'Genkit has official SDKs for TypeScript and JavaScript, Go, Python, and Dart.',
-    link: { label: 'Get started in your language', href: '/docs/get-started' },
+    link: { label: 'Get started in your language', href: '/docs/js/get-started/' },
   },
   {
     question: 'Is Genkit free?',
@@ -438,7 +438,7 @@ export const faqs: Faq[] = [
     question: 'Where can I deploy Genkit apps?',
     answer:
       'Anywhere your code runs. The docs include guides for Cloud Run, Firebase, AWS Lambda, and Azure Functions, and you can run Genkit on any server that supports your language.',
-    link: { label: 'Read the deployment guides', href: '/docs/deployment/overview' },
+    link: { label: 'Read the deployment guides', href: '/docs/js/deployment/overview/' },
   },
 ];
 
@@ -492,7 +492,7 @@ export function buildLandingJsonLd() {
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
         author: { '@id': orgId },
         featureList: useCases.map((useCase) => `${useCase.title}: ${useCase.summary}`),
-        softwareHelp: { '@type': 'CreativeWork', url: `${SITE_URL}/docs/get-started` },
+        softwareHelp: { '@type': 'CreativeWork', url: `${SITE_URL}/docs/js/get-started/` },
       },
       {
         '@type': 'SoftwareSourceCode',
@@ -531,8 +531,8 @@ export function buildLandingMarkdown() {
     '',
     heroDemo.description,
     '',
-    `- Website: ${SITE_URL}`,
-    `- Documentation: ${SITE_URL}/docs/get-started`,
+    `- Website: ${SITE_URL}/`,
+    `- Documentation: ${SITE_URL}/docs/js/get-started/`,
     `- Source code (Apache 2.0): ${GITHUB_URL}`,
     `- Full documentation for LLMs: ${SITE_URL}/llms.txt`,
     '',

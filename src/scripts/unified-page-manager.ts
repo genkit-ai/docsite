@@ -103,14 +103,26 @@ export class UnifiedPageManager {
     document.querySelectorAll<HTMLAnchorElement>('[data-genkit-docs-entry]').forEach((anchor) => {
       // The first rewrite replaces the neutral href, so keep it in the attribute
       // value to re-point the link on later language changes.
-      const neutralPath =
-        anchor.dataset.genkitDocsEntry || (anchor.getAttribute('href') || '').replace(/\/$/, '');
-      const slugMatch = neutralPath.match(/^\/docs\/([^/?#]+)$/);
+      const rawEntry = anchor.dataset.genkitDocsEntry || anchor.getAttribute('href') || '';
+      const neutralPath = rawEntry
+        .replace(/\/$/, '')
+        .replace(/^\/docs\/(js|go|dart|python)\//, '/docs/');
+      const slugMatch = neutralPath.match(/^\/docs\/([^?#]+)$/);
       if (!slugMatch) return;
       const slug = slugMatch[1];
       if ((LANGUAGE_FALLBACK_ORDER as readonly string[]).includes(slug)) return;
       anchor.dataset.genkitDocsEntry = neutralPath;
-      anchor.href = `/docs/${preferred}/${slug}/`;
+      if (this.docLanguageAgnostic[neutralPath]) {
+        anchor.href = `${neutralPath}/`;
+        return;
+      }
+      const supported = this.docLanguageSupport[neutralPath];
+      const targetLang = Array.isArray(supported) && supported.length > 0
+        ? supported.includes(preferred)
+          ? preferred
+          : LANGUAGE_FALLBACK_ORDER.find((lang) => supported.includes(lang)) || preferred
+        : preferred;
+      anchor.href = `/docs/${targetLang}/${slug}/`;
     });
   }
 

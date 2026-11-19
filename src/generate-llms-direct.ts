@@ -333,6 +333,9 @@ export async function generateLlmsDirectly(): Promise<void> {
   // Process all documents
   console.log('Processing all documentation files...');
   const docs = await getAllProcessedDocuments();
+  if (docs.length === 0) {
+    throw new Error('generate-llms-direct: found 0 documentation files; failing closed.');
+  }
   console.log(`Processed ${docs.length} documents`);
   
   // Generate complete unfiltered documentation (llms-full.txt)
@@ -383,5 +386,8 @@ export async function generateLlmsDirectly(): Promise<void> {
 
 // Run if called directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  generateLlmsDirectly().catch(console.error);
+  generateLlmsDirectly().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
