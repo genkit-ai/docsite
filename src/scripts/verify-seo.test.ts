@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { buildCanonicalDocRedirects } from './sync-firebase-docs-redirects.js';
-import { verifySeoBuild } from './verify-seo.js';
+import { type FirebaseHostingConfig, verifySeoBuild } from './verify-seo.js';
 
 function createValidDistFixture(): string {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-verify-seo-'));
@@ -63,6 +63,27 @@ test('verifySeoBuild fails closed when sitemap shrinks below threshold', () => {
       hosting: {},
     });
     assert.ok(errors.some((e) => e.includes('sitemap-0.xml failed closed')));
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
+});
+
+test('verifySeoBuild fails closed without throwing when hosting config is missing or malformed', () => {
+  const distDir = createValidDistFixture();
+  try {
+    for (const malformedHosting of [
+      undefined,
+      null,
+      [] as unknown as FirebaseHostingConfig,
+      'invalid' as unknown as FirebaseHostingConfig,
+    ]) {
+      const errors = verifySeoBuild({
+        distDir,
+        minSitemapUrls: 2,
+        hosting: malformedHosting,
+      });
+      assert.deepEqual(errors, ['firebase.json is missing a valid "hosting" configuration.']);
+    }
   } finally {
     fs.rmSync(distDir, { recursive: true, force: true });
   }

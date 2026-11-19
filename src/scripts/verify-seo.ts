@@ -15,7 +15,7 @@ export type FirebaseHostingConfig = {
 
 export type VerifySeoOptions = {
   distDir: string;
-  hosting: FirebaseHostingConfig;
+  hosting?: FirebaseHostingConfig | null;
   siteOrigin?: string;
   minSitemapUrls?: number;
 };
@@ -51,8 +51,11 @@ export function verifySeoBuild({
   minSitemapUrls = DEFAULT_MIN_SITEMAP_URLS,
 }: VerifySeoOptions): string[] {
   const errors: string[] = [];
-  const redirects = hosting.redirects ?? [];
-  const headers = hosting.headers ?? [];
+  if (!hosting || typeof hosting !== 'object' || Array.isArray(hosting)) {
+    errors.push('firebase.json is missing a valid "hosting" configuration.');
+  }
+  const redirects = hosting?.redirects ?? [];
+  const headers = hosting?.headers ?? [];
 
   // 1. Validate firebase.json headers
   for (const rule of headers) {
@@ -197,11 +200,11 @@ function main() {
   const distDir = path.resolve('dist');
   const firebaseRaw = fs.readFileSync(path.resolve('firebase.json'), 'utf8');
   const firebaseJson = JSON.parse(firebaseRaw) as {
-    hosting: FirebaseHostingConfig | FirebaseHostingConfig[];
-  };
-  const hosting = Array.isArray(firebaseJson.hosting)
+    hosting?: FirebaseHostingConfig | FirebaseHostingConfig[] | null;
+  } | null;
+  const hosting = Array.isArray(firebaseJson?.hosting)
     ? firebaseJson.hosting[0]
-    : firebaseJson.hosting;
+    : firebaseJson?.hosting;
 
   const errors = verifySeoBuild({ distDir, hosting });
   if (errors.length > 0) {
