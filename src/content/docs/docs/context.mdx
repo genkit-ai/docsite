@@ -192,6 +192,82 @@ helloPrompt({ pirateStyle: true }, { context: { auth: currentUser } });
 
 </Tabs>
 
+## Provide context from client calls
+
+When calling a deployed flow from a client application with [`runFlow` or `streamFlow`](/docs/client), you cannot pass the `context` object directly from the client because execution context (such as `context.auth`) is trusted server-side state. Instead, send credentials or metadata in the HTTP `headers` option, and configure a server-side `ContextProvider` to verify the request and populate `context`.
+
+On the client, pass `headers` to `runFlow` or `streamFlow`:
+
+```ts
+import { runFlow, streamFlow } from 'genkit/beta/client';
+
+// Non-streaming call
+const summary = await runFlow({
+  url: 'https://my-flow-endpoint/summarizeMessages',
+  headers: {
+    Authorization: `Bearer ${idToken}`,
+  },
+  input: { friendUid: 'user-123' },
+});
+
+// Streaming call
+const response = streamFlow({
+  url: 'https://my-flow-endpoint/summarizeMessages',
+  headers: {
+    Authorization: `Bearer ${idToken}`,
+  },
+  input: { friendUid: 'user-123' },
+});
+```
+
+On the server, pass a `ContextProvider` to `expressHandler` (`@genkit-ai/express`) or `appRoute` (`@genkit-ai/next`). The provider receives `RequestData` (where `request.headers` keys are lowercased) and returns the `ActionContext` supplied to your flow:
+
+<Tabs>
+
+<TabItem label="Express">
+
+```ts
+import { UserFacingError } from 'genkit';
+import type { ContextProvider, RequestData } from 'genkit/context';
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
+const authContext: ContextProvider = async (request: RequestData) => {
+  const token = request.headers['authorization']?.replace(/^Bearer\s+/i, '');
+  if (!token) {
+    throw new UserFacingError('UNAUTHENTICATED', 'Missing bearer token');
+  }
+  const user = await verifyToken(token);
+  return { auth: user };
+};
+
+const app = express();
+app.use(express.json());
+app.post(
+  '/summarizeMessages',
+  expressHandler(summarizeHistory, { contextProvider: authContext }),
+);
+```
+
+</TabItem>
+
+<TabItem label="Next.js">
+
+```ts
+import { appRoute } from '@genkit-ai/next';
+import { firebaseContext } from '@genkit-ai/firebase/context';
+
+export const POST = appRoute(summarizeHistory, {
+  contextProvider: firebaseContext({ signedIn: true }),
+});
+```
+
+</TabItem>
+
+</Tabs>
+
+For built-in context providers (such as `apiKey` from `genkit/context` and `firebaseContext` from `@genkit-ai/firebase/context`) and Cloud Functions for Firebase (`onCallGenkit`), see [Authorization and integrity](/docs/deployment/authorization).
+
 ## Context propagation and overrides
 
 By default, when you provide context it is automatically propagated to all
