@@ -10,6 +10,5 @@ export const GET: APIRoute = () =>
   new Response(buildLandingMarkdown(), {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
-      'X-Robots-Tag': 'noindex',
     },
   });

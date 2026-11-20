@@ -4,36 +4,10 @@ import { parse } from "yaml";
 
 const ALL_LANGUAGES = ["js", "go", "dart", "python"] as const;
 type SupportedLanguage = (typeof ALL_LANGUAGES)[number];
-type CanonicalByLanguage = Partial<Record<SupportedLanguage, SupportedLanguage>>;
 type DocLanguageMetadata = {
   supportedLanguages: SupportedLanguage[];
   isLanguageAgnostic: boolean;
-  canonicalByLanguage: CanonicalByLanguage;
 };
-
-function parseCanonicalByLanguage(
-  raw: unknown,
-  supportedLanguages: SupportedLanguage[],
-): CanonicalByLanguage {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
-  const result: CanonicalByLanguage = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    const fromLang = key.toLowerCase() as SupportedLanguage;
-    const toLang = typeof value === "string" ? (value.toLowerCase() as SupportedLanguage) : null;
-    if (
-      toLang &&
-      (ALL_LANGUAGES as readonly string[]).includes(fromLang) &&
-      (ALL_LANGUAGES as readonly string[]).includes(toLang) &&
-      supportedLanguages.includes(fromLang) &&
-      supportedLanguages.includes(toLang)
-    ) {
-      result[fromLang] = toLang;
-    }
-  }
-  return result;
-}
 
 function parseLanguageList(value: string): SupportedLanguage[] {
   const tokens = value
@@ -58,25 +32,21 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
     return {
       supportedLanguages: [...ALL_LANGUAGES],
       isLanguageAgnostic: false,
-      canonicalByLanguage: {},
     };
   }
 
   const source = fs.readFileSync(docFile, "utf8");
   let isLanguageAgnostic = false;
-  let rawCanonicalByLanguage: unknown = undefined;
   const frontmatterMatch = source.match(/^---\n([\s\S]*?)\n---\n?/);
   if (frontmatterMatch) {
     try {
       const frontmatter = parse(frontmatterMatch[1]) as {
         supportedLanguages?: unknown;
         isLanguageAgnostic?: unknown;
-        canonicalByLanguage?: unknown;
       };
       if (typeof frontmatter.isLanguageAgnostic === "boolean") {
         isLanguageAgnostic = frontmatter.isLanguageAgnostic;
       }
-      rawCanonicalByLanguage = frontmatter.canonicalByLanguage;
       if (Array.isArray(frontmatter.supportedLanguages)) {
         const langs = frontmatter.supportedLanguages
           .filter((value): value is string => typeof value === "string")
@@ -85,16 +55,11 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
             (ALL_LANGUAGES as readonly string[]).includes(value),
           );
         if (langs.length > 0) {
-          const supportedLanguages = ALL_LANGUAGES.filter((language) =>
-            langs.includes(language),
-          );
           return {
-            supportedLanguages,
-            isLanguageAgnostic,
-            canonicalByLanguage: parseCanonicalByLanguage(
-              rawCanonicalByLanguage,
-              supportedLanguages,
+            supportedLanguages: ALL_LANGUAGES.filter((language) =>
+              langs.includes(language),
             ),
+            isLanguageAgnostic,
           };
         }
       }
@@ -116,27 +81,17 @@ function getDocLanguageMetadata(slug: string): DocLanguageMetadata {
   }
 
   if (contentLanguages.size > 0) {
-    const supportedLanguages = ALL_LANGUAGES.filter((language) =>
-      contentLanguages.has(language),
-    );
     return {
-      supportedLanguages,
-      isLanguageAgnostic,
-      canonicalByLanguage: parseCanonicalByLanguage(
-        rawCanonicalByLanguage,
-        supportedLanguages,
+      supportedLanguages: ALL_LANGUAGES.filter((language) =>
+        contentLanguages.has(language),
       ),
+      isLanguageAgnostic,
     };
   }
 
-  const fallbackLanguages = [...ALL_LANGUAGES];
   return {
-    supportedLanguages: fallbackLanguages,
+    supportedLanguages: [...ALL_LANGUAGES],
     isLanguageAgnostic,
-    canonicalByLanguage: parseCanonicalByLanguage(
-      rawCanonicalByLanguage,
-      fallbackLanguages,
-    ),
   };
 }
 
@@ -395,22 +350,4 @@ export const docsLanguageAgnosticBySlug = Object.fromEntries(
     metadata.isLanguageAgnostic,
   ]),
 ) as Record<string, boolean>;
-export const docsCanonicalBySlug = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).map(([slug, metadata]) => [
-    slug,
-    metadata.canonicalByLanguage,
-  ]),
-) as Record<string, CanonicalByLanguage>;
-export const docsNonCanonicalLanguagePaths: Record<string, string> = Object.fromEntries(
-  Object.entries(docsLanguageMetadataBySlug).flatMap(([slug, metadata]) => {
-    if (metadata.isLanguageAgnostic) return [];
-    const slugPath = slug.replace(/^docs\//, "");
-    return Object.entries(metadata.canonicalByLanguage)
-      .filter(([fromLang, toLang]) => Boolean(toLang) && fromLang !== toLang)
-      .map(([fromLang, toLang]) => [
-        `/docs/${fromLang}/${slugPath}`,
-        `/docs/${toLang}/${slugPath}/`,
-      ]);
-  }),
-);
 export const docsAllLanguages = [...ALL_LANGUAGES];

@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildCanonicalDocRedirects } from './sync-firebase-docs-redirects.js';
 import { type FirebaseHostingConfig, verifySeoBuild } from './verify-seo.js';
 
 function createValidDistFixture(): string {
@@ -123,22 +122,38 @@ test('verifySeoBuild catches redirect chains, broken targets, canonical mismatch
   }
 });
 
-test('buildCanonicalDocRedirects emits neutral, unsupported-language, and agnostic redirects', () => {
-  const rules = buildCanonicalDocRedirects({
-    '/docs/develop-with-ai': {
-      supportedLanguages: ['js', 'go', 'python'],
-      isLanguageAgnostic: false,
-    },
-    '/docs/roadmap': {
-      supportedLanguages: ['js', 'go', 'dart', 'python'],
-      isLanguageAgnostic: true,
-    },
-  });
-  const bySource = new Map(rules.map((r) => [r.source, r.destination]));
-  assert.equal(bySource.get('/docs/develop-with-ai'), '/docs/js/develop-with-ai/');
-  assert.equal(bySource.get('/docs/develop-with-ai/'), '/docs/js/develop-with-ai/');
-  assert.equal(bySource.get('/docs/dart/develop-with-ai/'), '/docs/js/develop-with-ai/');
-  assert.equal(bySource.get('/docs/go/develop-with-ai/'), undefined);
-  assert.equal(bySource.get('/docs/go/roadmap/'), '/docs/roadmap/');
-  assert.equal(bySource.get('/docs/roadmap/'), undefined);
+test('verifySeoBuild catches 404 canonicals, missing 404 noindex, redirecting sitemap URLs, loops, and broad noindex headers', () => {
+  const distDir = createValidDistFixture();
+  try {
+    fs.writeFileSync(
+      path.join(distDir, '404.html'),
+      '<!doctype html><html><head><link rel="canonical" href="https://genkit.dev/404/"/></head><body>404</body></html>',
+    );
+    const errors = verifySeoBuild({
+      distDir,
+      minSitemapUrls: 2,
+      hosting: {
+        headers: [
+          {
+            glob: '/**',
+            headers: [{ key: 'X-Robots-Tag', value: 'noindex' }],
+          },
+        ],
+        redirects: [
+          { source: '/docs/js/flows/', destination: '/docs/flows/', type: 301 },
+          { source: '/docs/loop/', destination: '/docs/loop/', type: 301 },
+          { source: '/docs/dup', destination: '/docs/js/flows/', type: 301 },
+          { source: '/docs/dup', destination: '/', type: 301 },
+        ],
+      },
+    });
+    assert.ok(errors.some((e) => e.includes('dist/404.html must not emit a <link rel="canonical">')));
+    assert.ok(errors.some((e) => e.includes('dist/404.html must emit <meta name="robots" content="noindex">')));
+    assert.ok(errors.some((e) => e.includes('sitemap-0.xml lists redirecting URL')));
+    assert.ok(errors.some((e) => e.includes('Redirect loop in firebase.json')));
+    assert.ok(errors.some((e) => e.includes('Duplicate redirect source in firebase.json')));
+    assert.ok(errors.some((e) => e.includes('must not apply X-Robots-Tag: noindex to "/**"')));
+  } finally {
+    fs.rmSync(distDir, { recursive: true, force: true });
+  }
 });

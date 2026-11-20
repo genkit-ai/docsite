@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RedirectRule } from './sync-firebase-docs-redirects.js';
+
+export type RedirectRule = {
+  source: string;
+  destination: string;
+  type: number;
+};
 
 export type HeaderRule = {
   glob: string;

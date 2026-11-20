@@ -42,15 +42,6 @@ export const collections = {
 							.array(z.enum(['js', 'go', 'dart', 'python']))
 							.default(['js', 'go', 'dart', 'python']),
 						isLanguageAgnostic: z.boolean().optional(),
-						canonicalLanguage: z.enum(['js', 'go', 'dart', 'python']).optional(),
-						canonicalByLanguage: z
-							.object({
-								js: z.enum(['js', 'go', 'dart', 'python']).optional(),
-								go: z.enum(['js', 'go', 'dart', 'python']).optional(),
-								dart: z.enum(['js', 'go', 'dart', 'python']).optional(),
-								python: z.enum(['js', 'go', 'dart', 'python']).optional(),
-							})
-							.optional(),
 					})
 					// Blog post frontmatter (title, date, authors, tags, excerpt, cover, ...) for posts under src/content/docs/blog/.
 					.merge(blogSchema(context))
