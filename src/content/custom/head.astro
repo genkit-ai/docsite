@@ -1,5 +1,9 @@
 ---
-import { docsLanguageAgnosticBySlug, docsLanguageSupportBySlug } from '../../sidebar';
+import {
+  docsLanguageAgnosticBySlug,
+  docsLanguageSupportBySlug,
+  docsNonCanonicalLanguagePaths,
+} from '../../sidebar';
 import blogConfig from 'virtual:starlight-blog/config';
 import Fonts from '../../components/Fonts.astro';
 import DocsLanguageClient from '../../components/DocsLanguageClient.astro';
@@ -12,6 +16,7 @@ const docsLanguageSupportByPath = Object.fromEntries(
 const docsLanguageAgnosticByPath = Object.fromEntries(
   Object.entries(docsLanguageAgnosticBySlug).map(([slug, isAgnostic]) => [`/${slug}`, isAgnostic]),
 );
+const CANONICAL_FALLBACK_ORDER = ['js', 'go', 'dart', 'python'] as const;
 
 // --- Blog SEO enrichments (not provided by Starlight or starlight-blog) ---------------
 // 1. Use a post's `cover` as its OpenGraph image (else the site-wide default applies).
@@ -46,6 +51,61 @@ function resolveAuthors(raw: unknown): Array<{ name: string; url?: string }> {
 let resolvedHead = head;
 let jsonLd: string | undefined;
 
+const normalizedPathname = Astro.url.pathname.replace(/\/$/, '') || '/';
+const is404Page =
+  route.id === '404' ||
+  entry?.id?.replace(/\.(md|mdx)$/, '') === '404' ||
+  normalizedPathname === '/404' ||
+  normalizedPathname === '/404.html';
+
+if (is404Page) {
+  resolvedHead = [
+    ...resolvedHead.filter(
+      (item) =>
+        !(item.tag === 'link' && item.attrs?.rel === 'canonical') &&
+        !(item.tag === 'meta' && item.attrs?.property === 'og:url') &&
+        !(item.tag === 'meta' && item.attrs?.name === 'robots'),
+    ),
+    { tag: 'meta', attrs: { name: 'robots', content: 'noindex' }, content: '' },
+  ];
+} else if (Astro.site) {
+  let overrideCanonicalPath: string | undefined;
+  const langDocMatch = normalizedPathname.match(/^\/docs\/(js|go|dart|python)\/(.+)$/);
+  const declaredCanonicalLang = (entry?.data as { canonicalLanguage?: string } | undefined)
+    ?.canonicalLanguage;
+
+  if (langDocMatch) {
+    if (declaredCanonicalLang && declaredCanonicalLang !== langDocMatch[1]) {
+      overrideCanonicalPath = `/docs/${declaredCanonicalLang}/${langDocMatch[2]}/`;
+    } else if (docsNonCanonicalLanguagePaths[normalizedPathname]) {
+      overrideCanonicalPath = docsNonCanonicalLanguagePaths[normalizedPathname];
+    }
+  } else if (
+    normalizedPathname.startsWith('/docs/') &&
+    !docsLanguageAgnosticByPath[normalizedPathname]
+  ) {
+    const supported = docsLanguageSupportByPath[normalizedPathname];
+    const canonicalLang = CANONICAL_FALLBACK_ORDER.find((lang) => supported?.includes(lang));
+    if (canonicalLang) {
+      const slugPath = normalizedPathname.slice('/docs/'.length);
+      overrideCanonicalPath = `/docs/${canonicalLang}/${slugPath}/`;
+    }
+  }
+
+  if (overrideCanonicalPath) {
+    const overrideCanonicalHref = new URL(overrideCanonicalPath, Astro.site).href;
+    resolvedHead = resolvedHead.map((item) => {
+      if (item.tag === 'link' && item.attrs?.rel === 'canonical') {
+        return { ...item, attrs: { ...item.attrs, href: overrideCanonicalHref } };
+      }
+      if (item.tag === 'meta' && item.attrs?.property === 'og:url') {
+        return { ...item, attrs: { ...item.attrs, content: overrideCanonicalHref } };
+      }
+      return item;
+    });
+  }
+}
+
 if (isBlogPost && entry) {
   const pageUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : Astro.url.pathname;
   const coverUrl = resolveCoverUrl(entry.data.cover as BlogCover);
@@ -55,7 +115,7 @@ if (isBlogPost && entry) {
 
   // 1. Override the site-wide og:image with the post cover when one is set.
   if (coverUrl) {
-    resolvedHead = head.map((item) =>
+    resolvedHead = resolvedHead.map((item) =>
       item.attrs?.property === 'og:image'
         ? // Drop the global image's width/height; they don't match the cover.
           { ...item, attrs: { property: 'og:image', content: coverUrl } }

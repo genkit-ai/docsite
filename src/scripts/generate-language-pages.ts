@@ -159,17 +159,77 @@ function resolveDescriptionForLanguage(
   return undefined;
 }
 
-function getSupportedLanguages(frontmatter: Record<string, unknown>): Language[] {
-  const declared = Array.isArray(frontmatter.supportedLanguages)
-    ? frontmatter.supportedLanguages.filter((value): value is string => typeof value === 'string')
-    : [];
+function getSupportedLanguages(
+  frontmatter: Record<string, unknown>,
+  filePath: string,
+  errors: string[],
+  isLanguageAgnostic = false,
+): Language[] {
+  const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+  if (!Array.isArray(frontmatter.supportedLanguages)) {
+    if (!isLanguageAgnostic) {
+      errors.push(
+        `${fileRelativePath} must explicitly declare a non-empty supportedLanguages array in frontmatter.`,
+      );
+    }
+    return [...FALLBACK_LANGUAGES];
+  }
+  const declared = frontmatter.supportedLanguages.filter(
+    (value): value is string => typeof value === 'string',
+  );
+  const invalid = declared.filter((value) => !KNOWN_LANGUAGES.has(value.toLowerCase()));
+  if (invalid.length > 0) {
+    errors.push(
+      `${fileRelativePath} declares unknown language(s) in supportedLanguages: ${invalid.join(', ')} (allowed: ${LANGUAGES.join(', ')}).`,
+    );
+  }
   const normalized = declared
     .map((value) => value.toLowerCase())
     .filter((value): value is Language => LANGUAGES.includes(value as Language));
-  if (normalized.length > 0) {
-    return LANGUAGES.filter((lang) => normalized.includes(lang));
+  if (normalized.length === 0) {
+    if (!isLanguageAgnostic) {
+      errors.push(`${fileRelativePath} has an empty supportedLanguages array in frontmatter.`);
+    }
+    return [...FALLBACK_LANGUAGES];
   }
-  return [...FALLBACK_LANGUAGES];
+  return LANGUAGES.filter((lang) => normalized.includes(lang));
+}
+
+function parseCanonicalByLanguage(
+  frontmatter: Record<string, unknown>,
+  supportedLanguages: Language[],
+  filePath: string,
+  errors: string[],
+): Partial<Record<Language, Language>> {
+  const raw = frontmatter.canonicalByLanguage;
+  if (raw === undefined) {
+    return {};
+  }
+  const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(`${fileRelativePath} has invalid canonicalByLanguage (expected a language map).`);
+    return {};
+  }
+  const supportedSet = new Set<string>(supportedLanguages);
+  const result: Partial<Record<Language, Language>> = {};
+  for (const [rawFrom, rawTo] of Object.entries(raw as Record<string, unknown>)) {
+    const fromLang = rawFrom.toLowerCase();
+    const toLang = typeof rawTo === 'string' ? rawTo.toLowerCase() : '';
+    if (!KNOWN_LANGUAGES.has(fromLang) || !KNOWN_LANGUAGES.has(toLang)) {
+      errors.push(
+        `${fileRelativePath} canonicalByLanguage maps "${rawFrom}" -> "${String(rawTo)}"; both must be known languages (${LANGUAGES.join(', ')}).`,
+      );
+      continue;
+    }
+    if (!supportedSet.has(fromLang) || !supportedSet.has(toLang)) {
+      errors.push(
+        `${fileRelativePath} canonicalByLanguage maps "${fromLang}" -> "${toLang}", which must both appear in supportedLanguages [${supportedLanguages.join(', ')}].`,
+      );
+      continue;
+    }
+    result[fromLang as Language] = toLang as Language;
+  }
+  return result;
 }
 
 function parseLanguageBlocks(source: string): LanguageBlockNode[] {
@@ -260,6 +320,7 @@ function validateLanguageBlocks(
   body: string,
   supportedLanguages: Language[],
   filePath: string,
+  isLanguageAgnostic = false,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -269,6 +330,7 @@ function validateLanguageBlocks(
   }
 
   const supportedSet = new Set<string>(supportedLanguages);
+  const observedLangTags = new Set<string>();
   const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
 
   for (const block of blocks) {
@@ -281,7 +343,8 @@ function validateLanguageBlocks(
         continue;
       }
 
-      if (!supportedSet.has(lang)) {
+      observedLangTags.add(lang);
+      if (!isLanguageAgnostic && !supportedSet.has(lang)) {
         errors.push(
           `${fileRelativePath}:${line} uses Lang language "${lang}" not listed in supportedLanguages [${supportedLanguages.join(', ')}].`,
         );
@@ -311,6 +374,16 @@ function validateLanguageBlocks(
       warnings.push(
         `${fileRelativePath}:${fenceLine} has \`\`\`${label} inside <Lang lang="${blockLanguage}">.`,
       );
+    }
+  }
+
+  if (!isLanguageAgnostic) {
+    for (const declaredLang of supportedLanguages) {
+      if (!observedLangTags.has(declaredLang)) {
+        warnings.push(
+          `${fileRelativePath} lists "${declaredLang}" in supportedLanguages, but no <Lang> block includes "${declaredLang}".`,
+        );
+      }
     }
   }
 
@@ -487,8 +560,24 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
   const source = await readFile(filePath, 'utf8');
   const { frontmatter, body } = splitFrontmatter(source);
   const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
-  const supportedLanguages = getSupportedLanguages(frontmatter);
-  const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
+  const supportedLanguages = getSupportedLanguages(
+    frontmatter,
+    filePath,
+    context.validationErrors,
+    isLanguageAgnostic,
+  );
+  const canonicalByLanguage = parseCanonicalByLanguage(
+    frontmatter,
+    supportedLanguages,
+    filePath,
+    context.validationErrors,
+  );
+  const blockValidation = validateLanguageBlocks(
+    body,
+    supportedLanguages,
+    filePath,
+    isLanguageAgnostic,
+  );
   context.validationErrors.push(...blockValidation.errors);
   context.languageCodeWarnings.push(...blockValidation.warnings);
 
@@ -499,9 +588,15 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
     renderedByLanguage.set(language, rendered);
     const charCount = getMeaningfulContentCharCount(rendered);
     if (charCount === 0) {
-      context.sizeWarnings.push(
-        `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
-      );
+      if (!isLanguageAgnostic) {
+        context.validationErrors.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+        );
+      } else {
+        context.sizeWarnings.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+        );
+      }
       continue;
     }
     if (charCount < MIN_LANGUAGE_CONTENT_CHARS_WARNING) {
@@ -522,12 +617,20 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
   for (const language of supportedLanguages) {
     const outputPath = path.join(OUTPUT_ROOT, language, `${slug}.${extension}`);
     const resolvedDescription = resolveDescriptionForLanguage(frontmatter.description, language);
-    const { description: _omitDescription, ...frontmatterWithoutDescription } = frontmatter;
+    const canonicalTarget = canonicalByLanguage[language];
+    const {
+      description: _omitDescription,
+      canonicalByLanguage: _omitCanonicalByLanguage,
+      ...frontmatterWithoutDescription
+    } = frontmatter;
     const languageFrontmatter = rewriteRelativeAssetPaths(
       {
         ...frontmatterWithoutDescription,
         ...(resolvedDescription !== undefined ? { description: resolvedDescription } : {}),
         supportedLanguages: [language],
+        ...(canonicalTarget && canonicalTarget !== language
+          ? { canonicalLanguage: canonicalTarget }
+          : {}),
       },
       filePath,
       outputPath,
@@ -557,7 +660,7 @@ function printGenerateWarnings(context: GenerateContext): void {
   if (context.languageCodeWarnings.length > 0) {
     console.warn(
       [
-        'generate-language-pages: Found possible code-fence language mismatches inside Lang blocks:',
+        'generate-language-pages: Found Lang block or code-fence language warnings:',
         ...context.languageCodeWarnings.map((warning) => `- ${warning}`),
       ].join('\n'),
     );
