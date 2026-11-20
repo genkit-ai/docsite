@@ -2,7 +2,7 @@ import { watch } from 'node:fs';
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
-import { resolveDocsTarget, rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
+import { rewriteInternalDocsLinks } from '../utils/docs-link-routing.js';
 
 const SOURCE_ROOT = path.resolve('src/content/docs/docs');
 const OUTPUT_ROOT = path.resolve('src/content/docs/docs');
@@ -163,12 +163,15 @@ function getSupportedLanguages(
   frontmatter: Record<string, unknown>,
   filePath: string,
   errors: string[],
+  isLanguageAgnostic = false,
 ): Language[] {
   const fileRelativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
   if (!Array.isArray(frontmatter.supportedLanguages)) {
-    errors.push(
-      `${fileRelativePath} must explicitly declare a non-empty supportedLanguages array in frontmatter.`,
-    );
+    if (!isLanguageAgnostic) {
+      errors.push(
+        `${fileRelativePath} must explicitly declare a non-empty supportedLanguages array in frontmatter.`,
+      );
+    }
     return [...FALLBACK_LANGUAGES];
   }
   const declared = frontmatter.supportedLanguages.filter(
@@ -184,7 +187,9 @@ function getSupportedLanguages(
     .map((value) => value.toLowerCase())
     .filter((value): value is Language => LANGUAGES.includes(value as Language));
   if (normalized.length === 0) {
-    errors.push(`${fileRelativePath} has an empty supportedLanguages array in frontmatter.`);
+    if (!isLanguageAgnostic) {
+      errors.push(`${fileRelativePath} has an empty supportedLanguages array in frontmatter.`);
+    }
     return [...FALLBACK_LANGUAGES];
   }
   return LANGUAGES.filter((lang) => normalized.includes(lang));
@@ -315,6 +320,7 @@ function validateLanguageBlocks(
   body: string,
   supportedLanguages: Language[],
   filePath: string,
+  isLanguageAgnostic = false,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -338,7 +344,7 @@ function validateLanguageBlocks(
       }
 
       observedLangTags.add(lang);
-      if (!supportedSet.has(lang)) {
+      if (!isLanguageAgnostic && !supportedSet.has(lang)) {
         errors.push(
           `${fileRelativePath}:${line} uses Lang language "${lang}" not listed in supportedLanguages [${supportedLanguages.join(', ')}].`,
         );
@@ -371,11 +377,13 @@ function validateLanguageBlocks(
     }
   }
 
-  for (const declaredLang of supportedLanguages) {
-    if (!observedLangTags.has(declaredLang)) {
-      errors.push(
-        `${fileRelativePath} lists "${declaredLang}" in supportedLanguages, but no <Lang> block includes "${declaredLang}".`,
-      );
+  if (!isLanguageAgnostic) {
+    for (const declaredLang of supportedLanguages) {
+      if (!observedLangTags.has(declaredLang)) {
+        errors.push(
+          `${fileRelativePath} lists "${declaredLang}" in supportedLanguages, but no <Lang> block includes "${declaredLang}".`,
+        );
+      }
     }
   }
 
@@ -443,12 +451,8 @@ function rewriteRelativeAssetPaths(
   value: unknown,
   sourceFilePath: string,
   outputFilePath: string,
-  language: Language,
 ): unknown {
   if (typeof value === 'string') {
-    if (value.startsWith('/docs/') || value.startsWith('https://genkit.dev/docs/')) {
-      return resolveDocsTarget(value, language).resolvedUrl;
-    }
     if (value.startsWith('../')) {
       const resolvedSourcePath = path.resolve(path.dirname(sourceFilePath), value);
       if (resolvedSourcePath.includes(`${path.sep}src${path.sep}assets${path.sep}`)) {
@@ -463,16 +467,14 @@ function rewriteRelativeAssetPaths(
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) =>
-      rewriteRelativeAssetPaths(item, sourceFilePath, outputFilePath, language),
-    );
+    return value.map((item) => rewriteRelativeAssetPaths(item, sourceFilePath, outputFilePath));
   }
 
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
         key,
-        rewriteRelativeAssetPaths(nested, sourceFilePath, outputFilePath, language),
+        rewriteRelativeAssetPaths(nested, sourceFilePath, outputFilePath),
       ]),
     );
   }
@@ -558,14 +560,24 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
   const source = await readFile(filePath, 'utf8');
   const { frontmatter, body } = splitFrontmatter(source);
   const isLanguageAgnostic = Boolean(frontmatter.isLanguageAgnostic);
-  const supportedLanguages = getSupportedLanguages(frontmatter, filePath, context.validationErrors);
+  const supportedLanguages = getSupportedLanguages(
+    frontmatter,
+    filePath,
+    context.validationErrors,
+    isLanguageAgnostic,
+  );
   const canonicalByLanguage = parseCanonicalByLanguage(
     frontmatter,
     supportedLanguages,
     filePath,
     context.validationErrors,
   );
-  const blockValidation = validateLanguageBlocks(body, supportedLanguages, filePath);
+  const blockValidation = validateLanguageBlocks(
+    body,
+    supportedLanguages,
+    filePath,
+    isLanguageAgnostic,
+  );
   context.validationErrors.push(...blockValidation.errors);
   context.languageCodeWarnings.push(...blockValidation.warnings);
 
@@ -576,9 +588,15 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
     renderedByLanguage.set(language, rendered);
     const charCount = getMeaningfulContentCharCount(rendered);
     if (charCount === 0) {
-      context.validationErrors.push(
-        `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
-      );
+      if (!isLanguageAgnostic) {
+        context.validationErrors.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+        );
+      } else {
+        context.sizeWarnings.push(
+          `${fileRelativePath} declares "${language}" in supportedLanguages but rendered content is empty.`,
+        );
+      }
       continue;
     }
     if (charCount < MIN_LANGUAGE_CONTENT_CHARS_WARNING) {
@@ -616,7 +634,6 @@ async function generateForSourceFile(filePath: string, context: GenerateContext)
       },
       filePath,
       outputPath,
-      language,
     ) as Record<string, unknown>;
     const renderedBody = rewriteBodyAssetPaths(
       renderedByLanguage.get(language) || renderBodyForLanguage(body, language),
