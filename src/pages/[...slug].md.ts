@@ -105,6 +105,7 @@ export async function GET({
   return new Response(props.processedContent, {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
+      'X-Robots-Tag': 'noindex',
     },
   });
 }
