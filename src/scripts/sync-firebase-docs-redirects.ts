@@ -109,7 +109,7 @@ export function applySyncedDocRedirects(
 
 async function main() {
   const checkOnly = process.argv.includes('--check');
-  const firebasePath = path.resolve('firebase.json');
+  const firebasePath = fileURLToPath(new URL('../../firebase.json', import.meta.url));
   const rawOriginal = await readFile(firebasePath, 'utf8');
   const config = JSON.parse(rawOriginal) as FirebaseConfig;
   const hosting = Array.isArray(config.hosting) ? config.hosting[0] : config.hosting;
@@ -121,7 +121,7 @@ async function main() {
 
   const serialized = `${JSON.stringify(config, null, 2)}\n`;
   if (checkOnly) {
-    if (serialized !== rawOriginal) {
+    if (serialized.replace(/\r\n/g, '\n') !== rawOriginal.replace(/\r\n/g, '\n')) {
       throw new Error(
         'firebase.json redirects are out of sync with source docs metadata. Run: pnpm sync-firebase-docs-redirects',
       );
